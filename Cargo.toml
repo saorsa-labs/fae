@@ -1,0 +1,71 @@
+[package]
+name = "fae"
+version = "0.1.0"
+edition = "2024"
+description = "Real-time speech-to-speech AI conversation system"
+license = "AGPL-3.0"
+repository = "https://github.com/saorsa-labs/fae"
+
+[[bin]]
+name = "fae"
+path = "src/bin/cli.rs"
+
+[features]
+default = []
+metal = ["mistralrs/metal"]
+# Chatterbox TTS execution provider features (vendored from cbx).
+coreml = ["ort/coreml"]
+directml = ["ort/directml"]
+cuda = ["ort/cuda"]
+
+[dependencies]
+# Audio I/O
+cpal = "0.17"
+
+# Voice Activity Detection (energy-based, Silero ONNX planned)
+# silero-vad integration deferred — using energy-based VAD for now
+
+# Speech-to-Text (uses ort 2.0.0-rc.11)
+parakeet-rs = { version = "0.3", default-features = false, features = ["cpu"] }
+
+# LLM inference (mistral.rs — supports 30+ architectures, GGUF, Metal)
+mistralrs = "0.7"
+
+# TTS (Chatterbox Turbo — vendored from github.com/srv1n/cbx, ort rc.11 compat)
+ort = { version = "2.0.0-rc.11", features = ["half"] }
+half = "2"
+hound = "3"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+bincode = "1"
+
+# Model management
+hf-hub = "0.4"
+
+# HTTP client (for non-HuggingFace model downloads; shared with hf-hub)
+ureq = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Progress indicators
+indicatif = "0.17"
+
+# Utilities
+crossbeam-channel = "0.5"

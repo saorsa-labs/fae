@@ -1,0 +1,275 @@
+//! OpenAI-compatible API backend for LLM inference.
+//!
+//! Supports any server implementing the OpenAI chat completions API:
+//! - Ollama (`http://localhost:11434`)
+//! - MLX server (`http://localhost:8080`)
+//! - vLLM, llama.cpp server, etc.
+
+use crate::config::LlmConfig;
+use crate::error::{Result, SpeechError};
+use crate::pipeline::messages::SentenceChunk;
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+use tokio::sync::mpsc;
+use tracing::info;
+
+/// LLM backend using an OpenAI-compatible HTTP API.
+///
+/// Streams responses via Server-Sent Events (SSE) for low-latency
+/// sentence delivery to TTS.
+pub struct ApiLlm {
+    config: LlmConfig,
+    history: Vec<ChatMessage>,
+    agent: ureq::Agent,
+}
+
+/// A single message in the conversation history.
+#[derive(Debug, Clone)]
+struct ChatMessage {
+    role: &'static str,
+    content: String,
+}
+
+impl ApiLlm {
+    /// Create a new API-based LLM instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if configuration is invalid.
+    pub fn new(config: &LlmConfig) -> Result<Self> {
+        let agent = ureq::agent();
+
+        info!(
+            "API LLM configured: {} model={}",
+            config.api_url, config.api_model
+        );
+
+        let history = vec![ChatMessage {
+            role: "system",
+            content: config.system_prompt.clone(),
+        }];
+
+        Ok(Self {
+            config: config.clone(),
+            history,
+            agent,
+        })
+    }
+
+    /// Generate a streaming response from the API.
+    ///
+    /// Tokens are accumulated into sentences and sent to the TTS stage.
+    /// The `interrupt` flag is checked every token. Returns `true` if
+    /// the generation was interrupted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API call or streaming fails.
+    pub async fn generate_response(
+        &mut self,
+        user_input: &str,
+        tx: &mpsc::Sender<SentenceChunk>,
+        interrupt: &Arc<AtomicBool>,
+    ) -> Result<bool> {
+        self.history.push(ChatMessage {
+            role: "user",
+            content: user_input.to_owned(),
+        });
+
+        interrupt.store(false, Ordering::Relaxed);
+
+        info!("API generating response to: {user_input}");
+        let gen_start = Instant::now();
+
+        // Build the messages array for the OpenAI-compatible API
+        let messages: Vec<serde_json::Value> = self
+            .history
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "role": m.role,
+                    "content": m.content,
+                })
+            })
+            .collect();
+
+        let body = serde_json::json!({
+            "model": self.config.api_model,
+            "messages": messages,
+            "stream": true,
+            "temperature": self.config.temperature,
+            "top_p": self.config.top_p,
+            "max_tokens": self.config.max_tokens,
+        });
+
+        let body_str = serde_json::to_string(&body)
+            .map_err(|e| SpeechError::Llm(format!("JSON serialization failed: {e}")))?;
+
+        let url = format!("{}/v1/chat/completions", self.config.api_url);
+
+        // Bridge sync HTTP streaming to async via a channel
+        let (token_tx, mut token_rx) = mpsc::channel::<String>(64);
+        let agent = self.agent.clone();
+        let interrupt_clone = Arc::clone(interrupt);
+
+        let http_handle =
+            tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+                let response = agent
+                    .post(&url)
+                    .set("Content-Type", "application/json")
+                    .send_string(&body_str)
+                    .map_err(|e| format!("API request failed: {e}"))?;
+
+                let reader = std::io::BufReader::new(response.into_reader());
+                for line in std::io::BufRead::lines(reader) {
+                    if interrupt_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let line = line.map_err(|e| format!("read error: {e}"))?;
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    let Some(data) = line.strip_prefix("data: ") else {
+                        continue;
+                    };
+
+                    if data == "[DONE]" {
+                        break;
+                    }
+
+                    let chunk: serde_json::Value =
+                        serde_json::from_str(data).map_err(|e| format!("JSON parse error: {e}"))?;
+
+                    if let Some(content) = chunk["choices"][0]["delta"]["content"].as_str()
+                        && !content.is_empty()
+                        && token_tx.blocking_send(content.to_owned()).is_err()
+                    {
+                        break;
+                    }
+
+                    if chunk["choices"][0]["finish_reason"].as_str() == Some("stop") {
+                        break;
+                    }
+                }
+                Ok(())
+            });
+
+        // Async loop: accumulate tokens into sentences
+        let mut generated_text = String::new();
+        let mut sentence_buffer = String::new();
+        let mut token_count: usize = 0;
+        let mut was_interrupted = false;
+        let mut in_think_block = false;
+
+        while let Some(token_text) = token_rx.recv().await {
+            if interrupt.load(Ordering::Relaxed) {
+                was_interrupted = true;
+                break;
+            }
+
+            token_count += 1;
+
+            // Filter <think>...</think> blocks (some models output reasoning)
+            if token_text.contains("<think>") {
+                in_think_block = true;
+                continue;
+            }
+            if token_text.contains("</think>") {
+                in_think_block = false;
+                continue;
+            }
+            if in_think_block {
+                continue;
+            }
+
+            print!("{token_text}");
+            let _ = std::io::stdout().flush();
+
+            generated_text.push_str(&token_text);
+            sentence_buffer.push_str(&token_text);
+
+            // Check for sentence boundaries and send complete sentences
+            if let Some(pos) = super::find_sentence_boundary(&sentence_buffer) {
+                let sentence = sentence_buffer[..=pos].trim().to_owned();
+                if !sentence.is_empty() {
+                    let chunk = SentenceChunk {
+                        text: sentence,
+                        is_final: false,
+                    };
+                    tx.send(chunk).await.map_err(|e| {
+                        SpeechError::Channel(format!("LLM output channel closed: {e}"))
+                    })?;
+                }
+                sentence_buffer = sentence_buffer[pos + 1..].to_owned();
+            }
+        }
+
+        // Wait for the HTTP streaming task to finish
+        match http_handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                if !was_interrupted {
+                    return Err(SpeechError::Llm(e));
+                }
+            }
+            Err(e) => {
+                if !was_interrupted {
+                    return Err(SpeechError::Llm(format!("HTTP task panicked: {e}")));
+                }
+            }
+        }
+
+        // Send any remaining text as the final sentence
+        let remaining = sentence_buffer.trim().to_owned();
+        if !remaining.is_empty() {
+            let chunk = SentenceChunk {
+                text: remaining,
+                is_final: true,
+            };
+            tx.send(chunk)
+                .await
+                .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
+        } else {
+            // Signal end-of-response to the pipeline
+            let chunk = SentenceChunk {
+                text: String::new(),
+                is_final: true,
+            };
+            tx.send(chunk)
+                .await
+                .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
+        }
+
+        // Add assistant response to history
+        let final_text = generated_text.trim().to_owned();
+        if !final_text.is_empty() {
+            self.history.push(ChatMessage {
+                role: "assistant",
+                content: final_text,
+            });
+        }
+
+        let elapsed = gen_start.elapsed();
+        let tokens_per_sec = if elapsed.as_secs_f64() > 0.0 {
+            token_count as f64 / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        info!(
+            "API generated {token_count} tokens in {:.1}s ({:.1} tok/s){}",
+            elapsed.as_secs_f64(),
+            tokens_per_sec,
+            if was_interrupted {
+                " [interrupted]"
+            } else {
+                ""
+            },
+        );
+
+        Ok(was_interrupted)
+    }
+}
