@@ -2,6 +2,7 @@
 
 use crate::config::ModelConfig;
 use crate::error::{Result, SpeechError};
+use crate::progress::{ProgressCallback, ProgressEvent};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::Read;
 use std::path::PathBuf;
@@ -92,10 +93,17 @@ impl ModelManager {
     /// If the file is already cached, returns immediately without showing a bar.
     /// Uses `hf-hub`'s built-in `Progress` impl for `indicatif::ProgressBar`.
     ///
+    /// An optional `callback` receives [`ProgressEvent`]s for GUI or other consumers.
+    ///
     /// # Errors
     ///
     /// Returns an error if the download fails.
-    pub fn download_with_progress(&self, repo_id: &str, filename: &str) -> Result<PathBuf> {
+    pub fn download_with_progress(
+        &self,
+        repo_id: &str,
+        filename: &str,
+        callback: Option<&ProgressCallback>,
+    ) -> Result<PathBuf> {
         let api = hf_hub::api::sync::Api::new()
             .map_err(|e| SpeechError::Model(format!("failed to create HF API: {e}")))?;
 
@@ -103,7 +111,21 @@ impl ModelManager {
         let cache = hf_hub::Cache::default();
         if let Some(path) = cache.model(repo_id.to_owned()).get(filename) {
             println!("  {repo_id}/{filename}  [cached]");
+            if let Some(cb) = callback {
+                cb(ProgressEvent::Cached {
+                    repo_id: repo_id.to_owned(),
+                    filename: filename.to_owned(),
+                });
+            }
             return Ok(path);
+        }
+
+        if let Some(cb) = callback {
+            cb(ProgressEvent::DownloadStarted {
+                repo_id: repo_id.to_owned(),
+                filename: filename.to_owned(),
+                total_bytes: None,
+            });
         }
 
         let pb = ProgressBar::new(0);
@@ -119,6 +141,13 @@ impl ModelManager {
             .download_with_progress(filename, pb)
             .map_err(|e| SpeechError::Model(format!("failed to download {filename}: {e}")))?;
 
+        if let Some(cb) = callback {
+            cb(ProgressEvent::DownloadComplete {
+                repo_id: repo_id.to_owned(),
+                filename: filename.to_owned(),
+            });
+        }
+
         Ok(path)
     }
 
@@ -133,9 +162,10 @@ impl ModelManager {
         &self,
         repo_id: &str,
         filenames: &[&str],
+        callback: Option<&ProgressCallback>,
     ) -> Result<PathBuf> {
         for filename in filenames {
-            self.download_with_progress(repo_id, filename)?;
+            self.download_with_progress(repo_id, filename, callback)?;
         }
         self.get_repo_dir(repo_id)
     }
@@ -149,12 +179,31 @@ impl ModelManager {
     /// # Errors
     ///
     /// Returns an error if the download fails.
-    pub fn download_url_with_progress(&self, url: &str, filename: &str) -> Result<PathBuf> {
+    pub fn download_url_with_progress(
+        &self,
+        url: &str,
+        filename: &str,
+        callback: Option<&ProgressCallback>,
+    ) -> Result<PathBuf> {
         let dest = self.cache_dir.join(filename);
 
         if dest.exists() {
             println!("  {filename}  [cached]");
+            if let Some(cb) = callback {
+                cb(ProgressEvent::Cached {
+                    repo_id: url.to_owned(),
+                    filename: filename.to_owned(),
+                });
+            }
             return Ok(dest);
+        }
+
+        if let Some(cb) = callback {
+            cb(ProgressEvent::DownloadStarted {
+                repo_id: url.to_owned(),
+                filename: filename.to_owned(),
+                total_bytes: None,
+            });
         }
 
         let pb = ProgressBar::new(0);
@@ -169,10 +218,11 @@ impl ModelManager {
             .call()
             .map_err(|e| SpeechError::Model(format!("failed to download {filename}: {e}")))?;
 
-        if let Some(len) = resp
+        let total_bytes = resp
             .header("content-length")
-            .and_then(|v| v.parse::<u64>().ok())
-        {
+            .and_then(|v| v.parse::<u64>().ok());
+
+        if let Some(len) = total_bytes {
             pb.set_length(len);
         }
 
@@ -181,6 +231,7 @@ impl ModelManager {
         let mut file = std::fs::File::create(&tmp)?;
         let mut reader = resp.into_reader();
         let mut buf = [0u8; 64 * 1024];
+        let mut bytes_downloaded: u64 = 0;
         loop {
             let n = reader
                 .read(&mut buf)
@@ -190,10 +241,27 @@ impl ModelManager {
             }
             std::io::Write::write_all(&mut file, &buf[..n])?;
             pb.inc(n as u64);
+            bytes_downloaded += n as u64;
+            if let Some(cb) = callback {
+                cb(ProgressEvent::DownloadProgress {
+                    repo_id: url.to_owned(),
+                    filename: filename.to_owned(),
+                    bytes_downloaded,
+                    total_bytes,
+                });
+            }
         }
         pb.finish();
 
         std::fs::rename(&tmp, &dest)?;
+
+        if let Some(cb) = callback {
+            cb(ProgressEvent::DownloadComplete {
+                repo_id: url.to_owned(),
+                filename: filename.to_owned(),
+            });
+        }
+
         Ok(dest)
     }
 

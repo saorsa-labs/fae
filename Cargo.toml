@@ -10,9 +10,15 @@ repository = "https://github.com/saorsa-labs/fae"
 name = "fae"
 path = "src/bin/cli.rs"
 
+[[bin]]
+name = "fae-gui"
+path = "src/bin/gui.rs"
+required-features = ["gui"]
+
 [features]
 default = []
 metal = ["mistralrs/metal"]
+gui = ["dioxus"]
 # Chatterbox TTS execution provider features (vendored from cbx).
 coreml = ["ort/coreml"]
 directml = ["ort/directml"]
@@ -66,6 +72,9 @@ toml = "0.8"
 
 # Progress indicators
 indicatif = "0.17"
+
+# Desktop GUI (optional, behind `gui` feature)
+dioxus = { version = "0.6", features = ["desktop"], optional = true }
 
 # Utilities
 crossbeam-channel = "0.5"

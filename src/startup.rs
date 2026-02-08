@@ -2,11 +2,15 @@
 //!
 //! Call [`initialize_models`] at startup to pre-download and pre-load all ML models
 //! so the pipeline is ready to run without mid-conversation delays.
+//!
+//! For GUI consumers, use [`initialize_models_with_progress`] which accepts a
+//! [`ProgressCallback`] for structured progress events.
 
 use crate::config::{LlmBackend, SpeechConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
 use crate::models::ModelManager;
+use crate::progress::{ProgressCallback, ProgressEvent};
 use crate::stt::ParakeetStt;
 use crate::tts::ChatterboxTts;
 use std::time::Instant;
@@ -32,13 +36,28 @@ const STT_FILES: &[&str] = &[
 /// Download all model files with progress bars, then eagerly load each model.
 ///
 /// Prints user-friendly progress to stdout. This is designed for CLI use.
-/// When the LLM backend is set to API, the local LLM model download and
-/// loading is skipped entirely.
+/// For GUI consumers, use [`initialize_models_with_progress`] instead.
 ///
 /// # Errors
 ///
 /// Returns an error if any download or model load fails.
 pub async fn initialize_models(config: &SpeechConfig) -> Result<InitializedModels> {
+    initialize_models_with_progress(config, None).await
+}
+
+/// Download all model files and load them, sending progress events via callback.
+///
+/// When `callback` is `None`, progress is printed to stdout (CLI mode).
+/// When `callback` is `Some`, structured [`ProgressEvent`]s are emitted for
+/// each download and load step (GUI mode).
+///
+/// # Errors
+///
+/// Returns an error if any download or model load fails.
+pub async fn initialize_models_with_progress(
+    config: &SpeechConfig,
+    callback: Option<&ProgressCallback>,
+) -> Result<InitializedModels> {
     let model_manager = ModelManager::new(&config.models)?;
     let use_local_llm = config.llm.backend == LlmBackend::Local;
 
@@ -47,7 +66,7 @@ pub async fn initialize_models(config: &SpeechConfig) -> Result<InitializedModel
 
     // STT files
     for filename in STT_FILES {
-        model_manager.download_with_progress(&config.stt.model_id, filename)?;
+        model_manager.download_with_progress(&config.stt.model_id, filename, callback)?;
     }
 
     // LLM: mistralrs handles its own HF downloads, so we skip manual download
@@ -58,9 +77,9 @@ pub async fn initialize_models(config: &SpeechConfig) -> Result<InitializedModel
     // --- Phase 2: Load models ---
     println!("\nLoading models...");
 
-    let stt = load_stt(config)?;
+    let stt = load_stt(config, callback)?;
     let llm = if use_local_llm {
-        Some(load_llm(config).await?)
+        Some(load_llm(config, callback).await?)
     } else {
         println!(
             "  LLM: using API backend ({} @ {})",
@@ -68,41 +87,73 @@ pub async fn initialize_models(config: &SpeechConfig) -> Result<InitializedModel
         );
         None
     };
-    let tts = load_tts(config)?;
+    let tts = load_tts(config, callback)?;
 
     Ok(InitializedModels { stt, llm, tts })
 }
 
-/// Load STT with a status message.
-fn load_stt(config: &SpeechConfig) -> Result<ParakeetStt> {
-    print!("  Loading STT (Parakeet TDT)...");
+/// Load STT with a status message and optional progress callback.
+fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<ParakeetStt> {
+    let model_name = "STT (Parakeet TDT)".to_owned();
+    print!("  Loading {model_name}...");
+    if let Some(cb) = callback {
+        cb(ProgressEvent::LoadStarted {
+            model_name: model_name.clone(),
+        });
+    }
+
     let start = Instant::now();
     let mut stt = ParakeetStt::new(&config.stt, &config.models)?;
     stt.ensure_loaded()?;
     let elapsed = start.elapsed();
+
     println!("  done ({:.1}s)", elapsed.as_secs_f64());
+    if let Some(cb) = callback {
+        cb(ProgressEvent::LoadComplete {
+            model_name,
+            duration_secs: elapsed.as_secs_f64(),
+        });
+    }
     Ok(stt)
 }
 
-/// Load LLM with a status message.
-async fn load_llm(config: &SpeechConfig) -> Result<LocalLlm> {
-    print!(
-        "  Loading LLM ({} / {})...",
-        config.llm.model_id, config.llm.gguf_file
-    );
+/// Load LLM with a status message and optional progress callback.
+async fn load_llm(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<LocalLlm> {
+    let model_name = format!("LLM ({} / {})", config.llm.model_id, config.llm.gguf_file);
+    print!("  Loading {model_name}...");
+    if let Some(cb) = callback {
+        cb(ProgressEvent::LoadStarted {
+            model_name: model_name.clone(),
+        });
+    }
+
     let start = Instant::now();
     let llm = LocalLlm::new(&config.llm).await?;
     let elapsed = start.elapsed();
+
     println!("  done ({:.1}s)", elapsed.as_secs_f64());
+    if let Some(cb) = callback {
+        cb(ProgressEvent::LoadComplete {
+            model_name,
+            duration_secs: elapsed.as_secs_f64(),
+        });
+    }
     Ok(llm)
 }
 
-/// Load TTS with a status message.
+/// Load TTS with a status message and optional progress callback.
 ///
 /// When `voice_reference` is empty, downloads and uses a default voice profile.
 /// When set, encodes a custom voice profile from the WAV file.
-fn load_tts(config: &SpeechConfig) -> Result<ChatterboxTts> {
-    print!("  Loading TTS (Chatterbox Turbo)...");
+fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<ChatterboxTts> {
+    let model_name = "TTS (Chatterbox Turbo)".to_owned();
+    print!("  Loading {model_name}...");
+    if let Some(cb) = callback {
+        cb(ProgressEvent::LoadStarted {
+            model_name: model_name.clone(),
+        });
+    }
+
     let start = Instant::now();
 
     let tts = match crate::tts::resolve_voice_wav(&config.tts) {
@@ -120,5 +171,11 @@ fn load_tts(config: &SpeechConfig) -> Result<ChatterboxTts> {
 
     let elapsed = start.elapsed();
     println!("  done ({:.1}s)", elapsed.as_secs_f64());
+    if let Some(cb) = callback {
+        cb(ProgressEvent::LoadComplete {
+            model_name,
+            duration_secs: elapsed.as_secs_f64(),
+        });
+    }
     Ok(tts)
 }
