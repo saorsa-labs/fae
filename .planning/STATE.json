@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "project": "fae-dioxus-gui",
+  "active": true,
+  "milestone": {
+    "number": 1,
+    "name": "Dioxus Desktop GUI"
+  },
+  "phase": {
+    "number": "1.1",
+    "name": "Setup & Progress Abstraction",
+    "plan": null
+  },
+  "progress": {
+    "total_tasks": 0,
+    "completed_tasks": 0,
+    "current_task": null
+  },
+  "status": "designed",
+  "last_updated": "2026-02-08T00:00:00Z"
+}
