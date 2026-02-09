@@ -765,11 +765,22 @@ fn app() -> Element {
                                         let (inj_tx, inj_rx) = tokio::sync::mpsc::unbounded_channel::<fae::pipeline::messages::TextInjection>();
                                         text_injection_tx.set(Some(inj_tx));
 
+                                        // Canvas tool registry — tools write here, GUI reads for display.
+                                        let canvas_registry = {
+                                            let mut reg = fae::canvas::registry::CanvasSessionRegistry::new();
+                                            let session = std::sync::Arc::new(std::sync::Mutex::new(
+                                                fae::canvas::session::CanvasSession::new("gui", 800.0, 600.0),
+                                            ));
+                                            reg.register("gui", session);
+                                            std::sync::Arc::new(std::sync::Mutex::new(reg))
+                                        };
+
                                         let pipeline =
                                             fae::PipelineCoordinator::with_models(config, models)
                                                 .with_mode(fae::PipelineMode::Conversation)
                                                 .with_runtime_events(runtime_tx.clone())
                                                 .with_tool_approvals(approval_tx)
+                                                .with_canvas_registry(canvas_registry)
                                                 .with_text_injection(inj_rx)
                                                 .with_console_output(false);
                                         let cancel = pipeline.cancel_token();

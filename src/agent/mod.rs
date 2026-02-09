@@ -5,6 +5,8 @@
 
 use crate::agent::local_provider::ToolingMistralrsProvider;
 use crate::approval::ToolApprovalRequest;
+use crate::canvas::registry::CanvasSessionRegistry;
+use crate::canvas::tools::{CanvasExportTool, CanvasInteractTool, CanvasRenderTool};
 use crate::config::{AgentToolMode, LlmConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
@@ -15,8 +17,8 @@ use saorsa_agent::{
     WebSearchTool, WriteTool,
 };
 use saorsa_ai::{MistralrsConfig, MistralrsProvider, StreamingProvider};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -36,6 +38,7 @@ impl SaorsaAgentLlm {
         preloaded_llm: Option<LocalLlm>,
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+        canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     ) -> Result<Self> {
         let model = match preloaded_llm {
             Some(llm) => llm.shared_model(),
@@ -116,6 +119,16 @@ impl SaorsaAgentLlm {
                     approval_timeout,
                 )));
             }
+        }
+
+        // Register canvas tools when a session registry is available.
+        // Canvas tools are non-destructive (read/render only), so no approval needed.
+        if let Some(registry) = canvas_registry
+            && !matches!(config.tool_mode, AgentToolMode::Off)
+        {
+            tools.register(Box::new(CanvasRenderTool::new(registry.clone())));
+            tools.register(Box::new(CanvasInteractTool::new(registry.clone())));
+            tools.register(Box::new(CanvasExportTool::new(registry)));
         }
 
         let max_tokens_u32 = if config.max_tokens > u32::MAX as usize {

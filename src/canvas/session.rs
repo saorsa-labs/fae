@@ -52,6 +52,11 @@ impl CanvasSession {
         &self.scene
     }
 
+    /// Mutable reference to the underlying scene (for tool-driven modifications).
+    pub fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+
     /// Number of messages in this session.
     pub fn message_count(&self) -> usize {
         self.messages.len()

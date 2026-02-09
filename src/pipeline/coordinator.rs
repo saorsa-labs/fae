@@ -2,6 +2,7 @@
 
 use crate::approval::ToolApprovalRequest;
 use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
+use crate::canvas::registry::CanvasSessionRegistry;
 use crate::config::SpeechConfig;
 use crate::error::Result;
 use crate::memory::{MemoryStore, Person, PrimaryUser};
@@ -12,8 +13,8 @@ use crate::pipeline::messages::{
 use crate::runtime::RuntimeEvent;
 use crate::startup::InitializedModels;
 use std::io::Write;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -53,6 +54,7 @@ pub struct PipelineCoordinator {
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
     text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
+    canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     console_output: bool,
 }
 
@@ -67,6 +69,7 @@ impl PipelineCoordinator {
             runtime_tx: None,
             tool_approval_tx: None,
             text_injection_rx: None,
+            canvas_registry: None,
             console_output: true,
         }
     }
@@ -83,6 +86,7 @@ impl PipelineCoordinator {
             runtime_tx: None,
             tool_approval_tx: None,
             text_injection_rx: None,
+            canvas_registry: None,
             console_output: true,
         }
     }
@@ -104,6 +108,15 @@ impl PipelineCoordinator {
     /// When set, high-risk tools (write/edit/bash/web) can be gated behind explicit approval.
     pub fn with_tool_approvals(mut self, tx: mpsc::UnboundedSender<ToolApprovalRequest>) -> Self {
         self.tool_approval_tx = Some(tx);
+        self
+    }
+
+    /// Attach a canvas session registry for canvas tool integration.
+    ///
+    /// When set, the agent's canvas tools (`canvas_render`, `canvas_interact`,
+    /// `canvas_export`) can look up and modify active canvas sessions.
+    pub fn with_canvas_registry(mut self, registry: Arc<Mutex<CanvasSessionRegistry>>) -> Self {
+        self.canvas_registry = Some(registry);
         self
     }
 
@@ -167,6 +180,7 @@ impl PipelineCoordinator {
         let cancel = self.cancel.clone();
         let runtime_tx = self.runtime_tx.clone();
         let tool_approval_tx = self.tool_approval_tx.clone();
+        let canvas_registry = self.canvas_registry.clone();
         let console_output = self.console_output;
         let assistant_speaking = Arc::new(AtomicBool::new(false));
         let assistant_generating = Arc::new(AtomicBool::new(false));
@@ -388,6 +402,7 @@ impl PipelineCoordinator {
                     let playback_cmd_tx = playback_cmd_tx.clone();
                     let runtime_tx = runtime_tx.clone();
                     let tool_approval_tx = tool_approval_tx.clone();
+                    let canvas_registry = canvas_registry.clone();
                     tokio::spawn(async move {
                         let ctl = LlmStageControl {
                             interrupt,
@@ -396,6 +411,7 @@ impl PipelineCoordinator {
                             playback_cmd_tx,
                             runtime_tx,
                             tool_approval_tx,
+                            canvas_registry,
                             console_output,
                             cancel,
                         };
@@ -1365,6 +1381,7 @@ struct LlmStageControl {
     playback_cmd_tx: mpsc::UnboundedSender<PlaybackCommand>,
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+    canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     console_output: bool,
     cancel: CancellationToken,
 }
@@ -1434,6 +1451,7 @@ async fn run_llm_stage(
                 preloaded,
                 ctl.runtime_tx.clone(),
                 ctl.tool_approval_tx.clone(),
+                ctl.canvas_registry.clone(),
             )
             .await
             {

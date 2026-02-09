@@ -4,5 +4,7 @@
 //! mapping pipeline events to renderable scene elements.
 
 pub mod bridge;
+pub mod registry;
 pub mod session;
+pub mod tools;
 pub mod types;

@@ -95,6 +95,7 @@ saorsa-ai = { version = "0.4", features = ["mistralrs"] }
 
 # Canvas visual output (saorsa-canvas scene graph)
 canvas-core = { path = "../saorsa-canvas/canvas-core" }
+canvas-mcp = { path = "../saorsa-canvas/canvas-mcp" }
 
 # Acoustic Echo Cancellation (FDAF adaptive filter)
 fdaf-aec = "0.1"
