@@ -350,6 +350,7 @@ enum LogKind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MainView {
     Home,
+    Canvas,
     Settings,
     Voices,
 }
@@ -630,6 +631,8 @@ fn app() -> Element {
 
     let mut drawer_open = use_signal(|| false);
     let mut view = use_signal(|| MainView::Home);
+    let mut canvas_bridge =
+        use_signal(|| fae::canvas::bridge::CanvasBridge::new("gui", 800.0, 600.0));
     let mut voices_status = use_signal(String::new);
     let mut voices_name = use_signal(|| "voice_1".to_owned());
     // (avatar_base_ok signal removed — no longer needed since poses are cached
@@ -809,6 +812,9 @@ fn app() -> Element {
                                                     }
                                                 }
                                                 Some(ev) = rrx.recv() => {
+                                                    // Route event through canvas bridge
+                                                    canvas_bridge.write().on_event(&ev);
+
                                                     match ev {
                                                         fae::RuntimeEvent::Control(ctrl) => match ctrl {
                                                             fae::pipeline::messages::ControlEvent::AssistantSpeechStart => assistant_speaking.set(true),
@@ -1138,6 +1144,14 @@ fn app() -> Element {
                         button {
                             class: "drawer-item",
                             onclick: move |_| {
+                                view.set(MainView::Canvas);
+                                drawer_open.set(false);
+                            },
+                            "Canvas"
+                        }
+                        button {
+                            class: "drawer-item",
+                            onclick: move |_| {
                                 view.set(MainView::Voices);
                                 drawer_open.set(false);
                             },
@@ -1377,6 +1391,25 @@ fn app() -> Element {
                                 "Send"
                             }
                         }
+                    }
+                }
+            }
+
+            if *view.read() == MainView::Canvas {
+                div { class: "canvas-view",
+                    div { class: "screen-header",
+                        button {
+                            class: "back-btn",
+                            onclick: move |_| view.set(MainView::Home),
+                            "\u{2190} Back"
+                        }
+                        h2 { class: "screen-title", "Canvas" }
+                    }
+                    div { id: "canvas-pane", class: "canvas-pane",
+                        dangerous_inner_html: canvas_bridge.read().session().to_html(),
+                    }
+                    if !is_running {
+                        p { class: "canvas-hint", "Start the pipeline to see messages here." }
                     }
                 }
             }
@@ -3649,6 +3682,57 @@ const GLOBAL_CSS: &str = r#"
 
     .modal-approve { background: var(--green); color: white; }
     .modal-deny { background: var(--red); color: white; }
+
+    /* --- Canvas Pane --- */
+    .canvas-view { flex: 1; display: flex; flex-direction: column; padding: 1rem; }
+    .canvas-pane {
+        flex: 1;
+        overflow-y: auto;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 0.75rem;
+        margin-top: 0.5rem;
+    }
+    .canvas-hint {
+        color: var(--text-tertiary);
+        font-size: 0.85rem;
+        text-align: center;
+        padding: 1rem;
+    }
+    .canvas-messages { display: flex; flex-direction: column; gap: 6px; }
+    .canvas-messages .message {
+        padding: 8px 12px;
+        border-radius: var(--radius-sm);
+        font-size: 0.9rem;
+        line-height: 1.4;
+        max-width: 85%;
+        word-wrap: break-word;
+    }
+    .canvas-messages .message.user {
+        align-self: flex-end;
+        background: rgba(59, 130, 246, 0.12);
+        color: #93c5fd;
+    }
+    .canvas-messages .message.assistant {
+        align-self: flex-start;
+        background: rgba(16, 185, 129, 0.12);
+        color: #6ee7b7;
+    }
+    .canvas-messages .message.system {
+        align-self: center;
+        background: rgba(107, 114, 128, 0.12);
+        color: var(--text-secondary);
+        font-style: italic;
+        font-size: 0.8rem;
+    }
+    .canvas-messages .message.tool {
+        align-self: flex-start;
+        background: rgba(245, 158, 11, 0.12);
+        color: #fcd34d;
+        font-family: monospace;
+        font-size: 0.8rem;
+    }
 
     /* --- Scrollbar --- */
     ::-webkit-scrollbar { width: 5px; }
