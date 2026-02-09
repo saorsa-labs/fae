@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "project": "fae-dioxus-gui",
+  "active": true,
+  "milestone": {
+    "number": 2,
+    "name": "Self-Update, Tool Integration & Scheduler"
+  },
+  "phase": {
+    "number": "2.1",
+    "name": "Self-Update System",
+    "plan": "PLAN-phase-2.1.md"
+  },
+  "progress": {
+    "total_tasks": 8,
+    "completed_tasks": 0,
+    "current_task": null
+  },
+  "status": "planning",
+  "last_updated": "2026-02-09T20:00:00Z",
+  "milestones_completed": [
+    {
+      "number": 1,
+      "name": "Dioxus Desktop GUI",
+      "completed_at": "2026-02-08T15:45:00Z"
+    }
+  ]
+}
