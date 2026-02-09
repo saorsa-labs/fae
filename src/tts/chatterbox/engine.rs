@@ -3,7 +3,9 @@
     dead_code,
     clippy::too_many_arguments,
     clippy::type_complexity,
-    clippy::collapsible_if
+    clippy::collapsible_if,
+    clippy::manual_unwrap_or,
+    clippy::manual_unwrap_or_default
 )]
 
 use std::collections::HashMap;
@@ -161,12 +163,15 @@ impl Chatterbox {
             .find(|i| i.name() == "attention_mask")
             .map(|i| i.name().to_owned());
 
-        let lm_inputs_embeds_type = language_model
+        let lm_inputs_embeds_type = match language_model
             .inputs()
             .iter()
             .find(|i| i.name() == "inputs_embeds")
             .and_then(elem_type_of)
-            .unwrap_or(ElemType::F32);
+        {
+            Some(t) => t,
+            None => ElemType::F32,
+        };
 
         let (kv_type, kv_shape, past_kv_names, present_to_past) =
             inspect_kv_cache_io(&language_model)?;
@@ -337,19 +342,23 @@ impl Chatterbox {
         .context("failed to build audio_tokens tensor")?
         .into_dyn();
 
-        let speaker_embeddings = tensor_from_f32_profile(
-            &profile.speaker_embeddings,
-            elem_type_of_named_input(&self.conditional_decoder, "speaker_embeddings")
-                .unwrap_or(ElemType::F32),
-        )
-        .context("failed to build speaker_embeddings tensor")?;
+        let speaker_embeddings_ty =
+            match elem_type_of_named_input(&self.conditional_decoder, "speaker_embeddings") {
+                Some(t) => t,
+                None => ElemType::F32,
+            };
+        let speaker_embeddings =
+            tensor_from_f32_profile(&profile.speaker_embeddings, speaker_embeddings_ty)
+                .context("failed to build speaker_embeddings tensor")?;
 
-        let speaker_features = tensor_from_f32_profile(
-            &profile.speaker_features,
-            elem_type_of_named_input(&self.conditional_decoder, "speaker_features")
-                .unwrap_or(ElemType::F32),
-        )
-        .context("failed to build speaker_features tensor")?;
+        let speaker_features_ty =
+            match elem_type_of_named_input(&self.conditional_decoder, "speaker_features") {
+                Some(t) => t,
+                None => ElemType::F32,
+            };
+        let speaker_features =
+            tensor_from_f32_profile(&profile.speaker_features, speaker_features_ty)
+                .context("failed to build speaker_features tensor")?;
 
         self.synthesize_inner(
             text,
@@ -417,7 +426,10 @@ impl Chatterbox {
                 position_ids = (0..seq_len_for_mask as i64).collect();
             } else {
                 attention_mask.push(1);
-                let next_pos = position_ids.last().copied().unwrap_or(0) + 1;
+                let next_pos = match position_ids.last().copied() {
+                    Some(v) => v,
+                    None => 0,
+                } + 1;
                 position_ids = vec![next_pos];
             }
 
@@ -495,7 +507,10 @@ impl Chatterbox {
         if prompt_shape.len() != 2 || prompt_shape[0] != 1 {
             bail!("unexpected prompt_token shape: {:?}", prompt_shape);
         }
-        let decoder_vocab_size = stop_token.unwrap_or(6562) - 1;
+        let decoder_vocab_size = match stop_token {
+            Some(v) => v,
+            None => 6562,
+        } - 1;
         if SILENCE_TOKEN >= decoder_vocab_size {
             bail!(
                 "silence token id {} is out of range for decoder_vocab_size {}",
@@ -717,10 +732,12 @@ fn session_builder(cfg: &SessionConfig) -> Result<ort::session::builder::Session
             #[cfg(feature = "coreml")]
             {
                 use ort::execution_providers::ExecutionProvider as _;
-                if !ort::execution_providers::coreml::CoreML::default()
-                    .is_available()
-                    .unwrap_or(false)
-                {
+                let available =
+                    match ort::execution_providers::coreml::CoreML::default().is_available() {
+                        Ok(v) => v,
+                        Err(_) => false,
+                    };
+                if !available {
                     bail!("CoreML EP is not available in this ONNX Runtime build");
                 }
                 eps.push(coreml_ep(cfg));
@@ -738,10 +755,13 @@ fn session_builder(cfg: &SessionConfig) -> Result<ort::session::builder::Session
             #[cfg(feature = "directml")]
             {
                 use ort::execution_providers::ExecutionProvider as _;
-                if !ort::execution_providers::DirectMLExecutionProvider::default()
+                let available = match ort::execution_providers::DirectMLExecutionProvider::default()
                     .is_available()
-                    .unwrap_or(false)
                 {
+                    Ok(v) => v,
+                    Err(_) => false,
+                };
+                if !available {
                     bail!("DirectML EP is not available in this ONNX Runtime build");
                 }
                 eps.push(directml_ep());
@@ -759,10 +779,13 @@ fn session_builder(cfg: &SessionConfig) -> Result<ort::session::builder::Session
             #[cfg(feature = "cuda")]
             {
                 use ort::execution_providers::ExecutionProvider as _;
-                if !ort::execution_providers::CUDAExecutionProvider::default()
+                let available = match ort::execution_providers::CUDAExecutionProvider::default()
                     .is_available()
-                    .unwrap_or(false)
                 {
+                    Ok(v) => v,
+                    Err(_) => false,
+                };
+                if !available {
                     bail!("CUDA EP is not available in this ONNX Runtime build");
                 }
                 eps.push(cuda_ep());
@@ -780,30 +803,38 @@ fn session_builder(cfg: &SessionConfig) -> Result<ort::session::builder::Session
             #[cfg(all(feature = "coreml", target_os = "macos"))]
             {
                 use ort::execution_providers::ExecutionProvider as _;
-                if ort::execution_providers::coreml::CoreML::default()
-                    .is_available()
-                    .unwrap_or(false)
-                {
+                let available =
+                    match ort::execution_providers::coreml::CoreML::default().is_available() {
+                        Ok(v) => v,
+                        Err(_) => false,
+                    };
+                if available {
                     eps.push(coreml_ep(cfg));
                 }
             }
             #[cfg(all(feature = "cuda", target_os = "windows"))]
             {
                 use ort::execution_providers::ExecutionProvider as _;
-                if ort::execution_providers::CUDAExecutionProvider::default()
+                let available = match ort::execution_providers::CUDAExecutionProvider::default()
                     .is_available()
-                    .unwrap_or(false)
                 {
+                    Ok(v) => v,
+                    Err(_) => false,
+                };
+                if available {
                     eps.push(cuda_ep());
                 }
             }
             #[cfg(all(feature = "directml", target_os = "windows"))]
             {
                 use ort::execution_providers::ExecutionProvider as _;
-                if ort::execution_providers::DirectMLExecutionProvider::default()
+                let available = match ort::execution_providers::DirectMLExecutionProvider::default()
                     .is_available()
-                    .unwrap_or(false)
                 {
+                    Ok(v) => v,
+                    Err(_) => false,
+                };
+                if available {
                     eps.push(directml_ep());
                 }
             }
@@ -854,9 +885,18 @@ fn inspect_kv_cache_io(
         }
     }
 
-    let kv_type = kv_type.unwrap_or(ElemType::F32);
-    let h = kv_heads.unwrap_or(DEFAULT_NUM_KV_HEADS);
-    let d = kv_head_dim.unwrap_or(DEFAULT_HEAD_DIM);
+    let kv_type = match kv_type {
+        Some(v) => v,
+        None => ElemType::F32,
+    };
+    let h = match kv_heads {
+        Some(v) => v,
+        None => DEFAULT_NUM_KV_HEADS,
+    };
+    let d = match kv_head_dim {
+        Some(v) => v,
+        None => DEFAULT_HEAD_DIM,
+    };
     let kv_shape = (1usize, h, 0usize, d);
 
     // Map present -> past (stable even if indexing order changes).

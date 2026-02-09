@@ -5,9 +5,12 @@ use std::path::PathBuf;
 
 /// Top-level configuration for the speech pipeline.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SpeechConfig {
     /// Audio capture/playback settings.
     pub audio: AudioConfig,
+    /// Acoustic echo cancellation settings.
+    pub aec: AecConfig,
     /// Voice activity detection settings.
     pub vad: VadConfig,
     /// Speech-to-text settings.
@@ -18,12 +21,19 @@ pub struct SpeechConfig {
     pub tts: TtsConfig,
     /// Model management settings.
     pub models: ModelConfig,
+    /// Memory settings (persistent user identity + known people).
+    pub memory: MemoryConfig,
     /// Conversation gate settings (wake word / stop phrase).
     pub conversation: ConversationConfig,
+    /// Barge-in (interrupt) behavior while the assistant is generating/speaking.
+    pub barge_in: BargeInConfig,
+    /// Wake word detection (MFCC+DTW keyword spotter).
+    pub wakeword: WakewordConfig,
 }
 
 /// Audio I/O configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AudioConfig {
     /// Input sample rate in Hz.
     pub input_sample_rate: u32,
@@ -52,10 +62,45 @@ impl Default for AudioConfig {
     }
 }
 
+/// Acoustic echo cancellation configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AecConfig {
+    /// Whether DSP-based echo cancellation is enabled.
+    pub enabled: bool,
+    /// FFT size for the FDAF adaptive filter (must be a power of two).
+    ///
+    /// Frame size = fft_size / 2. With fft_size=1024 and 16kHz capture,
+    /// each frame is 512 samples (32ms), matching the default capture buffer.
+    pub fft_size: usize,
+    /// NLMS learning rate (step size) for the adaptive filter.
+    ///
+    /// Typical range: 0.01–0.5. Lower values are more stable but adapt slower.
+    pub step_size: f32,
+}
+
+impl Default for AecConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            fft_size: 1024,
+            step_size: 0.05,
+        }
+    }
+}
+
 /// Voice activity detection configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VadConfig {
-    /// Detection threshold (0.0 - 1.0).
+    /// RMS energy threshold for speech detection.
+    ///
+    /// Audio chunks with RMS above this value are classified as speech.
+    /// Typical values for f32 samples in \[-1, 1\]:
+    ///   - 0.005: very sensitive (picks up quiet speech and some noise)
+    ///   - 0.01:  normal sensitivity (default, good for most environments)
+    ///   - 0.02:  reduced sensitivity (noisy environments)
+    ///   - 0.05:  low sensitivity (only loud/close speech)
     pub threshold: f32,
     /// Minimum silence duration in ms to end a speech segment.
     pub min_silence_duration_ms: u32,
@@ -68,7 +113,7 @@ pub struct VadConfig {
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
-            threshold: 0.5,
+            threshold: 0.01,
             min_silence_duration_ms: 700,
             speech_pad_ms: 30,
             min_speech_duration_ms: 500,
@@ -78,6 +123,7 @@ impl Default for VadConfig {
 
 /// Speech-to-text configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SttConfig {
     /// HuggingFace model ID for the STT model.
     pub model_id: String,
@@ -105,10 +151,28 @@ pub enum LlmBackend {
     Local,
     /// Remote inference via OpenAI-compatible API (Ollama, MLX, etc.).
     Api,
+    /// Agent loop via `saorsa-agent` + `saorsa-ai` (in-process by default, tool-capable).
+    Agent,
+}
+
+/// Tool capability mode for the agent harness.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolMode {
+    /// Disable tools entirely (LLM-only behavior).
+    Off,
+    /// Read-only tools (safe defaults: read/grep/find/ls).
+    #[default]
+    ReadOnly,
+    /// Read/write tools (adds file writing/editing).
+    ReadWrite,
+    /// Full tools (adds shell + web search; highest risk).
+    Full,
 }
 
 /// Language model configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LlmConfig {
     /// Which backend to use for inference.
     pub backend: LlmBackend,
@@ -123,6 +187,12 @@ pub struct LlmConfig {
     pub api_url: String,
     /// Model name to request from the API (API backend only).
     pub api_model: String,
+    /// API key for the remote provider (API/Agent backends only).
+    ///
+    /// For local servers (Ollama/LM Studio/vLLM), this is typically empty.
+    pub api_key: String,
+    /// Tool capability mode (Agent backend only).
+    pub tool_mode: AgentToolMode,
     /// Maximum tokens to generate per response.
     pub max_tokens: usize,
     /// Sampling temperature (0.0 = greedy, higher = more random).
@@ -131,7 +201,14 @@ pub struct LlmConfig {
     pub top_p: f64,
     /// Repeat penalty for generated tokens.
     pub repeat_penalty: f32,
+    /// Maximum number of history messages to retain (excluding the system prompt).
+    ///
+    /// This bounds context growth over time. Set to 0 to disable trimming.
+    pub max_history_messages: usize,
     /// System prompt for the conversation.
+    ///
+    /// This is appended to Fae's built-in base system prompt (which is not user-editable).
+    /// Keep this short and specific.
     pub system_prompt: String,
 }
 
@@ -147,22 +224,126 @@ impl Default for LlmConfig {
             // Ollama default endpoint.
             api_url: "http://localhost:11434".to_owned(),
             api_model: "smollm3:3b".to_owned(),
-            max_tokens: 80,
+            api_key: String::new(),
+            tool_mode: AgentToolMode::default(),
+            max_tokens: 200,
             temperature: 0.7,
             top_p: 0.9,
             repeat_penalty: 1.1,
-            system_prompt: "You are Fae, a voice assistant. Rules:\n\
-                - Maximum 1-2 sentences per response\n\
-                - Be direct and concise, never ramble\n\
-                - Never narrate your actions or thoughts\n\
-                - Only ask follow-up questions if truly essential"
-                .to_owned(),
+            max_history_messages: 24,
+            // User add-on prompt (optional). The fixed base prompt is always applied.
+            system_prompt: String::new(),
+        }
+    }
+}
+
+impl LlmConfig {
+    /// Fixed base prompt for Fae. This is always applied and should not be overridden by users.
+    pub const BASE_SYSTEM_PROMPT: &'static str = r#"You are Fae, a calm, helpful Scottish woman who works as a personal voice assistant.
+
+Identity:
+- Your name is Fae (rhymes with "day"). Never claim a different name.
+- You are Scottish. Speak naturally with light Scottish flavour — use occasional Scots words
+  like "aye", "wee", "bonnie", "och", "nae bother" — but keep it conversational and clear.
+  Do not overdo the dialect; you are easy to understand.
+
+Style:
+- Be concise: 1-3 short sentences. Answer the question directly.
+- Sound natural, helpful, and composed. Do not be excessively cheerful or silly.
+- Do not laugh, giggle, or use filler like "haha", "hehe", "lol", or emojis.
+- Do not use *action* descriptions, roleplay narration, or stage directions.
+- Do not narrate hidden reasoning or your internal steps.
+- Never repeat the user's question back to them.
+
+Safety/accuracy:
+- If you are unsure, ask one focused question.
+- Do not claim you did something you cannot verify.
+- If you do not know the answer, say so briefly.
+
+Personal context:
+- Prefer addressing the primary user by name when you know it.
+- If you do not know the primary user's name, say exactly: "Hello, I'm Fae. What's your name?""#;
+
+    // Old default prompts that may still exist in user config files. If a user has one of
+    // these stored in `system_prompt`, treat it as "no add-on" to avoid duplicating the
+    // base prompt.
+    const LEGACY_PROMPTS: &'static [&'static str] = &[
+        // v0.1 — no identity section
+        "You are Fae, a warm, friendly personal voice assistant.\n\
+\n\
+Style:\n\
+- Be concise: 1-2 sentences.\n\
+- Sound natural and helpful. No rambling.\n\
+- Do not narrate hidden reasoning or your internal steps.\n\
+\n\
+Safety/accuracy:\n\
+- If you are unsure, ask one focused question.\n\
+- Do not claim you did something you cannot verify.\n\
+\n\
+Personal context:\n\
+- Prefer addressing the primary user by name when you know it.\n\
+- If you do not know the primary user's name, ask for it.",
+        // v0.2 — identity section, pre-Scottish
+        "You are Fae, a warm, friendly personal voice assistant.\n\
+\n\
+Identity:\n\
+- Your name is Fae. Never claim a different name.\n\
+\n\
+Style:\n\
+- Be concise: 1-2 sentences.\n\
+- Sound natural and helpful. No rambling.\n\
+- Do not narrate hidden reasoning or your internal steps.\n\
+\n\
+Safety/accuracy:\n\
+- If you are unsure, ask one focused question.\n\
+- Do not claim you did something you cannot verify.\n\
+\n\
+Personal context:\n\
+- Prefer addressing the primary user by name when you know it.\n\
+- If you do not know the primary user's name, say exactly: \"Hello, I am Fae. What is your name?\"",
+        // v0.3 — Scottish identity, "witty" style (too playful)
+        "You are Fae, a warm, witty Scottish woman who works as a personal voice assistant.\n\
+\n\
+Identity:\n\
+- Your name is Fae (rhymes with \"day\"). Never claim a different name.\n\
+- You are Scottish. Speak naturally with light Scottish flavour \u{2014} use occasional Scots words\n\
+  like \"aye\", \"wee\", \"bonnie\", \"och\", \"nae bother\" \u{2014} but keep it conversational and clear.\n\
+  Do not overdo the dialect; you are easy to understand.\n\
+\n\
+Style:\n\
+- Be concise: 1-2 sentences.\n\
+- Sound natural, helpful, and personable. A wee bit of humour is welcome.\n\
+- Do not narrate hidden reasoning or your internal steps.\n\
+\n\
+Safety/accuracy:\n\
+- If you are unsure, ask one focused question.\n\
+- Do not claim you did something you cannot verify.\n\
+\n\
+Personal context:\n\
+- Prefer addressing the primary user by name when you know it.\n\
+- If you do not know the primary user's name, say exactly: \"Hello, I'm Fae. What's your name?\"",
+    ];
+
+    pub fn effective_system_prompt(&self) -> String {
+        let add_on = self.system_prompt.trim();
+        let is_legacy = Self::LEGACY_PROMPTS
+            .iter()
+            .any(|legacy| add_on == legacy.trim());
+        if add_on.is_empty() || is_legacy || add_on == Self::BASE_SYSTEM_PROMPT.trim() {
+            Self::BASE_SYSTEM_PROMPT.to_owned()
+        } else {
+            format!(
+                "{}\n\nUser add-on:\n{}",
+                Self::BASE_SYSTEM_PROMPT.trim_end(),
+                add_on
+            )
         }
     }
 }
 
 /// Text-to-speech configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TtsConfig {
     /// Path to a reference voice WAV file for voice cloning.
     /// If empty, a default voice is downloaded automatically.
@@ -191,6 +372,7 @@ impl Default for TtsConfig {
 
 /// Conversation gate configuration (wake word and stop phrase).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ConversationConfig {
     /// Wake word to activate the assistant (case-insensitive).
     pub wake_word: String,
@@ -198,20 +380,107 @@ pub struct ConversationConfig {
     pub stop_phrase: String,
     /// Whether the conversation gate is enabled.
     pub enabled: bool,
+    /// Seconds of inactivity (no user speech while assistant is idle) before
+    /// automatically returning to the Idle state.
+    ///
+    /// Set to 0 to disable the auto-idle timeout.
+    pub idle_timeout_s: u32,
 }
 
 impl Default for ConversationConfig {
     fn default() -> Self {
         Self {
-            wake_word: "fae".to_owned(),
-            stop_phrase: "that will do".to_owned(),
+            wake_word: "hi fae".to_owned(),
+            stop_phrase: "that will do fae".to_owned(),
             enabled: true,
+            idle_timeout_s: 30,
+        }
+    }
+}
+
+/// Barge-in configuration (user interrupts assistant by speaking).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BargeInConfig {
+    /// Whether barge-in is enabled.
+    pub enabled: bool,
+    /// Minimum RMS energy required to treat a VAD speech-start as a barge-in.
+    ///
+    /// This helps avoid false triggers from speaker leakage when no AEC is available.
+    pub min_rms: f32,
+    /// Minimum amount of continuous speech (ms) required before emitting a barge-in signal.
+    ///
+    /// This helps filter out short transients (clicks, bumps, breath noise).
+    pub confirm_ms: u32,
+    /// Ignore barge-in triggers for a short window after assistant playback starts (ms).
+    ///
+    /// This reduces false barge-in caused by speaker leakage right at playback start.
+    pub assistant_start_holdoff_ms: u32,
+    /// VAD silence duration (ms) used to close speech segments while the assistant
+    /// is speaking or generating. A shorter value delivers transcriptions to the
+    /// conversation gate faster, enabling quicker name-gated barge-in.
+    ///
+    /// Set to 0 to use the normal `vad.min_silence_duration_ms` at all times.
+    pub barge_in_silence_ms: u32,
+}
+
+impl Default for BargeInConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_rms: 0.05,
+            confirm_ms: 150,
+            assistant_start_holdoff_ms: 500,
+            barge_in_silence_ms: 300,
+        }
+    }
+}
+
+/// Wake word detection configuration (MFCC+DTW keyword spotter).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WakewordConfig {
+    /// Whether the wake word spotter is enabled.
+    ///
+    /// When enabled, the spotter runs in parallel with the VAD stage and
+    /// compares incoming audio against reference recordings using MFCC features
+    /// and DTW (Dynamic Time Warping).
+    pub enabled: bool,
+    /// Directory containing reference WAV recordings of the wake word (16kHz mono).
+    ///
+    /// Each `.wav` file in this directory is loaded as a reference template.
+    /// At least one reference is required for detection. More references (3-5
+    /// recordings of the keyword) improve robustness.
+    pub references_dir: std::path::PathBuf,
+    /// Detection threshold (0.0–1.0). Higher values require a closer match.
+    ///
+    /// The score is `1 / (1 + dtw_distance)`: identical audio scores 1.0,
+    /// completely different audio scores close to 0.0.
+    ///   - 0.3: very lenient (more false positives)
+    ///   - 0.5: balanced (default)
+    ///   - 0.7: strict (fewer false positives, may miss quiet speech)
+    pub threshold: f32,
+    /// Number of MFCC coefficients to extract per audio frame.
+    ///
+    /// Standard value is 13. Higher values capture more spectral detail
+    /// but increase computation.
+    pub num_mfcc: usize,
+}
+
+impl Default for WakewordConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            references_dir: default_memory_root_dir().join("wakeword"),
+            threshold: 0.5,
+            num_mfcc: 13,
         }
     }
 }
 
 /// Model management configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ModelConfig {
     /// Directory for caching downloaded models.
     pub cache_dir: PathBuf,
@@ -221,6 +490,22 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             cache_dir: dirs_cache_dir(),
+        }
+    }
+}
+
+/// Persistent memory configuration (stored in `~/.fae` by default).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryConfig {
+    /// Root directory for all persistent data (markdown memories + voice samples).
+    pub root_dir: PathBuf,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            root_dir: default_memory_root_dir(),
         }
     }
 }
@@ -236,6 +521,14 @@ fn dirs_cache_dir() -> PathBuf {
     }
 }
 
+fn default_memory_root_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".fae")
+    } else {
+        PathBuf::from("/tmp").join(".fae")
+    }
+}
+
 impl SpeechConfig {
     /// Load configuration from a TOML file, falling back to defaults for missing fields.
     ///
@@ -245,5 +538,129 @@ impl SpeechConfig {
     pub fn from_file(path: &std::path::Path) -> crate::error::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         toml::from_str(&content).map_err(|e| crate::error::SpeechError::Config(e.to_string()))
+    }
+
+    /// Save configuration to a TOML file, creating parent directories as needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written or the config cannot be serialized.
+    pub fn save_to_file(&self, path: &std::path::Path) -> crate::error::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| crate::error::SpeechError::Config(e.to_string()))?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    /// Returns the default config file path: `~/.config/fae/config.toml`.
+    pub fn default_config_path() -> PathBuf {
+        if let Some(config) = std::env::var_os("XDG_CONFIG_HOME") {
+            PathBuf::from(config).join("fae").join("config.toml")
+        } else if let Some(home) = std::env::var_os("HOME") {
+            PathBuf::from(home)
+                .join(".config")
+                .join("fae")
+                .join("config.toml")
+        } else {
+            PathBuf::from("/tmp/fae-config/config.toml")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn default_config_is_valid() {
+        let config = SpeechConfig::default();
+        assert!(config.audio.input_sample_rate > 0);
+        assert!(config.audio.output_sample_rate > 0);
+        assert!(config.audio.input_channels > 0);
+        assert!(config.audio.buffer_size > 0);
+        assert!(!config.stt.model_id.is_empty());
+        assert!(config.stt.chunk_size > 0);
+        assert!(config.llm.max_tokens > 0);
+        assert!(config.llm.temperature >= 0.0);
+        assert!(config.llm.top_p >= 0.0 && config.llm.top_p <= 1.0);
+        assert!(config.tts.max_new_tokens > 0);
+        assert!(config.tts.sample_rate > 0);
+    }
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let dir = std::env::temp_dir().join("fae-test-config-roundtrip");
+        let path = dir.join("config.toml");
+
+        let mut config = SpeechConfig::default();
+        config.audio.input_sample_rate = 44100;
+        config.llm.temperature = 1.5;
+        config.conversation.wake_word = "hello".to_string();
+
+        assert!(config.save_to_file(&path).is_ok());
+        assert!(path.exists());
+
+        let loaded = SpeechConfig::from_file(&path);
+        assert!(loaded.is_ok());
+        let loaded = match loaded {
+            Ok(c) => c,
+            Err(_) => unreachable!("load should succeed"),
+        };
+        assert_eq!(loaded.audio.input_sample_rate, 44100);
+        assert!((loaded.llm.temperature - 1.5).abs() < f64::EPSILON);
+        assert_eq!(loaded.conversation.wake_word, "hello");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_file_nonexistent_returns_error() {
+        let result = SpeechConfig::from_file(std::path::Path::new("/nonexistent/path/config.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_file_invalid_toml_returns_error() {
+        let dir = std::env::temp_dir().join("fae-test-config-invalid");
+        let path = dir.join("bad.toml");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(&path, "this is not valid toml {{{").ok();
+
+        let result = SpeechConfig::from_file(&path);
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_config_path_ends_with_config_toml() {
+        let path = SpeechConfig::default_config_path();
+        let path_str = path.to_string_lossy();
+        assert!(path_str.ends_with("config.toml"));
+        assert!(path_str.contains("fae"));
+    }
+
+    #[test]
+    fn llm_backend_default_is_local() {
+        assert_eq!(LlmBackend::default(), LlmBackend::Local);
+    }
+
+    #[test]
+    fn config_serializes_to_toml() {
+        let config = SpeechConfig::default();
+        let result = toml::to_string_pretty(&config);
+        assert!(result.is_ok());
+        let toml_str = match result {
+            Ok(s) => s,
+            Err(_) => unreachable!("serialization should succeed"),
+        };
+        assert!(toml_str.contains("input_sample_rate"));
+        assert!(toml_str.contains("threshold"));
     }
 }

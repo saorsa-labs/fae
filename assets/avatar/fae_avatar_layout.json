@@ -1,0 +1,7 @@
+{
+  "canvas_width": 2048,
+  "canvas_height": 2048,
+  "mouth_anchor": { "x": 890, "y": 980, "w": 268, "h": 160 },
+  "eyes_anchor": { "x": 720, "y": 680, "w": 600, "h": 240 },
+  "recommended_scale_rules": "Scale uniformly; anchors based on full canvas. Overlay assets are pre-aligned to the base portrait's features."
+}

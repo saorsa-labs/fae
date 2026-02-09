@@ -59,7 +59,8 @@ pub async fn initialize_models_with_progress(
     callback: Option<&ProgressCallback>,
 ) -> Result<InitializedModels> {
     let model_manager = ModelManager::new(&config.models)?;
-    let use_local_llm = config.llm.backend == LlmBackend::Local;
+    // Agent backend uses in-process inference (local model) by default.
+    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Agent);
 
     // --- Phase 1: Download all model files ---
     println!("\nChecking models...");

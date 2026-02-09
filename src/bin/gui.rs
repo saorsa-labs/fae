@@ -1,17 +1,26 @@
 //! Fae desktop GUI — simple start/stop interface with progress feedback.
 //!
-//! Requires the `gui` feature: `cargo run --features gui --bin fae-gui`
+//! Requires the `gui` feature: `cargo run --features gui --bin fae`
 
 #[cfg(not(feature = "gui"))]
 fn main() {
-    eprintln!("fae-gui requires the `gui` feature. Run with:");
-    eprintln!("  cargo run --features gui --bin fae-gui");
+    eprintln!("fae requires the `gui` feature. Run with:");
+    eprintln!("  cargo run --features gui --bin fae");
     std::process::exit(1);
 }
 
 #[cfg(feature = "gui")]
 fn main() {
     use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
+
+    // Initialize tracing so pipeline logs are visible in the terminal.
+    // Control verbosity with RUST_LOG, e.g. RUST_LOG=info,fae=debug just run
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     LaunchBuilder::new()
         .with_cfg(
@@ -131,6 +140,8 @@ mod gui {
 
     #[cfg(test)]
     mod tests {
+        #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
         use super::*;
 
         // --- AppStatus display_text ---
@@ -310,13 +321,350 @@ mod gui {
 use dioxus::prelude::*;
 
 #[cfg(feature = "gui")]
+use dioxus::desktop::{Config, LogicalSize, WindowBuilder, use_window};
+
+#[cfg(feature = "gui")]
 use gui::{AppStatus, SharedState};
+
+use std::path::Path;
+#[cfg(feature = "gui")]
+use std::sync::OnceLock;
+
+#[cfg(feature = "gui")]
+#[derive(Clone)]
+struct LogEntry {
+    kind: LogKind,
+    text: String,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LogKind {
+    User,
+    Assistant,
+    Tool,
+    System,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainView {
+    Home,
+    Settings,
+    Voices,
+}
+
+#[cfg(feature = "gui")]
+fn embedded_fae_jpg_data_uri() -> String {
+    use base64::Engine as _;
+
+    static URI: OnceLock<String> = OnceLock::new();
+    URI.get_or_init(|| {
+        let bytes = include_bytes!("../../assets/fae.jpg");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        format!("data:image/jpeg;base64,{b64}")
+    })
+    .clone()
+}
+
+#[cfg(feature = "gui")]
+fn resolve_avatar_dir(memory_root: &Path) -> Option<std::path::PathBuf> {
+    let mem = memory_root.join("avatar");
+    if mem.is_dir() {
+        return Some(mem);
+    }
+    let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("avatar");
+    if dev.is_dir() {
+        return Some(dev);
+    }
+    None
+}
+
+/// Pre-load all avatar pose images as data URIs at startup.
+///
+/// WebKit in Dioxus desktop blocks `file://` subresources loaded from in-memory
+/// HTML pages. By converting PNGs to data URIs once, we avoid repeated file I/O
+/// and work around the WebKit restriction.
+#[cfg(feature = "gui")]
+fn load_avatar_cache(
+    avatar_dir: &Option<std::path::PathBuf>,
+) -> std::collections::HashMap<String, String> {
+    use base64::Engine as _;
+    let mut map = std::collections::HashMap::new();
+    let Some(dir) = avatar_dir else {
+        return map;
+    };
+    let poses = [
+        "fae_base.png",
+        "eyes_blink.png",
+        "mouth_open_small.png",
+        "mouth_open_medium.png",
+        "mouth_open_wide.png",
+    ];
+    for name in poses {
+        let path = dir.join(name);
+        if let Ok(bytes) = std::fs::read(&path) {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            map.insert(name.to_owned(), format!("data:image/png;base64,{b64}"));
+        }
+    }
+    map
+}
+
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, PartialEq)]
+enum StagePhase {
+    Pending,
+    Downloading { filename: String },
+    Loading,
+    Ready,
+    Error(String),
+}
+
+#[cfg(feature = "gui")]
+impl StagePhase {
+    fn label(&self, thing: &str) -> String {
+        match self {
+            Self::Pending => thing.to_owned(),
+            Self::Downloading { .. } | Self::Loading => format!("Loading {thing}"),
+            Self::Ready => format!("{thing} ready"),
+            Self::Error(_) => format!("{thing} error"),
+        }
+    }
+
+    fn css_class(&self) -> &'static str {
+        match self {
+            Self::Pending => "stage stage-pending",
+            Self::Downloading { .. } | Self::Loading => "stage stage-loading",
+            Self::Ready => "stage stage-ready",
+            Self::Error(_) => "stage stage-error",
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn update_stages_from_progress(
+    event: &fae::progress::ProgressEvent,
+    stt: &mut Signal<StagePhase>,
+    llm: &mut Signal<StagePhase>,
+    tts: &mut Signal<StagePhase>,
+) {
+    use fae::progress::ProgressEvent;
+
+    match event {
+        ProgressEvent::DownloadStarted { filename, .. }
+        | ProgressEvent::DownloadProgress { filename, .. } => {
+            stt.set(StagePhase::Downloading {
+                filename: filename.clone(),
+            });
+        }
+        ProgressEvent::LoadStarted { model_name } => {
+            if model_name.starts_with("STT") {
+                stt.set(StagePhase::Loading);
+            } else if model_name.starts_with("LLM") {
+                llm.set(StagePhase::Loading);
+            } else if model_name.starts_with("TTS") {
+                tts.set(StagePhase::Loading);
+            }
+        }
+        ProgressEvent::LoadComplete { model_name, .. } => {
+            if model_name.starts_with("STT") {
+                stt.set(StagePhase::Ready);
+            } else if model_name.starts_with("LLM") {
+                llm.set(StagePhase::Ready);
+            } else if model_name.starts_with("TTS") {
+                tts.set(StagePhase::Ready);
+            }
+        }
+        ProgressEvent::Error { message } => {
+            let msg = message.clone();
+            stt.set(StagePhase::Error(msg.clone()));
+            llm.set(StagePhase::Error(msg.clone()));
+            tts.set(StagePhase::Error(msg));
+        }
+        ProgressEvent::DownloadComplete { .. } | ProgressEvent::Cached { .. } => {}
+    }
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelPickerTab {
+    Recommended,
+    Search,
+    Manual,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Debug)]
+enum UiBusEvent {
+    ConfigUpdated,
+}
+
+#[cfg(feature = "gui")]
+fn ui_bus() -> tokio::sync::broadcast::Sender<UiBusEvent> {
+    static BUS: OnceLock<tokio::sync::broadcast::Sender<UiBusEvent>> = OnceLock::new();
+    BUS.get_or_init(|| {
+        let (tx, _rx) = tokio::sync::broadcast::channel(32);
+        tx
+    })
+    .clone()
+}
+
+#[cfg(feature = "gui")]
+fn read_config_or_default() -> fae::SpeechConfig {
+    let path = fae::SpeechConfig::default_config_path();
+    if path.exists() {
+        fae::SpeechConfig::from_file(&path).unwrap_or_default()
+    } else {
+        fae::SpeechConfig::default()
+    }
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone)]
+struct ModelDetails {
+    id: String,
+    license: Option<String>,
+    base_models: Vec<String>,
+    gated: Option<bool>,
+    snippet: Option<String>,
+    tokenizer_in_repo: bool,
+    gguf_files: Vec<String>,
+    // filename -> size
+    gguf_sizes: Vec<(String, Option<u64>)>,
+}
+
+#[cfg(feature = "gui")]
+impl LogEntry {
+    fn class_name(&self) -> &'static str {
+        match self.kind {
+            LogKind::User => "log-line log-user",
+            LogKind::Assistant => "log-line log-assistant",
+            LogKind::Tool => "log-line log-tool",
+            LogKind::System => "log-line log-system",
+        }
+    }
+}
+
+/// Given the activity log and a fork index, compute how many LLM history
+/// entries to keep. Counts User + Assistant entries up to (and including)
+/// the fork index, adds 1 for the system prompt.
+#[cfg(feature = "gui")]
+fn compute_history_keep_count(log: &[LogEntry], fork_index: usize) -> usize {
+    let conversation_entries = log[..=fork_index.min(log.len().saturating_sub(1))]
+        .iter()
+        .filter(|e| matches!(e.kind, LogKind::User | LogKind::Assistant))
+        .count();
+    conversation_entries + 1 // +1 for system prompt
+}
+
+#[cfg(feature = "gui")]
+fn fmt_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+    let b = bytes as f64;
+    if b >= TB {
+        format!("{:.1} TB", b / TB)
+    } else if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+#[cfg(feature = "gui")]
+fn fit_label(file_bytes: Option<u64>, ram_bytes: Option<u64>) -> Option<String> {
+    let file = file_bytes?;
+    let ram = ram_bytes?;
+    // Very rough heuristic: allow up to ~40% of RAM for weights.
+    let ratio = file as f64 / ram as f64;
+    let label = if ratio <= 0.15 {
+        "Fits easily"
+    } else if ratio <= 0.30 {
+        "Fits"
+    } else if ratio <= 0.40 {
+        "Tight"
+    } else {
+        "Likely too large"
+    };
+    Some(format!("{label} ({:.0}% of RAM)", ratio * 100.0))
+}
 
 /// Root application component.
 #[cfg(feature = "gui")]
 fn app() -> Element {
+    let desktop = use_window();
     let mut status = use_signal(|| AppStatus::Idle);
     let mut shared = use_signal(|| SharedState { cancel_token: None });
+    let mut assistant_speaking = use_signal(|| false);
+    let mut assistant_generating = use_signal(|| false);
+    let mut assistant_rms = use_signal(|| 0.0f32);
+    let blink = use_signal(|| false);
+    let mut activity_log = use_signal(Vec::<LogEntry>::new);
+    let mut assistant_buf = use_signal(String::new);
+    let mut llm_backend = use_signal(|| None::<fae::config::LlmBackend>);
+    let mut tool_mode = use_signal(|| None::<fae::config::AgentToolMode>);
+    let mut pending_approval = use_signal(|| None::<fae::ToolApprovalRequest>);
+    let mut approval_queue =
+        use_signal(std::collections::VecDeque::<fae::ToolApprovalRequest>::new);
+    let mut config_state = use_signal(read_config_or_default);
+    let mut config_save_status = use_signal(String::new);
+
+    let mut stt_stage = use_signal(|| StagePhase::Pending);
+    let mut llm_stage = use_signal(|| StagePhase::Pending);
+    let mut tts_stage = use_signal(|| StagePhase::Pending);
+
+    let mut text_input = use_signal(String::new);
+    let mut fork_point = use_signal(|| None::<usize>);
+    let mut text_injection_tx = use_signal(|| {
+        None::<tokio::sync::mpsc::UnboundedSender<fae::pipeline::messages::TextInjection>>
+    });
+
+    let mut drawer_open = use_signal(|| false);
+    let mut view = use_signal(|| MainView::Home);
+    let mut voices_status = use_signal(String::new);
+    let mut voices_name = use_signal(|| "voice_1".to_owned());
+    // (avatar_base_ok signal removed — no longer needed since poses are cached
+    // as data URIs and never use file:// URLs that can fail.)
+
+    use_hook(move || {
+        let mut config_state = config_state;
+        spawn(async move {
+            let mut rx = ui_bus().subscribe();
+            loop {
+                match rx.recv().await {
+                    Ok(UiBusEvent::ConfigUpdated) => {
+                        let res = tokio::task::spawn_blocking(read_config_or_default).await;
+                        if let Ok(cfg) = res {
+                            config_state.set(cfg);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    });
+
+    use_hook(move || {
+        let mut blink = blink;
+        spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(4200)).await;
+                blink.set(true);
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                blink.set(false);
+            }
+        });
+    });
 
     // Button click handler
     let on_button_click = move |_| {
@@ -329,6 +677,9 @@ fn app() -> Element {
                     bytes_downloaded: 0,
                     total_bytes: None,
                 });
+                stt_stage.set(StagePhase::Loading);
+                llm_stage.set(StagePhase::Pending);
+                tts_stage.set(StagePhase::Pending);
 
                 // Use a channel to bridge progress events from the Send+Sync
                 // callback to the single-threaded Dioxus signal.
@@ -347,9 +698,10 @@ fn app() -> Element {
                 // Background task: run model init + pipeline on the tokio threadpool.
                 // Results come back via channels.
                 let (result_tx, mut result_rx) = tokio::sync::mpsc::unbounded_channel();
+                let config_for_run = config_state.read().clone();
 
                 tokio::task::spawn(async move {
-                    let config = fae::SpeechConfig::default();
+                    let config = config_for_run;
 
                     // Phase 1: Download + Load models
                     let models_result =
@@ -367,6 +719,7 @@ fn app() -> Element {
                     loop {
                         tokio::select! {
                             Some(event) = rx.recv() => {
+                                update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage);
                                 if let Some(new_status) = gui::apply_progress_event(event) {
                                     status.set(new_status);
                                 }
@@ -374,6 +727,7 @@ fn app() -> Element {
                             Some(msg) = result_rx.recv() => {
                                 // Drain any remaining progress events first.
                                 while let Ok(event) = rx.try_recv() {
+                                    update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage);
                                     if let Some(new_status) = gui::apply_progress_event(event) {
                                         status.set(new_status);
                                     }
@@ -381,23 +735,131 @@ fn app() -> Element {
                                 match msg {
                                     PipelineMessage::ModelsReady(Ok((config, models))) => {
                                         status.set(AppStatus::Running);
+                                        stt_stage.set(StagePhase::Ready);
+                                        llm_stage.set(StagePhase::Ready);
+                                        tts_stage.set(StagePhase::Ready);
+                                        assistant_speaking.set(false);
+                                        assistant_generating.set(false);
+                                        assistant_buf.set(String::new());
+                                        activity_log.set(Vec::new());
+                                        llm_backend.set(Some(config.llm.backend));
+                                        tool_mode.set(Some(config.llm.tool_mode));
+
+                                        let (runtime_tx, _) =
+                                            tokio::sync::broadcast::channel::<fae::RuntimeEvent>(256);
+                                        let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<fae::ToolApprovalRequest>();
+                                        let (inj_tx, inj_rx) = tokio::sync::mpsc::unbounded_channel::<fae::pipeline::messages::TextInjection>();
+                                        text_injection_tx.set(Some(inj_tx));
 
                                         let pipeline =
                                             fae::PipelineCoordinator::with_models(config, models)
-                                                .with_mode(fae::PipelineMode::Conversation);
+                                                .with_mode(fae::PipelineMode::Conversation)
+                                                .with_runtime_events(runtime_tx.clone())
+                                                .with_tool_approvals(approval_tx)
+                                                .with_text_injection(inj_rx)
+                                                .with_console_output(false);
                                         let cancel = pipeline.cancel_token();
                                         shared.write().cancel_token = Some(cancel);
 
-                                        match pipeline.run().await {
-                                            Ok(()) => status.set(AppStatus::Idle),
-                                            Err(e) => {
-                                                status.set(AppStatus::Error(e.to_string()));
+                                        let (rtx, mut rrx) = tokio::sync::mpsc::unbounded_channel::<fae::RuntimeEvent>();
+                                        let mut b_rx = runtime_tx.subscribe();
+                                        let forward_handle = tokio::task::spawn(async move {
+                                            loop {
+                                                match b_rx.recv().await {
+                                                    Ok(ev) => {
+                                                        let _ = rtx.send(ev);
+                                                    }
+                                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                                }
+                                            }
+                                        });
+
+                                        let mut pipeline_handle = tokio::task::spawn(async move { pipeline.run().await });
+
+                                        loop {
+                                            tokio::select! {
+                                                res = &mut pipeline_handle => {
+                                                    forward_handle.abort();
+                                                    pending_approval.set(None);
+                                                    approval_queue.set(std::collections::VecDeque::new());
+                                                    match res {
+                                                        Ok(Ok(())) => status.set(AppStatus::Idle),
+                                                        Ok(Err(e)) => status.set(AppStatus::Error(e.to_string())),
+                                                        Err(e) => status.set(AppStatus::Error(format!("pipeline task failed: {e}"))),
+                                                    }
+                                                    break;
+                                                }
+                                                Some(req) = approval_rx.recv() => {
+                                                    if pending_approval.read().is_none() {
+                                                        pending_approval.set(Some(req));
+                                                    } else {
+                                                        approval_queue.write().push_back(req);
+                                                    }
+                                                }
+                                                Some(ev) = rrx.recv() => {
+                                                    match ev {
+                                                        fae::RuntimeEvent::Control(ctrl) => match ctrl {
+                                                            fae::pipeline::messages::ControlEvent::AssistantSpeechStart => assistant_speaking.set(true),
+                                                            fae::pipeline::messages::ControlEvent::AssistantSpeechEnd { .. } => assistant_speaking.set(false),
+                                                            fae::pipeline::messages::ControlEvent::UserSpeechStart { .. } => {}
+                                                            fae::pipeline::messages::ControlEvent::WakewordDetected => {}
+                                                        },
+                                                        fae::RuntimeEvent::AssistantGenerating { active } => assistant_generating.set(active),
+                                                        fae::RuntimeEvent::AssistantAudioLevel { rms } => assistant_rms.set(rms),
+                                                        fae::RuntimeEvent::Transcription(t) => {
+                                                            let text = t.text.trim().to_owned();
+                                                            if !text.is_empty() {
+                                                                activity_log.write().push(LogEntry { kind: LogKind::User, text });
+                                                            }
+                                                        }
+                                                        fae::RuntimeEvent::AssistantSentence(chunk) => {
+                                                            if !chunk.text.is_empty() {
+                                                                assistant_buf.write().push_str(&chunk.text);
+                                                            }
+                                                            if chunk.is_final {
+                                                                let msg = { assistant_buf.read().trim().to_owned() };
+                                                                assistant_buf.set(String::new());
+                                                                if !msg.is_empty() {
+                                                                    activity_log.write().push(LogEntry { kind: LogKind::Assistant, text: msg });
+                                                                }
+                                                            }
+                                                        }
+                                                        fae::RuntimeEvent::ToolCall { name, input_json } => {
+                                                            activity_log.write().push(LogEntry {
+                                                                kind: LogKind::Tool,
+                                                                text: format!("Tool call: {name} {input_json}"),
+                                                            });
+                                                        }
+                                                        fae::RuntimeEvent::ToolResult { name, success } => {
+                                                            activity_log.write().push(LogEntry {
+                                                                kind: LogKind::Tool,
+                                                                text: format!("Tool result: {name} success={success}"),
+                                                            });
+                                                        }
+                                                    }
+
+                                                    // Prevent unbounded growth.
+                                                    const MAX_LOG_LINES: usize = 200;
+                                                    let current_len = activity_log.read().len();
+                                                    if current_len > MAX_LOG_LINES {
+                                                        let drain = current_len - MAX_LOG_LINES;
+                                                        activity_log.write().drain(0..drain);
+                                                    }
+                                                }
                                             }
                                         }
                                         shared.write().cancel_token = None;
+                                        assistant_speaking.set(false);
+                                        assistant_generating.set(false);
+                                        text_injection_tx.set(None);
+                                        fork_point.set(None);
                                     }
                                     PipelineMessage::ModelsReady(Err(e)) => {
                                         status.set(AppStatus::Error(e.to_string()));
+                                        stt_stage.set(StagePhase::Error(e.to_string()));
+                                        llm_stage.set(StagePhase::Error(e.to_string()));
+                                        tts_stage.set(StagePhase::Error(e.to_string()));
                                     }
                                 }
                                 break;
@@ -418,7 +880,18 @@ fn app() -> Element {
     };
 
     let current_status = status.read().clone();
-    let status_text = current_status.display_text();
+    let status_text = match &current_status {
+        AppStatus::Running => {
+            if *assistant_speaking.read() {
+                "Speaking...".to_owned()
+            } else if *assistant_generating.read() {
+                "Thinking...".to_owned()
+            } else {
+                current_status.display_text()
+            }
+        }
+        _ => current_status.display_text(),
+    };
     let button_label = if current_status.show_start() {
         "Start"
     } else {
@@ -431,6 +904,61 @@ fn app() -> Element {
         AppStatus::Downloading { .. } | AppStatus::Loading { .. }
     );
     let is_error = matches!(current_status, AppStatus::Error(_));
+    let settings_enabled = matches!(current_status, AppStatus::Idle | AppStatus::Error(_));
+    let cfg_backend = config_state.read().llm.backend;
+    let cfg_tool_mode = config_state.read().llm.tool_mode;
+    let backend_value = match cfg_backend {
+        fae::config::LlmBackend::Local => "local",
+        fae::config::LlmBackend::Api => "api",
+        fae::config::LlmBackend::Agent => "agent",
+    };
+    let tool_mode_value = match cfg_tool_mode {
+        fae::config::AgentToolMode::Off => "off",
+        fae::config::AgentToolMode::ReadOnly => "read_only",
+        fae::config::AgentToolMode::ReadWrite => "read_write",
+        fae::config::AgentToolMode::Full => "full",
+    };
+    let tool_mode_select_enabled =
+        settings_enabled && matches!(cfg_backend, fae::config::LlmBackend::Agent);
+    let config_path = fae::SpeechConfig::default_config_path();
+    let current_voice_reference = config_state.read().tts.voice_reference.clone();
+    let fae_voice_path = fae::tts::bundled_fae_voice_path();
+    let is_fae_voice = current_voice_reference.is_empty()
+        || std::path::Path::new(&current_voice_reference) == fae_voice_path.as_path();
+    let voice_ref_display = if is_fae_voice {
+        "Fae (Scottish, built-in)".to_owned()
+    } else {
+        current_voice_reference.clone()
+    };
+
+    let (stt_model_id, llm_models_in_use, tts_models_in_use) = {
+        let cfg = config_state.read();
+        let stt = cfg.stt.model_id.clone();
+        let llm = match cfg_backend {
+            fae::config::LlmBackend::Api => {
+                format!("API: {} @ {}", cfg.llm.api_model, cfg.llm.api_url)
+            }
+            fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent => {
+                format!("{} / {}", cfg.llm.model_id, cfg.llm.gguf_file)
+            }
+        };
+        let tts = if cfg.tts.voice_reference.trim().is_empty() {
+            "Fae (Scottish, built-in)".to_owned()
+        } else {
+            cfg.tts.voice_reference.clone()
+        };
+        (stt, llm, tts)
+    };
+
+    let current_backend = *llm_backend.read();
+    let current_tool_mode = *tool_mode.read();
+    let risky_tools_enabled = matches!(
+        (current_backend, current_tool_mode),
+        (
+            Some(fae::config::LlmBackend::Agent),
+            Some(fae::config::AgentToolMode::ReadWrite | fae::config::AgentToolMode::Full)
+        )
+    );
 
     // Progress bar fraction (0.0 to 1.0)
     let progress_fraction = if let AppStatus::Downloading {
@@ -450,6 +978,42 @@ fn app() -> Element {
     let progress_pct = format!("{:.0}%", progress_fraction * 100.0);
     let progress_width = format!("{}%", (progress_fraction * 100.0) as u32);
 
+    let stt_tooltip = {
+        let cfg = config_state.read();
+        format!("Speech-to-text\nModel: {}\n", cfg.stt.model_id)
+    };
+    let llm_tooltip = {
+        let cfg = config_state.read();
+        match cfg.llm.backend {
+            fae::config::LlmBackend::Api => format!(
+                "Intelligence model (API)\nServer: {}\nModel: {}\n",
+                cfg.llm.api_url, cfg.llm.api_model
+            ),
+            fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent => format!(
+                "Intelligence model (local)\nRepo: {}\nGGUF: {}\nTokenizer: {}\n",
+                cfg.llm.model_id,
+                cfg.llm.gguf_file,
+                if cfg.llm.tokenizer_id.is_empty() {
+                    "(in repo)"
+                } else {
+                    &cfg.llm.tokenizer_id
+                }
+            ),
+        }
+    };
+    let tts_tooltip = {
+        let cfg = config_state.read();
+        let voice = if cfg.tts.voice_reference.trim().is_empty() {
+            "Fae (Scottish, built-in)".to_owned()
+        } else {
+            cfg.tts.voice_reference.clone()
+        };
+        format!(
+            "Text-to-speech\nVoice reference: {}\nModel dtype: {}\n",
+            voice, cfg.tts.model_dtype
+        )
+    };
+
     // Button colors
     let button_bg = if is_error {
         "#a78bfa"
@@ -460,60 +1024,1653 @@ fn app() -> Element {
     };
     let button_opacity = if button_enabled { "1" } else { "0.5" };
 
+    let open_models_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(models_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Models")
+                    .with_inner_size(LogicalSize::new(520.0, 760.0))
+                    .with_min_inner_size(LogicalSize::new(420.0, 600.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
+    let memory_root = config_state.read().memory.root_dir.clone();
+    let avatar_dir = resolve_avatar_dir(&memory_root);
+    // Cache avatar pose data URIs once (avoids per-render file I/O and works
+    // around WebKit blocking file:// subresources in Dioxus desktop).
+    let avatar_cache = use_hook(|| load_avatar_cache(&avatar_dir));
+
+    // Pick the single active pose image based on speech state.
+    // New avatar pack uses full-frame poses (entire face per image), so we swap
+    // the whole image rather than overlaying cropped patches.
+    let rms = *assistant_rms.read();
+    let speaking = *assistant_speaking.read();
+    let blinking = *blink.read();
+
+    let active_pose_name = if blinking {
+        "eyes_blink.png"
+    } else if speaking {
+        if rms < 0.030 {
+            "mouth_open_small.png"
+        } else if rms < 0.060 {
+            "mouth_open_medium.png"
+        } else {
+            "mouth_open_wide.png"
+        }
+    } else {
+        "fae_base.png"
+    };
+
+    let active_src = avatar_cache
+        .get(active_pose_name)
+        .cloned()
+        .unwrap_or_else(embedded_fae_jpg_data_uri);
+
+    // For the idle/stopped portrait: always use the full uncropped woodland image.
+    let portrait_src = embedded_fae_jpg_data_uri();
+
     rsx! {
         // Global styles
         style { {GLOBAL_CSS} }
 
         div { class: "container",
-            // Fae avatar with loading/running overlays
-            div {
-                class: match (&is_running, &is_loading) {
-                    (true, _) => "avatar avatar-pulse",
-                    (_, true) => "avatar avatar-loading",
-                    _ => "avatar",
-                },
-                img {
-                    src: "assets/fae.jpg",
-                    alt: "Fae",
-                    class: "avatar-img",
+            div { class: "topbar",
+                button {
+                    class: "hamburger",
+                    onclick: move |_| {
+                        let next = { !*drawer_open.read() };
+                        drawer_open.set(next);
+                    },
+                    "☰"
                 }
-                // Spinning ring overlay during loading
-                if is_loading {
-                    div { class: "avatar-spinner" }
+                p { class: "topbar-title", "Fae" }
+                button {
+                    class: "topbar-btn",
+                    disabled: !settings_enabled,
+                    onclick: {
+                        let open = open_models_window.clone();
+                        move |_| open()
+                    },
+                    "Models"
                 }
             }
 
-            // Title
-            h1 { class: "title", "Fae" }
-
-            // Status text
-            p {
-                class: if is_error { "status status-error" } else { "status" },
-                "{status_text}"
-            }
-
-            // Progress bar (visible during downloads)
-            if is_loading {
-                div { class: "progress-container",
-                    div { class: "progress-bar",
-                        div {
-                            class: "progress-fill",
-                            style: "width: {progress_width};",
+            if *drawer_open.read() {
+                div {
+                    class: "drawer-overlay",
+                    onclick: move |_| drawer_open.set(false),
+                    div {
+                        class: "drawer",
+                        onclick: move |evt| evt.stop_propagation(),
+                        button {
+                            class: "drawer-item",
+                            onclick: move |_| drawer_open.set(false),
+                            "Close"
+                        }
+                        button {
+                            class: "drawer-item",
+                            onclick: move |_| {
+                                view.set(MainView::Home);
+                                drawer_open.set(false);
+                            },
+                            "Home"
+                        }
+                        button {
+                            class: "drawer-item",
+                            onclick: move |_| {
+                                view.set(MainView::Settings);
+                                drawer_open.set(false);
+                            },
+                            "Settings"
+                        }
+                        button {
+                            class: "drawer-item",
+                            onclick: move |_| {
+                                view.set(MainView::Voices);
+                                drawer_open.set(false);
+                            },
+                            "Voice cloning"
+                        }
+                        button {
+                            class: "drawer-item",
+                            disabled: !settings_enabled,
+                            onclick: {
+                                let open = open_models_window.clone();
+                                move |_| {
+                                    drawer_open.set(false);
+                                    open();
+                                }
+                            },
+                            "Models..."
                         }
                     }
-                    if progress_fraction > 0.0 {
-                        p { class: "progress-text", "{progress_pct}" }
+                }
+            }
+
+            if *view.read() == MainView::Home {
+                if is_running {
+                    // Animated circular avatar while running — swap full-frame poses
+                    div {
+                        class: "avatar avatar-pulse",
+                        img {
+                            src: "{active_src}",
+                            alt: "Fae",
+                            class: "avatar-img",
+                        }
+                    }
+                } else {
+                    // Full rectangular portrait when idle, loading, stopped, or error
+                    div {
+                        class: if is_loading { "avatar-portrait avatar-portrait-loading" } else { "avatar-portrait" },
+                        img {
+                            src: "{portrait_src}",
+                            alt: "Fae",
+                            class: "avatar-portrait-img",
+                        }
+                        if is_loading {
+                            div { class: "avatar-portrait-spinner" }
+                        }
+                    }
+                }
+
+                // Title
+                h1 { class: "title", "Fae" }
+
+                // Status text
+                p {
+                    class: if is_error { "status status-error" } else { "status" },
+                    "{status_text}"
+                }
+
+                // Voice command hints (only when models are loaded and running)
+                if is_running {
+                    p { class: "hint",
+                        "Say "
+                        span { class: "hint-phrase", "\"Hi Fae\"" }
+                        " to converse with me"
+                    }
+                    p { class: "hint",
+                        "Say "
+                        span { class: "hint-phrase", "\"That'll do Fae\"" }
+                        " to stop me"
+                    }
+                }
+
+                div { class: "stagebar",
+                    div {
+                        class: "{stt_stage.read().css_class()}",
+                        title: "{stt_tooltip}",
+                        "Speech-to-text: {stt_stage.read().label(\"ears\")}"
+                    }
+                    div {
+                        class: "{llm_stage.read().css_class()}",
+                        title: "{llm_tooltip}",
+                        "Intelligence: {llm_stage.read().label(\"brain\")}"
+                    }
+                    div {
+                        class: "{tts_stage.read().css_class()}",
+                        title: "{tts_tooltip}",
+                        "Text-to-speech: {tts_stage.read().label(\"voice\")}"
+                    }
+                }
+
+                // Progress bar (visible during downloads)
+                if is_loading {
+                    div { class: "progress-container",
+                        div { class: "progress-bar",
+                            div {
+                                class: "progress-fill",
+                                style: "width: {progress_width};",
+                            }
+                        }
+                        if progress_fraction > 0.0 {
+                            p { class: "progress-text", "{progress_pct}" }
+                        }
+                    }
+                }
+
+                // Start/Stop button
+                button {
+                    class: "main-button",
+                    style: "background: {button_bg}; opacity: {button_opacity};",
+                    disabled: !button_enabled,
+                    onclick: on_button_click,
+                    "{button_label}"
+                }
+
+                if is_running {
+                    if risky_tools_enabled {
+                        p { class: "warning",
+                            "Tools enabled: approvals required for write/edit/bash/web."
+                        }
+                    }
+
+                    div { class: "log-panel",
+                        h2 { class: "log-title", "Activity" }
+                        div { class: "log",
+                            {
+                                let current_fork = *fork_point.read();
+                                let log_snapshot = activity_log.read();
+                                rsx! {
+                                    for (i, entry) in log_snapshot.iter().enumerate() {
+                                        {
+                                            let is_fork_point = current_fork == Some(i);
+                                            let is_forked_below = current_fork.is_some_and(|fp| i > fp);
+                                            let show_fork_btn = matches!(entry.kind, LogKind::User | LogKind::Assistant);
+                                            let entry_class = if is_fork_point {
+                                                "log-entry fork-point".to_owned()
+                                            } else if is_forked_below {
+                                                "log-entry forked-below".to_owned()
+                                            } else {
+                                                "log-entry".to_owned()
+                                            };
+                                            rsx! {
+                                                div { key: "{i}", class: "{entry_class}",
+                                                    p { class: "{entry.class_name()}",
+                                                        "{entry.text}"
+                                                    }
+                                                    if show_fork_btn {
+                                                        button {
+                                                            class: "fork-btn",
+                                                            onclick: move |_| {
+                                                                let current = *fork_point.read();
+                                                                if current == Some(i) {
+                                                                    fork_point.set(None);
+                                                                } else {
+                                                                    fork_point.set(Some(i));
+                                                                }
+                                                            },
+                                                            "+"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(_fp) = current_fork {
+                                        div { class: "fork-indicator",
+                                            "\u{2934} Fork from here \u{2014} type a new message below. "
+                                            button {
+                                                class: "fork-cancel",
+                                                onclick: move |_| fork_point.set(None),
+                                                "Cancel"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Text input bar
+                        div { class: "text-input-bar",
+                            input {
+                                class: "text-input",
+                                r#type: "text",
+                                placeholder: if fork_point.read().is_some() { "Type forked message..." } else { "Type a message..." },
+                                value: "{text_input.read()}",
+                                oninput: move |evt| text_input.set(evt.value()),
+                                onkeydown: move |evt: KeyboardEvent| {
+                                    if evt.key() == Key::Enter {
+                                        let msg = text_input.read().trim().to_owned();
+                                        if !msg.is_empty() {
+                                            if let Some(tx) = text_injection_tx.read().as_ref() {
+                                                let fp_val = *fork_point.read();
+                                                let fork_keep = fp_val.map(|fp| {
+                                                    compute_history_keep_count(&activity_log.read(), fp)
+                                                });
+
+                                                let injection = fae::pipeline::messages::TextInjection {
+                                                    text: msg,
+                                                    fork_at_keep_count: fork_keep,
+                                                };
+                                                let _ = tx.send(injection);
+
+                                                // If forking, truncate the visible activity log too.
+                                                if let Some(fp) = fp_val {
+                                                    activity_log.write().truncate(fp + 1);
+                                                    fork_point.set(None);
+                                                }
+                                            }
+                                            text_input.set(String::new());
+                                        }
+                                    }
+                                },
+                            }
+                            button {
+                                class: "text-send-btn",
+                                disabled: text_input.read().trim().is_empty() || text_injection_tx.read().is_none(),
+                                onclick: move |_| {
+                                    let msg = text_input.read().trim().to_owned();
+                                    if !msg.is_empty() {
+                                        if let Some(tx) = text_injection_tx.read().as_ref() {
+                                            let fp_val = *fork_point.read();
+                                            let fork_keep = fp_val.map(|fp| {
+                                                compute_history_keep_count(&activity_log.read(), fp)
+                                            });
+
+                                            let injection = fae::pipeline::messages::TextInjection {
+                                                text: msg,
+                                                fork_at_keep_count: fork_keep,
+                                            };
+                                            let _ = tx.send(injection);
+
+                                            if let Some(fp) = fp_val {
+                                                activity_log.write().truncate(fp + 1);
+                                                fork_point.set(None);
+                                            }
+                                        }
+                                        text_input.set(String::new());
+                                    }
+                                },
+                                "Send"
+                            }
+                        }
                     }
                 }
             }
 
-            // Start/Stop button
-            button {
-                class: "main-button",
-                style: "background: {button_bg}; opacity: {button_opacity};",
-                disabled: !button_enabled,
-                onclick: on_button_click,
-                "{button_label}"
+            if *view.read() == MainView::Settings {
+                div { class: "settings",
+                    div { class: "screen-header",
+                        button {
+                            class: "back-btn",
+                            onclick: move |_| view.set(MainView::Home),
+                            "\u{2190} Back"
+                        }
+                        h2 { class: "settings-title", "Settings" }
+                        // Spacer for centering
+                        div { class: "back-btn-spacer" }
+                    }
+                    p { class: "settings-sub",
+                        "Saved at: {config_path.display()}"
+                    }
+
+                    // --- Models in use (read-only summary) ---
+                    div { class: "settings-block",
+                        h3 { class: "settings-h3", "Models in use" }
+                        p { class: "note",
+                            "The specific models loaded when you press Start."
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Speech-to-text" }
+                            p { class: "settings-value", "{stt_model_id}" }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Intelligence (LLM)" }
+                            p { class: "settings-value", "{llm_models_in_use}" }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Text-to-speech" }
+                            p { class: "settings-value", "{tts_models_in_use}" }
+                        }
+                    }
+
+                    // --- LLM ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "LLM / Intelligence" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Backend" }
+                                select {
+                                    class: "settings-select",
+                                    disabled: !settings_enabled,
+                                    value: "{backend_value}",
+                                    onchange: move |evt| {
+                                        let v = evt.value();
+                                        let backend = match v.as_str() {
+                                            "local" => fae::config::LlmBackend::Local,
+                                            "api" => fae::config::LlmBackend::Api,
+                                            "agent" => fae::config::LlmBackend::Agent,
+                                            _ => fae::config::LlmBackend::Local,
+                                        };
+                                        config_state.write().llm.backend = backend;
+                                    },
+                                    option { value: "local", "Local" }
+                                    option { value: "api", "API" }
+                                    option { value: "agent", "Agent (saorsa)" }
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Tool mode" }
+                                select {
+                                    class: "settings-select",
+                                    disabled: !tool_mode_select_enabled,
+                                    value: "{tool_mode_value}",
+                                    onchange: move |evt| {
+                                        let v = evt.value();
+                                        let mode = match v.as_str() {
+                                            "off" => fae::config::AgentToolMode::Off,
+                                            "read_only" => fae::config::AgentToolMode::ReadOnly,
+                                            "read_write" => fae::config::AgentToolMode::ReadWrite,
+                                            "full" => fae::config::AgentToolMode::Full,
+                                            _ => fae::config::AgentToolMode::ReadOnly,
+                                        };
+                                        config_state.write().llm.tool_mode = mode;
+                                    },
+                                    option { value: "off", "Off" }
+                                    option { value: "read_only", "Read-only" }
+                                    option { value: "read_write", "Read/write (approval)" }
+                                    option { value: "full", "Full (approval)" }
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Max tokens" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().llm.max_tokens}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<usize>() {
+                                            config_state.write().llm.max_tokens = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Temperature" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    step: "0.1",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().llm.temperature}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f64>() {
+                                            config_state.write().llm.temperature = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Top-p" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    step: "0.05",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().llm.top_p}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f64>() {
+                                            config_state.write().llm.top_p = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Repeat penalty" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    step: "0.05",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().llm.repeat_penalty}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f32>() {
+                                            config_state.write().llm.repeat_penalty = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Max history msgs" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().llm.max_history_messages}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<usize>() {
+                                            config_state.write().llm.max_history_messages = v;
+                                        }
+                                    },
+                                }
+                            }
+                            if matches!(cfg_backend, fae::config::LlmBackend::Api) {
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "API URL" }
+                                    input {
+                                        class: "settings-select",
+                                        r#type: "text",
+                                        disabled: !settings_enabled,
+                                        value: "{config_state.read().llm.api_url}",
+                                        oninput: move |evt| config_state.write().llm.api_url = evt.value(),
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "API model" }
+                                    input {
+                                        class: "settings-select",
+                                        r#type: "text",
+                                        disabled: !settings_enabled,
+                                        value: "{config_state.read().llm.api_model}",
+                                        oninput: move |evt| config_state.write().llm.api_model = evt.value(),
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- System prompt ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "System Prompt" }
+                        div { class: "settings-section-body",
+                            p { class: "note",
+                                "Appended to Fae's built-in prompt. Identity cannot be changed."
+                            }
+                            textarea {
+                                class: "settings-textarea",
+                                disabled: !settings_enabled,
+                                value: "{config_state.read().llm.system_prompt}",
+                                placeholder: "Optional. e.g. \"Be more formal.\"",
+                                oninput: move |evt| {
+                                    config_state.write().llm.system_prompt = evt.value();
+                                },
+                            }
+                            div { class: "details-actions",
+                                button {
+                                    class: "pill",
+                                    disabled: !settings_enabled,
+                                    onclick: move |_| config_state.write().llm.system_prompt.clear(),
+                                    "Clear"
+                                }
+                            }
+                            details { class: "details",
+                                summary { class: "details-summary", "Show built-in base prompt" }
+                                pre { class: "details-pre", "{fae::config::LlmConfig::BASE_SYSTEM_PROMPT}" }
+                            }
+                        }
+                    }
+
+                    // --- Audio ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Audio" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Input sample rate" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().audio.input_sample_rate}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().audio.input_sample_rate = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Output sample rate" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().audio.output_sample_rate}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().audio.output_sample_rate = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Input channels" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().audio.input_channels}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u16>() {
+                                            config_state.write().audio.input_channels = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Buffer size" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().audio.buffer_size}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().audio.buffer_size = v;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+
+                    // --- VAD ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Voice Activity Detection" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Threshold" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    step: "0.05",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().vad.threshold}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f32>() {
+                                            config_state.write().vad.threshold = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Min silence (ms)" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().vad.min_silence_duration_ms}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().vad.min_silence_duration_ms = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Speech pad (ms)" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().vad.speech_pad_ms}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().vad.speech_pad_ms = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Min speech (ms)" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().vad.min_speech_duration_ms}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().vad.min_speech_duration_ms = v;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+
+                    // --- STT ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Speech-to-Text" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Model ID" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().stt.model_id}",
+                                    oninput: move |evt| config_state.write().stt.model_id = evt.value(),
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Chunk size" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().stt.chunk_size}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<usize>() {
+                                            config_state.write().stt.chunk_size = v;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+
+                    // --- TTS ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Text-to-Speech" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Model dtype" }
+                                select {
+                                    class: "settings-select",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().tts.model_dtype}",
+                                    onchange: move |evt| config_state.write().tts.model_dtype = evt.value(),
+                                    option { value: "q4f16", "q4f16 (fast)" }
+                                    option { value: "fp16", "fp16" }
+                                    option { value: "fp32", "fp32 (best)" }
+                                    option { value: "q4", "q4" }
+                                    option { value: "quantized", "quantized" }
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Max new tokens" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().tts.max_new_tokens}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<usize>() {
+                                            config_state.write().tts.max_new_tokens = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Rep. penalty" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    step: "0.05",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().tts.repetition_penalty}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f32>() {
+                                            config_state.write().tts.repetition_penalty = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Sample rate" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().tts.sample_rate}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().tts.sample_rate = v;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Conversation ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Conversation" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Enabled" }
+                                input {
+                                    class: "settings-checkbox",
+                                    r#type: "checkbox",
+                                    disabled: !settings_enabled,
+                                    checked: config_state.read().conversation.enabled,
+                                    onchange: move |evt| {
+                                        config_state.write().conversation.enabled = evt.checked();
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Wake word" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().conversation.wake_word}",
+                                    oninput: move |evt| config_state.write().conversation.wake_word = evt.value(),
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Stop phrase" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().conversation.stop_phrase}",
+                                    oninput: move |evt| config_state.write().conversation.stop_phrase = evt.value(),
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Barge-in ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Barge-in" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Enabled" }
+                                input {
+                                    class: "settings-checkbox",
+                                    r#type: "checkbox",
+                                    disabled: !settings_enabled,
+                                    checked: config_state.read().barge_in.enabled,
+                                    onchange: move |evt| {
+                                        config_state.write().barge_in.enabled = evt.checked();
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Min RMS" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    step: "0.005",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().barge_in.min_rms}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f32>() {
+                                            config_state.write().barge_in.min_rms = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Confirm (ms)" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().barge_in.confirm_ms}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().barge_in.confirm_ms = v;
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Start holdoff (ms)" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().barge_in.assistant_start_holdoff_ms}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<u32>() {
+                                            config_state.write().barge_in.assistant_start_holdoff_ms = v;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Save / Models buttons ---
+                    div { class: "settings-actions",
+                        button {
+                            class: "settings-save",
+                            disabled: !settings_enabled,
+                            onclick: move |_| {
+                                let cfg = config_state.read().clone();
+                                let path = fae::SpeechConfig::default_config_path();
+                                spawn(async move {
+                                    let res = tokio::task::spawn_blocking(move || cfg.save_to_file(&path)).await;
+                                    let msg = match res {
+                                        Ok(Ok(())) => {
+                                            let _ = ui_bus().send(UiBusEvent::ConfigUpdated);
+                                            "Saved.".to_owned()
+                                        }
+                                        Ok(Err(e)) => format!("Save failed: {e}"),
+                                        Err(e) => format!("Save failed: {e}"),
+                                    };
+                                    config_save_status.set(msg);
+                                });
+                            },
+                            "Save"
+                        }
+                        button {
+                            class: "settings-save",
+                            disabled: !settings_enabled,
+                            onclick: {
+                                let open = open_models_window.clone();
+                                move |_| open()
+                            },
+                            "Models..."
+                        }
+                    }
+                    p { class: "settings-status", "{config_save_status.read()}" }
+                }
+            }
+
+            if *view.read() == MainView::Voices {
+                div { class: "model-picker",
+                    div { class: "screen-header",
+                        button {
+                            class: "back-btn",
+                            onclick: move |_| view.set(MainView::Home),
+                            "\u{2190} Back"
+                        }
+                        h2 { class: "settings-title", "Voice Cloning" }
+                        div { class: "back-btn-spacer" }
+                    }
+                    p { class: "settings-sub",
+                        "Reference voice: {voice_ref_display}"
+                    }
+                    p { class: "note",
+                        "Upload an MP3/MP4/WAV or record from your microphone. We will save a WAV into your cache dir and set it as the reference voice."
+                    }
+
+                    div { class: "settings-row",
+                        label { class: "settings-label", "Voice name" }
+                        input {
+                            class: "settings-select",
+                            r#type: "text",
+                            disabled: !settings_enabled,
+                            value: "{voices_name.read()}",
+                            oninput: move |evt| voices_name.set(evt.value()),
+                        }
+                    }
+
+                    div { class: "details-actions",
+                        button {
+                            class: "pill pill-primary",
+                            disabled: !settings_enabled,
+                            onclick: move |_| {
+                                voices_status.set("Opening file picker...".to_owned());
+                                let cache_dir = config_state.read().models.cache_dir.clone();
+                                let name = voices_name.read().trim().to_owned();
+                                spawn(async move {
+                                    let picked = tokio::task::spawn_blocking(move || {
+                                        rfd::FileDialog::new()
+                                            .add_filter("Audio", &["mp3", "mp4", "wav"])
+                                            .pick_file()
+                                    }).await;
+
+                                    let Some(path) = (match picked {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            voices_status.set(format!("File picker failed: {e}"));
+                                            return;
+                                        }
+                                    }) else {
+                                        voices_status.set("Cancelled.".to_owned());
+                                        return;
+                                    };
+
+                                    let name = if name.trim().is_empty() {
+                                        path.file_stem()
+                                            .and_then(|s| s.to_str())
+                                            .unwrap_or("voice_1")
+                                            .to_owned()
+                                    } else {
+                                        name
+                                    };
+
+                                    voices_status.set("Importing audio...".to_owned());
+                                    let res = tokio::task::spawn_blocking(move || {
+                                        fae::voice_clone::import_audio_to_voice_wav(
+                                            &cache_dir,
+                                            &path,
+                                            &name,
+                                            fae::voice_clone::ImportOptions::default(),
+                                        )
+                                    }).await;
+
+                                    match res {
+                                        Ok(Ok(v)) => {
+                                            {
+                                                let mut cfg = config_state.write();
+                                                cfg.tts.voice_reference = v.wav_path.display().to_string();
+                                            }
+                                            voices_status.set(format!(
+                                                "Imported {:.1}s voice. Click Save to persist.",
+                                                v.seconds
+                                            ));
+                                        }
+                                        Ok(Err(e)) => voices_status.set(format!("Import failed: {e}")),
+                                        Err(e) => voices_status.set(format!("Import failed: {e}")),
+                                    }
+                                });
+                            },
+                            "Upload audio..."
+                        }
+                        button {
+                            class: "pill",
+                            disabled: !settings_enabled,
+                            onclick: move |_| {
+                                voices_status.set("Recording 10s...".to_owned());
+                                let cache_dir = config_state.read().models.cache_dir.clone();
+                                let name = voices_name.read().trim().to_owned();
+                                spawn(async move {
+                                    let res = tokio::task::spawn_blocking(move || {
+                                        fae::voice_clone::record_voice_wav(&cache_dir, &name, 10.0)
+                                    }).await;
+                                    match res {
+                                        Ok(Ok(v)) => {
+                                            {
+                                                let mut cfg = config_state.write();
+                                                cfg.tts.voice_reference = v.wav_path.display().to_string();
+                                            }
+                                            voices_status.set(format!(
+                                                "Recorded {:.1}s voice. Click Save to persist.",
+                                                v.seconds
+                                            ));
+                                        }
+                                        Ok(Err(e)) => voices_status.set(format!("Record failed: {e}")),
+                                        Err(e) => voices_status.set(format!("Record failed: {e}")),
+                                    }
+                                });
+                            },
+                            "Record 10s"
+                        }
+                        button {
+                            class: "pill",
+                            disabled: !settings_enabled,
+                            onclick: move |_| {
+                                config_state.write().tts.voice_reference = String::new();
+                                voices_status.set("Reset to Fae's voice (save to persist).".to_owned());
+                            },
+                            "Reset to Fae's voice"
+                        }
+                    }
+
+                    div { class: "settings-actions",
+                        button {
+                            class: "settings-save",
+                            disabled: !settings_enabled,
+                            onclick: move |_| {
+                                let cfg = config_state.read().clone();
+                                let path = fae::SpeechConfig::default_config_path();
+                                spawn(async move {
+                                    let res = tokio::task::spawn_blocking(move || cfg.save_to_file(&path)).await;
+                                    let msg = match res {
+                                        Ok(Ok(())) => {
+                                            let _ = ui_bus().send(UiBusEvent::ConfigUpdated);
+                                            "Saved.".to_owned()
+                                        }
+                                        Ok(Err(e)) => format!("Save failed: {e}"),
+                                        Err(e) => format!("Save failed: {e}"),
+                                    };
+                                    voices_status.set(msg);
+                                });
+                            },
+                            "Save"
+                        }
+                        p { class: "settings-status", "{voices_status.read()}" }
+                    }
+                }
+            }
+        }
+
+        {
+            match pending_approval.read().as_ref() {
+                Some(req) => rsx!(div {
+                    class: "modal-overlay",
+                    div {
+                        class: "modal",
+                        h2 { class: "modal-title", "Approve Tool?" }
+                        p { class: "modal-subtitle", "The assistant requested:" }
+                        p { class: "modal-tool", "{req.name}" }
+                        pre { class: "modal-json", "{req.input_json}" }
+                        div { class: "modal-actions",
+                            button {
+                                class: "modal-btn modal-approve",
+                                onclick: move |_| {
+                                    if let Some(req) = pending_approval.write().take() {
+                                        let name = req.name.clone();
+                                        let _ = req.respond(true);
+                                        activity_log.write().push(LogEntry {
+                                            kind: LogKind::System,
+                                            text: format!("Approved tool: {name}"),
+                                        });
+                                    }
+                                    if pending_approval.read().is_none()
+                                        && let Some(next) = approval_queue.write().pop_front()
+                                    {
+                                        pending_approval.set(Some(next));
+                                    }
+                                },
+                                "Approve"
+                            }
+                            button {
+                                class: "modal-btn modal-deny",
+                                onclick: move |_| {
+                                    if let Some(req) = pending_approval.write().take() {
+                                        let name = req.name.clone();
+                                        let _ = req.respond(false);
+                                        activity_log.write().push(LogEntry {
+                                            kind: LogKind::System,
+                                            text: format!("Denied tool: {name}"),
+                                        });
+                                    }
+                                    if pending_approval.read().is_none()
+                                        && let Some(next) = approval_queue.write().pop_front()
+                                    {
+                                        pending_approval.set(Some(next));
+                                    }
+                                },
+                                "Deny"
+                            }
+                        }
+                    }
+                }),
+                None => rsx!(),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn models_window() -> Element {
+    let desktop = use_window();
+
+    let mut config_state = use_signal(read_config_or_default);
+    let mut save_status = use_signal(String::new);
+
+    // Model picker state (LLM/GGUF).
+    let sys_profile = use_signal(fae::system_profile::SystemProfile::detect);
+    let mut model_tab = use_signal(|| ModelPickerTab::Recommended);
+    let mut optimize_for = use_signal(|| fae::model_picker::OptimizeFor::Balanced);
+    let mut model_search_query = use_signal(String::new);
+    let model_search_status = use_signal(String::new);
+    let model_search_results = use_signal(Vec::<fae::huggingface::ModelSearchItem>::new);
+
+    let model_details_status = use_signal(String::new);
+    let model_details = use_signal(|| None::<ModelDetails>);
+    let mut selected_gguf_file = use_signal(|| None::<String>);
+    let mut tokenizer_override = use_signal(String::new);
+
+    let settings_enabled = true;
+    let cfg_backend = config_state.read().llm.backend;
+    let can_pick_local_models = matches!(
+        cfg_backend,
+        fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent
+    );
+
+    let config_path = fae::SpeechConfig::default_config_path();
+
+    let ram_bytes = sys_profile.read().total_memory_bytes;
+    let ram_display = match ram_bytes {
+        Some(b) => fmt_bytes(b),
+        None => "Unknown".to_owned(),
+    };
+    let optimize_value = optimize_for.read().as_str();
+    let tab = *model_tab.read();
+    let selected_file_value = match selected_gguf_file.read().as_ref() {
+        Some(s) => s.clone(),
+        None => String::new(),
+    };
+
+    let search_rows = model_search_results
+        .read()
+        .iter()
+        .map(|item| {
+            let likes = item.likes.unwrap_or(0);
+            let downloads = item.downloads.unwrap_or(0);
+            let id = item.id.clone();
+            let label = format!("{id}  (dl {downloads}, likes {likes})");
+            (id, label)
+        })
+        .collect::<Vec<_>>();
+
+    let gguf_option_rows = model_details
+        .read()
+        .as_ref()
+        .map(|details| {
+            details
+                .gguf_files
+                .iter()
+                .map(|f| {
+                    let size = details
+                        .gguf_sizes
+                        .iter()
+                        .find(|(n, _)| n == f)
+                        .and_then(|(_, s)| *s);
+                    let label = match size {
+                        Some(b) => {
+                            let fit = fit_label(Some(b), ram_bytes);
+                            match fit {
+                                Some(fit) => format!("{f} ({}) - {fit}", fmt_bytes(b)),
+                                None => format!("{f} ({})", fmt_bytes(b)),
+                            }
+                        }
+                        None => f.clone(),
+                    };
+                    (f.clone(), label)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let load_model_details = {
+        let md_status_sig = model_details_status;
+        let md_sig = model_details;
+        let selected_sig = selected_gguf_file;
+        let tok_sig = tokenizer_override;
+        let sys_prof_sig = sys_profile;
+        let opt_sig = optimize_for;
+        let cfg_sig = config_state;
+        std::rc::Rc::new(move |model_id: String| {
+            let mut model_details_status = md_status_sig;
+            let mut model_details = md_sig;
+            let mut selected_gguf_file = selected_sig;
+
+            model_details_status.set("Loading model info...".to_owned());
+            model_details.set(None);
+            selected_gguf_file.set(None);
+
+            let ram_bytes = sys_prof_sig.read().total_memory_bytes;
+            let opt = *opt_sig.read();
+            let current_tok = cfg_sig.read().llm.tokenizer_id.clone();
+
+            let mut model_details_status_bg = model_details_status;
+            let mut model_details_bg = model_details;
+            let mut selected_gguf_file_bg = selected_gguf_file;
+            let mut tokenizer_override_bg = tok_sig;
+
+            spawn(async move {
+                let model_id_for_task = model_id.clone();
+                let res = tokio::task::spawn_blocking(move || {
+                    let info = fae::huggingface::get_model_info(&model_id_for_task)?;
+                    let snippet = fae::huggingface::readme_snippet(&model_id_for_task)?;
+                    let tokenizer_in_repo = fae::model_picker::has_tokenizer_json(&info.siblings);
+                    let gguf_files = fae::model_picker::extract_gguf_files(&info.siblings);
+
+                    let mut gguf_sizes = Vec::new();
+                    let cap = 40usize;
+                    for f in gguf_files.iter().take(cap) {
+                        let size = fae::huggingface::gguf_file_size_bytes(&model_id_for_task, f)
+                            .ok()
+                            .flatten();
+                        gguf_sizes.push((f.clone(), size));
+                    }
+
+                    Ok::<ModelDetails, fae::huggingface::HfApiError>(ModelDetails {
+                        id: info.id,
+                        license: info.license,
+                        base_models: info.base_models,
+                        gated: info.gated,
+                        snippet,
+                        tokenizer_in_repo,
+                        gguf_files,
+                        gguf_sizes,
+                    })
+                })
+                .await;
+
+                let details = match res {
+                    Ok(Ok(d)) => d,
+                    Ok(Err(e)) => {
+                        model_details_status_bg.set(format!("Failed to load model info: {e}"));
+                        return;
+                    }
+                    Err(e) => {
+                        model_details_status_bg.set(format!("Failed to load model info: {e}"));
+                        return;
+                    }
+                };
+
+                let auto = fae::model_picker::auto_pick_gguf_file(
+                    &details.gguf_files,
+                    opt,
+                    &details.gguf_sizes,
+                    ram_bytes,
+                );
+                selected_gguf_file_bg.set(auto);
+
+                let tok = if details.tokenizer_in_repo {
+                    String::new()
+                } else if let Some(first) = details.base_models.first() {
+                    first.clone()
+                } else {
+                    current_tok
+                };
+                tokenizer_override_bg.set(tok);
+
+                model_details_bg.set(Some(details));
+                model_details_status_bg.set(String::new());
+            });
+        })
+    };
+
+    let run_model_search = {
+        let ms_status_sig = model_search_status;
+        let ms_results_sig = model_search_results;
+        let ms_query_sig = model_search_query;
+        std::rc::Rc::new(move || {
+            let q = ms_query_sig.read().trim().to_owned();
+            let mut model_search_status = ms_status_sig;
+            let mut model_search_results = ms_results_sig;
+
+            if q.is_empty() {
+                model_search_status.set("Enter a search query.".to_owned());
+                model_search_results.set(Vec::new());
+                return;
+            }
+            model_search_status.set("Searching Hugging Face...".to_owned());
+            model_search_results.set(Vec::new());
+
+            spawn(async move {
+                let res = tokio::task::spawn_blocking(move || {
+                    fae::huggingface::search_models(&q, true, Some("text-generation"), 20)
+                })
+                .await;
+
+                match res {
+                    Ok(Ok(items)) => {
+                        model_search_status.set(format!("Found {} results.", items.len()));
+                        model_search_results.set(items);
+                    }
+                    Ok(Err(e)) => {
+                        model_search_status.set(format!("Search failed: {e}"));
+                    }
+                    Err(e) => {
+                        model_search_status.set(format!("Search failed: {e}"));
+                    }
+                }
+            });
+        })
+    };
+
+    let current_model = config_state.read().llm.model_id.clone();
+    let current_file = config_state.read().llm.gguf_file.clone();
+
+    rsx! {
+        style { {GLOBAL_CSS} }
+
+        div { class: "container",
+            div { class: "topbar",
+                button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
+                p { class: "topbar-title", "Models" }
+                button {
+                    class: "topbar-btn",
+                    onclick: move |_| {
+                        let defaults = fae::SpeechConfig::default().llm;
+                        let mut cfg = config_state.write();
+                        cfg.llm.model_id = defaults.model_id;
+                        cfg.llm.gguf_file = defaults.gguf_file;
+                        cfg.llm.tokenizer_id = defaults.tokenizer_id;
+                        save_status.set("Reset to default (Qwen3-4B). Click Save to persist.".to_owned());
+                    },
+                    "Default"
+                }
+            }
+
+            div { class: "model-picker",
+                h2 { class: "settings-title", "Local Models (GGUF)" }
+                p { class: "settings-sub",
+                    "Current: {current_model} / {current_file}"
+                }
+                p { class: "settings-sub",
+                    "Downloads go to the Hugging Face cache on Start. RAM detected: {ram_display}."
+                }
+
+                if !can_pick_local_models {
+                    p { class: "note",
+                        "Model picker is for Local/Agent backends. Switch backends in Settings in the main window."
+                    }
+                }
+
+                div { class: "settings-row",
+                    label { class: "settings-label", "Optimize for" }
+                    select {
+                        class: "settings-select",
+                        disabled: !settings_enabled || !can_pick_local_models,
+                        value: "{optimize_value}",
+                        onchange: move |evt| {
+                            optimize_for.set(fae::model_picker::OptimizeFor::parse(&evt.value()));
+                        },
+                        option { value: "speed", "Speed" }
+                        option { value: "balanced", "Balanced" }
+                        option { value: "quality", "Quality" }
+                    }
+                }
+
+                div { class: "tabs",
+                    button {
+                        class: if tab == ModelPickerTab::Recommended { "tab-btn tab-active" } else { "tab-btn" },
+                        onclick: move |_| model_tab.set(ModelPickerTab::Recommended),
+                        "Recommended"
+                    }
+                    button {
+                        class: if tab == ModelPickerTab::Search { "tab-btn tab-active" } else { "tab-btn" },
+                        onclick: move |_| model_tab.set(ModelPickerTab::Search),
+                        "Search"
+                    }
+                    button {
+                        class: if tab == ModelPickerTab::Manual { "tab-btn tab-active" } else { "tab-btn" },
+                        onclick: move |_| model_tab.set(ModelPickerTab::Manual),
+                        "Manual"
+                    }
+                }
+
+                if tab == ModelPickerTab::Recommended {
+                    div { class: "model-list",
+                        for (i, id) in fae::model_picker::curated_recommended_model_ids().iter().enumerate() {
+                            button {
+                                key: "{i}",
+                                class: "model-item",
+                                disabled: !settings_enabled || !can_pick_local_models,
+                                onclick: {
+                                    let load = load_model_details.clone();
+                                    let id = (*id).to_owned();
+                                    move |_| load(id.clone())
+                                },
+                                "{id}"
+                            }
+                        }
+                    }
+                }
+
+                if tab == ModelPickerTab::Search {
+                    div { class: "settings-row",
+                        input {
+                            class: "model-search",
+                            r#type: "text",
+                            placeholder: "Search Hugging Face (e.g. qwen3 instruct)",
+                            disabled: !settings_enabled || !can_pick_local_models,
+                            value: "{model_search_query.read()}",
+                            oninput: move |evt| model_search_query.set(evt.value()),
+                        }
+                        button {
+                            class: "model-search-btn",
+                            disabled: !settings_enabled || !can_pick_local_models,
+                            onclick: {
+                                let search = run_model_search.clone();
+                                move |_| search()
+                            },
+                            "Search"
+                        }
+                    }
+                    p { class: "note", "{model_search_status.read()}" }
+                    div { class: "model-list",
+                        for (i, (id, label)) in search_rows.iter().enumerate() {
+                            button {
+                                key: "{i}",
+                                class: "model-item",
+                                disabled: !settings_enabled || !can_pick_local_models,
+                                onclick: {
+                                    let load = load_model_details.clone();
+                                    let id = id.clone();
+                                    move |_| load(id.clone())
+                                },
+                                "{label}"
+                            }
+                        }
+                    }
+                }
+
+                if tab == ModelPickerTab::Manual {
+                    p { class: "note",
+                        "Advanced: set repo + GGUF filename directly. Applies on next Start."
+                    }
+                    div { class: "settings-row",
+                        label { class: "settings-label", "HF repo (GGUF)" }
+                        input {
+                            class: "settings-select",
+                            r#type: "text",
+                            disabled: !settings_enabled || !can_pick_local_models,
+                            value: "{config_state.read().llm.model_id}",
+                            oninput: move |evt| config_state.write().llm.model_id = evt.value(),
+                        }
+                    }
+                    div { class: "settings-row",
+                        label { class: "settings-label", "GGUF file" }
+                        input {
+                            class: "settings-select",
+                            r#type: "text",
+                            disabled: !settings_enabled || !can_pick_local_models,
+                            value: "{config_state.read().llm.gguf_file}",
+                            oninput: move |evt| config_state.write().llm.gguf_file = evt.value(),
+                        }
+                    }
+                    div { class: "settings-row",
+                        label { class: "settings-label", "Tokenizer repo" }
+                        input {
+                            class: "settings-select",
+                            r#type: "text",
+                            disabled: !settings_enabled || !can_pick_local_models,
+                            value: "{config_state.read().llm.tokenizer_id}",
+                            oninput: move |evt| config_state.write().llm.tokenizer_id = evt.value(),
+                        }
+                    }
+                }
+
+                if !model_details_status.read().is_empty() {
+                    p { class: "note", "{model_details_status.read()}" }
+                }
+
+                if let Some(details) = model_details.read().as_ref() {
+                    div { class: "model-details",
+                        h3 { class: "details-title", "{details.id}" }
+                        if let Some(lic) = details.license.as_ref() {
+                            p { class: "note", "License: {lic}" }
+                        }
+                        if let Some(g) = details.gated {
+                            if g {
+                                p { class: "warning", "This repo appears gated on Hugging Face." }
+                            }
+                        }
+                        if !details.base_models.is_empty() {
+                            p { class: "note", "Base: {details.base_models.join(\", \")}" }
+                        }
+                        if let Some(snippet) = details.snippet.as_ref() {
+                            p { class: "model-snippet", "{snippet}" }
+                        }
+
+                        div { class: "settings-row",
+                            label { class: "settings-label", "GGUF" }
+                            select {
+                                class: "settings-select",
+                                disabled: !settings_enabled || !can_pick_local_models,
+                                value: "{selected_file_value}",
+                                onchange: move |evt| {
+                                    let v = evt.value();
+                                    if v.trim().is_empty() {
+                                        selected_gguf_file.set(None);
+                                    } else {
+                                        selected_gguf_file.set(Some(v));
+                                    }
+                                },
+                                option { value: "", "(choose)" }
+                                for (i, (f, label)) in gguf_option_rows.iter().enumerate() {
+                                    option { key: "{i}", value: "{f}", "{label}" }
+                                }
+                            }
+                        }
+
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Tokenizer repo" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                disabled: !settings_enabled || !can_pick_local_models || details.tokenizer_in_repo,
+                                placeholder: if details.tokenizer_in_repo { "(in repo)" } else { "e.g. Qwen/Qwen3-4B-Instruct-2507" },
+                                value: "{tokenizer_override.read()}",
+                                oninput: move |evt| tokenizer_override.set(evt.value()),
+                            }
+                        }
+
+                        div { class: "details-actions",
+                            button {
+                                class: "pill",
+                                disabled: !settings_enabled || !can_pick_local_models,
+                                onclick: {
+                                    let files = details.gguf_files.clone();
+                                    let sizes = details.gguf_sizes.clone();
+                                    move |_| {
+                                        let ram = sys_profile.read().total_memory_bytes;
+                                        let opt = *optimize_for.read();
+                                        let auto = fae::model_picker::auto_pick_gguf_file(
+                                            &files,
+                                            opt,
+                                            &sizes,
+                                            ram,
+                                        );
+                                        selected_gguf_file.set(auto);
+                                    }
+                                },
+                                "Auto pick"
+                            }
+                            button {
+                                class: "pill pill-primary",
+                                disabled: !settings_enabled || !can_pick_local_models,
+                                onclick: {
+                                    let id = details.id.clone();
+                                    let mut model_details_status = model_details_status;
+                                    let mut save_status = save_status;
+                                    move |_| {
+                                        let file = match selected_gguf_file.read().clone() {
+                                            Some(f) if !f.trim().is_empty() => f,
+                                            _ => {
+                                                model_details_status.set("Pick a GGUF file first.".to_owned());
+                                                return;
+                                            }
+                                        };
+                                        let tok = tokenizer_override.read().trim().to_owned();
+                                        {
+                                            let mut cfg = config_state.write();
+                                            cfg.llm.model_id = id.clone();
+                                            cfg.llm.gguf_file = file;
+                                            cfg.llm.tokenizer_id = tok;
+                                        }
+                                        save_status.set("Selected model (not saved). Click Save to persist.".to_owned());
+                                    }
+                                },
+                                "Use model"
+                            }
+                        }
+                    }
+                }
+
+                div { class: "settings-actions",
+                    button {
+                        class: "settings-save",
+                        onclick: move |_| {
+                            let cfg = config_state.read().clone();
+                            let path = config_path.clone();
+                            spawn(async move {
+                                let res = tokio::task::spawn_blocking(move || cfg.save_to_file(&path)).await;
+                                let msg = match res {
+                                    Ok(Ok(())) => {
+                                        let _ = ui_bus().send(UiBusEvent::ConfigUpdated);
+                                        "Saved.".to_owned()
+                                    }
+                                    Ok(Err(e)) => format!("Save failed: {e}"),
+                                    Err(e) => format!("Save failed: {e}"),
+                                };
+                                save_status.set(msg);
+                            });
+                        },
+                        "Save"
+                    }
+                    p { class: "settings-status", "{save_status.read()}" }
+                }
             }
         }
     }
@@ -533,40 +2690,331 @@ enum PipelineMessage {
 const GLOBAL_CSS: &str = r#"
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    :root {
+        --bg-primary: #0f0f1a;
+        --bg-secondary: #161625;
+        --bg-card: rgba(255, 255, 255, 0.025);
+        --bg-elevated: rgba(255, 255, 255, 0.04);
+        --border-subtle: rgba(255, 255, 255, 0.07);
+        --border-medium: rgba(255, 255, 255, 0.12);
+        --accent: #a78bfa;
+        --accent-dim: rgba(167, 139, 250, 0.15);
+        --accent-glow: rgba(167, 139, 250, 0.25);
+        --green: #22c55e;
+        --green-dim: rgba(34, 197, 94, 0.12);
+        --red: #ef4444;
+        --red-dim: rgba(239, 68, 68, 0.12);
+        --yellow: #fbbf24;
+        --blue: #3b82f6;
+        --text-primary: #f0eef6;
+        --text-secondary: #a1a1b5;
+        --text-tertiary: #6b6b80;
+        --radius-sm: 8px;
+        --radius-md: 12px;
+        --radius-lg: 16px;
+        --radius-pill: 999px;
+    }
+
     body {
-        background: #1a1a2e;
-        color: #e0e0e0;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Helvetica, Arial, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
     }
 
     .container {
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
         min-height: 100vh;
-        padding: 2rem;
-        gap: 1.2rem;
+        padding: 0 1.25rem 2rem;
+        gap: 0.8rem;
+        overflow-y: auto;
     }
 
-    /* --- Avatar --- */
+    /* --- Topbar / Drawer --- */
+    .topbar {
+        position: sticky;
+        top: 0;
+        width: 100%;
+        max-width: 420px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.75rem 0;
+        background: var(--bg-primary);
+        z-index: 100;
+    }
+
+    .hamburger {
+        width: 38px;
+        height: 36px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-subtle);
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-size: 1.05rem;
+        transition: background 0.15s, color 0.15s;
+    }
+    .hamburger:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
+    .topbar-title {
+        flex: 1;
+        text-align: center;
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+    }
+
+    .topbar-btn {
+        border: 1px solid var(--border-subtle);
+        background: transparent;
+        color: var(--text-secondary);
+        border-radius: var(--radius-pill);
+        padding: 0.35rem 0.75rem;
+        font-size: 0.78rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s, transform 0.1s;
+        white-space: nowrap;
+    }
+    .topbar-btn:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); transform: translateY(-1px); }
+    .topbar-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* --- Screen Header (back button) --- */
+    .screen-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.6rem;
+    }
+    .back-btn {
+        border: 1px solid var(--border-subtle);
+        background: transparent;
+        color: var(--text-secondary);
+        border-radius: var(--radius-pill);
+        padding: 0.3rem 0.7rem;
+        font-size: 0.78rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        white-space: nowrap;
+    }
+    .back-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+    .back-btn-spacer { width: 60px; }
+
+    /* --- Drawer --- */
+    .drawer-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(4px);
+        padding: 1rem;
+        z-index: 1000;
+        animation: fadeIn 0.15s ease;
+    }
+
+    .drawer {
+        width: 220px;
+        border-radius: var(--radius-lg);
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        padding: 0.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+        animation: slideIn 0.2s ease;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideIn { from { transform: translateX(-12px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    .drawer-item {
+        width: 100%;
+        text-align: left;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        border-radius: var(--radius-sm);
+        padding: 0.55rem 0.65rem;
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s;
+    }
+    .drawer-item:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); }
+    .drawer-item:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* --- Settings Sections (collapsible) --- */
+    .settings-section {
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        margin-bottom: 0.5rem;
+        overflow: hidden;
+    }
+    .settings-section[open] { border-color: var(--border-medium); }
+
+    .settings-section-summary {
+        padding: 0.55rem 0.7rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: color 0.15s, background 0.15s;
+        list-style: none;
+    }
+    .settings-section-summary::-webkit-details-marker { display: none; }
+    .settings-section-summary::before {
+        content: "\u25B8";
+        display: inline-block;
+        margin-right: 0.45rem;
+        transition: transform 0.2s;
+        font-size: 0.7rem;
+    }
+    .settings-section[open] > .settings-section-summary::before { transform: rotate(90deg); }
+    .settings-section-summary:hover { color: var(--text-primary); background: var(--bg-elevated); }
+
+    .settings-section-body {
+        padding: 0.4rem 0.7rem 0.6rem;
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .settings-block {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        margin-bottom: 0.6rem;
+    }
+
+    .settings-textarea {
+        width: 100%;
+        min-height: 100px;
+        resize: vertical;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-card);
+        color: var(--text-primary);
+        padding: 0.5rem 0.6rem;
+        font-size: 0.85rem;
+        line-height: 1.4;
+        outline: none;
+        font-family: inherit;
+        transition: border-color 0.15s;
+    }
+    .settings-textarea:focus { border-color: var(--accent); }
+    .settings-textarea:disabled { opacity: 0.4; }
+
+    .settings-h3 {
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.1rem;
+    }
+
+    .settings-value {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 0.8rem;
+        word-break: break-word;
+        text-align: right;
+        max-width: 60%;
+    }
+
+    .settings-checkbox {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--accent);
+        cursor: pointer;
+    }
+    .settings-checkbox:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .details { margin-top: 0.4rem; }
+    .details-summary {
+        font-size: 0.78rem;
+        color: var(--text-tertiary);
+        cursor: pointer;
+        transition: color 0.15s;
+    }
+    .details-summary:hover { color: var(--text-secondary); }
+    .details-pre {
+        font-size: 0.75rem;
+        line-height: 1.35;
+        color: var(--text-secondary);
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 0.6rem;
+        margin-top: 0.3rem;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        max-height: 200px;
+        overflow: auto;
+    }
+
+    /* --- Stagebar --- */
+    .stagebar {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+        margin-top: 0.4rem;
+        width: 100%;
+        max-width: 280px;
+    }
+
+    .stage {
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-card);
+        color: var(--text-secondary);
+        border-radius: var(--radius-sm);
+        padding: 0.4rem 0.55rem;
+        font-size: 0.78rem;
+        line-height: 1.15;
+        cursor: default;
+        transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    .stage-pending { opacity: 0.5; }
+    .stage-loading {
+        border-color: rgba(167, 139, 250, 0.4);
+        box-shadow: 0 0 0 1px var(--accent-dim) inset;
+        color: var(--accent);
+    }
+    .stage-ready {
+        border-color: rgba(34, 197, 94, 0.4);
+        box-shadow: 0 0 0 1px var(--green-dim) inset;
+        color: var(--green);
+    }
+    .stage-error {
+        border-color: rgba(239, 68, 68, 0.4);
+        box-shadow: 0 0 0 1px var(--red-dim) inset;
+        color: var(--red);
+    }
+
+    /* --- Avatar (circular, running state) --- */
     .avatar {
         position: relative;
-        width: 160px;
-        height: 160px;
+        width: 140px;
+        height: 140px;
         border-radius: 50%;
         overflow: hidden;
-        border: 3px solid #a78bfa;
+        border: 2.5px solid var(--accent);
         transition: box-shadow 0.4s ease, border-color 0.4s ease;
+        margin-top: 0.5rem;
+        flex-shrink: 0;
     }
 
     .avatar-pulse {
-        animation: pulse 2s ease-in-out infinite;
-        border-color: #22c55e;
-    }
-
-    .avatar-loading {
-        border-color: transparent;
+        animation: pulse 2.5s ease-in-out infinite;
+        border-color: var(--green);
     }
 
     .avatar-img {
@@ -575,103 +3023,614 @@ const GLOBAL_CSS: &str = r#"
         object-fit: cover;
     }
 
-    /* Spinning ring overlay while loading */
-    .avatar-spinner {
+    @keyframes pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.35); }
+        50% { box-shadow: 0 0 24px 8px rgba(34, 197, 94, 0.1); }
+    }
+
+    /* --- Avatar portrait (rectangular, idle/loading/stopped) --- */
+    .avatar-portrait {
+        position: relative;
+        width: 100%;
+        border-radius: 16px;
+        overflow: hidden;
+        border: 2.5px solid var(--border);
+        margin-top: 0.5rem;
+        flex-shrink: 0;
+        transition: border-color 0.4s ease;
+    }
+
+    .avatar-portrait-loading {
+        border-color: transparent;
+    }
+
+    .avatar-portrait-img {
+        width: 100%;
+        height: auto;
+        display: block;
+    }
+
+    .avatar-portrait-spinner {
         position: absolute;
-        top: -3px;
-        left: -3px;
-        width: calc(100% + 6px);
-        height: calc(100% + 6px);
+        top: 50%;
+        left: 50%;
+        width: 48px;
+        height: 48px;
+        margin-top: -24px;
+        margin-left: -24px;
         border-radius: 50%;
         border: 3px solid transparent;
-        border-top-color: #a78bfa;
+        border-top-color: var(--accent);
         border-right-color: #7c3aed;
-        animation: spin 1s linear infinite;
+        animation: spin 0.9s linear infinite;
         pointer-events: none;
     }
 
-    @keyframes pulse {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
-        50% { box-shadow: 0 0 20px 10px rgba(34, 197, 94, 0.15); }
-    }
-
-    @keyframes spin {
-        to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     /* --- Title --- */
     .title {
-        font-size: 2rem;
-        color: #a78bfa;
+        font-size: 1.6rem;
+        color: var(--text-primary);
         font-weight: 300;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.15em;
     }
 
     /* --- Status --- */
     .status {
-        color: #888;
-        font-size: 0.9rem;
+        color: var(--text-tertiary);
+        font-size: 0.85rem;
         min-height: 1.4em;
         transition: color 0.3s ease;
     }
+    .status-error { color: var(--red); }
 
-    .status-error {
-        color: #ef4444;
+    /* --- Hint --- */
+    .hint {
+        color: var(--text-tertiary);
+        font-size: 0.78rem;
+        font-style: italic;
+        opacity: 0.7;
+    }
+    .hint-phrase {
+        color: var(--accent);
+        font-style: normal;
+        font-weight: 600;
     }
 
     /* --- Progress --- */
     .progress-container {
-        width: 80%;
-        max-width: 300px;
+        width: 70%;
+        max-width: 260px;
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 0.4rem;
+        gap: 0.35rem;
     }
 
     .progress-bar {
         width: 100%;
-        height: 6px;
-        background: #2a2a4a;
-        border-radius: 3px;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 2px;
         overflow: hidden;
     }
 
     .progress-fill {
         height: 100%;
-        background: linear-gradient(90deg, #a78bfa, #7c3aed);
-        border-radius: 3px;
+        background: linear-gradient(90deg, var(--accent), #7c3aed);
+        border-radius: 2px;
         transition: width 0.3s ease;
     }
 
     .progress-text {
-        color: #666;
-        font-size: 0.75rem;
+        color: var(--text-tertiary);
+        font-size: 0.72rem;
     }
 
     /* --- Button --- */
     .main-button {
-        margin-top: 1rem;
-        padding: 0.8rem 3rem;
+        margin-top: 0.6rem;
+        padding: 0.7rem 2.8rem;
         border: none;
-        border-radius: 2rem;
-        font-size: 1.1rem;
-        font-weight: 500;
+        border-radius: var(--radius-pill);
+        font-size: 0.95rem;
+        font-weight: 600;
         color: white;
         cursor: pointer;
-        transition: transform 0.15s ease, opacity 0.2s ease, background 0.3s ease;
-        letter-spacing: 0.05em;
+        transition: transform 0.12s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+        letter-spacing: 0.04em;
+    }
+    .main-button:hover:not(:disabled) { transform: scale(1.03); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+    .main-button:active:not(:disabled) { transform: scale(0.97); }
+    .main-button:disabled { cursor: not-allowed; }
+
+    /* --- Settings --- */
+    .settings {
+        width: 100%;
+        max-width: 420px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        padding: 0.8rem;
+        overflow-y: auto;
     }
 
-    .main-button:hover:not(:disabled) {
-        transform: scale(1.05);
+    .settings-title {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        flex: 1;
+        text-align: center;
     }
 
-    .main-button:active:not(:disabled) {
-        transform: scale(0.97);
+    .settings-sub {
+        color: var(--text-tertiary);
+        font-size: 0.75rem;
+        margin-bottom: 0.6rem;
+        word-break: break-word;
     }
 
-    .main-button:disabled {
-        cursor: not-allowed;
+    .settings-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        margin-bottom: 0.45rem;
     }
+
+    .settings-label {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        flex-shrink: 0;
+    }
+
+    .settings-select {
+        flex: 1;
+        min-width: 0;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-primary);
+        padding: 0.4rem 0.5rem;
+        border-radius: var(--radius-sm);
+        outline: none;
+        font-size: 0.82rem;
+        font-family: inherit;
+        transition: border-color 0.15s;
+    }
+    .settings-select:focus { border-color: var(--accent); }
+    .settings-select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .settings-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        margin-top: 0.6rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .settings-save {
+        border: none;
+        border-radius: var(--radius-pill);
+        padding: 0.45rem 1rem;
+        background: var(--accent);
+        color: #110a20;
+        font-weight: 700;
+        font-size: 0.82rem;
+        cursor: pointer;
+        transition: transform 0.1s, opacity 0.15s;
+    }
+    .settings-save:hover:not(:disabled) { transform: translateY(-1px); }
+    .settings-save:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .settings-status {
+        color: var(--text-tertiary);
+        font-size: 0.75rem;
+        flex: 1;
+        text-align: right;
+        min-height: 1.1em;
+    }
+
+    /* --- Model Picker / Voices --- */
+    .model-picker {
+        width: 100%;
+        max-width: 420px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        padding: 0.8rem;
+    }
+
+    .note {
+        color: var(--text-tertiary);
+        font-size: 0.78rem;
+        margin-bottom: 0.4rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.4;
+    }
+
+    .tabs {
+        display: flex;
+        gap: 0.35rem;
+        margin: 0.3rem 0 0.7rem 0;
+    }
+
+    .tab-btn {
+        flex: 1;
+        border: 1px solid var(--border-subtle);
+        background: transparent;
+        color: var(--text-secondary);
+        border-radius: var(--radius-pill);
+        padding: 0.32rem 0.5rem;
+        font-size: 0.78rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); }
+    .tab-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .tab-active {
+        border-color: var(--accent);
+        background: var(--accent-dim);
+        color: var(--accent);
+    }
+
+    .model-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .model-item {
+        width: 100%;
+        text-align: left;
+        border: 1px solid var(--border-subtle);
+        background: transparent;
+        color: var(--text-secondary);
+        border-radius: var(--radius-sm);
+        padding: 0.5rem 0.55rem;
+        font-size: 0.78rem;
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+        word-break: break-word;
+    }
+    .model-item:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); border-color: var(--border-medium); }
+    .model-item:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .model-search {
+        flex: 1;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-primary);
+        padding: 0.4rem 0.5rem;
+        border-radius: var(--radius-sm);
+        outline: none;
+        font-size: 0.82rem;
+        font-family: inherit;
+        transition: border-color 0.15s;
+    }
+    .model-search:focus { border-color: var(--accent); }
+
+    .model-search-btn {
+        border: none;
+        border-radius: var(--radius-pill);
+        padding: 0.4rem 0.8rem;
+        background: var(--blue);
+        color: white;
+        font-weight: 600;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: transform 0.1s, opacity 0.15s;
+    }
+    .model-search-btn:hover:not(:disabled) { transform: translateY(-1px); }
+    .model-search-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .model-details {
+        border-top: 1px solid var(--border-subtle);
+        padding-top: 0.6rem;
+        margin-top: 0.4rem;
+    }
+
+    .details-title {
+        font-size: 0.88rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin-bottom: 0.3rem;
+        word-break: break-word;
+    }
+
+    .model-snippet {
+        color: var(--text-secondary);
+        font-size: 0.8rem;
+        line-height: 1.3;
+        margin: 0.3rem 0 0.6rem 0;
+        padding: 0.5rem 0.6rem;
+        border-radius: var(--radius-sm);
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+    }
+
+    .details-actions {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+        margin-top: 0.3rem;
+    }
+
+    .pill {
+        border: 1px solid var(--border-subtle);
+        background: transparent;
+        color: var(--text-secondary);
+        border-radius: var(--radius-pill);
+        padding: 0.38rem 0.75rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s, transform 0.1s;
+    }
+    .pill:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); transform: translateY(-1px); }
+    .pill:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .pill-primary {
+        background: var(--green);
+        color: #08130d;
+        border-color: transparent;
+    }
+    .pill-primary:hover:not(:disabled) { background: #16a34a; color: white; }
+
+    /* --- Warning --- */
+    .warning {
+        color: var(--yellow);
+        font-size: 0.8rem;
+        text-align: center;
+        max-width: 300px;
+        padding: 0.4rem 0.6rem;
+        background: rgba(251, 191, 36, 0.06);
+        border: 1px solid rgba(251, 191, 36, 0.15);
+        border-radius: var(--radius-sm);
+    }
+
+    /* --- Activity Log --- */
+    .log-panel {
+        width: 100%;
+        max-width: 420px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        padding: 0.75rem;
+        margin-top: 0.2rem;
+    }
+
+    .log-title {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: var(--text-tertiary);
+        letter-spacing: 0.08em;
+        margin-bottom: 0.5rem;
+        text-transform: uppercase;
+    }
+
+    .log {
+        max-height: 220px;
+        overflow: auto;
+        padding-right: 0.2rem;
+    }
+
+    .log-line {
+        font-size: 0.8rem;
+        line-height: 1.3;
+        padding: 0.3rem 0.45rem;
+        border-radius: var(--radius-sm);
+        margin-bottom: 0.25rem;
+        word-break: break-word;
+        white-space: pre-wrap;
+    }
+
+    .log-user {
+        background: var(--green-dim);
+        border: 1px solid rgba(34, 197, 94, 0.15);
+    }
+
+    .log-assistant {
+        background: var(--accent-dim);
+        border: 1px solid rgba(167, 139, 250, 0.15);
+    }
+
+    .log-tool {
+        background: rgba(59, 130, 246, 0.08);
+        border: 1px solid rgba(59, 130, 246, 0.12);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.75rem;
+    }
+
+    .log-system {
+        background: rgba(251, 191, 36, 0.05);
+        border: 1px solid rgba(251, 191, 36, 0.1);
+    }
+
+    /* --- Text Input Bar --- */
+    .text-input-bar {
+        display: flex;
+        gap: 8px;
+        padding: 8px 4px 4px;
+        border-top: 1px solid var(--border-subtle);
+        margin-top: 0.4rem;
+    }
+
+    .text-input {
+        flex: 1;
+        background: var(--bg-elevated);
+        color: var(--text-primary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 6px 10px;
+        font-size: 0.82rem;
+        font-family: inherit;
+    }
+    .text-input:focus {
+        border-color: var(--accent);
+        outline: none;
+    }
+    .text-input::placeholder {
+        color: var(--text-tertiary);
+    }
+
+    .text-send-btn {
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: 6px 14px;
+        font-size: 0.82rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: opacity 0.15s;
+    }
+    .text-send-btn:hover:not(:disabled) { opacity: 0.85; }
+    .text-send-btn:disabled { opacity: 0.35; cursor: default; }
+
+    /* --- Log Entry with Fork Button --- */
+    .log-entry {
+        display: flex;
+        align-items: flex-start;
+        gap: 4px;
+        margin-bottom: 0.25rem;
+    }
+    .log-entry p {
+        flex: 1;
+    }
+
+    .fork-btn {
+        opacity: 0.15;
+        background: none;
+        border: none;
+        color: var(--text-tertiary);
+        cursor: pointer;
+        font-size: 0.85rem;
+        padding: 0.2rem 0.3rem;
+        line-height: 1;
+        border-radius: 4px;
+        transition: opacity 0.15s, color 0.15s;
+        flex-shrink: 0;
+    }
+    .log-entry:hover .fork-btn { opacity: 0.6; }
+    .fork-btn:hover { opacity: 1 !important; color: var(--accent); background: var(--accent-dim); }
+
+    /* Fork active state */
+    .log-entry.fork-point {
+        background: var(--accent-dim);
+        border-radius: var(--radius-sm);
+        padding: 2px;
+    }
+    .log-entry.forked-below p { opacity: 0.3; }
+    .log-entry.forked-below .fork-btn { opacity: 0.15; }
+
+    .fork-indicator {
+        font-size: 0.75rem;
+        color: var(--accent);
+        padding: 4px 6px;
+        margin-top: 4px;
+    }
+
+    .fork-cancel {
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        cursor: pointer;
+        text-decoration: underline;
+        font-size: 0.75rem;
+    }
+    .fork-cancel:hover { color: var(--text-primary); }
+
+    /* --- Modal --- */
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(6px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        z-index: 9999;
+        animation: fadeIn 0.15s ease;
+    }
+
+    .modal {
+        width: 100%;
+        max-width: 480px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        border-radius: var(--radius-lg);
+        padding: 1.1rem;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-title {
+        color: var(--text-primary);
+        font-size: 1rem;
+        font-weight: 700;
+        margin-bottom: 0.3rem;
+    }
+
+    .modal-subtitle {
+        color: var(--text-tertiary);
+        font-size: 0.85rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .modal-tool {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--accent);
+        margin-bottom: 0.5rem;
+    }
+
+    .modal-json {
+        max-height: 200px;
+        overflow: auto;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 0.6rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.8rem;
+        white-space: pre-wrap;
+    }
+
+    .modal-actions {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+    }
+
+    .modal-btn {
+        border: none;
+        border-radius: var(--radius-pill);
+        padding: 0.5rem 1rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.1s, opacity 0.15s;
+    }
+    .modal-btn:hover { transform: translateY(-1px); }
+    .modal-btn:active { transform: scale(0.97); }
+
+    .modal-approve { background: var(--green); color: white; }
+    .modal-deny { background: var(--red); color: white; }
+
+    /* --- Scrollbar --- */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.18); }
 "#;

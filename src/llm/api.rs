@@ -8,7 +8,6 @@
 use crate::config::LlmConfig;
 use crate::error::{Result, SpeechError};
 use crate::pipeline::messages::SentenceChunk;
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -48,7 +47,7 @@ impl ApiLlm {
 
         let history = vec![ChatMessage {
             role: "system",
-            content: config.system_prompt.clone(),
+            content: config.effective_system_prompt(),
         }];
 
         Ok(Self {
@@ -77,6 +76,7 @@ impl ApiLlm {
             role: "user",
             content: user_input.to_owned(),
         });
+        self.trim_history();
 
         interrupt.store(false, Ordering::Relaxed);
 
@@ -107,18 +107,28 @@ impl ApiLlm {
         let body_str = serde_json::to_string(&body)
             .map_err(|e| SpeechError::Llm(format!("JSON serialization failed: {e}")))?;
 
-        let url = format!("{}/v1/chat/completions", self.config.api_url);
+        let base = match self.config.api_url.strip_suffix("/v1") {
+            Some(u) => u,
+            None => &self.config.api_url,
+        };
+        let base = base.trim_end_matches('/');
+        let url = format!("{base}/v1/chat/completions");
 
         // Bridge sync HTTP streaming to async via a channel
         let (token_tx, mut token_rx) = mpsc::channel::<String>(64);
         let agent = self.agent.clone();
         let interrupt_clone = Arc::clone(interrupt);
+        let api_key = self.config.api_key.clone();
 
         let http_handle =
             tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
-                let response = agent
-                    .post(&url)
-                    .set("Content-Type", "application/json")
+                let mut req = agent.post(&url).set("Content-Type", "application/json");
+                if !api_key.is_empty() {
+                    let auth = format!("Bearer {}", api_key);
+                    req = req.set("Authorization", &auth);
+                }
+
+                let response = req
                     .send_string(&body_str)
                     .map_err(|e| format!("API request failed: {e}"))?;
 
@@ -186,9 +196,6 @@ impl ApiLlm {
                 continue;
             }
 
-            print!("{token_text}");
-            let _ = std::io::stdout().flush();
-
             generated_text.push_str(&token_text);
             sentence_buffer.push_str(&token_text);
 
@@ -252,6 +259,7 @@ impl ApiLlm {
                 content: final_text,
             });
         }
+        self.trim_history();
 
         let elapsed = gen_start.elapsed();
         let tokens_per_sec = if elapsed.as_secs_f64() > 0.0 {
@@ -271,5 +279,28 @@ impl ApiLlm {
         );
 
         Ok(was_interrupted)
+    }
+
+    /// Truncate the conversation history to keep only the system prompt and
+    /// the first `keep_count` messages after it.
+    ///
+    /// This is used by conversation forking to rewind to a specific point.
+    pub fn truncate_history(&mut self, keep_count: usize) {
+        if self.history.len() > 1 + keep_count {
+            self.history.truncate(1 + keep_count);
+        }
+    }
+
+    fn trim_history(&mut self) {
+        let max = self.config.max_history_messages;
+        if max == 0 {
+            return;
+        }
+        if self.history.len() > 1 + max {
+            let drain_end = self.history.len().saturating_sub(max);
+            if drain_end > 1 {
+                self.history.drain(1..drain_end);
+            }
+        }
     }
 }

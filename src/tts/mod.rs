@@ -1,8 +1,8 @@
 //! Text-to-speech synthesis using Chatterbox Turbo.
 //!
 //! Uses ResembleAI's Chatterbox Turbo ONNX models for high-quality
-//! voice-cloning TTS at 24kHz. When no reference voice WAV is configured,
-//! a default voice profile is downloaded automatically from cbx GitHub releases.
+//! voice-cloning TTS at 24kHz. The bundled default voice ("Fae") is a
+//! Scottish female voice embedded at compile time.
 
 mod chatterbox;
 
@@ -22,10 +22,17 @@ const DEFAULT_REPO_ID: &str = "ResembleAI/chatterbox-turbo-ONNX";
 /// Default revision (branch) for the model repo.
 const DEFAULT_REVISION: &str = "main";
 
-/// URL for the default voice profile from cbx GitHub releases.
-/// The `/releases/latest/download/` pattern auto-redirects to the current release.
+/// URL for the fallback voice profile from cbx GitHub releases (used only if the
+/// bundled Fae voice cannot be written to disk).
 const CBX_DEFAULT_VOICE_URL: &str =
     "https://github.com/srv1n/cbx/releases/latest/download/cbx-voice-default-fp16.cbxvoice";
+
+/// Bundled Fae voice WAV (Scottish female, 24kHz mono, ~30s).
+/// Embedded at compile time so it's always available without network access.
+const FAE_VOICE_WAV: &[u8] = include_bytes!("../../assets/voices/fae.wav");
+
+/// Well-known filename for the bundled Fae voice on disk.
+const FAE_VOICE_FILENAME: &str = "fae.wav";
 
 /// Text-to-speech engine using Chatterbox Turbo.
 ///
@@ -185,14 +192,63 @@ fn parse_model_variant(dtype: &str) -> ModelVariant {
 
 /// Resolve the voice reference WAV path.
 ///
-/// If the config's `voice_reference` is non-empty, uses that path directly.
-/// Otherwise returns `None` — the caller should use the default voice.
+/// Priority order:
+/// 1. Explicit `voice_reference` in config (user-selected voice)
+/// 2. Bundled Fae voice (Scottish female, written to `~/.fae/voices/fae.wav`)
+/// 3. `None` — caller falls back to downloading the cbx default voice profile
 pub fn resolve_voice_wav(config: &TtsConfig) -> Option<PathBuf> {
-    if config.voice_reference.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(&config.voice_reference))
+    if !config.voice_reference.is_empty() {
+        return Some(PathBuf::from(&config.voice_reference));
     }
+
+    // Try to ensure the bundled Fae voice is available on disk.
+    match ensure_bundled_fae_voice() {
+        Ok(path) => {
+            info!("using bundled Fae voice: {}", path.display());
+            Some(path)
+        }
+        Err(e) => {
+            info!("could not write bundled Fae voice to disk: {e}; falling back to cbx default");
+            None
+        }
+    }
+}
+
+/// Write the bundled Fae voice WAV to `~/.fae/voices/fae.wav` if it doesn't
+/// already exist (or if it has a different size). Returns the path.
+fn ensure_bundled_fae_voice() -> Result<PathBuf> {
+    let voices_dir = crate::config::MemoryConfig::default()
+        .root_dir
+        .join("voices");
+    std::fs::create_dir_all(&voices_dir)?;
+
+    let path = voices_dir.join(FAE_VOICE_FILENAME);
+
+    // Only write if the file is missing or has a different size (stale/corrupt).
+    let needs_write = match std::fs::metadata(&path) {
+        Ok(meta) => meta.len() != FAE_VOICE_WAV.len() as u64,
+        Err(_) => true,
+    };
+
+    if needs_write {
+        info!(
+            "writing bundled Fae voice ({} bytes) to {}",
+            FAE_VOICE_WAV.len(),
+            path.display()
+        );
+        std::fs::write(&path, FAE_VOICE_WAV)?;
+    }
+
+    Ok(path)
+}
+
+/// Return the path where the bundled Fae voice is (or would be) stored.
+/// Use this for "Reset to Fae's voice" in the GUI.
+pub fn bundled_fae_voice_path() -> PathBuf {
+    crate::config::MemoryConfig::default()
+        .root_dir
+        .join("voices")
+        .join(FAE_VOICE_FILENAME)
 }
 
 /// Check the cbx voice cache for a matching profile, or download the default.

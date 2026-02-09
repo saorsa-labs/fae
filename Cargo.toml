@@ -5,20 +5,28 @@ edition = "2024"
 description = "Real-time speech-to-speech AI conversation system"
 license = "AGPL-3.0"
 repository = "https://github.com/saorsa-labs/fae"
+autobins = false
+default-run = "fae"
 
 [[bin]]
 name = "fae"
-path = "src/bin/cli.rs"
-
-[[bin]]
-name = "fae-gui"
 path = "src/bin/gui.rs"
 required-features = ["gui"]
 
+[[bin]]
+name = "fae-record-wakeword"
+path = "src/bin/record_wakeword.rs"
+
+[[bin]]
+name = "fae-avatar-slicer"
+path = "src/bin/avatar_slicer.rs"
+required-features = ["tools"]
+
 [features]
-default = []
+default = ["gui"]
 metal = ["mistralrs/metal"]
 gui = ["dioxus"]
+tools = ["image"]
 # Chatterbox TTS execution provider features (vendored from cbx).
 coreml = ["ort/coreml"]
 directml = ["ort/directml"]
@@ -59,7 +67,7 @@ thiserror = "2"
 anyhow = "1"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+# GUI-only app (no CLI/TUI binaries).
 
 # Logging
 tracing = "0.1"
@@ -69,6 +77,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+urlencoding = "2"
+base64 = "0.22"
 
 # Progress indicators
 indicatif = "0.17"
@@ -76,5 +86,28 @@ indicatif = "0.17"
 # Desktop GUI (optional, behind `gui` feature)
 dioxus = { version = "0.6", features = ["desktop"], optional = true }
 
+# TUI (saorsa-tui terminal UI framework, published on crates.io)
+# (removed)
+
+# Agent runtime + multi-provider LLM API (saorsa ecosystem)
+saorsa-agent = "0.4"
+saorsa-ai = { version = "0.4", features = ["mistralrs"] }
+
+# Acoustic Echo Cancellation (FDAF adaptive filter)
+fdaf-aec = "0.1"
+
 # Utilities
 crossbeam-channel = "0.5"
+async-trait = "0.1"
+rustfft = "6"
+rfd = "0.15"
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "wav"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"], optional = true }
+
+# Auto-enable Metal GPU acceleration on macOS (Apple Silicon / Intel with Metal).
+# This is equivalent to `--features metal` but happens automatically.
+[target.'cfg(target_os = "macos")'.dependencies]
+mistralrs = { version = "0.7", features = ["metal"] }
+
+#
+# NOTE: We intentionally use the published crates.io versions of the saorsa ecosystem.

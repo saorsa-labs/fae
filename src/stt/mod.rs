@@ -7,6 +7,7 @@ use crate::config::{ModelConfig, SttConfig};
 use crate::error::{Result, SpeechError};
 use crate::models::ModelManager;
 use crate::pipeline::messages::{SpeechSegment, Transcription};
+use crate::voiceprint;
 use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
 use std::time::Instant;
 use tracing::info;
@@ -79,9 +80,12 @@ impl ParakeetStt {
             result.text
         );
 
+        let voiceprint = voiceprint::compute_voiceprint(&segment.samples, segment.sample_rate).ok();
+
         Ok(Transcription {
             text: result.text,
             is_final: true,
+            voiceprint,
             audio_captured_at: segment.started_at,
             transcribed_at,
         })

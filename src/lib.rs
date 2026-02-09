@@ -23,20 +23,32 @@ compile_error!(
      This is a one-time ~700 MB download."
 );
 
+pub mod agent;
+pub mod approval;
 pub mod audio;
 pub mod config;
 pub mod error;
+pub mod huggingface;
 pub mod llm;
+pub mod memory;
+pub mod model_picker;
 pub mod models;
 pub mod pipeline;
 pub mod progress;
+pub mod runtime;
 pub mod startup;
 pub mod stt;
+pub mod system_profile;
 pub mod tts;
 pub mod vad;
+pub mod voice_clone;
+pub mod voiceprint;
+pub mod wakeword;
 
+pub use approval::ToolApprovalRequest;
 pub use config::SpeechConfig;
 pub use error::{Result, SpeechError};
 pub use pipeline::coordinator::{PipelineCoordinator, PipelineMode};
 pub use progress::{ProgressCallback, ProgressEvent};
+pub use runtime::RuntimeEvent;
 pub use startup::InitializedModels;

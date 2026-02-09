@@ -1,14 +1,21 @@
 //! Main pipeline orchestrator that wires all stages together.
 
+use crate::approval::ToolApprovalRequest;
+use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::config::SpeechConfig;
 use crate::error::Result;
+use crate::memory::{MemoryStore, Person, PrimaryUser};
 use crate::pipeline::messages::{
-    AudioChunk, SentenceChunk, SpeechSegment, SynthesizedAudio, Transcription,
+    AudioChunk, ControlEvent, SentenceChunk, SpeechSegment, SynthesizedAudio, TextInjection,
+    Transcription,
 };
+use crate::runtime::RuntimeEvent;
 use crate::startup::InitializedModels;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -19,6 +26,14 @@ const SPEECH_CHANNEL_SIZE: usize = 8;
 const TRANSCRIPTION_CHANNEL_SIZE: usize = 8;
 const SENTENCE_CHANNEL_SIZE: usize = 8;
 const SYNTH_CHANNEL_SIZE: usize = 16;
+
+const PRIMARY_MATCH_THRESHOLD: f32 = 0.82;
+const UNKNOWN_MATCH_THRESHOLD: f32 = 0.78;
+
+/// Commands sent to the playback stage (e.g., barge-in stop).
+enum PlaybackCommand {
+    Stop,
+}
 
 /// Pipeline operating mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +50,10 @@ pub struct PipelineCoordinator {
     cancel: CancellationToken,
     mode: PipelineMode,
     models: Option<InitializedModels>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+    text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
+    console_output: bool,
 }
 
 impl PipelineCoordinator {
@@ -45,6 +64,10 @@ impl PipelineCoordinator {
             cancel: CancellationToken::new(),
             mode: PipelineMode::Conversation,
             models: None,
+            runtime_tx: None,
+            tool_approval_tx: None,
+            text_injection_rx: None,
+            console_output: true,
         }
     }
 
@@ -57,12 +80,47 @@ impl PipelineCoordinator {
             cancel: CancellationToken::new(),
             mode: PipelineMode::Conversation,
             models: Some(models),
+            runtime_tx: None,
+            tool_approval_tx: None,
+            text_injection_rx: None,
+            console_output: true,
         }
     }
 
     /// Set the pipeline operating mode.
     pub fn with_mode(mut self, mode: PipelineMode) -> Self {
         self.mode = mode;
+        self
+    }
+
+    /// Attach a runtime event broadcaster for UI/observability.
+    pub fn with_runtime_events(mut self, tx: broadcast::Sender<RuntimeEvent>) -> Self {
+        self.runtime_tx = Some(tx);
+        self
+    }
+
+    /// Attach a tool approval sender for interactive frontends.
+    ///
+    /// When set, high-risk tools (write/edit/bash/web) can be gated behind explicit approval.
+    pub fn with_tool_approvals(mut self, tx: mpsc::UnboundedSender<ToolApprovalRequest>) -> Self {
+        self.tool_approval_tx = Some(tx);
+        self
+    }
+
+    /// Attach a text injection channel for typed input from the GUI.
+    ///
+    /// Messages received on this channel bypass STT and are fed directly
+    /// into the LLM stage.
+    pub fn with_text_injection(mut self, rx: mpsc::UnboundedReceiver<TextInjection>) -> Self {
+        self.text_injection_rx = Some(rx);
+        self
+    }
+
+    /// Enable or disable console (stdout) output from the pipeline.
+    ///
+    /// UI frontends should set this to `false` to avoid corrupting rendering.
+    pub fn with_console_output(mut self, enabled: bool) -> Self {
+        self.console_output = enabled;
         self
     }
 
@@ -74,23 +132,53 @@ impl PipelineCoordinator {
     pub async fn run(mut self) -> Result<()> {
         info!("initializing speech pipeline (mode: {:?})", self.mode);
 
+        // Ensure persistent memory roots exist early, and decide whether we need onboarding.
+        let memory_root = self.config.memory.root_dir.clone();
+        let store = MemoryStore::new(&memory_root);
+        let _ = store.ensure_dirs();
+        let _ = MemoryStore::ensure_voice_dirs(&memory_root);
+        let primary_exists = store.load_primary_user().ok().flatten().is_some();
+        let onboarding_needed = !primary_exists && matches!(self.mode, PipelineMode::Conversation);
+
+        // If onboarding is needed, tee VAD speech segments to the identity gate so we can record a
+        // voice sample WAV for the primary user.
+        let (onboarding_seg_tx, onboarding_seg_rx) = if onboarding_needed {
+            let (tx, rx) = mpsc::channel::<SpeechSegment>(SPEECH_CHANNEL_SIZE);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+
         // Split pre-loaded models (if any) into per-stage pieces.
         let (preloaded_stt, preloaded_llm, preloaded_tts) = match self.models.take() {
             Some(m) => (Some(m.stt), m.llm, Some(m.tts)),
             None => (None, None, None),
         };
 
+        let text_injection_rx = self.text_injection_rx.take();
+
         // Create channels between stages
         let (audio_tx, audio_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
         let (speech_tx, speech_rx) = mpsc::channel::<SpeechSegment>(SPEECH_CHANNEL_SIZE);
         let (transcription_tx, transcription_rx) =
             mpsc::channel::<Transcription>(TRANSCRIPTION_CHANNEL_SIZE);
+        let (control_tx, control_rx) = mpsc::unbounded_channel::<ControlEvent>();
 
         let cancel = self.cancel.clone();
+        let runtime_tx = self.runtime_tx.clone();
+        let tool_approval_tx = self.tool_approval_tx.clone();
+        let console_output = self.console_output;
+        let assistant_speaking = Arc::new(AtomicBool::new(false));
+        let assistant_generating = Arc::new(AtomicBool::new(false));
 
-        // Shared flag: suppresses VAD while AI audio is playing to prevent
-        // speaker → mic feedback loop. Set by LLM stage, cleared by Playback.
-        let ai_speaking = Arc::new(AtomicBool::new(false));
+        // AEC reference buffer: playback pushes speaker audio here so the AEC
+        // stage can subtract it from the microphone signal.
+        let ref_buf = ReferenceBuffer::new(
+            self.config.audio.output_sample_rate,
+            self.config.audio.input_sample_rate,
+        );
+        let ref_handle_playback = ref_buf.handle();
+        let aec_enabled = self.config.aec.enabled;
 
         // Stage 1: Audio capture (always)
         let capture_handle = {
@@ -101,13 +189,97 @@ impl PipelineCoordinator {
             })
         };
 
+        // AEC stage: sits between capture and VAD when enabled.
+        let (vad_audio_rx, aec_handle) = if aec_enabled {
+            let (aec_out_tx, aec_out_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
+            let aec_config = self.config.aec.clone();
+            let cancel = cancel.clone();
+            let handle = tokio::spawn(async move {
+                run_aec_stage(aec_config, ref_buf, audio_rx, aec_out_tx, cancel).await;
+            });
+            (aec_out_rx, Some(handle))
+        } else {
+            // Bypass: raw capture audio goes directly to VAD.
+            drop(ref_buf);
+            (audio_rx, None)
+        };
+
+        // Wakeword spotter: when enabled, tee audio to a second channel so the
+        // MFCC+DTW spotter runs in parallel with VAD.
+        let wakeword_enabled = self.config.wakeword.enabled;
+        let (final_vad_rx, wakeword_handle, wakeword_gate_rx) = if wakeword_enabled {
+            let (wakeword_audio_tx, wakeword_audio_rx) =
+                mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
+            let (tee_out_tx, tee_out_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
+            let (wakeword_signal_tx, wakeword_signal_rx) = mpsc::unbounded_channel::<()>();
+            let cancel_tee = cancel.clone();
+
+            // Tee task: sends each audio chunk to both VAD and wakeword spotter.
+            tokio::spawn(async move {
+                let mut rx = vad_audio_rx;
+                loop {
+                    tokio::select! {
+                        () = cancel_tee.cancelled() => break,
+                        chunk = rx.recv() => {
+                            match chunk {
+                                Some(c) => {
+                                    // Best-effort send to wakeword: don't block VAD.
+                                    let _ = wakeword_audio_tx.try_send(c.clone());
+                                    if tee_out_tx.send(c).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Wakeword spotter: maps detections to signals for the conversation gate.
+            let ww_config = self.config.clone();
+            let ww_control_tx = control_tx.clone();
+            let ww_cancel = cancel.clone();
+            let ww_signal_tx = wakeword_signal_tx;
+            let handle = Some(tokio::spawn(async move {
+                // The stage sends ControlEvent::WakewordDetected AND a () signal.
+                run_wakeword_stage_with_signal(
+                    ww_config,
+                    wakeword_audio_rx,
+                    ww_control_tx,
+                    ww_signal_tx,
+                    ww_cancel,
+                )
+                .await;
+            }));
+
+            (tee_out_rx, handle, Some(wakeword_signal_rx))
+        } else {
+            (vad_audio_rx, None, None)
+        };
+
         // Stage 2: VAD (always)
         let vad_handle = {
             let config = self.config.clone();
             let cancel = cancel.clone();
-            let ai_speaking = Arc::clone(&ai_speaking);
+            let control_tx = control_tx.clone();
+            let onboarding_seg_tx = onboarding_seg_tx.clone();
+            let echo = VadEchoState {
+                assistant_speaking: Arc::clone(&assistant_speaking),
+                assistant_generating: Arc::clone(&assistant_generating),
+                aec_enabled,
+            };
             tokio::spawn(async move {
-                run_vad_stage(config, audio_rx, speech_tx, ai_speaking, cancel).await;
+                run_vad_stage(
+                    config,
+                    final_vad_rx,
+                    speech_tx,
+                    onboarding_seg_tx,
+                    control_tx,
+                    echo,
+                    cancel,
+                )
+                .await;
             })
         };
 
@@ -115,41 +287,95 @@ impl PipelineCoordinator {
         let stt_handle = {
             let config = self.config.clone();
             let cancel = cancel.clone();
+            let runtime_tx = runtime_tx.clone();
             tokio::spawn(async move {
-                run_stt_stage(config, preloaded_stt, speech_rx, transcription_tx, cancel).await;
+                run_stt_stage(
+                    config,
+                    preloaded_stt,
+                    speech_rx,
+                    transcription_tx,
+                    runtime_tx,
+                    cancel,
+                )
+                .await;
             })
         };
 
         // Build remaining handles depending on mode
         match self.mode {
             PipelineMode::Conversation => {
-                let (sentence_tx, sentence_rx) =
+                let mut control_rx = control_rx;
+                // Tee assistant sentences so UI can observe them without interfering with TTS.
+                let (llm_sentence_tx, llm_sentence_rx) =
+                    mpsc::channel::<SentenceChunk>(SENTENCE_CHANNEL_SIZE);
+                let (tts_sentence_tx, tts_sentence_rx) =
                     mpsc::channel::<SentenceChunk>(SENTENCE_CHANNEL_SIZE);
                 let (synth_tx, synth_rx) = mpsc::channel::<SynthesizedAudio>(SYNTH_CHANNEL_SIZE);
 
                 // Shared interrupt flag between gate and LLM
                 let interrupt = Arc::new(AtomicBool::new(false));
 
+                // Playback stop command channel (barge-in).
+                let (playback_cmd_tx, playback_cmd_rx) =
+                    mpsc::unbounded_channel::<PlaybackCommand>();
+
+                // Identity/onboarding gate: handles primary user enrollment and best-effort speaker
+                // matching before any wake-word gating.
+                let (ident_tx, ident_rx) =
+                    mpsc::channel::<Transcription>(TRANSCRIPTION_CHANNEL_SIZE);
+                let identity_handle = {
+                    let config = self.config.clone();
+                    let cancel = cancel.clone();
+                    let tts_tx = tts_sentence_tx.clone();
+                    let memory_root = memory_root.clone();
+                    tokio::spawn(async move {
+                        run_identity_gate(
+                            config,
+                            transcription_rx,
+                            ident_tx,
+                            tts_tx,
+                            memory_root,
+                            onboarding_seg_rx,
+                            cancel,
+                        )
+                        .await;
+                    })
+                };
+
                 // Insert conversation gate between STT and LLM when enabled
                 let (llm_rx, gate_handle) = if self.config.conversation.enabled {
                     let (gated_tx, gated_rx) =
                         mpsc::channel::<Transcription>(TRANSCRIPTION_CHANNEL_SIZE);
                     let config = self.config.clone();
-                    let cancel = cancel.clone();
-                    let interrupt = Arc::clone(&interrupt);
+                    let gate_ctl = ConversationGateControl {
+                        interrupt: Arc::clone(&interrupt),
+                        assistant_speaking: Arc::clone(&assistant_speaking),
+                        assistant_generating: Arc::clone(&assistant_generating),
+                        playback_cmd_tx: playback_cmd_tx.clone(),
+                        console_output,
+                        cancel: cancel.clone(),
+                        wakeword_rx: wakeword_gate_rx,
+                    };
                     let handle = Some(tokio::spawn(async move {
-                        run_conversation_gate(
-                            config,
-                            transcription_rx,
-                            gated_tx,
-                            interrupt,
-                            cancel,
-                        )
-                        .await;
+                        run_conversation_gate(config, ident_rx, gated_tx, gate_ctl).await;
                     }));
                     (gated_rx, handle)
                 } else {
-                    (transcription_rx, None)
+                    (ident_rx, None)
+                };
+
+                // Forward LLM sentences to both TTS and runtime event stream.
+                let sentence_forward_handle = {
+                    let runtime_tx = runtime_tx.clone();
+                    tokio::spawn(async move {
+                        forward_sentences(
+                            llm_sentence_rx,
+                            tts_sentence_tx,
+                            runtime_tx,
+                            console_output,
+                        )
+                        .await;
+                    })
                 };
 
                 // Stage 4: LLM
@@ -157,16 +383,29 @@ impl PipelineCoordinator {
                     let config = self.config.clone();
                     let cancel = cancel.clone();
                     let interrupt = Arc::clone(&interrupt);
-                    let ai_speaking = Arc::clone(&ai_speaking);
+                    let assistant_speaking = Arc::clone(&assistant_speaking);
+                    let assistant_generating = Arc::clone(&assistant_generating);
+                    let playback_cmd_tx = playback_cmd_tx.clone();
+                    let runtime_tx = runtime_tx.clone();
+                    let tool_approval_tx = tool_approval_tx.clone();
                     tokio::spawn(async move {
+                        let ctl = LlmStageControl {
+                            interrupt,
+                            assistant_speaking,
+                            assistant_generating,
+                            playback_cmd_tx,
+                            runtime_tx,
+                            tool_approval_tx,
+                            console_output,
+                            cancel,
+                        };
                         run_llm_stage(
                             config,
                             preloaded_llm,
                             llm_rx,
-                            sentence_tx,
-                            interrupt,
-                            ai_speaking,
-                            cancel,
+                            llm_sentence_tx,
+                            ctl,
+                            text_injection_rx,
                         )
                         .await;
                     })
@@ -176,32 +415,111 @@ impl PipelineCoordinator {
                 let tts_handle = {
                     let config = self.config.clone();
                     let cancel = cancel.clone();
+                    let interrupt = Arc::clone(&interrupt);
                     tokio::spawn(async move {
-                        run_tts_stage(config, preloaded_tts, sentence_rx, synth_tx, cancel).await;
+                        run_tts_stage(
+                            config,
+                            preloaded_tts,
+                            tts_sentence_rx,
+                            synth_tx,
+                            interrupt,
+                            cancel,
+                        )
+                        .await;
                     })
                 };
 
                 // Stage 6: Playback
                 let playback_handle = {
                     let config = self.config.audio.clone();
-                    let cancel = cancel.clone();
-                    let ai_speaking = Arc::clone(&ai_speaking);
+                    let ctl = PlaybackStageControl {
+                        assistant_speaking: Arc::clone(&assistant_speaking),
+                        control_tx: control_tx.clone(),
+                        runtime_tx: runtime_tx.clone(),
+                        aec_ref: if aec_enabled {
+                            Some(ref_handle_playback)
+                        } else {
+                            None
+                        },
+                        cancel: cancel.clone(),
+                    };
                     tokio::spawn(async move {
-                        run_playback_stage(config, synth_rx, ai_speaking, cancel).await;
+                        run_playback_stage(config, synth_rx, playback_cmd_rx, ctl).await;
                     })
                 };
+
+                // Control handler: on user speech start during assistant activity, interrupt and
+                // stop playback (barge-in).
+                //
+                // When AEC + conversation gate are both enabled, the gate handles
+                // barge-in based on transcription content (name-gated). The energy-based
+                // path here is only used as a fallback when either is disabled.
+                {
+                    let cancel = cancel.clone();
+                    let interrupt = Arc::clone(&interrupt);
+                    let assistant_speaking = Arc::clone(&assistant_speaking);
+                    let assistant_generating = Arc::clone(&assistant_generating);
+                    let playback_cmd_tx = playback_cmd_tx.clone();
+                    let barge_in = self.config.barge_in.clone();
+                    let runtime_tx = runtime_tx.clone();
+                    let name_gated = aec_enabled && self.config.conversation.enabled;
+                    tokio::spawn(async move {
+                        let mut last_assistant_speech_start: Option<Instant> = None;
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => break,
+                                ev = control_rx.recv() => {
+                                    let Some(ev) = ev else { break };
+                                    if let Some(rt) = &runtime_tx {
+                                        let _ = rt.send(RuntimeEvent::Control(ev.clone()));
+                                    }
+                                    if matches!(ev, ControlEvent::AssistantSpeechStart) {
+                                        last_assistant_speech_start = Some(Instant::now());
+                                    }
+                                    // Skip energy-based barge-in when name-gated: the
+                                    // conversation gate will interrupt only when the user
+                                    // says "Fae" in the transcription.
+                                    if let ControlEvent::UserSpeechStart { rms, .. } = ev
+                                        && !name_gated
+                                        && (assistant_speaking.load(Ordering::Relaxed)
+                                            || assistant_generating.load(Ordering::Relaxed))
+                                        && barge_in.enabled
+                                        && rms >= barge_in.min_rms
+                                        && !within_assistant_holdoff(
+                                            &last_assistant_speech_start,
+                                            barge_in.assistant_start_holdoff_ms,
+                                        )
+                                    {
+                                        interrupt.store(true, Ordering::Relaxed);
+                                        let _ = playback_cmd_tx.send(PlaybackCommand::Stop);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
 
                 // Wait for cancellation
                 cancel.cancelled().await;
                 info!("pipeline shutting down");
+
+                // Join optional stage handles.
+                if let Some(aec) = aec_handle {
+                    let _ = aec.await;
+                }
+                if let Some(ww) = wakeword_handle {
+                    let _ = ww.await;
+                }
 
                 if let Some(gate) = gate_handle {
                     let _ = tokio::join!(
                         capture_handle,
                         vad_handle,
                         stt_handle,
+                        identity_handle,
                         gate,
                         llm_handle,
+                        sentence_forward_handle,
                         tts_handle,
                         playback_handle,
                     );
@@ -210,23 +528,33 @@ impl PipelineCoordinator {
                         capture_handle,
                         vad_handle,
                         stt_handle,
+                        identity_handle,
                         llm_handle,
+                        sentence_forward_handle,
                         tts_handle,
                         playback_handle,
                     );
                 }
             }
             PipelineMode::TranscribeOnly => {
+                // Drop control events and unused reference handle (not used in this mode).
+                let _control_rx = control_rx;
+                drop(ref_handle_playback);
                 // Just print transcriptions to stdout
                 let print_handle = {
                     let cancel = cancel.clone();
+                    let runtime_tx = runtime_tx.clone();
                     tokio::spawn(async move {
-                        run_print_stage(transcription_rx, cancel).await;
+                        run_print_stage(transcription_rx, runtime_tx, console_output, cancel).await;
                     })
                 };
 
                 cancel.cancelled().await;
                 info!("pipeline shutting down");
+
+                if let Some(aec) = aec_handle {
+                    let _ = aec.await;
+                }
 
                 let _ = tokio::join!(capture_handle, vad_handle, stt_handle, print_handle,);
             }
@@ -266,22 +594,37 @@ async fn run_capture_stage(
     }
 }
 
-async fn run_vad_stage(
-    config: SpeechConfig,
+/// AEC stage: runs the adaptive filter on each microphone chunk.
+async fn run_aec_stage(
+    config: crate::config::AecConfig,
+    ref_buf: ReferenceBuffer,
     mut rx: mpsc::Receiver<AudioChunk>,
-    tx: mpsc::Sender<SpeechSegment>,
-    ai_speaking: Arc<AtomicBool>,
+    tx: mpsc::Sender<AudioChunk>,
     cancel: CancellationToken,
 ) {
-    use crate::vad::SileroVad;
-
-    let mut vad = match SileroVad::new(&config.vad, &config.models) {
-        Ok(v) => v,
+    let mut processor = match AecProcessor::new(&config, ref_buf) {
+        Ok(p) => p,
         Err(e) => {
-            error!("failed to init VAD: {e}");
-            return;
+            error!("failed to init AEC: {e}");
+            // Fall through: forward raw audio so the pipeline still works.
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => return,
+                    chunk = rx.recv() => {
+                        match chunk {
+                            Some(c) => { if tx.send(c).await.is_err() { return; } }
+                            None => return,
+                        }
+                    }
+                }
+            }
         }
     };
+
+    info!(
+        "AEC stage started (fft_size={}, step_size={})",
+        config.fft_size, config.step_size
+    );
 
     loop {
         tokio::select! {
@@ -289,21 +632,232 @@ async fn run_vad_stage(
             chunk = rx.recv() => {
                 match chunk {
                     Some(chunk) => {
-                        // Skip mic input while AI is speaking to prevent
-                        // speaker → mic → STT → LLM feedback loop.
-                        if ai_speaking.load(Ordering::Relaxed) {
-                            continue;
+                        let cleaned = processor.process(chunk);
+                        if tx.send(cleaned).await.is_err() {
+                            break;
                         }
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+}
+
+/// Wakeword spotter stage: runs MFCC+DTW detection on raw audio in parallel
+/// with the VAD stage. Emits a `ControlEvent::WakewordDetected` for UI
+/// observability and a dedicated `()` signal to the conversation gate.
+async fn run_wakeword_stage_with_signal(
+    config: SpeechConfig,
+    mut rx: mpsc::Receiver<AudioChunk>,
+    control_tx: mpsc::UnboundedSender<ControlEvent>,
+    signal_tx: mpsc::UnboundedSender<()>,
+    cancel: CancellationToken,
+) {
+    use crate::wakeword::WakewordSpotter;
+
+    let mut spotter = match WakewordSpotter::new(&config.wakeword, config.audio.input_sample_rate) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("failed to init wakeword spotter: {e}");
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => return,
+                    chunk = rx.recv() => {
+                        if chunk.is_none() { return; }
+                    }
+                }
+            }
+        }
+    };
+
+    info!(
+        "wakeword spotter started ({} references)",
+        spotter.reference_count()
+    );
+
+    let cooldown = Duration::from_secs(2);
+    let mut last_detection: Option<Instant> = None;
+
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => break,
+            chunk = rx.recv() => {
+                match chunk {
+                    Some(chunk) => {
+                        if spotter.process(&chunk.samples) {
+                            let in_cooldown = last_detection
+                                .is_some_and(|t| t.elapsed() < cooldown);
+                            if !in_cooldown {
+                                info!("wakeword detected by MFCC+DTW spotter");
+                                let _ = control_tx.send(ControlEvent::WakewordDetected);
+                                let _ = signal_tx.send(());
+                                last_detection = Some(Instant::now());
+                                spotter.clear();
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+}
+
+/// Shared state for echo suppression in the VAD stage.
+struct VadEchoState {
+    assistant_speaking: Arc<AtomicBool>,
+    assistant_generating: Arc<AtomicBool>,
+    /// When true, DSP-based AEC is active and echo suppression can be relaxed.
+    aec_enabled: bool,
+}
+
+async fn run_vad_stage(
+    config: SpeechConfig,
+    mut rx: mpsc::Receiver<AudioChunk>,
+    tx: mpsc::Sender<SpeechSegment>,
+    onboarding_tx: Option<mpsc::Sender<SpeechSegment>>,
+    control_tx: mpsc::UnboundedSender<ControlEvent>,
+    echo_state: VadEchoState,
+    cancel: CancellationToken,
+) {
+    use crate::vad::SileroVad;
+
+    let mut vad = match SileroVad::new(&config.vad, &config.models, config.audio.input_sample_rate)
+    {
+        Ok(v) => v,
+        Err(e) => {
+            error!("failed to init VAD: {e}");
+            return;
+        }
+    };
+
+    let confirm_samples = ms_to_samples(config.audio.input_sample_rate, config.barge_in.confirm_ms);
+    let mut pending: Option<PendingBargeIn> = None;
+
+    // Dynamic silence threshold: use a shorter silence gap during assistant
+    // speech so segments reach the conversation gate faster for barge-in.
+    let normal_silence_ms = config.vad.min_silence_duration_ms;
+    let barge_in_silence_ms = config.barge_in.barge_in_silence_ms;
+    let use_fast_silence = barge_in_silence_ms > 0 && barge_in_silence_ms < normal_silence_ms;
+    let mut in_fast_mode = false;
+
+    // Echo suppression tail: after assistant stops speaking, keep suppressing
+    // for a brief window so residual echo/reverb doesn't leak through.
+    // When AEC is active, the DSP filter handles most echo removal, so only a
+    // short tail is needed to catch residual reverb.
+    let echo_tail_ms: u64 = if echo_state.aec_enabled { 300 } else { 1500 };
+    let echo_tail = std::time::Duration::from_millis(echo_tail_ms);
+
+    let mut was_suppressing = false;
+    let mut suppress_until: Option<std::time::Instant> = None;
+
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => break,
+            chunk = rx.recv() => {
+                match chunk {
+                    Some(chunk) => {
                         match vad.process_chunk(&chunk) {
-                            Ok(Some(segment)) => {
-                                let duration_s = segment.samples.len() as f32
-                                    / segment.sample_rate as f32;
-                                info!("speech segment detected: {duration_s:.1}s");
-                                if tx.send(segment).await.is_err() {
-                                    break;
+                            Ok(out) => {
+                                // Update echo tail: detect the transition from suppressing→not.
+                                let actively_suppressing =
+                                    echo_state.assistant_speaking.load(Ordering::Relaxed)
+                                    || echo_state.assistant_generating.load(Ordering::Relaxed);
+                                if was_suppressing && !actively_suppressing {
+                                    suppress_until = Some(std::time::Instant::now() + echo_tail);
+                                }
+                                was_suppressing = actively_suppressing;
+
+                                // Switch silence threshold: shorter during assistant speech
+                                // for faster barge-in delivery.
+                                if use_fast_silence {
+                                    if actively_suppressing && !in_fast_mode {
+                                        vad.set_silence_threshold_ms(barge_in_silence_ms);
+                                        in_fast_mode = true;
+                                    } else if !actively_suppressing && in_fast_mode {
+                                        vad.set_silence_threshold_ms(normal_silence_ms);
+                                        in_fast_mode = false;
+                                    }
+                                }
+
+                                let in_echo_tail = suppress_until
+                                    .is_some_and(|t| std::time::Instant::now() < t);
+
+                                if out.speech_started {
+                                    pending = Some(PendingBargeIn {
+                                        captured_at: chunk.captured_at,
+                                        speech_samples: 0,
+                                        last_rms: out.rms,
+                                    });
+                                }
+
+                                let mut emit: Option<(Instant, f32)> = None;
+                                if let Some(mut p) = pending.take()
+                                    && out.is_speech
+                                {
+                                    p.speech_samples = p.speech_samples.saturating_add(chunk.samples.len());
+                                    p.last_rms = out.rms;
+                                    if p.speech_samples >= confirm_samples {
+                                        emit = Some((p.captured_at, p.last_rms));
+                                    } else {
+                                        pending = Some(p);
+                                    }
+                                }
+
+                                // Suppress barge-in events during echo suppression +
+                                // tail so echoed speech doesn't trigger false
+                                // interruptions.  Even with AEC active, residual
+                                // echo can leak through (especially on laptop
+                                // speakers), so always suppress during active
+                                // playback and the echo tail.  The wakeword
+                                // spotter provides fast barge-in detection on
+                                // raw audio, bypassing VAD entirely.
+                                let allow_event =
+                                    !actively_suppressing && !in_echo_tail;
+                                if let Some((captured_at, rms)) = emit
+                                    && allow_event
+                                {
+                                    let _ = control_tx.send(ControlEvent::UserSpeechStart {
+                                        captured_at,
+                                        rms,
+                                    });
+                                }
+                                if let Some(segment) = out.segment {
+                                    let duration_s =
+                                        segment.samples.len() as f32 / segment.sample_rate as f32;
+
+                                    // Echo suppression: when the assistant is speaking,
+                                    // generating, or within the echo tail, the mic is
+                                    // likely picking up playback audio.  Even with AEC
+                                    // active, residual echo leaks through on laptop
+                                    // speakers, so always drop segments during active
+                                    // playback and the echo tail.  Barge-in still works
+                                    // via the wakeword spotter which runs on raw audio.
+                                    let should_drop =
+                                        actively_suppressing || in_echo_tail;
+                                    if should_drop {
+                                        info!(
+                                            "dropping {duration_s:.1}s speech segment (echo suppression)"
+                                        );
+                                        continue;
+                                    }
+
+                                    // Clear the tail once we accept a real segment.
+                                    suppress_until = None;
+
+                                    info!("speech segment detected: {duration_s:.1}s");
+
+                                    if let Some(tap) = &onboarding_tx {
+                                        // Best-effort: don't block the pipeline if the tap is slow.
+                                        let _ = tap.try_send(segment.clone());
+                                    }
+
+                                    if tx.send(segment).await.is_err() {
+                                        break;
+                                    }
                                 }
                             }
-                            Ok(None) => {}
                             Err(e) => error!("VAD error: {e}"),
                         }
                     }
@@ -319,6 +873,7 @@ async fn run_stt_stage(
     preloaded: Option<crate::stt::ParakeetStt>,
     mut rx: mpsc::Receiver<SpeechSegment>,
     tx: mpsc::Sender<Transcription>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     cancel: CancellationToken,
 ) {
     use crate::stt::ParakeetStt;
@@ -342,6 +897,17 @@ async fn run_stt_stage(
                     Some(segment) => {
                         match stt.transcribe(&segment) {
                             Ok(transcription) => {
+                                let mut transcription = transcription;
+                                if let Some(fixed) = canonicalize_wake_word_transcription(
+                                    &config.conversation.wake_word,
+                                    &transcription.text,
+                                ) {
+                                    transcription.text = fixed;
+                                }
+
+                                if let Some(rt) = &runtime_tx {
+                                    let _ = rt.send(RuntimeEvent::Transcription(transcription.clone()));
+                                }
                                 if tx.send(transcription).await.is_err() {
                                     break;
                                 }
@@ -356,10 +922,451 @@ async fn run_stt_stage(
     }
 }
 
+async fn run_identity_gate(
+    _config: SpeechConfig,
+    mut rx: mpsc::Receiver<Transcription>,
+    tx: mpsc::Sender<Transcription>,
+    tts_tx: mpsc::Sender<SentenceChunk>,
+    memory_root: std::path::PathBuf,
+    mut onboarding_seg_rx: Option<mpsc::Receiver<SpeechSegment>>,
+    cancel: CancellationToken,
+) {
+    let store = MemoryStore::new(&memory_root);
+    if let Err(e) = store.ensure_dirs() {
+        error!("memory init failed: {e}");
+    }
+    if let Err(e) = MemoryStore::ensure_voice_dirs(&memory_root) {
+        error!("voice dir init failed: {e}");
+    }
+
+    let mut primary = match store.load_primary_user() {
+        Ok(v) => v,
+        Err(e) => {
+            error!("failed to load primary user memory: {e}");
+            None
+        }
+    };
+
+    // One-shot onboarding if missing.
+    if primary.is_none() {
+        if let Err(e) = run_onboarding(
+            &store,
+            &memory_root,
+            &tts_tx,
+            &mut rx,
+            &mut onboarding_seg_rx,
+            &cancel,
+        )
+        .await
+        {
+            error!("onboarding failed: {e}");
+        } else {
+            primary = store.load_primary_user().ok().flatten();
+        }
+    }
+
+    let mut pending_unknown: Option<Vec<f32>> = None;
+
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => break,
+            msg = rx.recv() => {
+                let Some(t) = msg else { break };
+
+                // Best-effort: only forward speech from the primary user once we have a voiceprint.
+                if let (Some(p), Some(vp)) = (primary.as_ref(), t.voiceprint.as_ref())
+                    && let Some(pvp) = p.voiceprint.as_ref()
+                {
+                    let sim = crate::voiceprint::similarity(pvp, vp).unwrap_or(0.0);
+                    if sim < PRIMARY_MATCH_THRESHOLD {
+                        // Unknown speaker.
+                        if pending_unknown.is_none() && sim < UNKNOWN_MATCH_THRESHOLD {
+                            pending_unknown = Some(vp.clone());
+                            let name = &p.name;
+                            let _ = speak(
+                                &tts_tx,
+                                &format!(
+                                    "{name}, I heard a new voice. If you want me to remember them, say: remember them as NAME. Otherwise say: don't remember."
+                                ),
+                                &cancel,
+                            )
+                            .await;
+                        }
+                        continue;
+                    }
+                }
+
+                // If we have a pending unknown speaker enrollment and the primary user is speaking,
+                // treat matching phrases as control commands (do not forward to the LLM).
+                if pending_unknown.is_some()
+                    && let Some(cmd) = parse_unknown_enrollment_command(&t.text)
+                {
+                    match cmd {
+                        UnknownEnrollCommand::RememberAs(person_name) => {
+                            if let Some(vp) = pending_unknown.take() {
+                                if let Err(e) = remember_person(&store, person_name.clone(), vp) {
+                                    error!("failed to remember person: {e}");
+                                    let _ = speak(
+                                        &tts_tx,
+                                        "Sorry, I couldn't save that memory.",
+                                        &cancel,
+                                    )
+                                    .await;
+                                } else {
+                                    let _ = speak(
+                                        &tts_tx,
+                                        &format!("Okay. I'll remember {person_name}."),
+                                        &cancel,
+                                    )
+                                    .await;
+                                }
+                            }
+                            continue;
+                        }
+                        UnknownEnrollCommand::DontRemember => {
+                            pending_unknown = None;
+                            let _ =
+                                speak(&tts_tx, "Okay. I won't remember them.", &cancel).await;
+                            continue;
+                        }
+                    }
+                }
+
+                if tx.send(t).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn run_onboarding(
+    store: &MemoryStore,
+    memory_root: &std::path::Path,
+    tts_tx: &mpsc::Sender<SentenceChunk>,
+    rx: &mut mpsc::Receiver<Transcription>,
+    onboarding_seg_rx: &mut Option<mpsc::Receiver<SpeechSegment>>,
+    cancel: &CancellationToken,
+) -> crate::error::Result<()> {
+    let _ = speak(tts_tx, "Hello, I am Fae. What is your name?", cancel).await;
+
+    // Ask up to 3 times for a usable name.
+    let mut name: Option<String> = None;
+    for _ in 0..3 {
+        if let Some(t) = recv_transcription(rx, cancel).await
+            && let Some(n) = parse_name(&t.text)
+        {
+            name = Some(n);
+            // Save an initial primary user right away using the first voiceprint we saw.
+            let user = PrimaryUser {
+                name: name.clone().unwrap_or_else(|| "Friend".to_owned()),
+                voiceprint: t.voiceprint.clone(),
+                voice_sample_wav: Some("voices/primary_user.wav".to_owned()),
+            };
+            store.save_primary_user(&user)?;
+            break;
+        }
+        let _ = speak(
+            tts_tx,
+            "Sorry, I didn't catch that. What is your name?",
+            cancel,
+        )
+        .await;
+    }
+    let name = name.unwrap_or_else(|| "Friend".to_owned());
+
+    // Ask for a longer sample.
+    let _ = speak(
+        tts_tx,
+        &format!(
+            "Nice to meet you, {name}. Please talk about yourself for 10 to 15 seconds so I can learn your voice."
+        ),
+        cancel,
+    )
+    .await;
+
+    // Drain any old segments before capture.
+    if let Some(seg_rx) = onboarding_seg_rx.as_mut() {
+        while seg_rx.try_recv().is_ok() {}
+    }
+
+    let (samples, sample_rate) = collect_voice_samples(onboarding_seg_rx, cancel).await;
+    if !samples.is_empty() && sample_rate > 0 {
+        let voiceprint = crate::voiceprint::compute_voiceprint(&samples, sample_rate).ok();
+
+        let voices_dir = MemoryStore::voices_dir(memory_root);
+        let wav_path = voices_dir.join("primary_user.wav");
+        if let Err(e) = write_wav_i16(&wav_path, &samples, sample_rate) {
+            error!("failed to write primary voice WAV: {e}");
+        }
+
+        let user = PrimaryUser {
+            name: name.clone(),
+            voiceprint,
+            voice_sample_wav: Some("voices/primary_user.wav".to_owned()),
+        };
+        store.save_primary_user(&user)?;
+    }
+
+    let _ = speak(tts_tx, &format!("Thanks, {name}. I'm ready."), cancel).await;
+    Ok(())
+}
+
+async fn recv_transcription(
+    rx: &mut mpsc::Receiver<Transcription>,
+    cancel: &CancellationToken,
+) -> Option<Transcription> {
+    tokio::select! {
+        () = cancel.cancelled() => None,
+        t = rx.recv() => t,
+    }
+}
+
+async fn speak(
+    tts_tx: &mpsc::Sender<SentenceChunk>,
+    text: &str,
+    cancel: &CancellationToken,
+) -> bool {
+    let chunk = SentenceChunk {
+        text: text.to_owned(),
+        is_final: true,
+    };
+    tokio::select! {
+        () = cancel.cancelled() => false,
+        res = tts_tx.send(chunk) => res.is_ok(),
+    }
+}
+
+async fn collect_voice_samples(
+    onboarding_seg_rx: &mut Option<mpsc::Receiver<SpeechSegment>>,
+    cancel: &CancellationToken,
+) -> (Vec<f32>, u32) {
+    let Some(seg_rx) = onboarding_seg_rx.as_mut() else {
+        return (Vec::new(), 0);
+    };
+
+    // Target: 10-15 seconds of *speech segments* (not wall-clock).
+    let target_ms: u32 = 10_000;
+    let hard_limit_ms: u32 = 18_000;
+    let mut total_ms: u32 = 0;
+    let mut all: Vec<f32> = Vec::new();
+    let mut sr: u32 = 0;
+
+    while total_ms < target_ms {
+        let seg_opt = tokio::select! {
+            () = cancel.cancelled() => None,
+            seg = seg_rx.recv() => seg,
+        };
+        let Some(seg) = seg_opt else { break };
+        if sr == 0 {
+            sr = seg.sample_rate;
+        }
+        if seg.sample_rate != sr || sr == 0 {
+            continue;
+        }
+
+        let ms = ((seg.samples.len() as u64) * 1000 / (sr as u64)) as u32;
+        total_ms = total_ms.saturating_add(ms);
+        all.extend_from_slice(&seg.samples);
+
+        if total_ms >= hard_limit_ms {
+            break;
+        }
+    }
+
+    (all, sr)
+}
+
+fn write_wav_i16(
+    path: &std::path::Path,
+    samples: &[f32],
+    sample_rate: u32,
+) -> std::result::Result<(), String> {
+    if sample_rate == 0 {
+        return Err("invalid sample rate".to_owned());
+    }
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
+    for s in samples {
+        let x = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        writer.write_sample(x).map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum UnknownEnrollCommand {
+    RememberAs(String),
+    DontRemember,
+}
+
+fn parse_unknown_enrollment_command(text: &str) -> Option<UnknownEnrollCommand> {
+    let t = text.trim().to_ascii_lowercase();
+    if t.contains("don't remember") || t.contains("dont remember") || t == "no" {
+        return Some(UnknownEnrollCommand::DontRemember);
+    }
+    let needles = [
+        "remember them as ",
+        "remember as ",
+        "remember them ",
+        "remember ",
+    ];
+    for n in needles {
+        if let Some(rest) = t.strip_prefix(n) {
+            let name = rest.split_whitespace().next().unwrap_or("");
+            if !name.is_empty() {
+                return Some(UnknownEnrollCommand::RememberAs(capitalize_first(name)));
+            }
+        }
+    }
+    None
+}
+
+fn remember_person(
+    store: &MemoryStore,
+    name: String,
+    voiceprint: Vec<f32>,
+) -> crate::error::Result<()> {
+    let mut people = store.load_people()?;
+    // Upsert by case-insensitive name.
+    if let Some(p) = people
+        .iter_mut()
+        .find(|p| p.name.eq_ignore_ascii_case(&name))
+    {
+        p.voiceprint = Some(voiceprint);
+        p.voice_sample_wav = None;
+    } else {
+        people.push(Person {
+            name,
+            voiceprint: Some(voiceprint),
+            voice_sample_wav: None,
+        });
+    }
+    store.save_people(&people)?;
+    Ok(())
+}
+
+fn parse_name(text: &str) -> Option<String> {
+    let raw = text.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let lower = raw.to_ascii_lowercase();
+
+    // Search for name-introducing patterns anywhere in the text, not just at the start.
+    // This handles "Hello, I'm David" where a greeting precedes the name pattern.
+    let patterns = [
+        "my name is ",
+        "i am ",
+        "i'm ",
+        "im ",
+        "this is ",
+        "call me ",
+        "it's ",
+        "its ",
+        "name's ",
+        "names ",
+    ];
+    for pat in patterns {
+        if let Some(idx) = lower.find(pat) {
+            let rest = &lower[idx + pat.len()..];
+            let token = rest.split_whitespace().next().unwrap_or("");
+            let cleaned = clean_name_token(token);
+            if !cleaned.is_empty() && !is_filler_word(&cleaned) {
+                return Some(capitalize_first(&cleaned));
+            }
+        }
+    }
+
+    // Single-token fallback: take the last non-filler word.
+    // Greetings like "Hello" or "Hi" are filtered out.
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    for token in tokens.iter().rev() {
+        let cleaned = clean_name_token(token);
+        if !cleaned.is_empty() && !is_filler_word(&cleaned) {
+            return Some(capitalize_first(&cleaned));
+        }
+    }
+
+    None
+}
+
+/// Returns `true` for common greetings, filler words, and articles that are
+/// not plausible names. Prevents "Hello" from being saved as the user's name.
+fn is_filler_word(token: &str) -> bool {
+    matches!(
+        token,
+        "hello"
+            | "hi"
+            | "hey"
+            | "yo"
+            | "hiya"
+            | "howdy"
+            | "greetings"
+            | "morning"
+            | "evening"
+            | "afternoon"
+            | "the"
+            | "a"
+            | "an"
+            | "um"
+            | "uh"
+            | "er"
+            | "erm"
+            | "so"
+            | "well"
+            | "okay"
+            | "ok"
+            | "yeah"
+            | "yes"
+            | "no"
+            | "just"
+            | "like"
+            | "actually"
+            | "basically"
+            | "you"
+            | "your"
+            | "can"
+            | "fae"
+            | "fay"
+            | "faye"
+            | "fee"
+            | "fey"
+    )
+}
+
+fn clean_name_token(token: &str) -> String {
+    token
+        .trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '-' && c != '\'')
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic() || *c == '-' || *c == '\'')
+        .take(24)
+        .collect()
+}
+
 /// Internal engine wrapper for either local or API-based LLM.
 enum LlmEngine {
     Local(Box<crate::llm::LocalLlm>),
     Api(Box<crate::llm::ApiLlm>),
+    Agent(Box<crate::agent::SaorsaAgentLlm>),
+}
+
+struct LlmStageControl {
+    interrupt: Arc<AtomicBool>,
+    assistant_speaking: Arc<AtomicBool>,
+    assistant_generating: Arc<AtomicBool>,
+    playback_cmd_tx: mpsc::UnboundedSender<PlaybackCommand>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+    console_output: bool,
+    cancel: CancellationToken,
 }
 
 impl LlmEngine {
@@ -373,6 +1380,17 @@ impl LlmEngine {
         match self {
             Self::Local(llm) => llm.generate_response(user_input, tx, interrupt).await,
             Self::Api(llm) => llm.generate_response(user_input, tx, interrupt).await,
+            Self::Agent(llm) => llm.generate_response(user_input, tx, interrupt).await,
+        }
+    }
+
+    /// Truncate the conversation history to keep only the system prompt and
+    /// the first `keep_count` messages after it. Used for conversation forking.
+    fn truncate_history(&mut self, keep_count: usize) {
+        match self {
+            Self::Local(llm) => llm.truncate_history(keep_count),
+            Self::Api(llm) => llm.truncate_history(keep_count),
+            Self::Agent(llm) => llm.truncate_history(keep_count),
         }
     }
 }
@@ -382,10 +1400,10 @@ async fn run_llm_stage(
     preloaded: Option<crate::llm::LocalLlm>,
     mut rx: mpsc::Receiver<Transcription>,
     tx: mpsc::Sender<SentenceChunk>,
-    interrupt: Arc<AtomicBool>,
-    ai_speaking: Arc<AtomicBool>,
-    cancel: CancellationToken,
+    ctl: LlmStageControl,
+    mut text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
 ) {
+    use crate::agent::SaorsaAgentLlm;
     use crate::config::LlmBackend;
     use crate::llm::{ApiLlm, LocalLlm};
 
@@ -410,59 +1428,143 @@ async fn run_llm_stage(
                 return;
             }
         },
+        LlmBackend::Agent => {
+            match SaorsaAgentLlm::new(
+                &config.llm,
+                preloaded,
+                ctl.runtime_tx.clone(),
+                ctl.tool_approval_tx.clone(),
+            )
+            .await
+            {
+                Ok(l) => LlmEngine::Agent(Box::new(l)),
+                Err(e) => {
+                    error!("failed to init agent LLM: {e}");
+                    return;
+                }
+            }
+        }
     };
 
-    let name = config
-        .conversation
-        .wake_word
-        .chars()
-        .next()
-        .map_or(String::new(), |c| {
-            let mut s = c.to_uppercase().to_string();
-            s.push_str(&config.conversation.wake_word[c.len_utf8()..]);
-            s
-        });
+    let name = "Fae".to_owned();
 
+    let cancel = ctl.cancel;
     loop {
-        tokio::select! {
+        // Optionally receive from the text injection channel. When no channel
+        // is configured, `recv_injection` will pend forever (never resolve).
+        let recv_injection = async {
+            match text_injection_rx.as_mut() {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
+        enum Input {
+            Transcription(Option<Transcription>),
+            TextInjection(Option<TextInjection>),
+        }
+
+        let input = tokio::select! {
             () = cancel.cancelled() => break,
-            transcription = rx.recv() => {
-                match transcription {
-                    Some(transcription) => {
-                        if transcription.text.is_empty() {
-                            continue;
-                        }
-                        // When gate is disabled, print [You] here since
-                        // there is no gate stage to do it
-                        if !config.conversation.enabled {
-                            let latency = transcription.transcribed_at
-                                .duration_since(transcription.audio_captured_at);
-                            println!("\n[You] {} (STT: {:.0}ms)",
-                                transcription.text, latency.as_millis());
-                            print!("[AI] ");
-                        } else {
-                            print!("[{name}] ");
-                        }
-                        let _ = std::io::stdout().flush();
-                        // Mute mic while generating + speaking
-                        ai_speaking.store(true, Ordering::Relaxed);
-                        match engine.generate_response(&transcription.text, &tx, &interrupt).await {
-                            Ok(interrupted) => {
-                                println!();
-                                if interrupted {
-                                    info!("LLM generation was interrupted");
-                                }
-                                // ai_speaking cleared by playback on final chunk
-                            }
-                            Err(e) => {
-                                println!();
-                                error!("LLM error: {e}");
-                                // On error, no final chunk sent — clear flag here
-                                ai_speaking.store(false, Ordering::Relaxed);
-                            }
-                        }
+            t = rx.recv() => Input::Transcription(t),
+            inj = recv_injection => Input::TextInjection(inj),
+        };
+
+        let user_text = match input {
+            Input::Transcription(Some(transcription)) => {
+                if transcription.text.is_empty() {
+                    continue;
+                }
+                if ctl.console_output {
+                    if !config.conversation.enabled {
+                        let latency = transcription
+                            .transcribed_at
+                            .duration_since(transcription.audio_captured_at);
+                        println!(
+                            "\n[You] {} (STT: {:.0}ms)",
+                            transcription.text,
+                            latency.as_millis()
+                        );
+                        print!("[AI] ");
+                    } else {
+                        print!("[{name}] ");
                     }
-                    None => break,
+                    let _ = std::io::stdout().flush();
+                }
+                transcription.text
+            }
+            Input::TextInjection(Some(injection)) => {
+                if injection.text.is_empty() {
+                    continue;
+                }
+                // Typed input should interrupt any active generation/playback,
+                // just like voice barge-in.
+                let assistant_active = ctl.assistant_speaking.load(Ordering::Relaxed)
+                    || ctl.assistant_generating.load(Ordering::Relaxed);
+                if assistant_active {
+                    ctl.interrupt.store(true, Ordering::Relaxed);
+                    let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
+                }
+                // Fork: truncate history before injecting the new text.
+                if let Some(keep) = injection.fork_at_keep_count {
+                    engine.truncate_history(keep);
+                    info!("forked conversation history, keeping {keep} entries");
+                }
+                // Emit a transcription event so the GUI sees the typed text.
+                if let Some(rt) = &ctl.runtime_tx {
+                    let now = std::time::Instant::now();
+                    let _ = rt.send(RuntimeEvent::Transcription(Transcription {
+                        text: injection.text.clone(),
+                        is_final: true,
+                        voiceprint: None,
+                        audio_captured_at: now,
+                        transcribed_at: now,
+                    }));
+                }
+                if ctl.console_output {
+                    println!("\n[You] {} (typed)", injection.text);
+                    print!("[{name}] ");
+                    let _ = std::io::stdout().flush();
+                }
+                injection.text
+            }
+            Input::Transcription(None) => break,
+            Input::TextInjection(None) => {
+                // Text injection channel closed (GUI dropped sender).
+                // Continue with voice-only mode rather than killing the LLM stage.
+                text_injection_rx = None;
+                continue;
+            }
+        };
+
+        ctl.assistant_generating.store(true, Ordering::Relaxed);
+        if let Some(rt) = &ctl.runtime_tx {
+            let _ = rt.send(RuntimeEvent::AssistantGenerating { active: true });
+        }
+        match engine
+            .generate_response(&user_text, &tx, &ctl.interrupt)
+            .await
+        {
+            Ok(interrupted) => {
+                if ctl.console_output {
+                    println!();
+                }
+                if interrupted {
+                    info!("LLM generation was interrupted");
+                }
+                ctl.assistant_generating.store(false, Ordering::Relaxed);
+                if let Some(rt) = &ctl.runtime_tx {
+                    let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
+                }
+            }
+            Err(e) => {
+                if ctl.console_output {
+                    println!();
+                }
+                error!("LLM error: {e}");
+                ctl.assistant_generating.store(false, Ordering::Relaxed);
+                if let Some(rt) = &ctl.runtime_tx {
+                    let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
                 }
             }
         }
@@ -474,6 +1576,7 @@ async fn run_tts_stage(
     preloaded: Option<crate::tts::ChatterboxTts>,
     mut rx: mpsc::Receiver<SentenceChunk>,
     tx: mpsc::Sender<SynthesizedAudio>,
+    interrupt: Arc<AtomicBool>,
     cancel: CancellationToken,
 ) {
     use crate::tts::{ChatterboxTts, resolve_voice_wav};
@@ -501,6 +1604,21 @@ async fn run_tts_stage(
             sentence = rx.recv() => {
                 match sentence {
                     Some(sentence) => {
+                        // If an interrupt was requested (barge-in), drop any pending synthesis
+                        // and only forward a final marker to unblock downstream state.
+                        if interrupt.load(Ordering::Relaxed) {
+                            if sentence.is_final {
+                                let synth = SynthesizedAudio {
+                                    samples: Vec::new(),
+                                    sample_rate: config.tts.sample_rate,
+                                    is_final: true,
+                                };
+                                if tx.send(synth).await.is_err() {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
                         if sentence.text.is_empty() {
                             // End-of-response marker, forward it
                             let synth = SynthesizedAudio {
@@ -515,6 +1633,18 @@ async fn run_tts_stage(
                         }
                         match tts.synthesize(&sentence.text).await {
                             Ok(audio) => {
+                                if interrupt.load(Ordering::Relaxed) {
+                                    // Interrupted while synthesizing; drop audio.
+                                    if sentence.is_final {
+                                        let synth = SynthesizedAudio {
+                                            samples: Vec::new(),
+                                            sample_rate: config.tts.sample_rate,
+                                            is_final: true,
+                                        };
+                                        let _ = tx.send(synth).await;
+                                    }
+                                    continue;
+                                }
                                 let synth = SynthesizedAudio {
                                     samples: audio,
                                     sample_rate: config.tts.sample_rate,
@@ -534,15 +1664,32 @@ async fn run_tts_stage(
     }
 }
 
+/// Bundled control state for the playback stage.
+struct PlaybackStageControl {
+    assistant_speaking: Arc<AtomicBool>,
+    control_tx: mpsc::UnboundedSender<ControlEvent>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    aec_ref: Option<ReferenceHandle>,
+    cancel: CancellationToken,
+}
+
 async fn run_playback_stage(
     config: crate::config::AudioConfig,
     mut rx: mpsc::Receiver<SynthesizedAudio>,
-    ai_speaking: Arc<AtomicBool>,
-    cancel: CancellationToken,
+    mut cmd_rx: mpsc::UnboundedReceiver<PlaybackCommand>,
+    ctl: PlaybackStageControl,
 ) {
+    let assistant_speaking = ctl.assistant_speaking;
+    let control_tx = ctl.control_tx;
+    let runtime_tx = ctl.runtime_tx;
+    let aec_ref = ctl.aec_ref;
+    let cancel = ctl.cancel;
     use crate::audio::playback::CpalPlayback;
+    use crate::audio::playback::PlaybackEvent;
 
-    let mut playback = match CpalPlayback::new(&config) {
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<PlaybackEvent>();
+
+    let mut playback = match CpalPlayback::new(&config, event_tx) {
         Ok(p) => p,
         Err(e) => {
             error!("failed to init playback: {e}");
@@ -550,23 +1697,79 @@ async fn run_playback_stage(
         }
     };
 
+    // Track whether we have received the final TTS chunk for this response.
+    // While false, PlaybackEvent::Finished means an intermediate chunk ended —
+    // keep assistant_speaking=true so the VAD echo suppression covers the gap
+    // between TTS chunks.
+    let mut received_final_chunk = true;
+
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(PlaybackCommand::Stop) => {
+                        playback.stop();
+                        received_final_chunk = true;
+                        assistant_speaking.store(false, Ordering::Relaxed);
+                        if let Some(ref r) = aec_ref {
+                            r.clear();
+                        }
+                        let _ = control_tx.send(ControlEvent::AssistantSpeechEnd { interrupted: true });
+                    }
+                    None => break,
+                }
+            }
+            ev = event_rx.recv() => {
+                match ev {
+                    Some(PlaybackEvent::Finished) => {
+                        if received_final_chunk {
+                            // Last chunk of the response finished playing — safe to
+                            // clear the speaking flag now.
+                            assistant_speaking.store(false, Ordering::Relaxed);
+                            let _ = control_tx.send(ControlEvent::AssistantSpeechEnd { interrupted: false });
+                        } else {
+                            // Intermediate chunk finished; more TTS audio is coming.
+                            // Keep assistant_speaking=true to suppress echo in the gap.
+                            info!("intermediate chunk finished, keeping echo suppression active");
+                        }
+                    }
+                    Some(PlaybackEvent::Stopped) => {
+                        received_final_chunk = true;
+                        assistant_speaking.store(false, Ordering::Relaxed);
+                        let _ = control_tx.send(ControlEvent::AssistantSpeechEnd { interrupted: true });
+                    }
+                    Some(PlaybackEvent::Level { rms }) => {
+                        if let Some(rt) = &runtime_tx {
+                            let _ = rt.send(RuntimeEvent::AssistantAudioLevel { rms });
+                        }
+                    }
+                    None => break,
+                }
+            }
             audio = rx.recv() => {
                 match audio {
                     Some(audio) => {
-                        if !audio.samples.is_empty()
-                            && let Err(e) = playback.play(&audio.samples, audio.sample_rate)
-                        {
-                            error!("playback error: {e}");
-                        }
-                        // When the final chunk of a response is played,
-                        // wait briefly for residual speaker audio to
-                        // dissipate, then re-enable the microphone.
-                        if audio.is_final {
-                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                            ai_speaking.store(false, Ordering::Relaxed);
+                        if audio.samples.is_empty() && audio.is_final {
+                            // End-of-response marker from TTS. Use mark_end() so
+                            // Finished fires only after the queue actually drains
+                            // (not immediately while audio is still playing).
+                            received_final_chunk = true;
+                            playback.mark_end();
+                        } else if !audio.samples.is_empty() {
+                            if !assistant_speaking.load(Ordering::Relaxed) {
+                                assistant_speaking.store(true, Ordering::Relaxed);
+                                let _ = control_tx.send(ControlEvent::AssistantSpeechStart);
+                            }
+                            received_final_chunk = audio.is_final;
+                            // Push audio to the AEC reference buffer so the
+                            // adaptive filter can subtract it from the mic signal.
+                            if let Some(ref r) = aec_ref {
+                                r.push(&audio.samples);
+                            }
+                            if let Err(e) = playback.enqueue(&audio.samples, audio.sample_rate, audio.is_final) {
+                                error!("playback error: {e}");
+                            }
                         }
                     }
                     None => break,
@@ -583,6 +1786,18 @@ enum GateState {
     Idle,
     /// Actively forwarding transcriptions to LLM.
     Active,
+}
+
+/// Strip punctuation that STT inserts (commas, periods, etc.) so that
+/// phrase matching is resilient to transcription formatting differences.
+/// For example, "that will do, fae" → "that will do fae".
+fn strip_punctuation(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Expand common English contractions so STT output like "that'll" matches
@@ -620,41 +1835,86 @@ fn expand_contractions(text: &str) -> String {
         .replace("shouldn't", "should not")
 }
 
+/// Bundled control state for the conversation gate.
+struct ConversationGateControl {
+    interrupt: Arc<AtomicBool>,
+    assistant_speaking: Arc<AtomicBool>,
+    assistant_generating: Arc<AtomicBool>,
+    playback_cmd_tx: mpsc::UnboundedSender<PlaybackCommand>,
+    console_output: bool,
+    cancel: CancellationToken,
+    /// Optional channel for MFCC+DTW wake word detections from the spotter stage.
+    /// When received in Idle state, transitions to Active immediately.
+    wakeword_rx: Option<mpsc::UnboundedReceiver<()>>,
+}
+
 /// Conversation gate: filters transcriptions based on wake word / stop phrase.
 ///
 /// In `Idle` state, listens for the wake word and discards everything else.
-/// In `Active` state, forwards transcriptions to the LLM and checks for the
-/// stop phrase. Any new transcription in Active state also sets the interrupt
-/// flag to enable barge-in.
+/// In `Active` state:
+///   - If the assistant is speaking/generating, only interrupt on wake word
+///     (name-gated barge-in) or stop phrase.
+///   - If the assistant is silent, forward any speech and check for stop phrase.
+///   - Auto-returns to Idle after a configurable inactivity timeout.
 async fn run_conversation_gate(
     config: SpeechConfig,
     mut stt_rx: mpsc::Receiver<Transcription>,
     llm_tx: mpsc::Sender<Transcription>,
-    interrupt: Arc<AtomicBool>,
-    cancel: CancellationToken,
+    mut ctl: ConversationGateControl,
 ) {
     let wake_word = config.conversation.wake_word.to_lowercase();
     let stop_phrase = config.conversation.stop_phrase.to_lowercase();
+    let idle_timeout_s = config.conversation.idle_timeout_s;
     let mut state = GateState::Idle;
 
-    // Capitalize wake word for display
-    let display_name = {
-        let mut chars = config.conversation.wake_word.chars();
-        match chars.next() {
-            Some(c) => {
-                let mut s = c.to_uppercase().to_string();
-                s.push_str(chars.as_str());
-                s
-            }
-            None => String::new(),
-        }
-    };
+    let display_name = "Fae".to_owned();
+
+    // Take the wakeword receiver out of ctl so we can use it in the select loop
+    // without a mutable borrow conflict.
+    let mut wakeword_rx = ctl.wakeword_rx.take();
+
+    // Auto-idle: track when the last conversational activity happened.
+    let mut last_activity = Instant::now();
+    let mut idle_check = tokio::time::interval(Duration::from_secs(5));
 
     info!("conversation gate active, wake word: \"{wake_word}\"");
 
     loop {
+        // Create a future for the wakeword channel that resolves to None when
+        // the channel is absent (effectively disabled).
+        let wakeword_fut = async {
+            match &mut wakeword_rx {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
         tokio::select! {
-            () = cancel.cancelled() => break,
+            () = ctl.cancel.cancelled() => break,
+            // MFCC+DTW wake word detection from the spotter stage.
+            Some(()) = wakeword_fut, if state == GateState::Idle => {
+                state = GateState::Active;
+                last_activity = Instant::now();
+                if ctl.console_output {
+                    println!("\n[{display_name}] Listening...");
+                }
+                info!("wakeword spotter triggered, transitioning to active");
+            }
+            // Periodic auto-idle check.
+            _ = idle_check.tick(), if state == GateState::Active && idle_timeout_s > 0 => {
+                let assistant_active =
+                    ctl.assistant_speaking.load(Ordering::Relaxed)
+                    || ctl.assistant_generating.load(Ordering::Relaxed);
+                if !assistant_active
+                    && last_activity.elapsed() >= Duration::from_secs(idle_timeout_s as u64)
+                {
+                    state = GateState::Idle;
+                    if ctl.console_output {
+                        println!("\n[{display_name}] Standing by.\n");
+                    }
+                    info!("conversation idle timeout, returning to idle");
+                }
+            }
             transcription = stt_rx.recv() => {
                 match transcription {
                     Some(t) => {
@@ -662,79 +1922,102 @@ async fn run_conversation_gate(
                             continue;
                         }
 
-                        let lower = expand_contractions(&t.text.to_lowercase());
+                        // Use the raw lowercase string for any operations that need stable
+                        // byte offsets back into `t.text`. Contraction expansion can change
+                        // string length, which would invalidate indices.
+                        let lower_raw = t.text.to_lowercase();
+                        let lower_expanded = expand_contractions(&lower_raw);
 
                         match state {
                             GateState::Idle => {
-                                if let Some(pos) = lower.find(&wake_word) {
+                                if let Some((pos, matched_len)) =
+                                    find_wake_word(&lower_raw, &wake_word)
+                                {
                                     // Wake word detected — transition to Active
                                     state = GateState::Active;
-                                    println!("\n[{display_name}] Listening...");
+                                    last_activity = Instant::now();
+                                    if ctl.console_output {
+                                        println!("\n[{display_name}] Listening...");
+                                    }
 
-                                    // Extract text after the wake word (if any),
-                                    // stripping surrounding punctuation so "Hi, Fae."
-                                    // doesn't send "." as a query.
-                                    let after = &t.text[pos + wake_word.len()..];
-                                    let after =
-                                        after.trim_start_matches([',', ':', '.', '!', '?', ' ']);
-                                    let after = after.trim();
+                                    let query = extract_query_around_wake_word(
+                                        &t.text, pos, matched_len,
+                                    );
 
-                                    if !after.is_empty() {
-                                        // There's a query after the wake word
-                                        let latency = t.transcribed_at
-                                            .duration_since(t.audio_captured_at);
-                                        println!("[You] {after} (STT: {:.0}ms)",
-                                            latency.as_millis());
+                                    let latency =
+                                        t.transcribed_at.duration_since(t.audio_captured_at);
+                                    if ctl.console_output {
+                                        println!(
+                                            "[You] {query} (STT: {:.0}ms)",
+                                            latency.as_millis()
+                                        );
+                                    }
 
-                                        let forwarded = Transcription {
-                                            text: after.to_owned(),
-                                            ..t
-                                        };
-                                        if llm_tx.send(forwarded).await.is_err() {
-                                            break;
-                                        }
+                                    let forwarded = Transcription {
+                                        text: query,
+                                        ..t
+                                    };
+                                    if llm_tx.send(forwarded).await.is_err() {
+                                        break;
                                     }
                                 }
                                 // If no wake word, silently discard
                             }
                             GateState::Active => {
-                                // Check for stop phrase
-                                if lower.contains(&stop_phrase) {
-                                    // Stop — interrupt any running generation
-                                    interrupt.store(true, Ordering::Relaxed);
+                                last_activity = Instant::now();
+
+                                // Strip punctuation for phrase matching so STT
+                                // formatting (commas, periods) doesn't break
+                                // comparisons. E.g. "that will do, fae" matches
+                                // stop phrase "that will do fae".
+                                let clean = strip_punctuation(&lower_expanded);
+
+                                // Check for stop phrase (always, even during
+                                // assistant speech — "that'll do Fae" should work
+                                // mid-sentence when AEC is active).
+                                if clean.contains(&stop_phrase) {
+                                    ctl.interrupt.store(true, Ordering::Relaxed);
+                                    let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
                                     state = GateState::Idle;
-                                    println!("\n[{display_name}] Standing by.\n");
+                                    if ctl.console_output {
+                                        println!("\n[{display_name}] Standing by.\n");
+                                    }
                                     info!("stop phrase detected, returning to idle");
                                     continue;
                                 }
 
-                                // Check if this is a new wake word activation
-                                // (barge-in with new query)
-                                if lower.contains(&wake_word) {
-                                    // Interrupt current generation
-                                    interrupt.store(true, Ordering::Relaxed);
+                                let assistant_active =
+                                    ctl.assistant_speaking.load(Ordering::Relaxed)
+                                    || ctl.assistant_generating.load(Ordering::Relaxed);
 
-                                    let after = if let Some(pos) = lower.find(&wake_word) {
-                                        let after = &t.text[pos + wake_word.len()..];
-                                        let after = after
-                                            .trim_start_matches([',', ':', '.', '!', '?', ' ']);
-                                        after.trim().to_owned()
-                                    } else {
-                                        String::new()
-                                    };
+                                // Check for full wake phrase first ("hi fae", "hey fae").
+                                // Then fall back to standalone name mention ("fae") for
+                                // name-gated barge-in — the user shouldn't need the full
+                                // phrase when already in an active conversation.
+                                let name_match = find_wake_word(&lower_raw, &wake_word)
+                                    .or_else(|| find_name_mention(&lower_raw));
 
-                                    if after.is_empty() {
-                                        println!("\n[{display_name}] Listening...");
-                                        continue;
+                                if let Some((pos, matched_len)) = name_match {
+                                    ctl.interrupt.store(true, Ordering::Relaxed);
+                                    if assistant_active {
+                                        let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
                                     }
+
+                                    let query = extract_query_around_wake_word(
+                                        &t.text, pos, matched_len,
+                                    );
 
                                     let latency = t.transcribed_at
                                         .duration_since(t.audio_captured_at);
-                                    println!("\n[You] {after} (STT: {:.0}ms)",
-                                        latency.as_millis());
+                                    if ctl.console_output {
+                                        println!(
+                                            "\n[You] {query} (STT: {:.0}ms)",
+                                            latency.as_millis()
+                                        );
+                                    }
 
                                     let forwarded = Transcription {
-                                        text: after,
+                                        text: query,
                                         ..t
                                     };
                                     if llm_tx.send(forwarded).await.is_err() {
@@ -743,14 +2026,26 @@ async fn run_conversation_gate(
                                     continue;
                                 }
 
-                                // Normal active transcription — barge-in interrupts
-                                // any running generation
-                                interrupt.store(true, Ordering::Relaxed);
+                                // No name found.
+                                if assistant_active {
+                                    // During assistant speech without name: ignore.
+                                    // Background conversation doesn't interrupt.
+                                    continue;
+                                }
+
+                                // Normal active transcription (assistant not active).
+                                // Interrupt any stale generation and forward.
+                                ctl.interrupt.store(true, Ordering::Relaxed);
 
                                 let latency = t.transcribed_at
                                     .duration_since(t.audio_captured_at);
-                                println!("\n[You] {} (STT: {:.0}ms)",
-                                    t.text, latency.as_millis());
+                                if ctl.console_output {
+                                    println!(
+                                        "\n[You] {} (STT: {:.0}ms)",
+                                        t.text,
+                                        latency.as_millis()
+                                    );
+                                }
 
                                 if llm_tx.send(t).await.is_err() {
                                     break;
@@ -765,15 +2060,225 @@ async fn run_conversation_gate(
     }
 }
 
+/// Extract the user's query from text surrounding a wake word match.
+///
+/// Prefers text after the wake word ("Fae, how are you?" → "how are you?"),
+/// falls back to text before it ("Hello Fae" → "Hello"), then defaults to
+/// "Hello" if the wake word was the entire utterance.
+fn extract_query_around_wake_word(text: &str, pos: usize, matched_len: usize) -> String {
+    let after = &text[pos + matched_len..];
+    let after = after.trim_start_matches([',', ':', '.', '!', '?', ' ']);
+    let after = after.trim();
+
+    if !after.is_empty() {
+        return after.to_owned();
+    }
+
+    let before = &text[..pos];
+    let before = before.trim_end_matches([',', ':', '.', '!', '?', ' ']);
+    let before = before.trim();
+    if before.is_empty() {
+        "Hello".to_owned()
+    } else {
+        before.to_owned()
+    }
+}
+
+fn find_wake_word(lower_raw: &str, wake_word: &str) -> Option<(usize, usize)> {
+    if wake_word.is_empty() {
+        return None;
+    }
+
+    let mut variants: Vec<String> = Vec::new();
+    variants.push(wake_word.to_owned());
+
+    // Common STT confusions for "fae" — add variants for both standalone and
+    // multi-word wake phrases containing "fae".
+    let fae_variants = ["faye", "fae", "fea", "fee", "fay", "fey", "fah", "feh"];
+
+    if wake_word == "hi fae" {
+        // Multi-word wake phrase: generate all "hi X" and "high X" variants.
+        for v in fae_variants {
+            variants.push(format!("hi {v}"));
+            variants.push(format!("high {v}"));
+            // STT may insert comma: "hi, fae"
+            variants.push(format!("hi, {v}"));
+            variants.push(format!("high, {v}"));
+        }
+        // Also match "hey fae" as a close variant of "hi fae"
+        for v in fae_variants {
+            variants.push(format!("hey {v}"));
+            variants.push(format!("hey, {v}"));
+        }
+    } else if wake_word == "fae" {
+        for v in fae_variants {
+            variants.push(v.to_owned());
+        }
+    }
+
+    // Sort longest-first so longer matches are preferred.
+    variants.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    variants.dedup();
+
+    let mut best: Option<(usize, usize)> = None;
+    for v in &variants {
+        let mut search_from = 0;
+        while search_from < lower_raw.len() {
+            let haystack = &lower_raw[search_from..];
+            let Some(rel_pos) = haystack.find(v.as_str()) else {
+                break;
+            };
+            let pos = search_from + rel_pos;
+            let end = pos + v.len();
+
+            // Word boundary check: avoid false positives like "coffee" matching "fee"
+            // or "buffet" matching "fey". A boundary is start-of-string, end-of-string,
+            // or a non-alphanumeric character.
+            let start_ok = pos == 0 || !lower_raw.as_bytes()[pos - 1].is_ascii_alphanumeric();
+            let end_ok =
+                end >= lower_raw.len() || !lower_raw.as_bytes()[end].is_ascii_alphanumeric();
+
+            if start_ok && end_ok {
+                let candidate = (pos, v.len());
+                best = match best {
+                    None => Some(candidate),
+                    Some(prev) if candidate.0 < prev.0 => Some(candidate),
+                    Some(prev) => Some(prev),
+                };
+                break; // found a valid match for this variant
+            }
+            search_from = pos + 1;
+        }
+    }
+    best
+}
+
+/// Check if the assistant's name ("fae") appears in text as a standalone word.
+///
+/// This is used during Active state for name-gated barge-in: saying just "Fae,
+/// stop that" should interrupt even though the full wake phrase is "hi fae".
+/// Returns `(byte_pos, matched_len)` of the first standalone name match, or
+/// `None` if the name doesn't appear.
+fn find_name_mention(lower_raw: &str) -> Option<(usize, usize)> {
+    let variants = ["faye", "fae", "fea", "fay", "fey", "fah", "feh", "fee"];
+
+    let mut best: Option<(usize, usize)> = None;
+    for v in variants {
+        let mut search_from = 0;
+        while search_from < lower_raw.len() {
+            let haystack = &lower_raw[search_from..];
+            let Some(rel_pos) = haystack.find(v) else {
+                break;
+            };
+            let pos = search_from + rel_pos;
+            let end = pos + v.len();
+
+            // Word boundary check to avoid false positives ("coffee" matching "fee").
+            let start_ok = pos == 0 || !lower_raw.as_bytes()[pos - 1].is_ascii_alphanumeric();
+            let end_ok =
+                end >= lower_raw.len() || !lower_raw.as_bytes()[end].is_ascii_alphanumeric();
+
+            if start_ok && end_ok {
+                let candidate = (pos, v.len());
+                best = match best {
+                    None => Some(candidate),
+                    Some(prev) if candidate.0 < prev.0 => Some(candidate),
+                    Some(prev) => Some(prev),
+                };
+                break;
+            }
+            search_from = pos + 1;
+        }
+    }
+    best
+}
+
+fn canonicalize_wake_word_transcription(wake_word: &str, text: &str) -> Option<String> {
+    // Conservative fix-up for common STT confusions when users address Fae.
+    // We only rewrite the first "wake-like" token near the start of the utterance.
+    let wake = wake_word.trim().to_ascii_lowercase();
+
+    // Only perform canonicalization for wake words containing "fae".
+    if !wake.contains("fae") {
+        return None;
+    }
+
+    let original = text;
+    let trimmed = original.trim_start();
+    let base_off = original.len().saturating_sub(trimmed.len());
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let canonical = "Fae";
+    let fae_variants = ["faye", "fae", "fea", "fee", "fay", "fey", "fah", "feh"];
+
+    fn boundary_ok(s: &str, at: usize) -> bool {
+        if at >= s.len() {
+            return true;
+        }
+        matches!(
+            s.as_bytes()[at],
+            b' ' | b'\t' | b'\n' | b'\r' | b',' | b'.' | b'!' | b'?' | b':' | b';'
+        )
+    }
+
+    // Direct: "fee, ...", "fay ..."
+    for v in fae_variants {
+        if lower.starts_with(v) && boundary_ok(&lower, v.len()) {
+            let start = base_off;
+            let end = start + v.len();
+            if end <= original.len() && end > start {
+                let mut out = original.to_owned();
+                out.replace_range(start..end, canonical);
+                return Some(out);
+            }
+        }
+    }
+
+    // Common prefixed forms: "hey fee", "hi fee", "hello fee", "hello, fee", etc.
+    // Include comma-separated variants since STT often inserts punctuation.
+    let prefixes = [
+        "hey ", "hey, ", "hi ", "hi, ", "high ", "high, ", "hello ", "hello, ", "ok ", "ok, ",
+        "okay ", "okay, ",
+    ];
+    for prefix in prefixes.iter().copied() {
+        if let Some(after) = lower.strip_prefix(prefix) {
+            for v in fae_variants {
+                if after.starts_with(v) && boundary_ok(after, v.len()) {
+                    let start = base_off + prefix.len();
+                    let end = start + v.len();
+                    if end <= original.len() && end > start {
+                        let mut out = original.to_owned();
+                        out.replace_range(start..end, canonical);
+                        return Some(out);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Print transcriptions to stdout (for transcribe-only mode).
-async fn run_print_stage(mut rx: mpsc::Receiver<Transcription>, cancel: CancellationToken) {
+async fn run_print_stage(
+    mut rx: mpsc::Receiver<Transcription>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    console_output: bool,
+    cancel: CancellationToken,
+) {
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
             transcription = rx.recv() => {
                 match transcription {
                     Some(t) => {
-                        if !t.text.is_empty() {
+                        if let Some(rt) = &runtime_tx {
+                            let _ = rt.send(RuntimeEvent::Transcription(t.clone()));
+                        }
+                        if console_output && !t.text.is_empty() {
                             let latency = t.transcribed_at.duration_since(t.audio_captured_at);
                             println!("[{:.0}ms] {}", latency.as_millis(), t.text);
                         }
@@ -782,5 +2287,570 @@ async fn run_print_stage(mut rx: mpsc::Receiver<Transcription>, cancel: Cancella
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingBargeIn {
+    captured_at: Instant,
+    speech_samples: usize,
+    last_rms: f32,
+}
+
+fn ms_to_samples(sample_rate: u32, ms: u32) -> usize {
+    ((ms as u64 * sample_rate as u64) / 1000) as usize
+}
+
+fn within_assistant_holdoff(last_start: &Option<Instant>, holdoff_ms: u32) -> bool {
+    let Some(t0) = *last_start else { return false };
+    if holdoff_ms == 0 {
+        return false;
+    }
+    Instant::now().duration_since(t0) < Duration::from_millis(holdoff_ms as u64)
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => {
+            let mut result = c.to_uppercase().to_string();
+            result.push_str(chars.as_str());
+            result
+        }
+        None => String::new(),
+    }
+}
+
+async fn forward_sentences(
+    mut rx: mpsc::Receiver<SentenceChunk>,
+    tx: mpsc::Sender<SentenceChunk>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    console_output: bool,
+) {
+    while let Some(chunk) = rx.recv().await {
+        if let Some(rt) = &runtime_tx {
+            let _ = rt.send(RuntimeEvent::AssistantSentence(chunk.clone()));
+        }
+        if console_output && !chunk.text.is_empty() {
+            print!("{}", chunk.text);
+            let _ = std::io::stdout().flush();
+        }
+        if tx.send(chunk).await.is_err() {
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    // ── find_wake_word ──────────────────────────────────────────────
+
+    #[test]
+    fn wake_word_exact_match() {
+        assert_eq!(find_wake_word("fae tell me a joke", "fae"), Some((0, 3)));
+    }
+
+    #[test]
+    fn wake_word_fee_variant() {
+        // "fee" is the most common STT confusion for "fae"
+        assert_eq!(find_wake_word("fee what time is it", "fae"), Some((0, 3)));
+    }
+
+    #[test]
+    fn wake_word_fay_variant() {
+        assert_eq!(find_wake_word("hey fay how are you", "fae"), Some((4, 3)));
+    }
+
+    #[test]
+    fn wake_word_fey_variant() {
+        assert_eq!(
+            find_wake_word("fey, what is the weather", "fae"),
+            Some((0, 3))
+        );
+    }
+
+    #[test]
+    fn wake_word_faye_variant() {
+        assert_eq!(find_wake_word("faye tell me a story", "fae"), Some((0, 4)));
+    }
+
+    #[test]
+    fn wake_word_fah_variant() {
+        assert_eq!(find_wake_word("fah what is that", "fae"), Some((0, 3)));
+    }
+
+    #[test]
+    fn wake_word_boundary_rejects_coffee() {
+        // "coffee" contains "fee" but should NOT trigger the wake word
+        assert_eq!(find_wake_word("i love coffee", "fae"), None);
+    }
+
+    #[test]
+    fn wake_word_boundary_rejects_buffet() {
+        // "buffet" contains "fey" substring — should not match
+        assert_eq!(find_wake_word("we went to the buffet", "fae"), None);
+    }
+
+    #[test]
+    fn wake_word_boundary_rejects_fayette() {
+        // "fayette" starts with "fay" but is not at a word boundary on the right
+        assert_eq!(find_wake_word("welcome to fayette", "fae"), None);
+    }
+
+    #[test]
+    fn wake_word_with_punctuation() {
+        // Punctuation counts as a word boundary
+        assert_eq!(find_wake_word("fae, play some music", "fae"), Some((0, 3)));
+        assert_eq!(find_wake_word("hey fee! what's up", "fae"), Some((4, 3)));
+    }
+
+    #[test]
+    fn wake_word_mid_sentence() {
+        assert_eq!(find_wake_word("hello fae how are you", "fae"), Some((6, 3)));
+    }
+
+    #[test]
+    fn wake_word_empty_wake_word() {
+        assert_eq!(find_wake_word("anything", ""), None);
+    }
+
+    #[test]
+    fn wake_word_not_found() {
+        assert_eq!(find_wake_word("tell me a joke", "fae"), None);
+    }
+
+    // ── canonicalize_wake_word_transcription ─────────────────────────
+
+    #[test]
+    fn canonicalize_fee_to_fae() {
+        let result = canonicalize_wake_word_transcription("fae", "Fee what time is it");
+        assert_eq!(result, Some("Fae what time is it".to_owned()));
+    }
+
+    #[test]
+    fn canonicalize_fay_to_fae() {
+        let result = canonicalize_wake_word_transcription("fae", "Fay, tell me a joke");
+        assert_eq!(result, Some("Fae, tell me a joke".to_owned()));
+    }
+
+    #[test]
+    fn canonicalize_faye_to_fae() {
+        let result = canonicalize_wake_word_transcription("fae", "Faye how are you");
+        assert_eq!(result, Some("Fae how are you".to_owned()));
+    }
+
+    #[test]
+    fn canonicalize_hey_fee_to_hey_fae() {
+        let result = canonicalize_wake_word_transcription("fae", "Hey fee, play music");
+        assert_eq!(result, Some("Hey Fae, play music".to_owned()));
+    }
+
+    #[test]
+    fn canonicalize_no_match() {
+        let result = canonicalize_wake_word_transcription("fae", "tell me a joke");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn canonicalize_non_fae_wake_word_noop() {
+        let result = canonicalize_wake_word_transcription("alexa", "alexa play music");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn canonicalize_hello_comma_fee() {
+        // STT often produces "Hello, Fee." — the comma variant must be handled
+        let result = canonicalize_wake_word_transcription("fae", "Hello, Fee.");
+        assert_eq!(result, Some("Hello, Fae.".to_owned()));
+    }
+
+    #[test]
+    fn canonicalize_hi_comma_fay() {
+        let result = canonicalize_wake_word_transcription("fae", "Hi, Fay!");
+        assert_eq!(result, Some("Hi, Fae!".to_owned()));
+    }
+
+    #[test]
+    fn canonicalize_hey_comma_fee() {
+        let result = canonicalize_wake_word_transcription("fae", "Hey, Fee how are you");
+        assert_eq!(result, Some("Hey, Fae how are you".to_owned()));
+    }
+
+    #[test]
+    fn canonicalize_okay_comma_fae() {
+        let result = canonicalize_wake_word_transcription("fae", "Okay, Fae stop");
+        assert_eq!(result, Some("Okay, Fae stop".to_owned()));
+    }
+
+    // ── wake word extraction helpers ────────────────────────────────
+
+    /// Helper: given an input like "Hello, Fee.", simulate what the
+    /// conversation gate extracts as the query to send to the LLM.
+    fn extract_query(input: &str, wake_word: &str) -> Option<String> {
+        let lower_raw = input.to_lowercase();
+        let (pos, matched_len) = find_wake_word(&lower_raw, wake_word)?;
+
+        let after = &input[pos + matched_len..];
+        let after = after.trim_start_matches([',', ':', '.', '!', '?', ' ']);
+        let after = after.trim();
+
+        if !after.is_empty() {
+            return Some(after.to_owned());
+        }
+
+        // Nothing after wake word — check for text before it
+        let before = &input[..pos];
+        let before = before.trim_end_matches([',', ':', '.', '!', '?', ' ']);
+        let before = before.trim();
+
+        if before.is_empty() {
+            Some("Hello".to_owned())
+        } else {
+            Some(before.to_owned())
+        }
+    }
+
+    #[test]
+    fn extract_query_after_wake_word() {
+        // "Fee what time is it" → query is "what time is it"
+        assert_eq!(
+            extract_query("fee what time is it", "fae"),
+            Some("what time is it".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_query_hello_fee_dot() {
+        // "Hello, Fee." → nothing after wake word → use "Hello" before it
+        assert_eq!(
+            extract_query("Hello, Fee.", "fae"),
+            Some("Hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_query_hello_fee_no_punct() {
+        // "Hello Fee" → nothing after → use "Hello"
+        assert_eq!(extract_query("Hello Fee", "fae"), Some("Hello".to_owned()));
+    }
+
+    #[test]
+    fn extract_query_hey_fae_how_are_you() {
+        // "Hey Fae how are you" → query is "how are you"
+        assert_eq!(
+            extract_query("Hey Fae how are you", "fae"),
+            Some("how are you".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_query_just_fae() {
+        // Just "Fae" alone → default greeting "Hello"
+        assert_eq!(extract_query("fae", "fae"), Some("Hello".to_owned()));
+    }
+
+    #[test]
+    fn extract_query_fae_comma() {
+        // "Fae," → nothing meaningful after → default "Hello"
+        assert_eq!(extract_query("Fae,", "fae"), Some("Hello".to_owned()));
+    }
+
+    #[test]
+    fn extract_query_hi_fae_excl() {
+        // "Hi Fae!" → nothing after → "Hi" from before
+        assert_eq!(extract_query("Hi Fae!", "fae"), Some("Hi".to_owned()));
+    }
+
+    // ── "hi fae" multi-word wake phrase ─────────────────────────────
+
+    #[test]
+    fn hi_fae_exact_match() {
+        assert_eq!(find_wake_word("hi fae how are you", "hi fae"), Some((0, 6)));
+    }
+
+    #[test]
+    fn hi_fae_with_comma() {
+        assert_eq!(
+            find_wake_word("hi, fae how are you", "hi fae"),
+            Some((0, 7))
+        );
+    }
+
+    #[test]
+    fn hi_fee_variant() {
+        assert_eq!(
+            find_wake_word("hi fee what time is it", "hi fae"),
+            Some((0, 6))
+        );
+    }
+
+    #[test]
+    fn hi_fea_variant() {
+        assert_eq!(
+            find_wake_word("hi fea tell me a joke", "hi fae"),
+            Some((0, 6))
+        );
+    }
+
+    #[test]
+    fn high_fae_variant() {
+        // STT may hear "high" instead of "hi"
+        assert_eq!(
+            find_wake_word("high fae how are you", "hi fae"),
+            Some((0, 8))
+        );
+    }
+
+    #[test]
+    fn hey_fae_variant() {
+        // "hey fae" is a close variant of "hi fae"
+        assert_eq!(
+            find_wake_word("hey fae how are you", "hi fae"),
+            Some((0, 7))
+        );
+    }
+
+    #[test]
+    fn hi_fae_not_found() {
+        assert_eq!(find_wake_word("tell me a joke", "hi fae"), None);
+    }
+
+    #[test]
+    fn hi_fae_query_extraction() {
+        // "Hi Fae, how are you" → "how are you"
+        assert_eq!(
+            extract_query("hi fae, how are you", "hi fae"),
+            Some("how are you".to_owned())
+        );
+    }
+
+    #[test]
+    fn hi_fae_alone_gives_greeting() {
+        // Just "Hi Fae" → default greeting
+        assert_eq!(extract_query("hi fae", "hi fae"), Some("Hello".to_owned()));
+    }
+
+    #[test]
+    fn hi_fea_query_extraction() {
+        assert_eq!(
+            extract_query("hi fea tell me a story", "hi fae"),
+            Some("tell me a story".to_owned())
+        );
+    }
+
+    #[test]
+    fn canonicalize_hi_fae_variants() {
+        // canonicalize should work with "hi fae" as wake word too
+        let result = canonicalize_wake_word_transcription("hi fae", "Hi Fee, tell me a joke");
+        assert_eq!(result, Some("Hi Fae, tell me a joke".to_owned()));
+    }
+
+    // ── find_name_mention (standalone name for barge-in) ────────────
+
+    #[test]
+    fn name_mention_standalone_fae() {
+        assert_eq!(find_name_mention("fae stop talking"), Some((0, 3)));
+    }
+
+    #[test]
+    fn name_mention_standalone_faye() {
+        assert_eq!(find_name_mention("faye, what about this"), Some((0, 4)));
+    }
+
+    #[test]
+    fn name_mention_mid_sentence() {
+        assert_eq!(find_name_mention("hey fae how are you"), Some((4, 3)));
+    }
+
+    #[test]
+    fn name_mention_end_of_sentence() {
+        assert_eq!(find_name_mention("that will do fae"), Some((13, 3)));
+    }
+
+    #[test]
+    fn name_mention_with_punctuation() {
+        assert_eq!(find_name_mention("fae, stop!"), Some((0, 3)));
+    }
+
+    #[test]
+    fn name_mention_rejects_coffee() {
+        // "coffee" contains "fee" but should NOT match
+        assert_eq!(find_name_mention("i love coffee"), None);
+    }
+
+    #[test]
+    fn name_mention_rejects_fayette() {
+        assert_eq!(find_name_mention("welcome to fayette"), None);
+    }
+
+    #[test]
+    fn name_mention_not_found() {
+        assert_eq!(find_name_mention("tell me a joke"), None);
+    }
+
+    // ── strip_punctuation ───────────────────────────────────────────
+
+    #[test]
+    fn strip_punct_removes_commas() {
+        assert_eq!(strip_punctuation("that will do, fae"), "that will do fae");
+    }
+
+    #[test]
+    fn strip_punct_removes_periods_and_exclamation() {
+        assert_eq!(
+            strip_punctuation("hello. how are you!"),
+            "hello how are you"
+        );
+    }
+
+    #[test]
+    fn strip_punct_normalizes_whitespace() {
+        assert_eq!(strip_punctuation("  hello   world  "), "hello world");
+    }
+
+    #[test]
+    fn strip_punct_preserves_alphanumeric() {
+        assert_eq!(strip_punctuation("hello fae 123"), "hello fae 123");
+    }
+
+    #[test]
+    fn stop_phrase_with_comma_matches_after_strip() {
+        // The actual scenario: STT produces "that will do, fae"
+        // and the stop phrase is "that will do fae"
+        let stt_output = "that will do, fae";
+        let stop_phrase = "that will do fae";
+        let expanded = expand_contractions(&stt_output.to_lowercase());
+        let clean = strip_punctuation(&expanded);
+        assert!(clean.contains(stop_phrase));
+    }
+
+    #[test]
+    fn stop_phrase_contraction_with_comma() {
+        // STT: "that'll do, Fae" → expand → "that will do, fae" → strip → "that will do fae"
+        let stt_output = "that'll do, fae";
+        let stop_phrase = "that will do fae";
+        let expanded = expand_contractions(&stt_output.to_lowercase());
+        let clean = strip_punctuation(&expanded);
+        assert!(clean.contains(stop_phrase));
+    }
+
+    // ── parse_name ──────────────────────────────────────────────────
+
+    #[test]
+    fn parse_name_my_name_is() {
+        assert_eq!(parse_name("my name is David"), Some("David".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_i_am() {
+        assert_eq!(parse_name("I am Sarah"), Some("Sarah".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_im_contraction() {
+        assert_eq!(parse_name("I'm Alice"), Some("Alice".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_call_me() {
+        assert_eq!(parse_name("call me Bob"), Some("Bob".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_greeting_then_pattern() {
+        // "Hello, I'm David" — pattern found mid-string, not at start
+        assert_eq!(parse_name("Hello, I'm David"), Some("David".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_hi_im() {
+        assert_eq!(parse_name("Hi, I'm Sarah"), Some("Sarah".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_hey_my_name_is() {
+        assert_eq!(parse_name("Hey, my name is Alex"), Some("Alex".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_hello_alone_rejected() {
+        // "Hello" is a greeting, not a name
+        assert_eq!(parse_name("Hello"), None);
+    }
+
+    #[test]
+    fn parse_name_hi_alone_rejected() {
+        assert_eq!(parse_name("Hi"), None);
+    }
+
+    #[test]
+    fn parse_name_hey_alone_rejected() {
+        assert_eq!(parse_name("Hey"), None);
+    }
+
+    #[test]
+    fn parse_name_hello_fae_rejected() {
+        // Both "hello" and "fae" are filler words
+        assert_eq!(parse_name("Hello Fae"), None);
+    }
+
+    #[test]
+    fn parse_name_single_word_name() {
+        // Just a name with no pattern prefix
+        assert_eq!(parse_name("David"), Some("David".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_greeting_then_name_no_pattern() {
+        // "Hello David" — no "I'm"/"my name is" pattern, fallback picks last non-filler
+        assert_eq!(parse_name("Hello David"), Some("David".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_empty_string() {
+        assert_eq!(parse_name(""), None);
+    }
+
+    #[test]
+    fn parse_name_whitespace_only() {
+        assert_eq!(parse_name("   "), None);
+    }
+
+    #[test]
+    fn parse_name_with_punctuation() {
+        assert_eq!(parse_name("I'm David."), Some("David".to_owned()));
+    }
+
+    #[test]
+    fn parse_name_its_pattern() {
+        assert_eq!(parse_name("it's James"), Some("James".to_owned()));
+    }
+
+    // ── is_filler_word ──────────────────────────────────────────────
+
+    #[test]
+    fn filler_rejects_greetings() {
+        assert!(is_filler_word("hello"));
+        assert!(is_filler_word("hi"));
+        assert!(is_filler_word("hey"));
+        assert!(is_filler_word("morning"));
+    }
+
+    #[test]
+    fn filler_rejects_fae_variants() {
+        assert!(is_filler_word("fae"));
+        assert!(is_filler_word("faye"));
+        assert!(is_filler_word("fee"));
+    }
+
+    #[test]
+    fn filler_accepts_real_names() {
+        assert!(!is_filler_word("david"));
+        assert!(!is_filler_word("sarah"));
+        assert!(!is_filler_word("alex"));
     }
 }

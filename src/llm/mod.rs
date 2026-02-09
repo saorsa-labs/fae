@@ -15,34 +15,25 @@ use mistralrs::{
     GgufModelBuilder, Model, PagedAttentionMetaBuilder, RequestBuilder, Response, TextMessageRole,
     TextMessages,
 };
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 /// Language model for generating conversational responses.
 ///
 /// Uses `mistralrs` for high-level GGUF inference with streaming token
 /// generation and sentence-level buffering for TTS consumption.
 pub struct LocalLlm {
-    model: Model,
+    model: Arc<Model>,
     config: LlmConfig,
     /// Conversation history: (role, content) pairs.
     history: Vec<(TextMessageRole, String)>,
 }
 
 impl LocalLlm {
-    /// Build a new local LLM from the given configuration.
-    ///
-    /// This downloads the GGUF model (if not cached) and loads it onto
-    /// the best available device (Metal GPU on Apple Silicon, CPU otherwise).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if model loading fails.
-    pub async fn new(config: &LlmConfig) -> Result<Self> {
+    pub(crate) async fn load_local_model(config: &LlmConfig) -> Result<Arc<Model>> {
         info!(
             "loading local LLM: {} / {}",
             config.model_id, config.gguf_file
@@ -63,8 +54,25 @@ impl LocalLlm {
             .map_err(|e| SpeechError::Llm(format!("model build failed: {e}")))?;
 
         info!("local LLM loaded successfully");
+        Ok(Arc::new(model))
+    }
 
-        let history = vec![(TextMessageRole::System, config.system_prompt.clone())];
+    pub(crate) fn shared_model(&self) -> Arc<Model> {
+        Arc::clone(&self.model)
+    }
+
+    /// Build a new local LLM from the given configuration.
+    ///
+    /// This downloads the GGUF model (if not cached) and loads it onto
+    /// the best available device (Metal GPU on Apple Silicon, CPU otherwise).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if model loading fails.
+    pub async fn new(config: &LlmConfig) -> Result<Self> {
+        let model = Self::load_local_model(config).await?;
+
+        let history = vec![(TextMessageRole::System, config.effective_system_prompt())];
 
         Ok(Self {
             model,
@@ -94,6 +102,7 @@ impl LocalLlm {
         // Add user message to history
         self.history
             .push((TextMessageRole::User, user_input.to_owned()));
+        self.trim_history();
 
         // Clear interrupt flag at the start of each generation
         interrupt.store(false, Ordering::Relaxed);
@@ -114,18 +123,49 @@ impl LocalLlm {
             .set_sampler_max_len(self.config.max_tokens);
 
         // Start streaming
+        info!("sending stream request to mistralrs engine");
         let mut stream = self
             .model
             .stream_chat_request(request)
             .await
             .map_err(|e| SpeechError::Llm(format!("stream request failed: {e}")))?;
+        info!("stream started, waiting for first token");
 
         let mut generated_text = String::new();
         let mut sentence_buffer = String::new();
         let mut token_count: usize = 0;
         let mut was_interrupted = false;
+        let mut in_think_block = false;
+        let mut first_token_received = false;
 
-        while let Some(response) = stream.next().await {
+        /// Maximum time to wait for the first token before giving up.
+        const FIRST_TOKEN_TIMEOUT: Duration = Duration::from_secs(120);
+
+        loop {
+            let response = if !first_token_received {
+                // Apply a timeout for the first token — model warm-up on CPU can be slow
+                // but shouldn't take more than 2 minutes.
+                match tokio::time::timeout(FIRST_TOKEN_TIMEOUT, stream.next()).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => break,
+                    Err(_) => {
+                        warn!(
+                            "first token timeout after {}s — model may be too slow on CPU; \
+                             consider enabling the 'metal' feature for GPU acceleration",
+                            FIRST_TOKEN_TIMEOUT.as_secs()
+                        );
+                        return Err(SpeechError::Llm(
+                            "first token timeout — model did not produce output in time".to_owned(),
+                        ));
+                    }
+                }
+            } else {
+                match stream.next().await {
+                    Some(r) => r,
+                    None => break,
+                }
+            };
+
             // Check interrupt flag (set by conversation gate on barge-in)
             if interrupt.load(Ordering::Relaxed) {
                 info!("generation interrupted after {token_count} tokens");
@@ -142,10 +182,29 @@ impl LocalLlm {
                             continue;
                         }
 
+                        if !first_token_received {
+                            first_token_received = true;
+                            let ttft = gen_start.elapsed();
+                            info!("first token received in {:.1}s", ttft.as_secs_f64());
+                        }
+
                         token_count += 1;
 
-                        print!("{content}");
-                        let _ = std::io::stdout().flush();
+                        // Filter <think>...</think> blocks (Qwen3 thinking mode).
+                        // These reasoning tokens should not reach TTS.
+                        if content.contains("<think>") {
+                            in_think_block = true;
+                            debug!("entered <think> block at token {token_count}");
+                            continue;
+                        }
+                        if content.contains("</think>") {
+                            in_think_block = false;
+                            debug!("exited </think> block at token {token_count}");
+                            continue;
+                        }
+                        if in_think_block {
+                            continue;
+                        }
 
                         generated_text.push_str(content);
                         sentence_buffer.push_str(content);
@@ -206,6 +265,7 @@ impl LocalLlm {
         if !final_text.is_empty() {
             self.history.push((TextMessageRole::Assistant, final_text));
         }
+        self.trim_history();
 
         let elapsed = gen_start.elapsed();
         let tokens_per_sec = if elapsed.as_secs_f64() > 0.0 {
@@ -224,6 +284,30 @@ impl LocalLlm {
             },
         );
         Ok(was_interrupted)
+    }
+
+    /// Truncate the conversation history to keep only the system prompt and
+    /// the first `keep_count` messages after it.
+    ///
+    /// This is used by conversation forking to rewind to a specific point.
+    pub fn truncate_history(&mut self, keep_count: usize) {
+        if self.history.len() > 1 + keep_count {
+            self.history.truncate(1 + keep_count);
+        }
+    }
+
+    fn trim_history(&mut self) {
+        let max = self.config.max_history_messages;
+        if max == 0 {
+            return;
+        }
+        // Keep the system prompt at index 0, then retain the last `max` messages.
+        if self.history.len() > 1 + max {
+            let drain_end = self.history.len().saturating_sub(max);
+            if drain_end > 1 {
+                self.history.drain(1..drain_end);
+            }
+        }
     }
 }
 

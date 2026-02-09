@@ -8,7 +8,10 @@ use crate::error::{Result, SpeechError};
 use crate::pipeline::messages::AudioChunk;
 use cpal::StreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
@@ -22,6 +25,8 @@ pub struct CpalCapture {
     stream_config: StreamConfig,
     /// The target sample rate for the pipeline (e.g., 16kHz).
     target_sample_rate: u32,
+    /// Target chunk size at the pipeline sample rate (in frames/samples).
+    target_chunk_frames: usize,
 }
 
 impl CpalCapture {
@@ -39,11 +44,9 @@ impl CpalCapture {
         let device = if let Some(ref name) = config.input_device {
             host.input_devices()
                 .map_err(|e| SpeechError::Audio(format!("cannot enumerate devices: {e}")))?
-                .find(|d| {
-                    d.description()
-                        .ok()
-                        .map(|desc| desc.name() == name)
-                        .unwrap_or(false)
+                .find(|d| match d.description() {
+                    Ok(desc) => desc.name() == name,
+                    Err(_) => false,
                 })
                 .ok_or_else(|| SpeechError::Audio(format!("input device '{name}' not found")))?
         } else {
@@ -51,10 +54,10 @@ impl CpalCapture {
                 .ok_or_else(|| SpeechError::Audio("no default input device".into()))?
         };
 
-        let device_name = device
-            .description()
-            .map(|d| d.name().to_owned())
-            .unwrap_or_else(|_| "<unknown>".into());
+        let device_name = match device.description() {
+            Ok(d) => d.name().to_owned(),
+            Err(_) => "<unknown>".into(),
+        };
         info!("using input device: {device_name}");
 
         // Use the device's default config for best compatibility
@@ -87,6 +90,7 @@ impl CpalCapture {
             device,
             stream_config,
             target_sample_rate: config.input_sample_rate,
+            target_chunk_frames: config.buffer_size as usize,
         })
     }
 
@@ -101,7 +105,14 @@ impl CpalCapture {
         let native_rate = self.stream_config.sample_rate;
         let native_channels = self.stream_config.channels;
         let target_rate = self.target_sample_rate;
+        let chunk_len = self.target_chunk_frames.max(1);
         let tx_clone = tx.clone();
+        let mut pending: VecDeque<f32> = VecDeque::with_capacity(chunk_len.saturating_mul(4));
+
+        // Rate-limited reporting from the audio callback thread.
+        let dropped_full = AtomicU64::new(0);
+        let last_report_ms = AtomicU64::new(0);
+        let tx_closed = AtomicBool::new(false);
 
         let stream = self
             .device
@@ -122,14 +133,62 @@ impl CpalCapture {
                         mono
                     };
 
-                    let chunk = AudioChunk {
-                        samples,
-                        sample_rate: target_rate,
-                        captured_at: Instant::now(),
-                    };
-                    // Use try_send to avoid blocking the audio thread
-                    if tx_clone.try_send(chunk).is_err() {
-                        debug!("audio channel full, dropping chunk");
+                    pending.extend(samples.into_iter());
+
+                    // Emit fixed-size chunks to make downstream timing consistent.
+                    while pending.len() >= chunk_len {
+                        if tx_closed.load(Ordering::Relaxed) {
+                            // Downstream pipeline has stopped; discard buffered samples.
+                            pending.clear();
+                            break;
+                        }
+
+                        let mut out = Vec::with_capacity(chunk_len);
+                        for _ in 0..chunk_len {
+                            if let Some(s) = pending.pop_front() {
+                                out.push(s);
+                            }
+                        }
+
+                        let chunk = AudioChunk {
+                            samples: out,
+                            sample_rate: target_rate,
+                            captured_at: Instant::now(),
+                        };
+                        // Use try_send to avoid blocking the audio thread
+                        match tx_clone.try_send(chunk) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_chunk)) => {
+                                dropped_full.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_chunk)) => {
+                                tx_closed.store(true, Ordering::Relaxed);
+                            }
+                        }
+
+                        // Rate-limit logs to avoid spamming.
+                        let now_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        let last = last_report_ms.load(Ordering::Relaxed);
+                        if now_ms.saturating_sub(last) >= 2_000
+                            && last_report_ms
+                                .compare_exchange(
+                                    last,
+                                    now_ms,
+                                    Ordering::Relaxed,
+                                    Ordering::Relaxed,
+                                )
+                                .is_ok()
+                        {
+                            let n = dropped_full.swap(0, Ordering::Relaxed);
+                            if tx_closed.load(Ordering::Relaxed) {
+                                debug!("audio channel closed (pipeline stopped)");
+                            } else if n > 0 {
+                                debug!("audio channel full, dropped {n} chunks (last 2s)");
+                            }
+                        }
                     }
                 },
                 move |err| {

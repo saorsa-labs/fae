@@ -31,6 +31,10 @@ pub enum SpeechError {
     #[error("config error: {0}")]
     Config(String),
 
+    /// Memory / identity storage error.
+    #[error("memory error: {0}")]
+    Memory(String),
+
     /// Pipeline coordination error.
     #[error("pipeline error: {0}")]
     Pipeline(String),

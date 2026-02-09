@@ -2,6 +2,27 @@
 
 use std::time::Instant;
 
+/// Control events emitted by stages to coordinate interruption and UI state.
+#[derive(Debug, Clone)]
+pub enum ControlEvent {
+    /// VAD detected the start of user speech (barge-in signal).
+    UserSpeechStart {
+        /// Timestamp for the chunk that triggered speech start.
+        captured_at: Instant,
+        /// RMS energy of the triggering chunk.
+        rms: f32,
+    },
+    /// Assistant playback started (first non-empty audio queued).
+    AssistantSpeechStart,
+    /// Assistant playback ended (response completed).
+    AssistantSpeechEnd {
+        /// Whether playback ended due to interruption.
+        interrupted: bool,
+    },
+    /// MFCC+DTW wake word spotter detected the keyword in raw audio.
+    WakewordDetected,
+}
+
 /// A chunk of raw audio samples from the microphone.
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
@@ -31,6 +52,11 @@ pub struct Transcription {
     pub text: String,
     /// Whether this is a final transcription (vs partial/streaming).
     pub is_final: bool,
+    /// Optional voiceprint features for best-effort speaker matching.
+    ///
+    /// This is computed from the original audio and is intended for lightweight
+    /// "respond mostly to the primary user" behavior.
+    pub voiceprint: Option<Vec<f32>>,
     /// Time the original audio was captured.
     pub audio_captured_at: Instant,
     /// Time the transcription completed.
@@ -53,6 +79,16 @@ pub struct SentenceChunk {
     pub text: String,
     /// Whether this is the last sentence in the response.
     pub is_final: bool,
+}
+
+/// A text message injected directly from the GUI, bypassing STT.
+#[derive(Debug, Clone)]
+pub struct TextInjection {
+    /// The user's typed text.
+    pub text: String,
+    /// If `Some`, truncate LLM history to keep only this many entries
+    /// (system prompt + N user/assistant pairs) before injecting.
+    pub fork_at_keep_count: Option<usize>,
 }
 
 /// Synthesized audio from TTS, ready for playback.
