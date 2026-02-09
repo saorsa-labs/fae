@@ -1573,29 +1573,21 @@ async fn run_llm_stage(
 
 async fn run_tts_stage(
     config: SpeechConfig,
-    preloaded: Option<crate::tts::ChatterboxTts>,
+    preloaded: Option<crate::tts::KokoroTts>,
     mut rx: mpsc::Receiver<SentenceChunk>,
     tx: mpsc::Sender<SynthesizedAudio>,
     interrupt: Arc<AtomicBool>,
     cancel: CancellationToken,
 ) {
-    use crate::tts::{ChatterboxTts, resolve_voice_wav};
-
     let mut tts = match preloaded {
         Some(t) => t,
-        None => {
-            let result = match resolve_voice_wav(&config.tts) {
-                Some(voice_wav) => ChatterboxTts::new(&config.tts, &voice_wav),
-                None => ChatterboxTts::new_with_default_voice(&config.tts),
-            };
-            match result {
-                Ok(t) => t,
-                Err(e) => {
-                    error!("failed to init TTS: {e}");
-                    return;
-                }
+        None => match crate::tts::KokoroTts::new(&config.tts) {
+            Ok(t) => t,
+            Err(e) => {
+                error!("failed to init TTS: {e}");
+                return;
             }
-        }
+        },
     };
 
     loop {

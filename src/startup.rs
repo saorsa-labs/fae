@@ -7,12 +7,12 @@
 //! [`ProgressCallback`] for structured progress events.
 
 use crate::config::{LlmBackend, SpeechConfig};
-use crate::error::{Result, SpeechError};
+use crate::error::Result;
 use crate::llm::LocalLlm;
 use crate::models::ModelManager;
 use crate::progress::{ProgressCallback, ProgressEvent};
 use crate::stt::ParakeetStt;
-use crate::tts::ChatterboxTts;
+use crate::tts::KokoroTts;
 use std::time::Instant;
 
 /// Pre-loaded model instances ready for the pipeline.
@@ -21,8 +21,8 @@ pub struct InitializedModels {
     pub stt: ParakeetStt,
     /// Local LLM engine (only loaded for local backend).
     pub llm: Option<LocalLlm>,
-    /// Chatterbox TTS engine.
-    pub tts: ChatterboxTts,
+    /// Kokoro TTS engine.
+    pub tts: KokoroTts,
 }
 
 /// STT model files to pre-download.
@@ -143,11 +143,8 @@ async fn load_llm(config: &SpeechConfig, callback: Option<&ProgressCallback>) ->
 }
 
 /// Load TTS with a status message and optional progress callback.
-///
-/// When `voice_reference` is empty, downloads and uses a default voice profile.
-/// When set, encodes a custom voice profile from the WAV file.
-fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<ChatterboxTts> {
-    let model_name = "TTS (Chatterbox Turbo)".to_owned();
+fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<KokoroTts> {
+    let model_name = "TTS (Kokoro-82M)".to_owned();
     print!("  Loading {model_name}...");
     if let Some(cb) = callback {
         cb(ProgressEvent::LoadStarted {
@@ -156,21 +153,9 @@ fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Resul
     }
 
     let start = Instant::now();
-
-    let tts = match crate::tts::resolve_voice_wav(&config.tts) {
-        Some(voice_wav) => {
-            if !voice_wav.exists() {
-                return Err(SpeechError::Tts(format!(
-                    "voice reference WAV not found: {}",
-                    voice_wav.display()
-                )));
-            }
-            ChatterboxTts::new(&config.tts, &voice_wav)?
-        }
-        None => ChatterboxTts::new_with_default_voice(&config.tts)?,
-    };
-
+    let tts = KokoroTts::new(&config.tts)?;
     let elapsed = start.elapsed();
+
     println!("  done ({:.1}s)", elapsed.as_secs_f64());
     if let Some(cb) = callback {
         cb(ProgressEvent::LoadComplete {

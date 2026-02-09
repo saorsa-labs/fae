@@ -200,7 +200,7 @@ impl ApiLlm {
             sentence_buffer.push_str(&token_text);
 
             // Check for sentence boundaries and send complete sentences
-            if let Some(pos) = super::find_sentence_boundary(&sentence_buffer) {
+            if let Some(pos) = super::find_clause_boundary(&sentence_buffer) {
                 let sentence = sentence_buffer[..=pos].trim().to_owned();
                 if !sentence.is_empty() {
                     let chunk = SentenceChunk {

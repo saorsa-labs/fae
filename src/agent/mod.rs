@@ -188,7 +188,7 @@ impl SaorsaAgentLlm {
                             }
                             sentence_buffer.push_str(&text);
 
-                            while let Some(pos) = crate::llm::find_sentence_boundary(&sentence_buffer) {
+                            while let Some(pos) = crate::llm::find_clause_boundary(&sentence_buffer) {
                                 let sentence = sentence_buffer[..=pos].trim().to_owned();
                                 if !sentence.is_empty() {
                                     tx.send(SentenceChunk {

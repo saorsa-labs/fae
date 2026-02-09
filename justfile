@@ -1,5 +1,11 @@
 # fae — Real-time speech-to-speech AI conversation system
 
+# espeak-rs-sys needs the macOS SDK sysroot for bindgen + cmake.
+# These are no-ops on Linux where the system headers are in the default search path.
+export CC := env("CC", "/usr/bin/cc")
+export BINDGEN_EXTRA_CLANG_ARGS := if os() == "macos" { "-isysroot " + `xcrun --show-sdk-path 2>/dev/null || echo ""` } else { "" }
+export CFLAGS := if os() == "macos" { "-isysroot " + `xcrun --show-sdk-path 2>/dev/null || echo ""` } else { "" }
+
 # Show available recipes
 default:
     @just --list

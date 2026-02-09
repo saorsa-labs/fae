@@ -1,7 +1,7 @@
 //! Voice cloning helpers for the GUI.
 //!
-//! Supports importing an audio file (mp3/mp4/wav) and saving a reference WAV
-//! that can be used by Chatterbox TTS for voice cloning.
+//! Supports importing an audio file (mp3/mp4/wav) and saving a reference WAV.
+//! Future: generate Kokoro-style `.bin` tensors from reference audio.
 
 use crate::error::{Result, SpeechError};
 use std::fs;

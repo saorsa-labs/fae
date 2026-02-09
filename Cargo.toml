@@ -27,7 +27,7 @@ default = ["gui"]
 metal = ["mistralrs/metal"]
 gui = ["dioxus"]
 tools = ["image"]
-# Chatterbox TTS execution provider features (vendored from cbx).
+# TTS ONNX execution provider features.
 coreml = ["ort/coreml"]
 directml = ["ort/directml"]
 cuda = ["ort/cuda"]
@@ -45,12 +45,12 @@ parakeet-rs = { version = "0.3", default-features = false, features = ["cpu"] }
 # LLM inference (mistral.rs — supports 30+ architectures, GGUF, Metal)
 mistralrs = "0.7"
 
-# TTS (Chatterbox Turbo — vendored from github.com/srv1n/cbx, ort rc.11 compat)
+# TTS (Kokoro-82M — single ONNX model, misaki-rs G2P phonemizer)
 ort = { version = "2.0.0-rc.11", features = ["half"] }
 half = "2"
 hound = "3"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
-bincode = "1"
+misaki-rs = "0.3"
 
 # Model management
 hf-hub = "0.4"
@@ -92,6 +92,9 @@ dioxus = { version = "0.6", features = ["desktop"], optional = true }
 # Agent runtime + multi-provider LLM API (saorsa ecosystem)
 saorsa-agent = "0.4"
 saorsa-ai = { version = "0.4", features = ["mistralrs"] }
+
+# Canvas visual output (saorsa-canvas scene graph)
+canvas-core = { path = "../saorsa-canvas/canvas-core" }
 
 # Acoustic Echo Cancellation (FDAF adaptive filter)
 fdaf-aec = "0.1"

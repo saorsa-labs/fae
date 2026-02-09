@@ -209,8 +209,8 @@ impl LocalLlm {
                         generated_text.push_str(content);
                         sentence_buffer.push_str(content);
 
-                        // Check for sentence boundaries and send complete sentences
-                        if let Some(pos) = find_sentence_boundary(&sentence_buffer) {
+                        // Check for clause/sentence boundaries for streaming TTS
+                        if let Some(pos) = find_clause_boundary(&sentence_buffer) {
                             let sentence = sentence_buffer[..=pos].trim().to_owned();
                             if !sentence.is_empty() {
                                 let sentence_chunk = SentenceChunk {
@@ -327,4 +327,45 @@ pub(crate) fn find_sentence_boundary(text: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Minimum accumulated buffer length (chars) before splitting on clause punctuation.
+const CLAUSE_MIN_LEN: usize = 20;
+
+/// Find the position of a clause boundary for streaming TTS.
+///
+/// Always splits on sentence-ending punctuation (`. ! ? \n`). Additionally,
+/// when the buffer exceeds [`CLAUSE_MIN_LEN`] characters, also splits on
+/// clause punctuation (`, ; : — –`) to enable lower-latency streaming.
+///
+/// Returns the byte index of the last byte of the boundary character, or `None`.
+///
+/// Callers use `text[..=pos]` and `text[pos + 1..]`, so we must return the
+/// last byte of the (possibly multi-byte) punctuation character to ensure
+/// both slices land on valid UTF-8 char boundaries.
+pub(crate) fn find_clause_boundary(text: &str) -> Option<usize> {
+    // Sentence boundaries take priority.
+    if let Some(pos) = find_sentence_boundary(text) {
+        return Some(pos);
+    }
+
+    // Only split on clause punctuation when we have enough text.
+    if text.len() < CLAUSE_MIN_LEN {
+        return None;
+    }
+
+    // Find the *last* clause-level punctuation mark so we send the
+    // longest possible chunk rather than splitting too early.
+    let mut last_clause: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        if matches!(c, ',' | ';' | ':' | '\u{2014}' | '\u{2013}') {
+            // Only count if followed by a space or end of text.
+            let rest = &text[i + c.len_utf8()..];
+            if rest.is_empty() || rest.starts_with(' ') {
+                // Return last byte of the character so [..=pos] is char-safe.
+                last_clause = Some(i + c.len_utf8() - 1);
+            }
+        }
+    }
+    last_clause
 }
