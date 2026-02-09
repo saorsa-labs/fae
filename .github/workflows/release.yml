@@ -16,10 +16,13 @@ jobs:
   preflight:
     name: Pre-flight
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Verify tag matches Cargo.toml version
+        id: version
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
@@ -27,7 +30,7 @@ jobs:
             echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml ($CARGO_VERSION)"
             exit 1
           fi
-          echo "VERSION=$CARGO_VERSION" >> "$GITHUB_ENV"
+          echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing v$CARGO_VERSION"
 
   # ── Run full test suite before building release artifacts ──────────
@@ -44,27 +47,16 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
-  # ── Build macOS binaries (Apple Silicon + Intel) ───────────────────
+  # ── Build macOS binary (Apple Silicon) ─────────────────────────────
   build-macos:
-    name: Build macOS (${{ matrix.arch }})
+    name: Build macOS (arm64)
     needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            arch: arm64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            arch: x86_64
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -73,13 +65,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-release-
+          key: ${{ runner.os }}-aarch64-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-aarch64-release-
 
       - name: Build release binaries
         run: |
-          cargo build --release --features gui --target ${{ matrix.target }}
-          cargo build --release --bin fae-record-wakeword --no-default-features --target ${{ matrix.target }}
+          cargo build --release --features gui
+          cargo build --release --bin fae-record-wakeword --no-default-features
 
       - name: Import signing certificate
         env:
@@ -125,12 +117,12 @@ jobs:
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --timestamp \
-            "target/${{ matrix.target }}/release/fae"
+            target/release/fae
 
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --timestamp \
-            "target/${{ matrix.target }}/release/fae-record-wakeword"
+            target/release/fae-record-wakeword
 
       - name: Notarize binaries
         if: env.SIGNING_ENABLED == 'true'
@@ -139,11 +131,8 @@ jobs:
           MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
           MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
         run: |
-          # Create a zip for notarization submission
           NOTARIZE_ZIP="$RUNNER_TEMP/fae-notarize.zip"
-          ditto -c -k --keepParent \
-            "target/${{ matrix.target }}/release/fae" \
-            "$NOTARIZE_ZIP"
+          ditto -c -k --keepParent target/release/fae "$NOTARIZE_ZIP"
 
           xcrun notarytool submit "$NOTARIZE_ZIP" \
             --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
@@ -151,11 +140,8 @@ jobs:
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
             --wait
 
-          # Notarize the wakeword recorder too
           NOTARIZE_ZIP2="$RUNNER_TEMP/fae-wakeword-notarize.zip"
-          ditto -c -k --keepParent \
-            "target/${{ matrix.target }}/release/fae-record-wakeword" \
-            "$NOTARIZE_ZIP2"
+          ditto -c -k --keepParent target/release/fae-record-wakeword "$NOTARIZE_ZIP2"
 
           xcrun notarytool submit "$NOTARIZE_ZIP2" \
             --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
@@ -166,11 +152,11 @@ jobs:
       - name: Package release archive
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
-          ARCHIVE="fae-${VERSION}-macos-${{ matrix.arch }}.tar.gz"
+          ARCHIVE="fae-${VERSION}-macos-arm64.tar.gz"
 
           mkdir -p staging
-          cp "target/${{ matrix.target }}/release/fae" staging/
-          cp "target/${{ matrix.target }}/release/fae-record-wakeword" staging/
+          cp target/release/fae staging/
+          cp target/release/fae-record-wakeword staging/
           cp README.md staging/
           cp LICENSE staging/ 2>/dev/null || true
 
@@ -180,7 +166,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fae-macos-${{ matrix.arch }}
+          name: fae-macos-arm64
           path: ${{ env.ARCHIVE }}
 
   # ── Create GitHub Release with all artifacts ───────────────────────
@@ -214,9 +200,3 @@ jobs:
             artifacts/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Clean up keychain
-        if: always()
-        run: |
-          # Cleanup is handled by runner temp directory
-          echo "Release artifacts published"
