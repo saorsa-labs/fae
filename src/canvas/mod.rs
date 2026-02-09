@@ -3,5 +3,6 @@
 //! Bridges fae's voice pipeline with the `canvas-core` scene graph,
 //! mapping pipeline events to renderable scene elements.
 
+pub mod bridge;
 pub mod session;
 pub mod types;

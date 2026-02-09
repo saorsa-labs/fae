@@ -88,6 +88,17 @@ impl CanvasMessage {
     pub fn to_element_at(&self, transform: Transform) -> Element {
         self.to_element().with_transform(transform)
     }
+
+    /// Format the timestamp as `"HH:MM"` (UTC).
+    ///
+    /// The timestamp is treated as milliseconds since an arbitrary epoch
+    /// (typically session start). For display, only hours and minutes matter.
+    pub fn formatted_time(&self) -> String {
+        let total_secs = self.timestamp_ms / 1000;
+        let hours = (total_secs / 3600) % 24;
+        let minutes = (total_secs / 60) % 60;
+        format!("{hours:02}:{minutes:02}")
+    }
 }
 
 #[cfg(test)]
@@ -195,5 +206,20 @@ mod tests {
         assert!((el.transform.x - 10.0).abs() < f32::EPSILON);
         assert!((el.transform.y - 20.0).abs() < f32::EPSILON);
         assert_eq!(el.transform.z_index, 5);
+    }
+
+    #[test]
+    fn test_formatted_time() {
+        // 0 ms → 00:00
+        let msg = CanvasMessage::new(MessageRole::User, "x", 0);
+        assert_eq!(msg.formatted_time(), "00:00");
+
+        // 3661000 ms = 1h 1m 1s → 01:01
+        let msg = CanvasMessage::new(MessageRole::User, "x", 3_661_000);
+        assert_eq!(msg.formatted_time(), "01:01");
+
+        // 86400000 ms = 24h → wraps to 00:00
+        let msg = CanvasMessage::new(MessageRole::User, "x", 86_400_000);
+        assert_eq!(msg.formatted_time(), "00:00");
     }
 }
