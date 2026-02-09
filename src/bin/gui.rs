@@ -635,6 +635,17 @@ fn app() -> Element {
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
+    // Auto-scroll the activity log to the bottom when new messages arrive.
+    use_effect(move || {
+        let _len = activity_log.read().len();
+        document::eval(
+            r#"
+            let el = document.getElementById('activity-log');
+            if (el) el.scrollTop = el.scrollHeight;
+            "#,
+        );
+    });
+
     use_hook(move || {
         let mut config_state = config_state;
         spawn(async move {
@@ -921,14 +932,19 @@ fn app() -> Element {
     let tool_mode_select_enabled =
         settings_enabled && matches!(cfg_backend, fae::config::LlmBackend::Agent);
     let config_path = fae::SpeechConfig::default_config_path();
-    let current_voice_reference = config_state.read().tts.voice_reference.clone();
-    let fae_voice_path = fae::tts::bundled_fae_voice_path();
-    let is_fae_voice = current_voice_reference.is_empty()
-        || std::path::Path::new(&current_voice_reference) == fae_voice_path.as_path();
-    let voice_ref_display = if is_fae_voice {
-        "Fae (Scottish, built-in)".to_owned()
+    let current_voice = config_state.read().tts.voice.clone();
+    let is_builtin_voice = !current_voice.ends_with(".bin") || current_voice.is_empty();
+    let voice_ref_display = if is_builtin_voice {
+        format!(
+            "Kokoro: {}",
+            if current_voice.is_empty() {
+                "bf_emma"
+            } else {
+                &current_voice
+            }
+        )
     } else {
-        current_voice_reference.clone()
+        current_voice.clone()
     };
 
     let (stt_model_id, llm_models_in_use, tts_models_in_use) = {
@@ -942,11 +958,7 @@ fn app() -> Element {
                 format!("{} / {}", cfg.llm.model_id, cfg.llm.gguf_file)
             }
         };
-        let tts = if cfg.tts.voice_reference.trim().is_empty() {
-            "Fae (Scottish, built-in)".to_owned()
-        } else {
-            cfg.tts.voice_reference.clone()
-        };
+        let tts = format!("Kokoro-82M ({}, {})", cfg.tts.voice, cfg.tts.model_variant);
         (stt, llm, tts)
     };
 
@@ -1003,14 +1015,9 @@ fn app() -> Element {
     };
     let tts_tooltip = {
         let cfg = config_state.read();
-        let voice = if cfg.tts.voice_reference.trim().is_empty() {
-            "Fae (Scottish, built-in)".to_owned()
-        } else {
-            cfg.tts.voice_reference.clone()
-        };
         format!(
-            "Text-to-speech\nVoice reference: {}\nModel dtype: {}\n",
-            voice, cfg.tts.model_dtype
+            "Text-to-speech (Kokoro-82M)\nVoice: {}\nModel variant: {}\nSpeed: {:.1}x\n",
+            cfg.tts.voice, cfg.tts.model_variant, cfg.tts.speed
         )
     };
 
@@ -1252,7 +1259,7 @@ fn app() -> Element {
 
                     div { class: "log-panel",
                         h2 { class: "log-title", "Activity" }
-                        div { class: "log",
+                        div { id: "activity-log", class: "log",
                             {
                                 let current_fork = *fork_point.read();
                                 let log_snapshot = activity_log.read();
@@ -1556,12 +1563,28 @@ fn app() -> Element {
                         }
                     }
 
-                    // --- System prompt ---
+                    // --- Personality ---
                     details { class: "settings-section",
-                        summary { class: "settings-section-summary", "System Prompt" }
+                        summary { class: "settings-section-summary", "Personality" }
                         div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Profile" }
+                                select {
+                                    class: "settings-select",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().llm.personality}",
+                                    onchange: move |evt| {
+                                        config_state.write().llm.personality = evt.value();
+                                    },
+                                    {fae::personality::list_personalities().into_iter().map(|name| {
+                                        rsx! {
+                                            option { value: "{name}", "{name}" }
+                                        }
+                                    })}
+                                }
+                            }
                             p { class: "note",
-                                "Appended to Fae's built-in prompt. Identity cannot be changed."
+                                "Optional instructions appended after the personality profile."
                             }
                             textarea {
                                 class: "settings-textarea",
@@ -1577,12 +1600,12 @@ fn app() -> Element {
                                     class: "pill",
                                     disabled: !settings_enabled,
                                     onclick: move |_| config_state.write().llm.system_prompt.clear(),
-                                    "Clear"
+                                    "Clear add-on"
                                 }
                             }
                             details { class: "details",
-                                summary { class: "details-summary", "Show built-in base prompt" }
-                                pre { class: "details-pre", "{fae::config::LlmConfig::BASE_SYSTEM_PROMPT}" }
+                                summary { class: "details-summary", "Show active prompt" }
+                                pre { class: "details-pre", "{config_state.read().llm.effective_system_prompt()}" }
                             }
                         }
                     }
@@ -1750,44 +1773,43 @@ fn app() -> Element {
                         summary { class: "settings-section-summary", "Text-to-Speech" }
                         div { class: "settings-section-body",
                             div { class: "settings-row",
-                                label { class: "settings-label", "Model dtype" }
+                                label { class: "settings-label", "Model variant" }
                                 select {
                                     class: "settings-select",
                                     disabled: !settings_enabled,
-                                    value: "{config_state.read().tts.model_dtype}",
-                                    onchange: move |evt| config_state.write().tts.model_dtype = evt.value(),
-                                    option { value: "q4f16", "q4f16 (fast)" }
+                                    value: "{config_state.read().tts.model_variant}",
+                                    onchange: move |evt| config_state.write().tts.model_variant = evt.value(),
+                                    option { value: "q8", "q8 (recommended)" }
+                                    option { value: "q8f16", "q8f16 (smallest)" }
                                     option { value: "fp16", "fp16" }
                                     option { value: "fp32", "fp32 (best)" }
                                     option { value: "q4", "q4" }
-                                    option { value: "quantized", "quantized" }
+                                    option { value: "q4f16", "q4f16" }
                                 }
                             }
                             div { class: "settings-row",
-                                label { class: "settings-label", "Max new tokens" }
+                                label { class: "settings-label", "Voice" }
                                 input {
                                     class: "settings-select",
-                                    r#type: "number",
+                                    r#type: "text",
                                     disabled: !settings_enabled,
-                                    value: "{config_state.read().tts.max_new_tokens}",
+                                    value: "{config_state.read().tts.voice}",
                                     oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<usize>() {
-                                            config_state.write().tts.max_new_tokens = v;
-                                        }
+                                        config_state.write().tts.voice = evt.value();
                                     },
                                 }
                             }
                             div { class: "settings-row",
-                                label { class: "settings-label", "Rep. penalty" }
+                                label { class: "settings-label", "Speed" }
                                 input {
                                     class: "settings-select",
                                     r#type: "number",
-                                    step: "0.05",
+                                    step: "0.1",
                                     disabled: !settings_enabled,
-                                    value: "{config_state.read().tts.repetition_penalty}",
+                                    value: "{config_state.read().tts.speed}",
                                     oninput: move |evt| {
                                         if let Ok(v) = evt.value().parse::<f32>() {
-                                            config_state.write().tts.repetition_penalty = v;
+                                            config_state.write().tts.speed = v;
                                         }
                                     },
                                 }
@@ -2025,7 +2047,7 @@ fn app() -> Element {
                                         Ok(Ok(v)) => {
                                             {
                                                 let mut cfg = config_state.write();
-                                                cfg.tts.voice_reference = v.wav_path.display().to_string();
+                                                cfg.tts.voice = v.wav_path.display().to_string();
                                             }
                                             voices_status.set(format!(
                                                 "Imported {:.1}s voice. Click Save to persist.",
@@ -2054,7 +2076,7 @@ fn app() -> Element {
                                         Ok(Ok(v)) => {
                                             {
                                                 let mut cfg = config_state.write();
-                                                cfg.tts.voice_reference = v.wav_path.display().to_string();
+                                                cfg.tts.voice = v.wav_path.display().to_string();
                                             }
                                             voices_status.set(format!(
                                                 "Recorded {:.1}s voice. Click Save to persist.",
@@ -2072,10 +2094,10 @@ fn app() -> Element {
                             class: "pill",
                             disabled: !settings_enabled,
                             onclick: move |_| {
-                                config_state.write().tts.voice_reference = String::new();
-                                voices_status.set("Reset to Fae's voice (save to persist).".to_owned());
+                                config_state.write().tts.voice = "bf_emma".to_owned();
+                                voices_status.set("Reset to default voice (save to persist).".to_owned());
                             },
-                            "Reset to Fae's voice"
+                            "Reset to default voice"
                         }
                     }
 

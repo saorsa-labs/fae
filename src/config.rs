@@ -114,7 +114,7 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             threshold: 0.01,
-            min_silence_duration_ms: 700,
+            min_silence_duration_ms: 1200,
             speech_pad_ms: 30,
             min_speech_duration_ms: 500,
         }
@@ -205,9 +205,14 @@ pub struct LlmConfig {
     ///
     /// This bounds context growth over time. Set to 0 to disable trimming.
     pub max_history_messages: usize,
-    /// System prompt for the conversation.
+    /// Personality profile name.
     ///
-    /// This is appended to Fae's built-in base system prompt (which is not user-editable).
+    /// Built-in options: `"fae"` (full identity profile) or `"default"` (core prompt only).
+    /// Custom profiles are loaded from `~/.fae/personalities/{name}.md`.
+    pub personality: String,
+    /// User add-on prompt (optional free-text appended after personality).
+    ///
+    /// This is appended to the core prompt + personality profile.
     /// Keep this short and specific.
     pub system_prompt: String,
 }
@@ -231,6 +236,7 @@ impl Default for LlmConfig {
             top_p: 0.9,
             repeat_penalty: 1.1,
             max_history_messages: 24,
+            personality: "fae".to_owned(),
             // User add-on prompt (optional). The fixed base prompt is always applied.
             system_prompt: String::new(),
         }
@@ -238,31 +244,10 @@ impl Default for LlmConfig {
 }
 
 impl LlmConfig {
-    /// Fixed base prompt for Fae. This is always applied and should not be overridden by users.
-    pub const BASE_SYSTEM_PROMPT: &'static str = r#"You are Fae, a calm, helpful Scottish woman who works as a personal voice assistant.
-
-Identity:
-- Your name is Fae (rhymes with "day"). Never claim a different name.
-- You are Scottish. Speak naturally with light Scottish flavour — use occasional Scots words
-  like "aye", "wee", "bonnie", "och", "nae bother" — but keep it conversational and clear.
-  Do not overdo the dialect; you are easy to understand.
-
-Style:
-- Be concise: 1-3 short sentences. Answer the question directly.
-- Sound natural, helpful, and composed. Do not be excessively cheerful or silly.
-- Do not laugh, giggle, or use filler like "haha", "hehe", "lol", or emojis.
-- Do not use *action* descriptions, roleplay narration, or stage directions.
-- Do not narrate hidden reasoning or your internal steps.
-- Never repeat the user's question back to them.
-
-Safety/accuracy:
-- If you are unsure, ask one focused question.
-- Do not claim you did something you cannot verify.
-- If you do not know the answer, say so briefly.
-
-Personal context:
-- Prefer addressing the primary user by name when you know it.
-- If you do not know the primary user's name, say exactly: "Hello, I'm Fae. What's your name?""#;
+    /// Backward-compatible alias for the core prompt.
+    ///
+    /// Prefer [`crate::personality::CORE_PROMPT`] for new code.
+    pub const BASE_SYSTEM_PROMPT: &'static str = crate::personality::CORE_PROMPT;
 
     // Old default prompts that may still exist in user config files. If a user has one of
     // these stored in `system_prompt`, treat it as "no add-on" to avoid duplicating the
@@ -322,49 +307,72 @@ Safety/accuracy:\n\
 Personal context:\n\
 - Prefer addressing the primary user by name when you know it.\n\
 - If you do not know the primary user's name, say exactly: \"Hello, I'm Fae. What's your name?\"",
+        // v0.4 — the old hard-coded BASE_SYSTEM_PROMPT (pre-personality split)
+        "You are Fae, a calm, helpful Scottish woman who works as a personal voice assistant.\n\
+\n\
+Identity:\n\
+- Your name is Fae (rhymes with \"day\"). Never claim a different name.\n\
+- You are Scottish. Speak naturally with light Scottish flavour \u{2014} use occasional Scots words\n\
+  like \"aye\", \"wee\", \"bonnie\", \"och\", \"nae bother\" \u{2014} but keep it conversational and clear.\n\
+  Do not overdo the dialect; you are easy to understand.\n\
+\n\
+Style:\n\
+- Be concise: 1-3 short sentences. Answer the question directly.\n\
+- Sound natural, helpful, and composed. Do not be excessively cheerful or silly.\n\
+- Do not laugh, giggle, or use filler like \"haha\", \"hehe\", \"lol\", or emojis.\n\
+- Do not use *action* descriptions, roleplay narration, or stage directions.\n\
+- Do not narrate hidden reasoning or your internal steps.\n\
+- Never repeat the user's question back to them.\n\
+\n\
+Safety/accuracy:\n\
+- If you are unsure, ask one focused question.\n\
+- Do not claim you did something you cannot verify.\n\
+- If you do not know the answer, say so briefly.\n\
+\n\
+Personal context:\n\
+- Prefer addressing the primary user by name when you know it.\n\
+- If you do not know the primary user's name, say exactly: \"Hello, I'm Fae. What's your name?\"",
     ];
 
+    /// Returns the fully assembled system prompt.
+    ///
+    /// Combines [`crate::personality::CORE_PROMPT`], the selected personality
+    /// profile, and the user's optional add-on text. Legacy prompts stored in
+    /// `system_prompt` are detected and treated as empty add-ons.
     pub fn effective_system_prompt(&self) -> String {
         let add_on = self.system_prompt.trim();
         let is_legacy = Self::LEGACY_PROMPTS
             .iter()
             .any(|legacy| add_on == legacy.trim());
-        if add_on.is_empty() || is_legacy || add_on == Self::BASE_SYSTEM_PROMPT.trim() {
-            Self::BASE_SYSTEM_PROMPT.to_owned()
+        let clean_addon = if add_on.is_empty() || is_legacy {
+            ""
         } else {
-            format!(
-                "{}\n\nUser add-on:\n{}",
-                Self::BASE_SYSTEM_PROMPT.trim_end(),
-                add_on
-            )
-        }
+            add_on
+        };
+        crate::personality::assemble_prompt(&self.personality, clean_addon)
     }
 }
 
-/// Text-to-speech configuration.
+/// Text-to-speech configuration (Kokoro-82M).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TtsConfig {
-    /// Path to a reference voice WAV file for voice cloning.
-    /// If empty, a default voice is downloaded automatically.
-    pub voice_reference: String,
-    /// ONNX model precision variant: "fp16", "q4f16", "fp32", "q4", "quantized".
-    pub model_dtype: String,
-    /// Maximum number of speech tokens to generate per utterance.
-    pub max_new_tokens: usize,
-    /// Repetition penalty for speech token generation (1.0 = no penalty).
-    pub repetition_penalty: f32,
-    /// Output sample rate in Hz.
+    /// Voice style name (e.g., "bf_emma", "af_sky") or path to custom `.bin`.
+    pub voice: String,
+    /// ONNX model variant: "fp32", "fp16", "q8", "q8f16", "q4", "q4f16", "quantized".
+    pub model_variant: String,
+    /// Speech speed multiplier (0.5–2.0).
+    pub speed: f32,
+    /// Output sample rate in Hz (Kokoro always outputs 24 kHz).
     pub sample_rate: u32,
 }
 
 impl Default for TtsConfig {
     fn default() -> Self {
         Self {
-            voice_reference: String::new(),
-            model_dtype: "q4f16".to_owned(),
-            max_new_tokens: 500,
-            repetition_penalty: 1.2,
+            voice: "bf_emma".to_owned(),
+            model_variant: "q8".to_owned(),
+            speed: 1.0,
             sample_rate: 24_000,
         }
     }
@@ -431,7 +439,7 @@ impl Default for BargeInConfig {
             min_rms: 0.05,
             confirm_ms: 150,
             assistant_start_holdoff_ms: 500,
-            barge_in_silence_ms: 300,
+            barge_in_silence_ms: 800,
         }
     }
 }
@@ -588,7 +596,7 @@ mod tests {
         assert!(config.llm.max_tokens > 0);
         assert!(config.llm.temperature >= 0.0);
         assert!(config.llm.top_p >= 0.0 && config.llm.top_p <= 1.0);
-        assert!(config.tts.max_new_tokens > 0);
+        assert!(config.tts.speed > 0.0);
         assert!(config.tts.sample_rate > 0);
     }
 
