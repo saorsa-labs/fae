@@ -10,6 +10,7 @@ use crate::pipeline::messages::{
     AudioChunk, ControlEvent, SentenceChunk, SpeechSegment, SynthesizedAudio, TextInjection,
     Transcription,
 };
+use crate::llm::server::LlmServer;
 use crate::runtime::RuntimeEvent;
 use crate::startup::InitializedModels;
 use std::io::Write;
@@ -55,6 +56,8 @@ pub struct PipelineCoordinator {
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
     text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+    /// LLM HTTP server kept alive for the pipeline duration.
+    llm_server: Option<LlmServer>,
     console_output: bool,
 }
 
@@ -70,6 +73,7 @@ impl PipelineCoordinator {
             tool_approval_tx: None,
             text_injection_rx: None,
             canvas_registry: None,
+            llm_server: None,
             console_output: true,
         }
     }
@@ -87,6 +91,7 @@ impl PipelineCoordinator {
             tool_approval_tx: None,
             text_injection_rx: None,
             canvas_registry: None,
+            llm_server: None,
             console_output: true,
         }
     }
@@ -163,8 +168,13 @@ impl PipelineCoordinator {
         };
 
         // Split pre-loaded models (if any) into per-stage pieces.
+        // The LLM server runs independently and is kept alive for the
+        // duration of the pipeline (dropped when the coordinator is dropped).
         let (preloaded_stt, preloaded_llm, preloaded_tts) = match self.models.take() {
-            Some(m) => (Some(m.stt), m.llm, Some(m.tts)),
+            Some(m) => {
+                self.llm_server = m.llm_server;
+                (Some(m.stt), m.llm, Some(m.tts))
+            }
             None => (None, None, None),
         };
 

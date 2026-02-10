@@ -9,11 +9,13 @@
 use crate::config::{LlmBackend, SpeechConfig};
 use crate::error::Result;
 use crate::llm::LocalLlm;
+use crate::llm::server::LlmServer;
 use crate::models::ModelManager;
 use crate::progress::{ProgressCallback, ProgressEvent};
 use crate::stt::ParakeetStt;
 use crate::tts::KokoroTts;
 use std::time::Instant;
+use tracing::info;
 
 /// Pre-loaded model instances ready for the pipeline.
 pub struct InitializedModels {
@@ -23,6 +25,34 @@ pub struct InitializedModels {
     pub llm: Option<LocalLlm>,
     /// Kokoro TTS engine.
     pub tts: KokoroTts,
+    /// OpenAI-compatible HTTP server for local LLM inference.
+    pub llm_server: Option<LlmServer>,
+}
+
+impl InitializedModels {
+    /// Returns the port the LLM server is listening on, if running.
+    pub fn llm_server_port(&self) -> Option<u16> {
+        self.llm_server.as_ref().map(LlmServer::port)
+    }
+}
+
+impl InitializedModels {
+    /// Shut down the LLM server and clean up Pi's models.json.
+    ///
+    /// Call this before dropping the struct if you want to clean up the
+    /// Pi provider entry. The server task is aborted automatically via
+    /// [`LlmServer::drop`], but the models.json cleanup requires this
+    /// explicit call.
+    pub fn shutdown_llm_server(&mut self) {
+        if let Some(server) = self.llm_server.take() {
+            server.shutdown();
+            if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path()
+                && let Err(e) = crate::llm::pi_config::remove_fae_local_provider(&pi_path)
+            {
+                tracing::warn!("failed to clean Pi models.json: {e}");
+            }
+        }
+    }
 }
 
 /// STT model files to pre-download.
@@ -90,7 +120,47 @@ pub async fn initialize_models_with_progress(
     };
     let tts = load_tts(config, callback)?;
 
-    Ok(InitializedModels { stt, llm, tts })
+    // --- Phase 3: Start LLM HTTP server (if enabled and model is loaded) ---
+    let llm_server = if config.llm_server.enabled
+        && let Some(ref local_llm) = llm
+    {
+        match start_llm_server(local_llm, config).await {
+            Ok(server) => Some(server),
+            Err(e) => {
+                tracing::warn!("failed to start LLM server: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(InitializedModels {
+        stt,
+        llm,
+        tts,
+        llm_server,
+    })
+}
+
+/// Start the LLM HTTP server with the shared model and optionally register with Pi.
+async fn start_llm_server(llm: &LocalLlm, config: &SpeechConfig) -> Result<LlmServer> {
+    let model = llm.shared_model();
+    let server = LlmServer::start(model, &config.llm_server).await?;
+
+    info!(
+        "LLM server listening on http://127.0.0.1:{}/v1",
+        server.port()
+    );
+
+    // Write the fae-local provider to Pi's models.json so Pi can discover us.
+    if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path()
+        && let Err(e) = crate::llm::pi_config::write_fae_local_provider(&pi_path, server.port())
+    {
+        tracing::warn!("failed to write Pi models.json: {e}");
+    }
+
+    Ok(server)
 }
 
 /// Load STT with a status message and optional progress callback.
