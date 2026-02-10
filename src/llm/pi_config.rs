@@ -60,6 +60,36 @@ pub struct PiModel {
     pub cost: f64,
 }
 
+impl PiModelsConfig {
+    /// Look up a provider by name.
+    pub fn find_provider(&self, name: &str) -> Option<&PiProvider> {
+        self.providers.get(name)
+    }
+
+    /// Look up a specific model within a provider.
+    pub fn find_model(&self, provider: &str, model_id: &str) -> Option<&PiModel> {
+        self.providers
+            .get(provider)?
+            .models
+            .iter()
+            .find(|m| m.id == model_id)
+    }
+
+    /// List all provider names.
+    pub fn list_providers(&self) -> Vec<&str> {
+        self.providers.keys().map(String::as_str).collect()
+    }
+
+    /// Return cloud providers (excludes `fae-local`).
+    pub fn cloud_providers(&self) -> Vec<(&str, &PiProvider)> {
+        self.providers
+            .iter()
+            .filter(|(k, _)| k.as_str() != FAE_PROVIDER_KEY)
+            .map(|(k, v)| (k.as_str(), v))
+            .collect()
+    }
+}
+
 /// Read the Pi models configuration from disk.
 ///
 /// Returns an empty [`PiModelsConfig`] if the file does not exist.
@@ -289,5 +319,107 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let parsed: PiModelsConfig = serde_json::from_str(&json).unwrap();
         assert!(parsed.providers.is_empty());
+    }
+
+    fn sample_config() -> PiModelsConfig {
+        let mut config = PiModelsConfig::default();
+        config.providers.insert(
+            "fae-local".to_owned(),
+            PiProvider {
+                base_url: "http://127.0.0.1:8080/v1".to_owned(),
+                api: "openai".to_owned(),
+                api_key: String::new(),
+                models: vec![PiModel {
+                    id: "fae-qwen3".to_owned(),
+                    name: "Fae Local".to_owned(),
+                    reasoning: false,
+                    input: vec!["text".to_owned()],
+                    context_window: 32_768,
+                    max_tokens: 2048,
+                    cost: 0.0,
+                }],
+            },
+        );
+        config.providers.insert(
+            "anthropic".to_owned(),
+            PiProvider {
+                base_url: "https://api.anthropic.com/v1".to_owned(),
+                api: "anthropic".to_owned(),
+                api_key: "sk-test".to_owned(),
+                models: vec![PiModel {
+                    id: "claude-3-haiku".to_owned(),
+                    name: "Claude 3 Haiku".to_owned(),
+                    reasoning: false,
+                    input: vec!["text".to_owned()],
+                    context_window: 200_000,
+                    max_tokens: 4096,
+                    cost: 0.001,
+                }],
+            },
+        );
+        config
+    }
+
+    #[test]
+    fn find_provider_returns_some_for_existing() {
+        let config = sample_config();
+        let p = config.find_provider("anthropic").unwrap();
+        assert_eq!(p.api, "anthropic");
+    }
+
+    #[test]
+    fn find_provider_returns_none_for_missing() {
+        let config = sample_config();
+        assert!(config.find_provider("nonexistent").is_none());
+    }
+
+    #[test]
+    fn find_model_returns_some_for_existing() {
+        let config = sample_config();
+        let m = config.find_model("anthropic", "claude-3-haiku").unwrap();
+        assert_eq!(m.name, "Claude 3 Haiku");
+    }
+
+    #[test]
+    fn find_model_returns_none_for_wrong_model() {
+        let config = sample_config();
+        assert!(config.find_model("anthropic", "gpt-4").is_none());
+    }
+
+    #[test]
+    fn find_model_returns_none_for_wrong_provider() {
+        let config = sample_config();
+        assert!(config.find_model("openai", "claude-3-haiku").is_none());
+    }
+
+    #[test]
+    fn list_providers_returns_all() {
+        let config = sample_config();
+        let mut names = config.list_providers();
+        names.sort();
+        assert_eq!(names, vec!["anthropic", "fae-local"]);
+    }
+
+    #[test]
+    fn cloud_providers_excludes_fae_local() {
+        let config = sample_config();
+        let cloud = config.cloud_providers();
+        assert_eq!(cloud.len(), 1);
+        assert_eq!(cloud[0].0, "anthropic");
+    }
+
+    #[test]
+    fn cloud_providers_empty_when_only_fae_local() {
+        let mut config = PiModelsConfig::default();
+        config.providers.insert(
+            "fae-local".to_owned(),
+            PiProvider {
+                base_url: "http://127.0.0.1:8080/v1".to_owned(),
+                api: "openai".to_owned(),
+                api_key: String::new(),
+                models: vec![],
+            },
+        );
+        assert!(config.cloud_providers().is_empty());
     }
 }
