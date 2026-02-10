@@ -9,6 +9,7 @@
 use crate::config::PiConfig;
 use crate::error::{Result, SpeechError};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The installation state of the Pi coding agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,6 +356,67 @@ fn is_npm_shim(path: &Path) -> bool {
     path_str.contains("node_modules") || path_str.contains(".npm") || path_str.contains("npx")
 }
 
+/// GitHub API URL for the latest Pi release.
+const PI_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/badlogic/pi-mono/releases/latest";
+
+/// Fetch the latest Pi release metadata from GitHub.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the response cannot be parsed.
+pub fn fetch_latest_release() -> Result<PiRelease> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(20))
+        .build();
+
+    let resp = agent
+        .get(PI_LATEST_RELEASE_URL)
+        .set("User-Agent", "fae/0.1 (pi-manager)")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| SpeechError::Pi(format!("GitHub API request failed: {e}")))?;
+
+    let body: serde_json::Value = resp
+        .into_json()
+        .map_err(|e| SpeechError::Pi(format!("GitHub API response parse failed: {e}")))?;
+
+    parse_release_json(&body)
+}
+
+/// Parse a GitHub release JSON response into a `PiRelease`.
+fn parse_release_json(body: &serde_json::Value) -> Result<PiRelease> {
+    let tag_name = body["tag_name"]
+        .as_str()
+        .ok_or_else(|| SpeechError::Pi("missing tag_name in release JSON".to_owned()))?
+        .to_owned();
+
+    let assets_array = body["assets"]
+        .as_array()
+        .ok_or_else(|| SpeechError::Pi("missing assets array in release JSON".to_owned()))?;
+
+    let mut assets = Vec::with_capacity(assets_array.len());
+    for asset_val in assets_array {
+        let name = asset_val["name"].as_str().unwrap_or_default().to_owned();
+        let browser_download_url = asset_val["browser_download_url"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let size = asset_val["size"].as_u64().unwrap_or(0);
+
+        if !name.is_empty() && !browser_download_url.is_empty() {
+            assets.push(PiAsset {
+                name,
+                browser_download_url,
+                size,
+            });
+        }
+    }
+
+    Ok(PiRelease { tag_name, assets })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -600,5 +662,60 @@ mod tests {
             marker_str.contains("fae") && marker_str.contains("pi-managed"),
             "unexpected marker path: {marker_str}"
         );
+    }
+
+    #[test]
+    fn parse_release_json_valid() {
+        let json = serde_json::json!({
+            "tag_name": "v0.52.9",
+            "assets": [
+                {
+                    "name": "pi-darwin-arm64.tar.gz",
+                    "browser_download_url": "https://github.com/badlogic/pi-mono/releases/download/v0.52.9/pi-darwin-arm64.tar.gz",
+                    "size": 27531660
+                },
+                {
+                    "name": "pi-linux-x64.tar.gz",
+                    "browser_download_url": "https://github.com/badlogic/pi-mono/releases/download/v0.52.9/pi-linux-x64.tar.gz",
+                    "size": 44541454
+                }
+            ]
+        });
+
+        let release = parse_release_json(&json).unwrap();
+        assert_eq!(release.tag_name, "v0.52.9");
+        assert_eq!(release.version(), "0.52.9");
+        assert_eq!(release.assets.len(), 2);
+        assert_eq!(release.assets[0].name, "pi-darwin-arm64.tar.gz");
+        assert_eq!(release.assets[0].size, 27_531_660);
+    }
+
+    #[test]
+    fn parse_release_json_missing_tag() {
+        let json = serde_json::json!({ "assets": [] });
+        assert!(parse_release_json(&json).is_err());
+    }
+
+    #[test]
+    fn parse_release_json_missing_assets() {
+        let json = serde_json::json!({ "tag_name": "v1.0.0" });
+        assert!(parse_release_json(&json).is_err());
+    }
+
+    #[test]
+    fn parse_release_json_skips_incomplete_assets() {
+        let json = serde_json::json!({
+            "tag_name": "v1.0.0",
+            "assets": [
+                { "name": "", "browser_download_url": "https://example.com/a", "size": 100 },
+                { "name": "pi-linux-x64.tar.gz", "browser_download_url": "", "size": 200 },
+                { "name": "pi-linux-x64.tar.gz", "browser_download_url": "https://example.com/b", "size": 300 }
+            ]
+        });
+
+        let release = parse_release_json(&json).unwrap();
+        // First two skipped (empty name or URL), only the third included.
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].size, 300);
     }
 }
