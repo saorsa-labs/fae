@@ -3744,6 +3744,94 @@ const GLOBAL_CSS: &str = r#"
         font-family: monospace;
         font-size: 0.8rem;
     }
+    /* Markdown-formatted messages */
+    .canvas-messages .message.markdown { max-width: 95%; }
+    .canvas-messages .message.markdown h1,
+    .canvas-messages .message.markdown h2,
+    .canvas-messages .message.markdown h3 {
+        margin: 0.4em 0 0.2em;
+        line-height: 1.3;
+    }
+    .canvas-messages .message.markdown h1 { font-size: 1.2rem; }
+    .canvas-messages .message.markdown h2 { font-size: 1.05rem; }
+    .canvas-messages .message.markdown h3 { font-size: 0.95rem; }
+    .canvas-messages .message.markdown p { margin: 0.3em 0; }
+    .canvas-messages .message.markdown ul,
+    .canvas-messages .message.markdown ol { padding-left: 1.2em; margin: 0.3em 0; }
+    .canvas-messages .message.markdown blockquote {
+        border-left: 3px solid rgba(255,255,255,0.2);
+        padding-left: 0.6em;
+        margin: 0.3em 0;
+        opacity: 0.85;
+    }
+    .canvas-messages .message.markdown table {
+        border-collapse: collapse;
+        margin: 0.4em 0;
+        font-size: 0.85rem;
+    }
+    .canvas-messages .message.markdown th,
+    .canvas-messages .message.markdown td {
+        border: 1px solid rgba(255,255,255,0.15);
+        padding: 4px 8px;
+    }
+    .canvas-messages .message.markdown th {
+        background: rgba(255,255,255,0.05);
+    }
+    /* Code blocks (syntax highlighted) */
+    .code-block {
+        border-radius: var(--radius-sm);
+        margin: 0.4em 0;
+        overflow-x: auto;
+    }
+    .code-block pre {
+        margin: 0;
+        padding: 0.6em 0.8em;
+        font-size: 0.82rem;
+        line-height: 1.5;
+    }
+    /* Inline code in markdown */
+    .canvas-messages .message.markdown code {
+        background: rgba(255,255,255,0.08);
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-size: 0.85em;
+    }
+    .canvas-messages .message.markdown pre code {
+        background: none;
+        padding: 0;
+    }
+    /* Tool-pushed content (charts, images, etc.) */
+    .canvas-tools { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .canvas-chart { text-align: center; }
+    .canvas-chart img { max-width: 100%; border-radius: var(--radius-sm); }
+    .canvas-chart-error {
+        padding: 8px 12px;
+        background: rgba(239, 68, 68, 0.12);
+        color: #fca5a5;
+        border-radius: var(--radius-sm);
+        font-size: 0.85rem;
+    }
+    .canvas-image { text-align: center; }
+    .canvas-image img { max-width: 100%; border-radius: var(--radius-sm); }
+    .canvas-image-error {
+        padding: 8px 12px;
+        background: rgba(239, 68, 68, 0.12);
+        color: #fca5a5;
+        border-radius: var(--radius-sm);
+        font-size: 0.85rem;
+    }
+    .canvas-model3d, .canvas-video {
+        padding: 12px;
+        background: rgba(99, 102, 241, 0.12);
+        color: #a5b4fc;
+        border-radius: var(--radius-sm);
+        font-size: 0.85rem;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+    .model-label, .video-label { font-weight: 600; }
+    .model-info, .video-info { opacity: 0.7; font-size: 0.8rem; }
 
     /* --- Scrollbar --- */
     ::-webkit-scrollbar { width: 5px; }

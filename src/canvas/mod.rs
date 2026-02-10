@@ -5,6 +5,7 @@
 
 pub mod bridge;
 pub mod registry;
+pub mod render;
 pub mod session;
 pub mod tools;
 pub mod types;

@@ -345,6 +345,7 @@ mod tests {
     fn test_empty_session_html() {
         let b = CanvasBridge::new("t", 800.0, 600.0);
         let html = b.session().to_html();
-        assert_eq!(html, "<div class=\"canvas-messages\">\n</div>");
+        assert!(html.contains("canvas-messages"));
+        assert!(!html.contains("canvas-tools"));
     }
 }

@@ -26,7 +26,7 @@ required-features = ["tools"]
 default = ["gui"]
 metal = ["mistralrs/metal"]
 gui = ["dioxus"]
-tools = ["image"]
+tools = []
 # TTS ONNX execution provider features.
 coreml = ["ort/coreml"]
 directml = ["ort/directml"]
@@ -96,6 +96,13 @@ saorsa-ai = { version = "0.4", features = ["mistralrs"] }
 # Canvas visual output (saorsa-canvas scene graph)
 canvas-core = { path = "../saorsa-canvas/canvas-core" }
 canvas-mcp = { path = "../saorsa-canvas/canvas-mcp" }
+canvas-renderer = { path = "../saorsa-canvas/canvas-renderer", default-features = false, features = ["charts", "images"] }
+
+# Markdown → HTML rendering
+pulldown-cmark = "0.13"
+
+# Syntax highlighting for code blocks
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
 # Acoustic Echo Cancellation (FDAF adaptive filter)
 fdaf-aec = "0.1"
@@ -106,7 +113,7 @@ async-trait = "0.1"
 rustfft = "6"
 rfd = "0.15"
 symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "wav"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # Auto-enable Metal GPU acceleration on macOS (Apple Silicon / Intel with Metal).
 # This is equivalent to `--features metal` but happens automatically.
