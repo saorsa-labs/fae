@@ -222,8 +222,8 @@ impl Scheduler {
             return executor(task_id);
         }
 
-        // Default: no executor registered, return success.
-        TaskResult::Success(format!("task {task_id} completed (no executor)"))
+        // Default: try built-in tasks.
+        crate::scheduler::tasks::execute_builtin(task_id)
     }
 
     /// Default path for scheduler state file.
@@ -283,6 +283,8 @@ mod tests {
     #[test]
     fn tick_executes_due_tasks() {
         let (mut scheduler, mut rx) = make_scheduler();
+        // Use a custom executor so the test doesn't depend on network.
+        scheduler.executor = Some(Box::new(|_| TaskResult::Success("ran".to_owned())));
         // Add a task that's immediately due (never run, interval 0).
         let task = ScheduledTask::new("due", "Due Task", Schedule::Interval { secs: 0 });
         scheduler.add_task(task);
