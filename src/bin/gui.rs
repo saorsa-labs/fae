@@ -734,6 +734,10 @@ fn app() -> Element {
     let mut canvas_search = use_signal(String::new);
     let mut canvas_ctx_menu = use_signal(|| None::<usize>);
     let mut clipboard_text = use_signal(String::new);
+    let mut update_state = use_signal(fae::update::UpdateState::load);
+    let mut update_available = use_signal(|| None::<fae::update::Release>);
+    let mut update_banner_dismissed = use_signal(|| false);
+    let mut update_check_status = use_signal(String::new);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
@@ -1291,6 +1295,40 @@ fn app() -> Element {
                             "Models..."
                         }
                     }
+                }
+            }
+
+            // --- Update notification banner ---
+            {
+                let has_update = update_available.read().is_some()
+                    && !*update_banner_dismissed.read();
+                if has_update {
+                    let ver = update_available.read().as_ref()
+                        .map(|r| r.version.clone())
+                        .unwrap_or_default();
+                    rsx! {
+                        div { class: "update-banner",
+                            span { class: "update-banner-text",
+                                "Fae v{ver} is available."
+                            }
+                            button {
+                                class: "update-banner-btn",
+                                onclick: move |_| {
+                                    view.set(MainView::Settings);
+                                },
+                                "View"
+                            }
+                            button {
+                                class: "update-banner-dismiss",
+                                onclick: move |_| {
+                                    update_banner_dismissed.set(true);
+                                },
+                                "\u{2715}"
+                            }
+                        }
+                    }
+                } else {
+                    rsx! {}
                 }
             }
 
@@ -2314,6 +2352,99 @@ fn app() -> Element {
                                 label { class: "settings-label", "Elements" }
                                 p { class: "settings-value",
                                     "{canvas_bridge.read().session().element_count()}"
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Updates ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Updates" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Fae version" }
+                                p { class: "settings-value",
+                                    "{update_state.read().fae_version}"
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Pi version" }
+                                p { class: "settings-value",
+                                    "{update_state.read().pi_version.as_deref().unwrap_or(\"not installed\")}"
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Auto-update" }
+                                select {
+                                    class: "settings-select",
+                                    value: "{update_state.read().auto_update}",
+                                    onchange: move |evt| {
+                                        let pref = match evt.value().as_str() {
+                                            "always" => fae::update::AutoUpdatePreference::Always,
+                                            "never" => fae::update::AutoUpdatePreference::Never,
+                                            _ => fae::update::AutoUpdatePreference::Ask,
+                                        };
+                                        update_state.write().auto_update = pref;
+                                        let state = update_state.read().clone();
+                                        spawn(async move {
+                                            let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                                        });
+                                    },
+                                    option { value: "ask", "Ask" }
+                                    option { value: "always", "Always" }
+                                    option { value: "never", "Never" }
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Last check" }
+                                {
+                                    let ts = update_state.read().last_check.clone();
+                                    let label = ts.unwrap_or_else(|| "never".to_owned());
+                                    rsx! { p { class: "settings-value", "{label}" } }
+                                }
+                            }
+                            div { class: "settings-row",
+                                button {
+                                    class: "settings-save",
+                                    onclick: move |_| {
+                                        update_check_status.set("Checking...".to_owned());
+                                        let etag = update_state.read().etag_fae.clone();
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(move || {
+                                                let checker = fae::update::UpdateChecker::for_fae();
+                                                checker.check(etag.as_deref())
+                                            }).await;
+
+                                            match result {
+                                                Ok(Ok((Some(release), new_etag))) => {
+                                                    let msg = format!("v{} available!", release.version);
+                                                    update_check_status.set(msg);
+                                                    update_available.set(Some(release));
+                                                    update_state.write().etag_fae = new_etag;
+                                                    update_state.write().mark_checked();
+                                                    let state = update_state.read().clone();
+                                                    let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                                                }
+                                                Ok(Ok((None, new_etag))) => {
+                                                    update_check_status.set("Up to date.".to_owned());
+                                                    update_state.write().etag_fae = new_etag;
+                                                    update_state.write().mark_checked();
+                                                    let state = update_state.read().clone();
+                                                    let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                                                }
+                                                Ok(Err(e)) => {
+                                                    update_check_status.set(format!("Error: {e}"));
+                                                }
+                                                Err(e) => {
+                                                    update_check_status.set(format!("Error: {e}"));
+                                                }
+                                            }
+                                        });
+                                    },
+                                    "Check now"
+                                }
+                                p { class: "settings-value",
+                                    "{update_check_status.read()}"
                                 }
                             }
                         }
@@ -4322,6 +4453,43 @@ const GLOBAL_CSS: &str = r#"
         border-radius: 2px;
         padding: 0 1px;
     }
+
+    /* --- Update banner --- */
+    .update-banner {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: var(--bg-elevated);
+        border: 1px solid var(--accent);
+        border-radius: var(--radius-card);
+        padding: 0.4rem 0.7rem;
+        margin: 0.3rem 0.5rem;
+    }
+    .update-banner-text {
+        flex: 1;
+        font-size: 0.8rem;
+        color: var(--text-primary);
+    }
+    .update-banner-btn {
+        border: none;
+        border-radius: var(--radius-pill);
+        padding: 0.2rem 0.6rem;
+        background: var(--accent);
+        color: #000;
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .update-banner-btn:hover { opacity: 0.85; }
+    .update-banner-dismiss {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-size: 0.9rem;
+        padding: 0 0.2rem;
+    }
+    .update-banner-dismiss:hover { color: var(--text-primary); }
 
     /* --- Scrollbar --- */
     ::-webkit-scrollbar { width: 5px; }
