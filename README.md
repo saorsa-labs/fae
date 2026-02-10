@@ -30,7 +30,7 @@ Mic (16kHz) ──> AEC ──┬──> VAD ──> STT ──> Identity Gate �
 | **Identity Gate** | Primary user enrollment + best-effort speaker matching via voiceprint | Custom |
 | **Conversation Gate** | Wake word / stop phrase gating, name-gated barge-in, auto-idle | Custom |
 | **LLM** | Generates responses with streaming token output | `mistralrs` (GGUF, Metal GPU) |
-| **TTS** | Synthesizes speech with voice cloning support | Chatterbox Turbo (ONNX) |
+| **TTS** | Synthesizes speech from text | Kokoro-82M (ONNX, misaki-rs G2P) |
 | **Playback** | Plays 24kHz audio, feeds reference buffer for AEC | `cpal` |
 
 ### Key Features
@@ -42,6 +42,38 @@ Mic (16kHz) ──> AEC ──┬──> VAD ──> STT ──> Identity Gate �
 - **Conversation Gate**: Wake phrase ("hi Fae") activates, stop phrase ("that will do Fae") deactivates, auto-idle on timeout
 - **Voice Identity**: Voiceprint-based speaker matching so Fae responds primarily to the registered user
 - **Agent Mode**: Optional tool-capable agent via `saorsa-agent` + `saorsa-ai`
+
+## Canvas Integration
+
+Fae includes a visual canvas pane powered by [saorsa-canvas](https://github.com/saorsa-labs/saorsa-canvas) that displays rich content alongside voice conversations.
+
+### What It Does
+
+- **Charts**: Bar, line, pie, and scatter plots rendered via plotters
+- **Images**: Display images from URLs or base64 data
+- **Formatted text**: Markdown, code blocks with syntax highlighting, tables
+- **Export**: Save canvas content as PNG, JPEG, SVG, or PDF
+
+### MCP Tools
+
+The AI agent has access to canvas tools via the Model Context Protocol:
+
+| Tool | Description |
+|------|-------------|
+| `canvas_render` | Push charts, images, or text to the canvas |
+| `canvas_interact` | Report user interactions (touch, voice) |
+| `canvas_export` | Export session to image/document format |
+
+### Remote Canvas Server
+
+Fae can connect to a remote `canvas-server` instance via WebSocket for multi-device scenarios. Set the server URL in Settings or in `config.toml`:
+
+```toml
+[canvas]
+server_url = "ws://localhost:9473/ws/sync"
+```
+
+When connected, all canvas operations sync in real-time between the local pane and the server.
 
 ## Configuration
 
@@ -109,6 +141,9 @@ cargo build --release
 Requires:
 - Rust 1.85+
 - Metal Toolchain (macOS): `xcodebuild -downloadComponent MetalToolchain`
+- cmake (for espeak-ng build via misaki-rs)
+
+Canvas dependencies (`canvas-core`, `canvas-mcp`, `canvas-renderer`) are published on [crates.io](https://crates.io/crates/canvas-core). For local development against a saorsa-canvas checkout, `[patch.crates-io]` overrides are configured in `Cargo.toml`.
 
 ## License
 
