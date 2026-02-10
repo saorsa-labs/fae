@@ -794,6 +794,55 @@ fn app() -> Element {
         });
     });
 
+    // Background update check at startup (non-blocking, respects preferences).
+    use_hook(move || {
+        spawn(async move {
+            // Only check if last check was more than 24 hours ago.
+            let is_stale = update_state.read().check_is_stale(24);
+            let pref = update_state.read().auto_update;
+            if !is_stale || pref == fae::update::AutoUpdatePreference::Never {
+                return;
+            }
+
+            let etag = update_state.read().etag_fae.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let checker = fae::update::UpdateChecker::for_fae();
+                checker.check(etag.as_deref())
+            })
+            .await;
+
+            match result {
+                Ok(Ok((Some(release), new_etag))) => {
+                    let dismissed = update_state.read().dismissed_release.clone();
+                    let is_dismissed = dismissed.as_deref() == Some(release.version.as_str());
+
+                    update_state.write().etag_fae = new_etag;
+                    update_state.write().mark_checked();
+
+                    if !is_dismissed {
+                        tracing::info!("update available: Fae v{}", release.version);
+                        update_available.set(Some(release));
+                    }
+
+                    let state = update_state.read().clone();
+                    let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                }
+                Ok(Ok((None, new_etag))) => {
+                    update_state.write().etag_fae = new_etag;
+                    update_state.write().mark_checked();
+                    let state = update_state.read().clone();
+                    let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                }
+                Ok(Err(e)) => {
+                    tracing::debug!("startup update check failed: {e}");
+                }
+                Err(e) => {
+                    tracing::debug!("startup update check task failed: {e}");
+                }
+            }
+        });
+    });
+
     // Button click handler
     let on_button_click = move |_| {
         let current = status.read().clone();

@@ -235,3 +235,63 @@ fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Resul
     }
     Ok(tts)
 }
+
+/// Run a background update check for Fae.
+///
+/// Respects the user's auto-update preference and only checks if the last
+/// check was more than `stale_hours` hours ago. Returns `Some(release)` if
+/// a newer version is available, `None` otherwise.
+///
+/// This function is safe to call from any async context — it spawns the
+/// HTTP request on a blocking thread.
+pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Release> {
+    let state = crate::update::UpdateState::load();
+
+    if !state.check_is_stale(stale_hours) {
+        return None;
+    }
+
+    if state.auto_update == crate::update::AutoUpdatePreference::Never {
+        return None;
+    }
+
+    let etag = state.etag_fae.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let checker = crate::update::UpdateChecker::for_fae();
+        checker.check(etag.as_deref())
+    })
+    .await;
+
+    match result {
+        Ok(Ok((Some(release), new_etag))) => {
+            let dismissed = state.dismissed_release.as_deref();
+            if dismissed == Some(release.version.as_str()) {
+                return None;
+            }
+
+            // Persist the new state.
+            let mut new_state = state;
+            new_state.etag_fae = new_etag;
+            new_state.mark_checked();
+            let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
+
+            info!("update available: Fae v{}", release.version);
+            Some(release)
+        }
+        Ok(Ok((None, new_etag))) => {
+            let mut new_state = state;
+            new_state.etag_fae = new_etag;
+            new_state.mark_checked();
+            let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
+            None
+        }
+        Ok(Err(e)) => {
+            tracing::debug!("update check failed: {e}");
+            None
+        }
+        Err(e) => {
+            tracing::debug!("update check task failed: {e}");
+            None
+        }
+    }
+}
