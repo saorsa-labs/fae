@@ -6,3 +6,6 @@
 
 pub mod runner;
 pub mod tasks;
+
+pub use runner::Scheduler;
+pub use tasks::{ScheduledTask, TaskResult};

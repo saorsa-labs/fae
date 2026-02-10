@@ -738,6 +738,7 @@ fn app() -> Element {
     let mut update_available = use_signal(|| None::<fae::update::Release>);
     let mut update_banner_dismissed = use_signal(|| false);
     let mut update_check_status = use_signal(String::new);
+    let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
@@ -838,6 +839,40 @@ fn app() -> Element {
                 }
                 Err(e) => {
                     tracing::debug!("startup update check task failed: {e}");
+                }
+            }
+        });
+    });
+
+    // --- Background scheduler ---
+    // Start the scheduler and poll its result channel for notifications.
+    use_hook(move || {
+        let (_handle, mut rx) = fae::startup::start_scheduler();
+        spawn(async move {
+            while let Some(result) = rx.recv().await {
+                match result {
+                    fae::scheduler::tasks::TaskResult::Success(msg) => {
+                        tracing::debug!("scheduler task succeeded: {msg}");
+                    }
+                    fae::scheduler::tasks::TaskResult::NeedsUserAction(prompt) => {
+                        tracing::info!("scheduler notification: {}", prompt.title);
+                        // If the prompt is about an update, also set update_available.
+                        if prompt.title.contains("Fae Update") {
+                            // Re-check to get the Release struct for the banner.
+                            let etag = update_state.read().etag_fae.clone();
+                            let result = tokio::task::spawn_blocking(move || {
+                                let checker = fae::update::UpdateChecker::for_fae();
+                                checker.check(etag.as_deref())
+                            }).await;
+                            if let Ok(Ok((Some(release), _))) = result {
+                                update_available.set(Some(release));
+                            }
+                        }
+                        scheduler_notification.set(Some(prompt));
+                    }
+                    fae::scheduler::tasks::TaskResult::Error(err) => {
+                        tracing::warn!("scheduler task error: {err}");
+                    }
                 }
             }
         });
@@ -2496,6 +2531,22 @@ fn app() -> Element {
                                     "{update_check_status.read()}"
                                 }
                             }
+                        }
+                    }
+
+                    // --- Scheduled Tasks ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Scheduled Tasks" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Check Fae updates" }
+                                p { class: "settings-value", "daily at 09:00 UTC" }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Check Pi updates" }
+                                p { class: "settings-value", "daily at 09:05 UTC" }
+                            }
+                            p { class: "note", "More scheduled tasks coming soon." }
                         }
                     }
 

@@ -289,3 +289,24 @@ pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Rel
 
     None
 }
+
+/// Start the background scheduler with built-in update check tasks.
+///
+/// Returns a tuple of the background task handle and a receiver for task
+/// results. The caller should poll the receiver to surface task outcomes
+/// in the GUI (e.g., update-available notifications).
+///
+/// The scheduler ticks every 60 seconds and persists state to
+/// `~/.config/fae/scheduler.json`.
+pub fn start_scheduler() -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
+    scheduler.with_update_checks();
+
+    info!("starting background scheduler with {} tasks", scheduler.tasks().len());
+    let handle = scheduler.run();
+    (handle, rx)
+}
