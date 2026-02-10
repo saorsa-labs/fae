@@ -448,4 +448,135 @@ mod tests {
         // Task should still have been marked as run.
         assert!(scheduler.tasks()[0].last_run.is_some());
     }
+
+    #[test]
+    fn tick_executes_multiple_due_tasks() {
+        let (mut scheduler, mut rx) = make_scheduler();
+        scheduler.executor = Some(Box::new(|id| TaskResult::Success(id.to_owned())));
+
+        scheduler.add_task(ScheduledTask::new("a", "A", Schedule::Interval { secs: 0 }));
+        scheduler.add_task(ScheduledTask::new("b", "B", Schedule::Interval { secs: 0 }));
+        scheduler.add_task(ScheduledTask::new("c", "C", Schedule::Interval { secs: 0 }));
+
+        scheduler.tick();
+
+        // All three tasks should have produced results.
+        let r1 = rx.try_recv().unwrap();
+        let r2 = rx.try_recv().unwrap();
+        let r3 = rx.try_recv().unwrap();
+        assert!(matches!(r1, TaskResult::Success(_)));
+        assert!(matches!(r2, TaskResult::Success(_)));
+        assert!(matches!(r3, TaskResult::Success(_)));
+
+        // All should be marked as run.
+        assert!(scheduler.tasks().iter().all(|t| t.last_run.is_some()));
+    }
+
+    #[test]
+    fn tick_second_time_skips_recently_run() {
+        let (mut scheduler, mut rx) = make_scheduler();
+        scheduler.executor = Some(Box::new(|_| TaskResult::Success("ok".to_owned())));
+
+        scheduler.add_task(ScheduledTask::new("once", "Once", Schedule::Interval { secs: 3600 }));
+
+        // First tick: executes.
+        scheduler.tick();
+        let _ = rx.try_recv().unwrap();
+
+        // Second tick: should not execute again (3600s interval).
+        scheduler.tick();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn with_executor_overrides_builtin() {
+        let (mut scheduler, mut rx) = make_scheduler();
+        scheduler.with_update_checks();
+        // Override with custom executor.
+        scheduler = scheduler.with_executor(Box::new(|id| {
+            TaskResult::Success(format!("custom: {id}"))
+        }));
+
+        // Force all tasks to be due.
+        for task in &mut scheduler.tasks {
+            task.last_run = None;
+        }
+
+        scheduler.tick();
+
+        let r1 = rx.try_recv().unwrap();
+        match r1 {
+            TaskResult::Success(msg) => assert!(msg.starts_with("custom: ")),
+            _ => panic!("expected Success from custom executor"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_starts_and_ticks() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut scheduler = Scheduler::new(tx);
+        scheduler.state_path = None;
+        scheduler.executor = Some(Box::new(|_| TaskResult::Success("ran".to_owned())));
+        scheduler.add_task(ScheduledTask::new("async_test", "Async", Schedule::Interval { secs: 0 }));
+
+        let handle = scheduler.run();
+
+        // Wait for the first tick result (should come within ~1 second).
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            rx.recv()
+        ).await;
+
+        assert!(result.is_ok());
+        let task_result = result.unwrap().unwrap();
+        assert!(matches!(task_result, TaskResult::Success(_)));
+
+        handle.abort();
+    }
+
+    #[test]
+    fn save_state_creates_directory() {
+        let dir = std::env::temp_dir()
+            .join("fae-scheduler-test-mkdir")
+            .join("nested");
+        let path = dir.join("scheduler.json");
+
+        // Ensure the directory doesn't exist.
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut scheduler = Scheduler::new(tx);
+        scheduler.state_path = Some(path.clone());
+        scheduler.add_task(ScheduledTask::new("t", "T", Schedule::Interval { secs: 60 }));
+
+        scheduler.save_state();
+
+        assert!(path.exists());
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn needs_user_action_result_sent_to_channel() {
+        use crate::scheduler::tasks::{PromptAction, UserPrompt};
+
+        let (mut scheduler, mut rx) = make_scheduler();
+        scheduler.executor = Some(Box::new(|_| {
+            TaskResult::NeedsUserAction(UserPrompt {
+                title: "Update".to_owned(),
+                message: "New version".to_owned(),
+                actions: vec![PromptAction {
+                    label: "Install".to_owned(),
+                    id: "install".to_owned(),
+                }],
+            })
+        }));
+
+        scheduler.add_task(ScheduledTask::new("update", "Update", Schedule::Interval { secs: 0 }));
+        scheduler.tick();
+
+        let result = rx.try_recv().unwrap();
+        assert!(matches!(result, TaskResult::NeedsUserAction(_)));
+    }
 }
