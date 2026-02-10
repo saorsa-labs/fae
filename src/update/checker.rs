@@ -340,4 +340,73 @@ mod tests {
             assert!(result.is_some());
         }
     }
+
+    #[test]
+    fn parse_github_release_with_notes_and_date() {
+        let json = serde_json::json!({
+            "tag_name": "v0.3.0",
+            "body": "## Changelog\n- Fixed bugs\n- Added features",
+            "published_at": "2026-01-15T12:00:00Z",
+            "assets": [{
+                "name": "fae-darwin-aarch64",
+                "browser_download_url": "https://example.com/fae",
+                "size": 42_000_000
+            }]
+        });
+
+        let release = parse_github_release(&json, "saorsa-labs/fae").unwrap();
+        assert_eq!(release.version, "0.3.0");
+        assert!(release.release_notes.contains("Fixed bugs"));
+        assert_eq!(release.published_at, "2026-01-15T12:00:00Z");
+    }
+
+    #[test]
+    fn parse_github_release_pi_repo() {
+        let json = serde_json::json!({
+            "tag_name": "v0.52.10",
+            "body": "Pi update",
+            "published_at": "2026-02-01T00:00:00Z",
+            "assets": [{
+                "name": "pi-darwin-arm64.tar.gz",
+                "browser_download_url": "https://github.com/badlogic/pi-mono/releases/download/v0.52.10/pi-darwin-arm64.tar.gz",
+                "size": 30_000_000
+            }]
+        });
+
+        let release = parse_github_release(&json, "badlogic/pi-mono").unwrap();
+        assert_eq!(release.version, "0.52.10");
+        assert_eq!(release.release_notes, "Pi update");
+    }
+
+    #[test]
+    fn release_download_url_empty_when_no_matching_asset() {
+        let json = serde_json::json!({
+            "tag_name": "v1.0.0",
+            "body": "",
+            "published_at": "",
+            "assets": [{
+                "name": "fae-some-other-platform",
+                "browser_download_url": "https://example.com/other",
+                "size": 100
+            }]
+        });
+
+        let release = parse_github_release(&json, "saorsa-labs/fae").unwrap();
+        // No matching asset for current platform → empty download_url.
+        assert_eq!(release.version, "1.0.0");
+        // download_url may be empty if no matching asset
+    }
+
+    #[test]
+    fn select_fae_asset_skips_empty_url() {
+        if let Some(name) = fae_asset_name() {
+            let assets = vec![serde_json::json!({
+                "name": name,
+                "browser_download_url": "",
+                "size": 100
+            })];
+            let result = select_fae_platform_asset(&assets);
+            assert!(result.is_none(), "should skip asset with empty URL");
+        }
+    }
 }

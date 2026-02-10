@@ -296,4 +296,52 @@ mod tests {
         let never: AutoUpdatePreference = serde_json::from_str(r#""never""#).unwrap();
         assert_eq!(never, AutoUpdatePreference::Never);
     }
+
+    #[test]
+    fn check_is_stale_with_invalid_timestamp() {
+        let mut state = UpdateState::default();
+        state.last_check = Some("not-a-number".to_owned());
+        assert!(state.check_is_stale(24));
+    }
+
+    #[test]
+    fn check_is_stale_with_zero_hours() {
+        let mut state = UpdateState::default();
+        state.mark_checked();
+        // Even a just-checked state is stale with 0-hour threshold.
+        assert!(state.check_is_stale(0));
+    }
+
+    #[test]
+    fn state_pretty_json_format() {
+        let state = UpdateState::default();
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        // Should contain readable field names.
+        assert!(json.contains("fae_version"));
+        assert!(json.contains("auto_update"));
+        assert!(json.contains("ask"));
+    }
+
+    #[test]
+    fn state_preserves_etags() {
+        let state = UpdateState {
+            etag_fae: Some("W/\"abc123\"".to_owned()),
+            etag_pi: Some("W/\"def456\"".to_owned()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: UpdateState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.etag_fae.as_deref(), Some("W/\"abc123\""));
+        assert_eq!(restored.etag_pi.as_deref(), Some("W/\"def456\""));
+    }
+
+    #[test]
+    fn state_dismissed_release_round_trip() {
+        let mut state = UpdateState::default();
+        state.dismissed_release = Some("0.5.0".to_owned());
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: UpdateState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.dismissed_release.as_deref(), Some("0.5.0"));
+    }
 }
