@@ -172,9 +172,10 @@ impl PiManager {
     /// Ensure Pi is available on the system.
     ///
     /// 1. Runs [`detect()`](Self::detect) to find an existing installation.
-    /// 2. If not found and `auto_install` is enabled, downloads and installs
+    /// 2. If not found, checks for a bundled Pi alongside the Fae binary.
+    /// 3. If not found and `auto_install` is enabled, downloads and installs
     ///    the latest version from GitHub.
-    /// 3. If not found and `auto_install` is disabled, returns `NotFound`.
+    /// 4. If not found and `auto_install` is disabled, returns `NotFound`.
     ///
     /// # Errors
     ///
@@ -185,6 +186,27 @@ impl PiManager {
 
         if self.state.is_installed() {
             return Ok(&self.state);
+        }
+
+        // Check for a bundled Pi binary shipped alongside Fae.
+        if let Some(bundled) = bundled_pi_path()
+            && bundled.is_file()
+        {
+            tracing::info!("found bundled Pi at {}", bundled.display());
+            match install_bundled_pi(&bundled, &self.install_dir, &self.marker_path) {
+                Ok(dest) => {
+                    let version = run_pi_version(&dest).unwrap_or_else(|| "bundled".to_owned());
+                    self.state = PiInstallState::FaeManaged {
+                        path: dest,
+                        version,
+                    };
+                    return Ok(&self.state);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to install bundled Pi: {e}");
+                    // Fall through to GitHub download.
+                }
+            }
         }
 
         if !self.config.auto_install {
@@ -607,6 +629,85 @@ pub fn version_is_newer(current: &str, latest: &str) -> bool {
         }
     }
     false // Versions are equal.
+}
+
+/// Returns the expected path of a bundled Pi binary shipped alongside the Fae executable.
+///
+/// The release archive places `pi` (or `pi.exe`) in the same directory as `fae`.
+/// On macOS `.app` bundles, also checks `../Resources/` relative to the executable.
+pub fn bundled_pi_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+
+    // Check same directory as the Fae binary.
+    let same_dir = exe_dir.join(pi_binary_name());
+    if same_dir.is_file() {
+        return Some(same_dir);
+    }
+
+    // On macOS .app bundles: Contents/MacOS/fae → check Contents/Resources/pi
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(macos_dir) = exe_dir.parent() {
+            let resources = macos_dir.join("Resources").join(pi_binary_name());
+            if resources.is_file() {
+                return Some(resources);
+            }
+        }
+    }
+
+    None
+}
+
+/// Install a bundled Pi binary to the standard install location.
+///
+/// Copies the binary, sets permissions, clears quarantine, and writes
+/// the Fae-managed marker file.
+fn install_bundled_pi(
+    bundled_path: &Path,
+    install_dir: &Path,
+    marker_path: &Path,
+) -> Result<PathBuf> {
+    std::fs::create_dir_all(install_dir)?;
+
+    let dest = install_dir.join(pi_binary_name());
+    std::fs::copy(bundled_path, &dest).map_err(|e| {
+        SpeechError::Pi(format!(
+            "failed to copy bundled Pi to {}: {e}",
+            dest.display()
+        ))
+    })?;
+
+    // Set executable permissions on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).map_err(|e| {
+            SpeechError::Pi(format!(
+                "failed to set executable permission on {}: {e}",
+                dest.display()
+            ))
+        })?;
+    }
+
+    // Clear macOS quarantine attribute.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("xattr")
+            .args(["-c", &dest.to_string_lossy()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    // Write marker file.
+    if let Some(parent) = marker_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(marker_path, "fae-managed\n")?;
+
+    tracing::info!("bundled Pi installed to {}", dest.display());
+    Ok(dest)
 }
 
 /// Extract the Pi binary from a downloaded archive.
@@ -1073,6 +1174,51 @@ mod tests {
         // First two skipped (empty name or URL), only the third included.
         assert_eq!(release.assets.len(), 1);
         assert_eq!(release.assets[0].size, 300);
+    }
+
+    #[test]
+    fn bundled_pi_path_returns_option() {
+        // bundled_pi_path() should not panic regardless of environment.
+        // It may return Some (if a pi binary happens to be next to the test binary)
+        // or None (normal case in development).
+        let _result = bundled_pi_path();
+    }
+
+    #[test]
+    fn install_bundled_pi_copies_to_dest() {
+        let temp = std::env::temp_dir().join("fae-test-bundled-pi");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        // Create a fake "bundled" Pi binary.
+        let bundled = temp.join("pi-bundled");
+        std::fs::write(&bundled, "#!/bin/sh\necho 1.0.0").unwrap();
+
+        let install_dir = temp.join("install");
+        let marker = temp.join("marker");
+
+        let dest = install_bundled_pi(&bundled, &install_dir, &marker).unwrap();
+        assert!(dest.is_file());
+        assert!(marker.is_file());
+
+        // Clean up.
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn install_bundled_pi_fails_for_missing_source() {
+        let temp = std::env::temp_dir().join("fae-test-bundled-pi-missing");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let install_dir = temp.join("install");
+        let marker = temp.join("marker");
+        let missing = temp.join("nonexistent-pi");
+
+        let result = install_bundled_pi(&missing, &install_dir, &marker);
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
