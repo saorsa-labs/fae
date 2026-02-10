@@ -18,10 +18,24 @@ use tracing::info;
 ///
 /// Streams responses via Server-Sent Events (SSE) for low-latency
 /// sentence delivery to TTS.
+///
+/// Connection details (URL, model, API key) can come from either:
+/// - Direct config (`api_url`, `api_model`, `api_key`), or
+/// - Pi's `~/.pi/agent/models.json` when `cloud_provider` is set.
 pub struct ApiLlm {
     config: LlmConfig,
+    /// Resolved connection details (may come from models.json).
+    conn: ResolvedConnection,
     history: Vec<ChatMessage>,
     agent: ureq::Agent,
+}
+
+/// Resolved connection details for the API backend.
+#[derive(Debug, Clone)]
+struct ResolvedConnection {
+    api_url: String,
+    api_model: String,
+    api_key: String,
 }
 
 /// A single message in the conversation history.
@@ -34,15 +48,22 @@ struct ChatMessage {
 impl ApiLlm {
     /// Create a new API-based LLM instance.
     ///
+    /// When `cloud_provider` is set in config, connection details are
+    /// resolved from Pi's `~/.pi/agent/models.json`. Otherwise, the
+    /// `api_url`, `api_model`, and `api_key` config fields are used directly.
+    ///
     /// # Errors
     ///
-    /// Returns an error if configuration is invalid.
+    /// Returns an error if configuration is invalid or the cloud provider
+    /// cannot be found in models.json.
     pub fn new(config: &LlmConfig) -> Result<Self> {
         let agent = ureq::agent();
 
+        let conn = resolve_connection(config)?;
+
         info!(
             "API LLM configured: {} model={}",
-            config.api_url, config.api_model
+            conn.api_url, conn.api_model
         );
 
         let history = vec![ChatMessage {
@@ -52,6 +73,7 @@ impl ApiLlm {
 
         Ok(Self {
             config: config.clone(),
+            conn,
             history,
             agent,
         })
@@ -96,7 +118,7 @@ impl ApiLlm {
             .collect();
 
         let body = serde_json::json!({
-            "model": self.config.api_model,
+            "model": self.conn.api_model,
             "messages": messages,
             "stream": true,
             "temperature": self.config.temperature,
@@ -107,9 +129,9 @@ impl ApiLlm {
         let body_str = serde_json::to_string(&body)
             .map_err(|e| SpeechError::Llm(format!("JSON serialization failed: {e}")))?;
 
-        let base = match self.config.api_url.strip_suffix("/v1") {
+        let base = match self.conn.api_url.strip_suffix("/v1") {
             Some(u) => u,
-            None => &self.config.api_url,
+            None => &self.conn.api_url,
         };
         let base = base.trim_end_matches('/');
         let url = format!("{base}/v1/chat/completions");
@@ -118,7 +140,7 @@ impl ApiLlm {
         let (token_tx, mut token_rx) = mpsc::channel::<String>(64);
         let agent = self.agent.clone();
         let interrupt_clone = Arc::clone(interrupt);
-        let api_key = self.config.api_key.clone();
+        let api_key = self.conn.api_key.clone();
 
         let http_handle =
             tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
@@ -302,5 +324,41 @@ impl ApiLlm {
                 self.history.drain(1..drain_end);
             }
         }
+    }
+}
+
+/// Resolve API connection details from either `cloud_provider` (models.json)
+/// or direct config fields.
+fn resolve_connection(config: &LlmConfig) -> Result<ResolvedConnection> {
+    if let Some(ref cloud_name) = config.cloud_provider {
+        let pi_path =
+            crate::llm::pi_config::default_pi_models_path().ok_or_else(|| {
+                SpeechError::Config("cannot determine HOME for Pi models.json".to_owned())
+            })?;
+        let pi_config = crate::llm::pi_config::read_pi_config(&pi_path)?;
+        let provider = pi_config.find_provider(cloud_name).ok_or_else(|| {
+            SpeechError::Config(format!(
+                "cloud provider '{cloud_name}' not found in {}",
+                pi_path.display()
+            ))
+        })?;
+
+        let model_id = config
+            .cloud_model
+            .clone()
+            .or_else(|| provider.models.first().map(|m| m.id.clone()))
+            .unwrap_or_else(|| config.api_model.clone());
+
+        Ok(ResolvedConnection {
+            api_url: provider.base_url.clone(),
+            api_model: model_id,
+            api_key: provider.api_key.clone(),
+        })
+    } else {
+        Ok(ResolvedConnection {
+            api_url: config.api_url.clone(),
+            api_model: config.api_model.clone(),
+            api_key: config.api_key.clone(),
+        })
     }
 }
