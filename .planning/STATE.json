@@ -7,18 +7,19 @@
     "name": "Remote Canvas Server"
   },
   "phase": {
-    "number": "3.1",
-    "name": "WebSocket Client",
-    "plan": "PLAN-phase-3.1.md",
-    "status": "complete"
+    "number": "3.2",
+    "name": "Server-Side Rendering",
+    "plan": null,
+    "status": "pending"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 8,
+    "completed_tasks": 0,
     "current_task": null
   },
-  "status": "phase_complete",
-  "last_updated": "2026-02-10T14:00:00Z",
+  "status": "blocked",
+  "blocked_reason": "Phase 3.2 modifies canvas-server (separate project at ../saorsa-canvas). Requires cross-project work.",
+  "last_updated": "2026-02-10T14:05:00Z",
   "milestones_completed": [
     {
       "number": 0,
@@ -34,6 +35,13 @@
       "number": 2,
       "name": "Rich Content & MCP Tools",
       "completed_at": "2026-02-10T05:20:00Z"
+    }
+  ],
+  "phases_completed": [
+    {
+      "number": "3.1",
+      "name": "WebSocket Client",
+      "completed_at": "2026-02-10T14:00:00Z"
     }
   ]
 }
