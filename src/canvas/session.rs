@@ -321,6 +321,10 @@ impl super::backend::CanvasBackend for CanvasSession {
     fn connection_status(&self) -> super::backend::ConnectionStatus {
         super::backend::ConnectionStatus::Local
     }
+
+    fn scene_snapshot(&self) -> canvas_core::Scene {
+        self.scene.clone()
+    }
 }
 
 /// Escape HTML special characters.

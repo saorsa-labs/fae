@@ -86,6 +86,9 @@ pub trait CanvasBackend: Send {
 
     /// Current connection status.
     fn connection_status(&self) -> ConnectionStatus;
+
+    /// Return a snapshot of the current scene for export.
+    fn scene_snapshot(&self) -> canvas_core::Scene;
 }
 
 #[cfg(test)]

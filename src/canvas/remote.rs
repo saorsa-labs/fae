@@ -512,6 +512,13 @@ impl CanvasBackend for RemoteCanvasSession {
             Err(p) => p.into_inner().status.clone(),
         }
     }
+
+    fn scene_snapshot(&self) -> canvas_core::Scene {
+        match self.shared.lock() {
+            Ok(s) => s.scene.clone(),
+            Err(p) => p.into_inner().scene.clone(),
+        }
+    }
 }
 
 /// Build full HTML from shared state (helper for cache).
