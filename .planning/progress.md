@@ -1,50 +1,142 @@
 # Progress Log
 
-## Fae Personalization Project
+## Milestone 1: Canvas Core Integration & Dioxus Pane — COMPLETE
+
+### Phase 1.1: Dependency & Shared Types
+- [x] All 8 tasks complete (commit: 2e3c2d2)
+
+### Phase 1.2: Message Pipeline Bridge
+- [x] All 8 tasks complete (commit: f1f763b)
+
+### Phase 1.3: Dioxus Canvas Pane
+- [x] All 8 tasks complete (commit: 933bbba)
+
+---
+
+## Milestone 2: Rich Content & MCP Tools — COMPLETE
+
+### Phase 2.1: MCP Tool Integration
+- [x] All 8 tasks complete (commit: 94a2c73)
+
+### Phase 2.2: Content Renderers
+- [x] All 8 tasks complete (commit: e80609e)
+
+### Phase 2.3: Interactive Elements
+- [x] Task 1: Expose message iteration from CanvasSession
+- [x] Task 2: Thinking indicator
+- [x] Task 3: Tool-call collapsible cards
+- [x] Task 4: Message actions — copy and details
+- [x] Task 5: Message search/filter
+- [x] Task 6: Context menu
+- [x] Task 7: Keyboard navigation and accessibility
+- [x] Task 8: Integration and non-message element rendering
+- (commit: 7fb8dea)
+
+---
+
+## Milestone 3: Remote Canvas Server — IN PROGRESS
+
+### Phase 3.1: WebSocket Client — COMPLETE
+- [x] Task 1: CanvasBackend trait + ConnectionStatus enum (backend.rs)
+- [x] Task 2: Impl CanvasBackend for CanvasSession (session.rs)
+- [x] Task 3: Update CanvasBridge to use Box<dyn CanvasBackend> (bridge.rs)
+- [x] Task 4: Update registry to use dyn CanvasBackend (registry.rs)
+- [x] Task 5: Update tools to use CanvasBackend trait (render.rs, export.rs, interact.rs)
+- [x] Task 6: RemoteCanvasSession with WebSocket client (remote.rs)
+- [x] Task 7: Connection status badge in GUI + CanvasConfig (gui.rs, config.rs)
+- [x] Task 8: Tests for all modules (inline in each file)
+- (commits: 4fa9550, f584bc7)
+
+---
+
+## Milestone 5: Pi Integration, Self-Update & Autonomy — READY
+
+> Worktree: ~/Desktop/Devel/projects/fae-worktree-pi
+> Spec: specs/pi-integration-spec.md
+
+### Phase 5.1: Local LLM HTTP Server — NOT STARTED
+- [ ] Task 1: Create src/llm/server.rs — HTTP server scaffold
+- [ ] Task 2: Implement /v1/chat/completions endpoint
+- [ ] Task 3: Implement /v1/models endpoint
+- [ ] Task 4: Write Pi provider config to ~/.pi/agent/models.json
+- [ ] Task 5: Wire LLM server into GUI startup
+- [ ] Task 6: Add LLM server config to config.rs
+- [ ] Task 7: Add LLM server status to GUI settings
+- [ ] Task 8: Tests
+
+### Phase 5.2: Drop saorsa-ai / API Unification — NOT STARTED
+- [ ] Task 1: Create src/providers/mod.rs — provider abstraction
+- [ ] Task 2: Create src/providers/pi_config.rs — read models.json
+- [ ] Task 3: Create src/providers/streaming.rs — streaming provider
+- [ ] Task 4: Replace saorsa-ai in agent module
+- [ ] Task 5: Remove saorsa-ai from Cargo.toml
+- [ ] Task 6: Add provider selection logic
+- [ ] Task 7: API key management in GUI settings
+- [ ] Task 8: Tests
+
+### Phase 5.3: Pi Manager — Detection & Installation — NOT STARTED
+- [ ] Task 1: Create src/pi/mod.rs — module scaffold
+- [ ] Task 2: Create src/pi/manager.rs — PiManager struct
+- [ ] Task 3: Implement find_pi() — detection
+- [ ] Task 4: Implement install() — download from GitHub
+- [ ] Task 5: Implement update() — update existing Pi
+- [ ] Task 6: Implement ensure_pi() — first-run flow
+- [ ] Task 7: Wire PiManager into GUI
+- [ ] Task 8: Tests
+
+### Phase 5.4: Pi RPC Session & Coding Skill — NOT STARTED
+- [ ] Task 1: Create src/pi/session.rs — PiSession struct
+- [ ] Task 2: Implement RPC protocol — send/receive
+- [ ] Task 3: Implement prompt() — high-level task delegation
+- [ ] Task 4: Create Skills/pi.md — Pi coding skill
+- [ ] Task 5: Register Pi skill in src/skills.rs
+- [ ] Task 6: Create src/pi/tool.rs — pi_delegate agent tool
+- [ ] Task 7: Register pi_delegate tool in agent
+- [ ] Task 8: Tests
+
+### Phase 5.5: Self-Update System — NOT STARTED
+- [ ] Task 1: Create src/update/mod.rs — module scaffold
+- [ ] Task 2: Create src/update/checker.rs — GitHub release checker
+- [ ] Task 3: Create src/update/state.rs — update state persistence
+- [ ] Task 4: Create src/update/applier.rs — platform-specific update
+- [ ] Task 5: Implement update notification UI
+- [ ] Task 6: Implement auto-update preference UI
+- [ ] Task 7: Wire update checks into startup
+- [ ] Task 8: Tests
+
+### Phase 5.6: Scheduler — NOT STARTED
+- [ ] Task 1: Create src/scheduler/mod.rs — module scaffold
+- [ ] Task 2: Create src/scheduler/tasks.rs — task definitions
+- [ ] Task 3: Create src/scheduler/runner.rs — scheduler loop
+- [ ] Task 4: Implement built-in update check tasks
+- [ ] Task 5: Task result handling in GUI
+- [ ] Task 6: Scheduler status in GUI settings
+- [ ] Task 7: Wire scheduler into GUI startup
+- [ ] Task 8: Tests
+
+### Phase 5.7: Installer Integration & Testing — NOT STARTED
+- [ ] Task 1: macOS installer (.dmg) — bundle Pi
+- [ ] Task 2: Linux installer (.deb/.AppImage) — bundle Pi
+- [ ] Task 3: Windows installer (.msi) — bundle Pi
+- [ ] Task 4: CI pipeline — download Pi assets
+- [ ] Task 5: First-run detection and Pi extraction
+- [ ] Task 6: Cross-platform integration tests
+- [ ] Task 7: User documentation
+- [ ] Task 8: Final verification and cleanup
+
+## Phase 5.7: Installer Integration & Testing
 
 ### 2026-02-10
 
-### Phase 1.1: Personality Enhancement — COMPLETE
-- [x] Task 1: Replace personality profile with voice-optimized version (78 lines)
-- [x] Task 2: Create full character reference file (291 lines)
-- [x] Task 3: Add FAE_IDENTITY_REFERENCE constant to personality.rs
-- [x] Task 4: Add 5 personality enhancement tests (Scottish identity, speech examples, constraints, reference, size)
-- [x] Task 5: Verify all tests pass (18 personality tests + 15 integration = 33 total, zero warnings)
+**BLOCKED - Architectural Decision Required**
 
-**Note:** espeak-rs-sys has a path truncation bug with long build paths. Use `CARGO_TARGET_DIR=/tmp/fae-build` for worktrees with long directory names.
+Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dmg, .deb, .AppImage, .msi) from scratch. This is a multi-week effort that:
+- Exceeds scope of all previous Phase 5.x phases combined
+- Requires platform-specific tooling not currently in project
+- Is not required for Pi integration functionality (already working)
 
-### Phase 1.2: TTS Abstraction Layer — COMPLETE
-- [x] Task 1: Add TtsBackend enum and extend TtsConfig (config.rs)
-- [x] Task 2: Update tts/mod.rs with conditional fish_speech export
-- [x] Task 3: Create tts/fish_speech.rs scaffold module
-- [x] Task 4: Add fish-speech feature flag to Cargo.toml
-- [x] Task 5: Update coordinator.rs with TtsEngine enum and backend dispatch
-- [x] Task 6: Update startup.rs for Option<KokoroTts> in InitializedModels
-- [x] Task 7: Add 3 TTS config tests (backend default, serialization, voice_reference)
-- [x] Task 8: Verify build (328 tests pass, zero warnings, clippy clean)
+**Blocker details:** `.planning/BLOCKER-5.7.md`
 
-### Phase 1.3: Fish Speech Integration — COMPLETE (scaffold; blocked on external dep)
-- [x] Task 1: Research fish-speech.rs API — NOT published to crates.io; GitHub-only binary/server
-- [x] Task 2: FishSpeechTts scaffold module already created in Phase 1.2
-- [x] Task 3: Voice embedding extraction — deferred (blocked on fish_speech_core availability)
-- [x] Task 4: Synthesis — scaffold returns proportional silence (correct for dev)
-- [x] Task 5: Model caching — deferred (blocked on fish_speech_core availability)
+**Recommended path:** Defer installer creation to Milestone 4 "Publishing & Polish", complete Phase 5.7 with integration tests and documentation only.
 
-**Note:** fish-speech.rs (github.com/EndlessReform/fish-speech.rs) has fish_speech_core internal
-crate but is not published. When it becomes available as a lib dependency, fill in the scaffold.
-
-### Phase 1.4: Testing & Polish — COMPLETE
-- [x] Task 1: TTS backend unit tests — 6 fish_speech tests added
-- [x] Task 2: Config serialization tests — 3 tests added in Phase 1.2
-- [x] Task 3: Integration tests — 7 tests in tests/personalization_integration.rs
-- [x] Task 4: Performance benchmarks — deferred (scaffold mode, no real inference)
-- [x] Task 5: Build verification — 341 tests pass, zero warnings, clippy clean, fmt clean
-- [x] Task 6: Acceptance criteria walkthrough — see below
-
-### Final Verification Summary
-- **Tests:** 341 total (304 unit + 15 GUI + 15 canvas + 7 personalization)
-- **Clippy:** Zero warnings (all features, all targets, -D warnings)
-- **Format:** Clean (cargo fmt --check passes)
-- **Build:** Compiles with all features enabled
-
-### MILESTONE 1: Fae Personalization — COMPLETE
+**Status:** Awaiting architectural decision

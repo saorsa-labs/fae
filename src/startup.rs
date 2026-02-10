@@ -9,11 +9,13 @@
 use crate::config::{LlmBackend, SpeechConfig, TtsBackend};
 use crate::error::Result;
 use crate::llm::LocalLlm;
+use crate::llm::server::LlmServer;
 use crate::models::ModelManager;
 use crate::progress::{ProgressCallback, ProgressEvent};
 use crate::stt::ParakeetStt;
 use crate::tts::KokoroTts;
 use std::time::Instant;
+use tracing::info;
 
 /// Pre-loaded model instances ready for the pipeline.
 pub struct InitializedModels {
@@ -21,8 +23,36 @@ pub struct InitializedModels {
     pub stt: ParakeetStt,
     /// Local LLM engine (only loaded for local backend).
     pub llm: Option<LocalLlm>,
-    /// Kokoro TTS engine (only loaded when Kokoro backend is selected).
-    pub tts: Option<KokoroTts>,
+    /// Kokoro TTS engine.
+    pub tts: KokoroTts,
+    /// OpenAI-compatible HTTP server for local LLM inference.
+    pub llm_server: Option<LlmServer>,
+}
+
+impl InitializedModels {
+    /// Returns the port the LLM server is listening on, if running.
+    pub fn llm_server_port(&self) -> Option<u16> {
+        self.llm_server.as_ref().map(LlmServer::port)
+    }
+}
+
+impl InitializedModels {
+    /// Shut down the LLM server and clean up Pi's models.json.
+    ///
+    /// Call this before dropping the struct if you want to clean up the
+    /// Pi provider entry. The server task is aborted automatically via
+    /// [`LlmServer::drop`], but the models.json cleanup requires this
+    /// explicit call.
+    pub fn shutdown_llm_server(&mut self) {
+        if let Some(server) = self.llm_server.take() {
+            server.shutdown();
+            if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path()
+                && let Err(e) = crate::llm::pi_config::remove_fae_local_provider(&pi_path)
+            {
+                tracing::warn!("failed to clean Pi models.json: {e}");
+            }
+        }
+    }
 }
 
 /// STT model files to pre-download.
@@ -101,12 +131,52 @@ pub async fn initialize_models_with_progress(
         None
     };
 
-    Ok(InitializedModels { stt, llm, tts })
+    // --- Phase 3: Start LLM HTTP server (if enabled and model is loaded) ---
+    let llm_server = match (config.llm_server.enabled, &llm) {
+        (true, Some(local_llm)) => match start_llm_server(local_llm, config).await {
+            Ok(server) => Some(server),
+            Err(e) => {
+                tracing::warn!("failed to start LLM server: {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+
+    Ok(InitializedModels {
+        stt,
+        llm,
+        tts,
+        llm_server,
+    })
 }
 
-/// Load STT with a status message and optional progress callback.
-fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<ParakeetStt> {
-    let model_name = "STT (Parakeet TDT)".to_owned();
+/// Start the LLM HTTP server with the shared model and optionally register with Pi.
+async fn start_llm_server(llm: &LocalLlm, config: &SpeechConfig) -> Result<LlmServer> {
+    let model = llm.shared_model();
+    let server = LlmServer::start(model, &config.llm_server).await?;
+
+    info!(
+        "LLM server listening on http://127.0.0.1:{}/v1",
+        server.port()
+    );
+
+    // Write the fae-local provider to Pi's models.json so Pi can discover us.
+    if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path()
+        && let Err(e) = crate::llm::pi_config::write_fae_local_provider(&pi_path, server.port())
+    {
+        tracing::warn!("failed to write Pi models.json: {e}");
+    }
+
+    Ok(server)
+}
+
+/// Generic wrapper for model loading with timing, logging, and progress callbacks.
+fn load_model_with_progress<T>(
+    model_name: String,
+    callback: Option<&ProgressCallback>,
+    loader: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     print!("  Loading {model_name}...");
     if let Some(cb) = callback {
         cb(ProgressEvent::LoadStarted {
@@ -115,8 +185,7 @@ fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Resul
     }
 
     let start = Instant::now();
-    let mut stt = ParakeetStt::new(&config.stt, &config.models)?;
-    stt.ensure_loaded()?;
+    let model = loader()?;
     let elapsed = start.elapsed();
 
     println!("  done ({:.1}s)", elapsed.as_secs_f64());
@@ -126,7 +195,16 @@ fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Resul
             duration_secs: elapsed.as_secs_f64(),
         });
     }
-    Ok(stt)
+    Ok(model)
+}
+
+/// Load STT with a status message and optional progress callback.
+fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<ParakeetStt> {
+    load_model_with_progress("STT (Parakeet TDT)".to_owned(), callback, || {
+        let mut stt = ParakeetStt::new(&config.stt, &config.models)?;
+        stt.ensure_loaded()?;
+        Ok(stt)
+    })
 }
 
 /// Load LLM with a status message and optional progress callback.
@@ -155,24 +233,92 @@ async fn load_llm(config: &SpeechConfig, callback: Option<&ProgressCallback>) ->
 
 /// Load TTS with a status message and optional progress callback.
 fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<KokoroTts> {
-    let model_name = "TTS (Kokoro-82M)".to_owned();
-    print!("  Loading {model_name}...");
-    if let Some(cb) = callback {
-        cb(ProgressEvent::LoadStarted {
-            model_name: model_name.clone(),
-        });
+    load_model_with_progress("TTS (Kokoro-82M)".to_owned(), callback, || {
+        KokoroTts::new(&config.tts)
+    })
+}
+
+/// Run a background update check for Fae.
+///
+/// Respects the user's auto-update preference and only checks if the last
+/// check was more than `stale_hours` hours ago. Returns `Some(release)` if
+/// a newer version is available, `None` otherwise.
+///
+/// This function is safe to call from any async context — it spawns the
+/// HTTP request on a blocking thread.
+pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Release> {
+    let state = crate::update::UpdateState::load();
+
+    if !state.check_is_stale(stale_hours) {
+        return None;
     }
 
-    let start = Instant::now();
-    let tts = KokoroTts::new(&config.tts)?;
-    let elapsed = start.elapsed();
-
-    println!("  done ({:.1}s)", elapsed.as_secs_f64());
-    if let Some(cb) = callback {
-        cb(ProgressEvent::LoadComplete {
-            model_name,
-            duration_secs: elapsed.as_secs_f64(),
-        });
+    if state.auto_update == crate::update::AutoUpdatePreference::Never {
+        return None;
     }
-    Ok(tts)
+
+    let etag = state.etag_fae.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let checker = crate::update::UpdateChecker::for_fae();
+        checker.check(etag.as_deref())
+    })
+    .await;
+
+    let (release, new_etag) = match result {
+        Ok(Ok((release, new_etag))) => (release, new_etag),
+        Ok(Err(e)) => {
+            tracing::debug!("update check failed: {e}");
+            return None;
+        }
+        Err(e) => {
+            tracing::debug!("update check task failed: {e}");
+            return None;
+        }
+    };
+
+    // Update state with new ETag and timestamp.
+    let mut new_state = state;
+    new_state.etag_fae = new_etag;
+    new_state.mark_checked();
+
+    // Check if release should be returned before moving state.
+    let should_return_release = match &release {
+        Some(rel) => new_state.dismissed_release.as_deref() != Some(rel.version.as_str()),
+        None => false,
+    };
+
+    // Persist state update.
+    let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
+
+    // Return release if available and not dismissed.
+    if should_return_release && let Some(rel) = release {
+        info!("update available: Fae v{}", rel.version);
+        return Some(rel);
+    }
+
+    None
+}
+
+/// Start the background scheduler with built-in update check tasks.
+///
+/// Returns a tuple of the background task handle and a receiver for task
+/// results. The caller should poll the receiver to surface task outcomes
+/// in the GUI (e.g., update-available notifications).
+///
+/// The scheduler ticks every 60 seconds and persists state to
+/// `~/.config/fae/scheduler.json`.
+pub fn start_scheduler() -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
+    scheduler.with_update_checks();
+
+    info!(
+        "starting background scheduler with {} tasks",
+        scheduler.tasks().len()
+    );
+    let handle = scheduler.run();
+    (handle, rx)
 }

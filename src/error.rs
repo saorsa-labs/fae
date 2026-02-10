@@ -46,6 +46,22 @@ pub enum SpeechError {
     /// Channel send/receive error.
     #[error("channel error: {0}")]
     Channel(String),
+
+    /// HTTP server error (LLM API endpoint).
+    #[error("server error: {0}")]
+    Server(String),
+
+    /// Pi coding agent error (detection, installation, RPC).
+    #[error("pi error: {0}")]
+    Pi(String),
+
+    /// Self-update error (version check, download, apply).
+    #[error("update error: {0}")]
+    Update(String),
+
+    /// Scheduler error (task execution, state persistence).
+    #[error("scheduler error: {0}")]
+    Scheduler(String),
 }
 
 /// Convenience result type.

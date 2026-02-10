@@ -149,6 +149,41 @@ jobs:
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
             --wait
 
+      - name: Download Pi coding agent binary
+        env:
+          PI_VERSION: "latest"
+        run: |
+          PI_ASSET="pi-darwin-arm64.tar.gz"
+          PI_URL="https://github.com/badlogic/pi-mono/releases/${PI_VERSION}/download/${PI_ASSET}"
+
+          echo "Downloading Pi from ${PI_URL}"
+          curl -fsSL -o "/tmp/${PI_ASSET}" "${PI_URL}" || {
+            echo "::warning::Failed to download Pi binary — release will not include Pi"
+            echo "PI_BUNDLED=false" >> "$GITHUB_ENV"
+            exit 0
+          }
+
+          # Extract Pi binary from the tarball (pi/pi inside the archive)
+          mkdir -p /tmp/pi-extract
+          tar xzf "/tmp/${PI_ASSET}" -C /tmp/pi-extract
+          if [ -f /tmp/pi-extract/pi/pi ]; then
+            echo "PI_BINARY=/tmp/pi-extract/pi/pi" >> "$GITHUB_ENV"
+            echo "PI_BUNDLED=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Pi binary not found at expected path in archive"
+            echo "PI_BUNDLED=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Sign Pi binary
+        if: env.SIGNING_ENABLED == 'true' && env.PI_BUNDLED == 'true'
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --options runtime \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --timestamp \
+            "$PI_BINARY"
+
       - name: Package release archive
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
@@ -159,6 +194,13 @@ jobs:
           cp target/release/fae-record-wakeword staging/
           cp README.md staging/
           cp LICENSE staging/ 2>/dev/null || true
+
+          # Include Pi binary if downloaded successfully
+          if [ "${PI_BUNDLED}" = "true" ] && [ -f "${PI_BINARY}" ]; then
+            cp "${PI_BINARY}" staging/pi
+            chmod +x staging/pi
+            echo "Pi binary bundled in release archive"
+          fi
 
           tar -czf "$ARCHIVE" -C staging .
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"

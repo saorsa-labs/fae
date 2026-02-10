@@ -5,6 +5,7 @@ use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::canvas::registry::CanvasSessionRegistry;
 use crate::config::SpeechConfig;
 use crate::error::Result;
+use crate::llm::server::LlmServer;
 use crate::memory::{MemoryStore, PrimaryUser};
 use crate::pipeline::messages::{
     AudioChunk, ControlEvent, GateCommand, SentenceChunk, SpeechSegment, SynthesizedAudio,
@@ -54,6 +55,8 @@ pub struct PipelineCoordinator {
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     gate_cmd_rx: Option<mpsc::UnboundedReceiver<GateCommand>>,
     gate_active: Arc<AtomicBool>,
+    /// LLM HTTP server kept alive for the pipeline duration.
+    llm_server: Option<LlmServer>,
     console_output: bool,
 }
 
@@ -71,6 +74,7 @@ impl PipelineCoordinator {
             canvas_registry: None,
             gate_cmd_rx: None,
             gate_active: Arc::new(AtomicBool::new(false)),
+            llm_server: None,
             console_output: true,
         }
     }
@@ -90,6 +94,7 @@ impl PipelineCoordinator {
             canvas_registry: None,
             gate_cmd_rx: None,
             gate_active: Arc::new(AtomicBool::new(false)),
+            llm_server: None,
             console_output: true,
         }
     }
@@ -183,8 +188,13 @@ impl PipelineCoordinator {
         };
 
         // Split pre-loaded models (if any) into per-stage pieces.
+        // The LLM server runs independently and is kept alive for the
+        // duration of the pipeline (dropped when the coordinator is dropped).
         let (preloaded_stt, preloaded_llm, preloaded_tts) = match self.models.take() {
-            Some(m) => (Some(m.stt), m.llm, m.tts),
+            Some(m) => {
+                self.llm_server = m.llm_server;
+                (Some(m.stt), m.llm, Some(m.tts))
+            }
             None => (None, None, None),
         };
 
@@ -1364,6 +1374,7 @@ async fn run_llm_stage(
                 ctl.runtime_tx.clone(),
                 ctl.tool_approval_tx.clone(),
                 ctl.canvas_registry.clone(),
+                None, // Pi session — wired in Phase 5.7 (Installer Integration)
             )
             .await
             {
