@@ -24,6 +24,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
 mod approval_tool;
+pub mod http_provider;
 mod local_provider;
 
 pub struct SaorsaAgentLlm {
