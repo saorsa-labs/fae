@@ -1525,6 +1525,18 @@ fn app() -> Element {
                             "\u{2190} Back"
                         }
                         h2 { class: "screen-title", "Canvas" }
+                        {
+                            let status = canvas_bridge.read().session().connection_status();
+                            let (class, label) = match &status {
+                                fae::canvas::backend::ConnectionStatus::Local => ("canvas-status local", "Local"),
+                                fae::canvas::backend::ConnectionStatus::Connected => ("canvas-status connected", "Connected"),
+                                fae::canvas::backend::ConnectionStatus::Connecting => ("canvas-status connecting", "Connecting\u{2026}"),
+                                fae::canvas::backend::ConnectionStatus::Reconnecting { .. } => ("canvas-status reconnecting", "Reconnecting\u{2026}"),
+                                fae::canvas::backend::ConnectionStatus::Disconnected => ("canvas-status disconnected", "Disconnected"),
+                                fae::canvas::backend::ConnectionStatus::Failed(_) => ("canvas-status failed", "Failed"),
+                            };
+                            rsx! { span { class: "{class}", "{label}" } }
+                        }
                     }
                     // Search bar
                     div { class: "canvas-search",
@@ -3979,6 +3991,22 @@ const GLOBAL_CSS: &str = r#"
 
     .modal-approve { background: var(--green); color: white; }
     .modal-deny { background: var(--red); color: white; }
+
+    /* --- Canvas Status Badge --- */
+    .canvas-status {
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 0.15rem 0.5rem;
+        border-radius: var(--radius-pill);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .canvas-status.local { background: var(--bg-elevated); color: var(--text-tertiary); }
+    .canvas-status.connected { background: rgba(52, 199, 89, 0.15); color: #34c759; }
+    .canvas-status.connecting { background: rgba(255, 204, 0, 0.15); color: #ffcc00; }
+    .canvas-status.reconnecting { background: rgba(255, 159, 10, 0.15); color: #ff9f0a; }
+    .canvas-status.disconnected { background: rgba(255, 69, 58, 0.12); color: #ff453a; }
+    .canvas-status.failed { background: rgba(255, 69, 58, 0.15); color: #ff453a; }
 
     /* --- Canvas Pane --- */
     .canvas-view { flex: 1; display: flex; flex-direction: column; padding: 1rem; }

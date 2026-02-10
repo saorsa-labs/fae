@@ -29,6 +29,8 @@ pub struct SpeechConfig {
     pub barge_in: BargeInConfig,
     /// Wake word detection (MFCC+DTW keyword spotter).
     pub wakeword: WakewordConfig,
+    /// Canvas visual output settings.
+    pub canvas: CanvasConfig,
 }
 
 /// Audio I/O configuration.
@@ -527,6 +529,18 @@ fn dirs_cache_dir() -> PathBuf {
     } else {
         PathBuf::from("/tmp/fae-cache")
     }
+}
+
+/// Canvas visual output configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CanvasConfig {
+    /// Remote canvas-server WebSocket URL.
+    ///
+    /// When set, fae connects to this server for shared visual output
+    /// (e.g., `ws://localhost:9473/ws/sync`). When `None`, a local-only
+    /// canvas session is used.
+    pub server_url: Option<String>,
 }
 
 fn default_memory_root_dir() -> PathBuf {
