@@ -1,7 +1,7 @@
 //! Pipeline-to-canvas bridge.
 //!
 //! Subscribes to [`RuntimeEvent`]s and converts them into
-//! [`CanvasMessage`]s pushed to a [`CanvasBackend`](super::backend::CanvasBackend).
+//! [`CanvasMessage`]s pushed to a [`CanvasBackend`].
 
 use std::collections::HashMap;
 
