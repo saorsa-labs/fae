@@ -135,7 +135,7 @@
     "findings_count": {
       "critical": 0,
       "important": 0,
-      "minor": 0
+      "minor": 5
     }
   }
 }
