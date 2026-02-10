@@ -31,6 +31,8 @@ tools = []
 coreml = ["ort/coreml"]
 directml = ["ort/directml"]
 cuda = ["ort/cuda"]
+# Voice cloning TTS backend (Fish Speech).
+fish-speech = []
 
 [dependencies]
 # Audio I/O

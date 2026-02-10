@@ -1,9 +1,15 @@
-//! Text-to-speech synthesis using Kokoro-82M.
+//! Text-to-speech synthesis.
 //!
-//! Uses the Kokoro-82M ONNX model with espeak-ng phonemization for
-//! high-quality TTS at 24 kHz. Voice selection via pre-trained style
-//! tensors (`.bin` files).
+//! Supports multiple backends:
+//! - **Kokoro** (default) — Kokoro-82M ONNX with pre-trained voice styles.
+//! - **Fish Speech** (optional, `fish-speech` feature) — voice cloning from reference audio.
 
 mod kokoro;
 
+#[cfg(feature = "fish-speech")]
+pub mod fish_speech;
+
 pub use kokoro::KokoroTts;
+
+#[cfg(feature = "fish-speech")]
+pub use fish_speech::FishSpeechTts;

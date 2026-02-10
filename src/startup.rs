@@ -6,7 +6,7 @@
 //! For GUI consumers, use [`initialize_models_with_progress`] which accepts a
 //! [`ProgressCallback`] for structured progress events.
 
-use crate::config::{LlmBackend, SpeechConfig};
+use crate::config::{LlmBackend, SpeechConfig, TtsBackend};
 use crate::error::Result;
 use crate::llm::LocalLlm;
 use crate::models::ModelManager;
@@ -21,8 +21,8 @@ pub struct InitializedModels {
     pub stt: ParakeetStt,
     /// Local LLM engine (only loaded for local backend).
     pub llm: Option<LocalLlm>,
-    /// Kokoro TTS engine.
-    pub tts: KokoroTts,
+    /// Kokoro TTS engine (only loaded when Kokoro backend is selected).
+    pub tts: Option<KokoroTts>,
 }
 
 /// STT model files to pre-download.
@@ -88,7 +88,18 @@ pub async fn initialize_models_with_progress(
         );
         None
     };
-    let tts = load_tts(config, callback)?;
+    let tts = if matches!(config.tts.backend, TtsBackend::Kokoro) {
+        Some(load_tts(config, callback)?)
+    } else {
+        println!(
+            "  TTS: using {} backend (loaded at pipeline start)",
+            match config.tts.backend {
+                TtsBackend::Kokoro => "Kokoro",
+                TtsBackend::FishSpeech => "Fish Speech",
+            }
+        );
+        None
+    };
 
     Ok(InitializedModels { stt, llm, tts })
 }

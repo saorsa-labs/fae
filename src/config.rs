@@ -355,12 +355,29 @@ Personal context:\n\
     }
 }
 
-/// Text-to-speech configuration (Kokoro-82M).
+/// TTS engine backend selection.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TtsBackend {
+    /// Kokoro-82M ONNX (fast, preset voices).
+    #[default]
+    Kokoro,
+    /// Fish Speech (voice cloning from reference audio).
+    FishSpeech,
+}
+
+/// Text-to-speech configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TtsConfig {
-    /// Voice style name (e.g., "bf_emma", "af_sky") or path to custom `.bin`.
+    /// Which TTS backend to use.
+    pub backend: TtsBackend,
+    /// Voice style name for Kokoro (e.g., "bf_emma", "af_sky") or path to custom `.bin`.
     pub voice: String,
+    /// Path to reference audio for voice cloning (Fish Speech only).
+    pub voice_reference: Option<PathBuf>,
+    /// Transcript of reference audio (improves cloning quality).
+    pub voice_reference_transcript: Option<String>,
     /// ONNX model variant: "fp32", "fp16", "q8", "q8f16", "q4", "q4f16", "quantized".
     pub model_variant: String,
     /// Speech speed multiplier (0.5–2.0).
@@ -372,7 +389,10 @@ pub struct TtsConfig {
 impl Default for TtsConfig {
     fn default() -> Self {
         Self {
+            backend: TtsBackend::default(),
             voice: "bf_emma".to_owned(),
+            voice_reference: None,
+            voice_reference_transcript: None,
             model_variant: "q8".to_owned(),
             speed: 1.0,
             sample_rate: 24_000,
@@ -684,5 +704,28 @@ mod tests {
         };
         assert!(toml_str.contains("input_sample_rate"));
         assert!(toml_str.contains("threshold"));
+    }
+
+    #[test]
+    fn tts_backend_default_is_kokoro() {
+        assert_eq!(TtsBackend::default(), TtsBackend::Kokoro);
+    }
+
+    #[test]
+    fn tts_config_with_backend_serializes() {
+        let mut config = SpeechConfig::default();
+        config.tts.backend = TtsBackend::FishSpeech;
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(toml_str.contains("backend"));
+        // Round-trip
+        let loaded: SpeechConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(loaded.tts.backend, TtsBackend::FishSpeech);
+    }
+
+    #[test]
+    fn tts_config_voice_reference_defaults_to_none() {
+        let config = TtsConfig::default();
+        assert!(config.voice_reference.is_none());
+        assert!(config.voice_reference_transcript.is_none());
     }
 }

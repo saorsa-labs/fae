@@ -164,7 +164,7 @@ impl PipelineCoordinator {
 
         // Split pre-loaded models (if any) into per-stage pieces.
         let (preloaded_stt, preloaded_llm, preloaded_tts) = match self.models.take() {
-            Some(m) => (Some(m.stt), m.llm, Some(m.tts)),
+            Some(m) => (Some(m.stt), m.llm, m.tts),
             None => (None, None, None),
         };
 
@@ -1589,6 +1589,26 @@ async fn run_llm_stage(
     }
 }
 
+/// Internal TTS engine wrapper for backend dispatch.
+enum TtsEngine {
+    /// Kokoro-82M ONNX backend (boxed to reduce enum size).
+    Kokoro(Box<crate::tts::KokoroTts>),
+    /// Fish Speech voice-cloning backend (requires `fish-speech` feature).
+    #[cfg(feature = "fish-speech")]
+    FishSpeech(crate::tts::FishSpeechTts),
+}
+
+impl TtsEngine {
+    /// Synthesise text to f32 audio samples.
+    async fn synthesize(&mut self, text: &str) -> crate::error::Result<Vec<f32>> {
+        match self {
+            Self::Kokoro(k) => k.synthesize(text).await,
+            #[cfg(feature = "fish-speech")]
+            Self::FishSpeech(f) => f.synthesize(text).await,
+        }
+    }
+}
+
 async fn run_tts_stage(
     config: SpeechConfig,
     preloaded: Option<crate::tts::KokoroTts>,
@@ -1597,15 +1617,37 @@ async fn run_tts_stage(
     interrupt: Arc<AtomicBool>,
     cancel: CancellationToken,
 ) {
-    let mut tts = match preloaded {
-        Some(t) => t,
-        None => match crate::tts::KokoroTts::new(&config.tts) {
-            Ok(t) => t,
-            Err(e) => {
-                error!("failed to init TTS: {e}");
+    let mut engine = match config.tts.backend {
+        crate::config::TtsBackend::Kokoro => {
+            let tts = match preloaded {
+                Some(t) => t,
+                None => match crate::tts::KokoroTts::new(&config.tts) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        error!("failed to init Kokoro TTS: {e}");
+                        return;
+                    }
+                },
+            };
+            TtsEngine::Kokoro(Box::new(tts))
+        }
+        crate::config::TtsBackend::FishSpeech => {
+            #[cfg(feature = "fish-speech")]
+            {
+                match crate::tts::FishSpeechTts::new(&config.tts) {
+                    Ok(t) => TtsEngine::FishSpeech(t),
+                    Err(e) => {
+                        error!("failed to init Fish Speech TTS: {e}");
+                        return;
+                    }
+                }
+            }
+            #[cfg(not(feature = "fish-speech"))]
+            {
+                error!("Fish Speech backend selected but `fish-speech` feature is not enabled");
                 return;
             }
-        },
+        }
     };
 
     loop {
@@ -1641,7 +1683,7 @@ async fn run_tts_stage(
                             }
                             continue;
                         }
-                        match tts.synthesize(&sentence.text).await {
+                        match engine.synthesize(&sentence.text).await {
                             Ok(audio) => {
                                 if interrupt.load(Ordering::Relaxed) {
                                     // Interrupted while synthesizing; drop audio.
