@@ -2274,6 +2274,51 @@ fn app() -> Element {
                         }
                     }
 
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Canvas" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Server URL" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    placeholder: "ws://localhost:9473/ws/sync",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().canvas.server_url.as_deref().unwrap_or_default()}",
+                                    oninput: move |evt| {
+                                        let val = evt.value();
+                                        config_state.write().canvas.server_url = if val.is_empty() {
+                                            None
+                                        } else {
+                                            Some(val)
+                                        };
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Status" }
+                                {
+                                    let status = canvas_bridge.read().session().connection_status();
+                                    let label = match status {
+                                        fae::canvas::backend::ConnectionStatus::Local => "Local (no server)",
+                                        fae::canvas::backend::ConnectionStatus::Connected => "Connected",
+                                        fae::canvas::backend::ConnectionStatus::Connecting => "Connecting\u{2026}",
+                                        fae::canvas::backend::ConnectionStatus::Reconnecting { .. } => "Reconnecting\u{2026}",
+                                        fae::canvas::backend::ConnectionStatus::Disconnected => "Disconnected",
+                                        fae::canvas::backend::ConnectionStatus::Failed(_) => "Failed",
+                                    };
+                                    rsx! { p { class: "settings-value", "{label}" } }
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Elements" }
+                                p { class: "settings-value",
+                                    "{canvas_bridge.read().session().element_count()}"
+                                }
+                            }
+                        }
+                    }
+
                     // --- Save / Models buttons ---
                     div { class: "settings-actions",
                         button {
