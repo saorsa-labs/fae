@@ -42,6 +42,71 @@ Mic (16kHz) ──> AEC ──┬──> VAD ──> STT ──> Identity Gate �
 - **Conversation Gate**: Wake phrase ("hi Fae") activates, stop phrase ("that will do Fae") deactivates, auto-idle on timeout
 - **Voice Identity**: Voiceprint-based speaker matching so Fae responds primarily to the registered user
 - **Agent Mode**: Optional tool-capable agent via `saorsa-agent` + `saorsa-ai`
+- **Pi Coding Agent**: Delegates coding, file editing, and research tasks to [Pi](https://github.com/badlogic/pi-mono)
+- **Self-Update**: Automatic update checks for both Fae and Pi from GitHub releases
+- **Task Scheduler**: Background periodic tasks (update checks, future user-defined tasks)
+
+## Pi Integration
+
+Fae integrates with the [Pi coding agent](https://github.com/badlogic/pi-mono) to handle coding tasks, file editing, shell commands, and research — all triggered by voice.
+
+### How It Works
+
+```
+User speaks "fix the login bug in my website"
+  → STT → LLM (Qwen 3) reads Pi skill → decides to delegate to Pi
+  → Pi uses Fae's local LLM for reasoning
+  → Pi executes: read files, edit code, run tests
+  → Fae narrates progress via TTS
+```
+
+### Pi Detection & Installation
+
+Fae automatically manages Pi:
+
+1. **Bundled**: Release archives include a Pi binary — works offline on first run
+2. **PATH detection**: If Pi is already installed, Fae uses it
+3. **Auto-install**: Downloads the latest Pi from GitHub releases if not found
+4. **Updates**: Scheduler checks for new Pi versions daily
+
+Pi install locations:
+- **macOS / Linux**: `~/.local/bin/pi`
+- **Windows**: `%LOCALAPPDATA%\pi\pi.exe`
+
+### AI Configuration
+
+All AI provider configuration lives in `~/.pi/agent/models.json`. Fae reads this file for both local and cloud providers — there is no separate API key configuration.
+
+Fae automatically writes a `"fae-local"` provider entry pointing to its on-device LLM, so Pi can use Fae's brain with zero cloud dependency.
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Pi not found | Check `~/.local/bin/pi` exists and is executable |
+| Pi auto-install fails | Check internet connectivity; manually download from [Pi releases](https://github.com/badlogic/pi-mono/releases) |
+| LLM server not responding | Restart Fae; check logs for model loading errors |
+| Update check fails | Network error — Fae will retry on next scheduled check |
+| macOS Gatekeeper blocks Pi | Fae clears quarantine automatically; if blocked, run `xattr -c ~/.local/bin/pi` |
+
+### Self-Update System
+
+Fae checks GitHub releases for new versions of both itself and Pi:
+
+- **Update preference**: Ask (default) / Always / Never — configurable in Settings
+- **Check frequency**: Daily via the built-in scheduler
+- **Update notification**: Banner appears in the GUI when updates are available
+
+### Scheduler
+
+The background scheduler runs periodic tasks:
+
+| Task | Frequency | Description |
+|------|-----------|-------------|
+| Fae update check | Daily | Check GitHub for new Fae releases |
+| Pi update check | Daily | Check GitHub for new Pi releases |
+
+Scheduler state is persisted in `~/.config/fae/scheduler.json`.
 
 ## Canvas Integration
 
