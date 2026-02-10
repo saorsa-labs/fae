@@ -1,4 +1,449 @@
 //! Scheduler background loop.
 //!
 //! Spawns a tokio task that periodically checks for due tasks and
-//! executes them.
+//! executes them. Task state (last-run timestamps) is persisted to
+//! `~/.config/fae/scheduler.json`.
+
+use crate::scheduler::tasks::{ScheduledTask, Schedule, TaskResult};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
+
+/// Interval between scheduler ticks (seconds).
+const TICK_INTERVAL_SECS: u64 = 60;
+
+/// Callback type for executing a task.
+///
+/// Takes the task ID and returns a [`TaskResult`]. Implementations should
+/// be lightweight — expensive work happens inside the callback.
+pub type TaskExecutor = Box<dyn Fn(&str) -> TaskResult + Send + Sync>;
+
+/// Background scheduler that runs periodic tasks.
+pub struct Scheduler {
+    /// Registered tasks.
+    tasks: Vec<ScheduledTask>,
+    /// Path to persisted scheduler state.
+    state_path: Option<PathBuf>,
+    /// Channel for sending task results to the GUI.
+    result_tx: mpsc::UnboundedSender<TaskResult>,
+    /// Task executor callback.
+    executor: Option<TaskExecutor>,
+}
+
+/// Persisted scheduler state (task last-run timestamps).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct SchedulerState {
+    /// Map of task ID to last-run epoch seconds.
+    tasks: Vec<TaskEntry>,
+}
+
+/// A single persisted task entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskEntry {
+    /// Task identifier.
+    id: String,
+    /// Unix epoch seconds of last run.
+    last_run: Option<u64>,
+    /// Whether the task is enabled.
+    enabled: bool,
+}
+
+impl Scheduler {
+    /// Create a new scheduler with the given result channel.
+    pub fn new(result_tx: mpsc::UnboundedSender<TaskResult>) -> Self {
+        let state_path = Self::default_state_path();
+        Self {
+            tasks: Vec::new(),
+            state_path,
+            result_tx,
+            executor: None,
+        }
+    }
+
+    /// Set a custom executor callback for running tasks.
+    pub fn with_executor(mut self, executor: TaskExecutor) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    /// Register built-in Fae and Pi update check tasks (daily).
+    pub fn with_update_checks(&mut self) {
+        let fae_task = ScheduledTask::new(
+            "check_fae_update",
+            "Check for Fae updates",
+            Schedule::Daily { hour: 9, min: 0 },
+        );
+
+        let pi_task = ScheduledTask::new(
+            "check_pi_update",
+            "Check for Pi updates",
+            Schedule::Daily { hour: 9, min: 5 },
+        );
+
+        self.tasks.push(fae_task);
+        self.tasks.push(pi_task);
+    }
+
+    /// Add a custom task to the scheduler.
+    pub fn add_task(&mut self, task: ScheduledTask) {
+        self.tasks.push(task);
+    }
+
+    /// Returns a snapshot of the registered tasks.
+    pub fn tasks(&self) -> &[ScheduledTask] {
+        &self.tasks
+    }
+
+    /// Load persisted state from disk and merge with registered tasks.
+    pub fn load_state(&mut self) {
+        let path = match &self.state_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+
+        let state: SchedulerState = match serde_json::from_slice(&bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("cannot parse scheduler state: {e}");
+                return;
+            }
+        };
+
+        // Merge persisted state into registered tasks.
+        for entry in &state.tasks {
+            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == entry.id) {
+                task.last_run = entry.last_run;
+                task.enabled = entry.enabled;
+            }
+        }
+
+        debug!("loaded scheduler state from {}", path.display());
+    }
+
+    /// Persist task state to disk.
+    fn save_state(&self) {
+        let path = match &self.state_path {
+            Some(p) => p,
+            None => return,
+        };
+
+        let entries: Vec<TaskEntry> = self
+            .tasks
+            .iter()
+            .map(|t| TaskEntry {
+                id: t.id.clone(),
+                last_run: t.last_run,
+                enabled: t.enabled,
+            })
+            .collect();
+
+        let state = SchedulerState { tasks: entries };
+
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            error!("cannot create scheduler state dir: {e}");
+            return;
+        }
+
+        match serde_json::to_string_pretty(&state) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, json) {
+                    error!("cannot write scheduler state: {e}");
+                }
+            }
+            Err(e) => {
+                error!("cannot serialize scheduler state: {e}");
+            }
+        }
+    }
+
+    /// Start the scheduler background loop.
+    ///
+    /// Returns a [`tokio::task::JoinHandle`] for the spawned task.
+    /// The loop runs until the result channel is closed.
+    pub fn run(mut self) -> tokio::task::JoinHandle<()> {
+        self.load_state();
+
+        tokio::spawn(async move {
+            info!("scheduler started with {} tasks", self.tasks.len());
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(TICK_INTERVAL_SECS));
+
+            loop {
+                interval.tick().await;
+                self.tick();
+            }
+        })
+    }
+
+    /// Execute one scheduler tick — check and run due tasks.
+    fn tick(&mut self) {
+        let due_ids: Vec<String> = self
+            .tasks
+            .iter()
+            .filter(|t| t.is_due())
+            .map(|t| t.id.clone())
+            .collect();
+
+        let ran_any = !due_ids.is_empty();
+        for id in due_ids {
+            let result = self.execute_task(&id);
+
+            // Mark the task as run regardless of result.
+            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+                task.mark_run();
+            }
+
+            // Send result to GUI.
+            if self.result_tx.send(result).is_err() {
+                debug!("scheduler result channel closed, stopping");
+                return;
+            }
+        }
+
+        // Persist state after running tasks.
+        if ran_any {
+            self.save_state();
+        }
+    }
+
+    /// Execute a single task by ID.
+    fn execute_task(&self, task_id: &str) -> TaskResult {
+        debug!("executing scheduled task: {task_id}");
+
+        if let Some(executor) = &self.executor {
+            return executor(task_id);
+        }
+
+        // Default: no executor registered, return success.
+        TaskResult::Success(format!("task {task_id} completed (no executor)"))
+    }
+
+    /// Default path for scheduler state file.
+    fn default_state_path() -> Option<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var_os("LOCALAPPDATA")
+                .map(|d| PathBuf::from(d).join("fae").join("scheduler.json"))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".config").join("fae").join("scheduler.json"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::scheduler::tasks::Schedule;
+
+    fn make_scheduler() -> (Scheduler, mpsc::UnboundedReceiver<TaskResult>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut scheduler = Scheduler::new(tx);
+        // Disable disk persistence in tests.
+        scheduler.state_path = None;
+        (scheduler, rx)
+    }
+
+    #[test]
+    fn new_scheduler_has_no_tasks() {
+        let (scheduler, _rx) = make_scheduler();
+        assert!(scheduler.tasks().is_empty());
+    }
+
+    #[test]
+    fn with_update_checks_adds_two_tasks() {
+        let (mut scheduler, _rx) = make_scheduler();
+        scheduler.with_update_checks();
+        assert_eq!(scheduler.tasks().len(), 2);
+        assert_eq!(scheduler.tasks()[0].id, "check_fae_update");
+        assert_eq!(scheduler.tasks()[1].id, "check_pi_update");
+    }
+
+    #[test]
+    fn add_task_registers_custom_task() {
+        let (mut scheduler, _rx) = make_scheduler();
+        let task = ScheduledTask::new("custom", "Custom Task", Schedule::Interval { secs: 300 });
+        scheduler.add_task(task);
+        assert_eq!(scheduler.tasks().len(), 1);
+        assert_eq!(scheduler.tasks()[0].id, "custom");
+    }
+
+    #[test]
+    fn tick_executes_due_tasks() {
+        let (mut scheduler, mut rx) = make_scheduler();
+        // Add a task that's immediately due (never run, interval 0).
+        let task = ScheduledTask::new("due", "Due Task", Schedule::Interval { secs: 0 });
+        scheduler.add_task(task);
+
+        scheduler.tick();
+
+        // Should have sent a result.
+        let result = rx.try_recv().unwrap();
+        assert!(matches!(result, TaskResult::Success(_)));
+
+        // Task should now have a last_run set.
+        assert!(scheduler.tasks()[0].last_run.is_some());
+    }
+
+    #[test]
+    fn tick_skips_not_due_tasks() {
+        let (mut scheduler, mut rx) = make_scheduler();
+        let mut task = ScheduledTask::new("not_due", "Not Due", Schedule::Interval { secs: 86400 });
+        task.mark_run(); // Just ran, not due for 24h.
+        scheduler.add_task(task);
+
+        scheduler.tick();
+
+        // No result should have been sent.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn tick_with_custom_executor() {
+        let (mut scheduler, mut rx) = make_scheduler();
+        scheduler.executor = Some(Box::new(|id| {
+            TaskResult::Success(format!("custom executed: {id}"))
+        }));
+
+        let task = ScheduledTask::new("exec", "Exec Task", Schedule::Interval { secs: 0 });
+        scheduler.add_task(task);
+
+        scheduler.tick();
+
+        let result = rx.try_recv().unwrap();
+        match result {
+            TaskResult::Success(msg) => assert!(msg.contains("custom executed")),
+            _ => panic!("expected Success"),
+        }
+    }
+
+    #[test]
+    fn state_persistence_round_trip() {
+        let dir = std::env::temp_dir().join("fae-scheduler-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("scheduler-test.json");
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut scheduler = Scheduler::new(tx);
+        scheduler.state_path = Some(path.clone());
+
+        let mut task =
+            ScheduledTask::new("persist", "Persist Test", Schedule::Interval { secs: 3600 });
+        task.mark_run();
+        let saved_last_run = task.last_run;
+        scheduler.add_task(task);
+
+        // Save state.
+        scheduler.save_state();
+
+        // Create a new scheduler, add the same task (without last_run),
+        // then load state.
+        let (tx2, _rx2) = mpsc::unbounded_channel();
+        let mut scheduler2 = Scheduler::new(tx2);
+        scheduler2.state_path = Some(path.clone());
+        scheduler2.add_task(ScheduledTask::new(
+            "persist",
+            "Persist Test",
+            Schedule::Interval { secs: 3600 },
+        ));
+
+        scheduler2.load_state();
+        assert_eq!(scheduler2.tasks()[0].last_run, saved_last_run);
+
+        // Cleanup.
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn default_state_path_is_some() {
+        let path = Scheduler::default_state_path();
+        assert!(path.is_some());
+        let path_str = path.unwrap().to_string_lossy().to_string();
+        assert!(path_str.contains("scheduler.json"));
+    }
+
+    #[test]
+    fn scheduler_state_serde_round_trip() {
+        let state = SchedulerState {
+            tasks: vec![
+                TaskEntry {
+                    id: "task1".to_owned(),
+                    last_run: Some(1000),
+                    enabled: true,
+                },
+                TaskEntry {
+                    id: "task2".to_owned(),
+                    last_run: None,
+                    enabled: false,
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: SchedulerState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.tasks.len(), 2);
+        assert_eq!(restored.tasks[0].id, "task1");
+        assert_eq!(restored.tasks[0].last_run, Some(1000));
+        assert!(restored.tasks[0].enabled);
+        assert_eq!(restored.tasks[1].id, "task2");
+        assert!(restored.tasks[1].last_run.is_none());
+        assert!(!restored.tasks[1].enabled);
+    }
+
+    #[test]
+    fn load_state_handles_missing_file() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut scheduler = Scheduler::new(tx);
+        scheduler.state_path = Some(PathBuf::from("/tmp/nonexistent-scheduler-state.json"));
+        // Should not panic or error.
+        scheduler.load_state();
+    }
+
+    #[test]
+    fn load_state_handles_invalid_json() {
+        let dir = std::env::temp_dir().join("fae-scheduler-test-invalid");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("invalid.json");
+        std::fs::write(&path, "not valid json").unwrap();
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut scheduler = Scheduler::new(tx);
+        scheduler.state_path = Some(path.clone());
+        // Should not panic, just warn.
+        scheduler.load_state();
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn tick_marks_run_even_on_error() {
+        let (mut scheduler, mut rx) = make_scheduler();
+        scheduler.executor = Some(Box::new(|_| TaskResult::Error("boom".to_owned())));
+
+        let task = ScheduledTask::new("err", "Error Task", Schedule::Interval { secs: 0 });
+        scheduler.add_task(task);
+
+        scheduler.tick();
+
+        // Should have sent the error result.
+        let result = rx.try_recv().unwrap();
+        assert!(matches!(result, TaskResult::Error(_)));
+
+        // Task should still have been marked as run.
+        assert!(scheduler.tasks()[0].last_run.is_some());
+    }
+}
