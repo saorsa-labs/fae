@@ -360,6 +360,166 @@ fn is_npm_shim(path: &Path) -> bool {
 const PI_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/badlogic/pi-mono/releases/latest";
 
+/// Download a Pi release asset and install the binary.
+///
+/// 1. Downloads the archive to a temp file
+/// 2. Extracts the `pi/pi` binary from the tarball (or `pi/pi.exe` from zip)
+/// 3. Moves it to `install_dir`
+/// 4. Sets executable permissions (Unix)
+/// 5. Clears macOS quarantine attribute
+/// 6. Writes the marker file to indicate Fae-managed installation
+///
+/// # Errors
+///
+/// Returns an error if download, extraction, or installation fails.
+pub fn download_and_install(
+    asset: &PiAsset,
+    install_dir: &Path,
+    marker_path: &Path,
+) -> Result<PathBuf> {
+    let temp_dir = std::env::temp_dir().join("fae-pi-install");
+    std::fs::create_dir_all(&temp_dir)?;
+
+    // Download the archive.
+    let archive_path = temp_dir.join(&asset.name);
+    download_file(&asset.browser_download_url, &archive_path)?;
+
+    // Extract the Pi binary.
+    let extracted_binary = extract_pi_binary(&archive_path, &temp_dir)?;
+
+    // Ensure install directory exists.
+    std::fs::create_dir_all(install_dir)?;
+
+    // Move binary to install location.
+    let dest = install_dir.join(pi_binary_name());
+    std::fs::copy(&extracted_binary, &dest).map_err(|e| {
+        SpeechError::Pi(format!(
+            "failed to copy Pi binary to {}: {e}",
+            dest.display()
+        ))
+    })?;
+
+    // Set executable permissions on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).map_err(|e| {
+            SpeechError::Pi(format!(
+                "failed to set executable permission on {}: {e}",
+                dest.display()
+            ))
+        })?;
+    }
+
+    // Clear macOS quarantine attribute.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("xattr")
+            .args(["-c", &dest.to_string_lossy()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    // Write marker file to indicate Fae manages this installation.
+    if let Some(parent) = marker_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(marker_path, "fae-managed\n")?;
+
+    // Clean up temp files.
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    tracing::info!("Pi installed to {}", dest.display());
+    Ok(dest)
+}
+
+/// Download a file from a URL to a local path.
+fn download_file(url: &str, dest: &Path) -> Result<()> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(120))
+        .build();
+
+    let resp = agent
+        .get(url)
+        .set("User-Agent", "fae/0.1 (pi-manager)")
+        .call()
+        .map_err(|e| SpeechError::Pi(format!("download failed: {e}")))?;
+
+    let mut reader = resp.into_reader();
+    let mut file = std::fs::File::create(dest)?;
+    std::io::copy(&mut reader, &mut file).map_err(|e| {
+        SpeechError::Pi(format!(
+            "failed to write download to {}: {e}",
+            dest.display()
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Extract the Pi binary from a downloaded archive.
+///
+/// For `.tar.gz` archives, uses the system `tar` command.
+/// For `.zip` archives (Windows), uses the system `tar` command (available on
+/// Windows 10+ via bsdtar).
+fn extract_pi_binary(archive_path: &Path, temp_dir: &Path) -> Result<PathBuf> {
+    let archive_name = archive_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+
+    if archive_name.ends_with(".tar.gz") {
+        // Extract using system tar.
+        let status = std::process::Command::new("tar")
+            .args(["xzf", &archive_path.to_string_lossy(), "-C"])
+            .arg(temp_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .status()
+            .map_err(|e| SpeechError::Pi(format!("failed to run tar: {e}")))?;
+
+        if !status.success() {
+            return Err(SpeechError::Pi(format!(
+                "tar extraction failed with exit code: {:?}",
+                status.code()
+            )));
+        }
+    } else if archive_name.ends_with(".zip") {
+        // Windows 10+ has bsdtar that handles zip.
+        let status = std::process::Command::new("tar")
+            .args(["xf", &archive_path.to_string_lossy(), "-C"])
+            .arg(temp_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .status()
+            .map_err(|e| SpeechError::Pi(format!("failed to run tar: {e}")))?;
+
+        if !status.success() {
+            return Err(SpeechError::Pi(format!(
+                "zip extraction failed with exit code: {:?}",
+                status.code()
+            )));
+        }
+    } else {
+        return Err(SpeechError::Pi(format!(
+            "unsupported archive format: {archive_name}"
+        )));
+    }
+
+    // The Pi tarball extracts to `pi/pi` (or `pi/pi.exe` on Windows).
+    let binary_path = temp_dir.join("pi").join(pi_binary_name());
+    if !binary_path.is_file() {
+        return Err(SpeechError::Pi(format!(
+            "Pi binary not found in archive at expected path: {}",
+            binary_path.display()
+        )));
+    }
+
+    Ok(binary_path)
+}
+
 /// Fetch the latest Pi release metadata from GitHub.
 ///
 /// # Errors
