@@ -10,16 +10,20 @@
 //! - `POST /v1/chat/completions` — chat completions (streaming and non-streaming)
 
 use axum::extract::State;
-use axum::response::Json;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use axum::Router;
-use mistralrs::Model;
+use futures_util::stream::Stream;
+use mistralrs::{Model, RequestBuilder, Response, TextMessageRole, TextMessages};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tracing::info;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -213,6 +217,15 @@ impl Default for LlmServerConfig {
 /// Default model ID exposed by the server.
 const MODEL_ID: &str = "fae-qwen3";
 
+/// Default temperature when not specified in the request.
+const DEFAULT_TEMPERATURE: f64 = 0.7;
+
+/// Default top-p when not specified in the request.
+const DEFAULT_TOP_P: f64 = 0.9;
+
+/// Default max tokens when not specified in the request.
+const DEFAULT_MAX_TOKENS: usize = 2048;
+
 // ---------------------------------------------------------------------------
 // Shared application state
 // ---------------------------------------------------------------------------
@@ -305,6 +318,63 @@ impl Drop for LlmServer {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Generate a unique completion ID.
+fn completion_id() -> String {
+    format!("chatcmpl-{}", Uuid::new_v4())
+}
+
+/// Get the current Unix timestamp in seconds.
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Convert our [`ChatMessage`] list into a mistralrs [`RequestBuilder`].
+fn build_request(
+    messages: &[ChatMessage],
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<usize>,
+) -> RequestBuilder {
+    let mut text_messages = TextMessages::new().enable_thinking(false);
+    for msg in messages {
+        let role = match msg.role.as_str() {
+            "system" => TextMessageRole::System,
+            "assistant" => TextMessageRole::Assistant,
+            _ => TextMessageRole::User,
+        };
+        text_messages = text_messages.add_message(role, &msg.content);
+    }
+
+    RequestBuilder::from(text_messages)
+        .set_sampler_temperature(temperature.unwrap_or(DEFAULT_TEMPERATURE))
+        .set_sampler_topp(top_p.unwrap_or(DEFAULT_TOP_P))
+        .set_sampler_max_len(max_tokens.unwrap_or(DEFAULT_MAX_TOKENS))
+}
+
+/// Strip `<think>...</think>` blocks from generated text.
+fn strip_think_blocks(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some(start) = remaining.find("<think>") {
+        result.push_str(&remaining[..start]);
+        if let Some(end) = remaining[start..].find("</think>") {
+            remaining = &remaining[start + end + "</think>".len()..];
+        } else {
+            // Unclosed <think> — discard the rest
+            return result;
+        }
+    }
+    result.push_str(remaining);
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
 
@@ -320,22 +390,255 @@ async fn handle_models(State(state): State<AppState>) -> Json<ModelListResponse>
     })
 }
 
-/// `POST /v1/chat/completions` — chat completions (placeholder, implemented in Task 3).
+/// `POST /v1/chat/completions` — chat completions (streaming and non-streaming).
 async fn handle_chat_completions(
     State(state): State<AppState>,
-    Json(_request): Json<ChatCompletionRequest>,
-) -> (axum::http::StatusCode, Json<ErrorResponse>) {
-    // Reference the model to prove it's wired through state.
-    let _model = &state.model;
-    (
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        Json(ErrorResponse {
-            error: ErrorBody {
-                message: "chat completions not yet implemented".to_owned(),
-                error_type: "not_implemented".to_owned(),
+    Json(request): Json<ChatCompletionRequest>,
+) -> axum::response::Response {
+    if request.stream == Some(true) {
+        handle_streaming(state, request).await.into_response()
+    } else {
+        handle_non_streaming(state, request).await.into_response()
+    }
+}
+
+/// Handle a non-streaming chat completion request.
+async fn handle_non_streaming(
+    state: AppState,
+    request: ChatCompletionRequest,
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let req = build_request(
+        &request.messages,
+        request.temperature,
+        request.top_p,
+        request.max_tokens,
+    );
+
+    let result = state.model.send_chat_request(req).await;
+
+    let response = match result {
+        Ok(resp) => resp,
+        Err(e) => {
+            let err = ErrorResponse {
+                error: ErrorBody {
+                    message: format!("inference failed: {e}"),
+                    error_type: "server_error".to_owned(),
+                },
+            };
+            let json = serde_json::to_value(err).unwrap_or_default();
+            return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json));
+        }
+    };
+
+    // Extract content from the mistralrs response.
+    let content = response
+        .choices
+        .first()
+        .and_then(|c| c.message.content.as_deref())
+        .unwrap_or("");
+
+    let content = strip_think_blocks(content);
+    let finish_reason = response
+        .choices
+        .first()
+        .map(|c| c.finish_reason.clone())
+        .unwrap_or_else(|| "stop".to_owned());
+
+    let resp = ChatCompletionResponse {
+        id: completion_id(),
+        object: "chat.completion".to_owned(),
+        created: unix_timestamp(),
+        model: state.model_id,
+        choices: vec![Choice {
+            index: 0,
+            message: ChatMessage {
+                role: "assistant".to_owned(),
+                content,
             },
-        }),
-    )
+            finish_reason: Some(finish_reason),
+        }],
+        usage: Usage {
+            prompt_tokens: response.usage.prompt_tokens as u32,
+            completion_tokens: response.usage.completion_tokens as u32,
+            total_tokens: response.usage.total_tokens as u32,
+        },
+    };
+
+    let json = serde_json::to_value(resp).unwrap_or_default();
+    (axum::http::StatusCode::OK, Json(json))
+}
+
+/// Internal message type for the streaming channel.
+enum StreamMsg {
+    /// A token chunk from the model.
+    Token(String),
+    /// Streaming is done (finish_reason).
+    Done(String),
+    /// An error occurred.
+    Error(String),
+}
+
+/// Handle a streaming chat completion request via SSE.
+///
+/// Uses a channel to decouple the `mistralrs` stream lifetime (`Stream<'_>`)
+/// from the SSE response lifetime. A background task holds the `Arc<Model>`
+/// borrow and forwards tokens through a channel.
+async fn handle_streaming(
+    state: AppState,
+    request: ChatCompletionRequest,
+) -> Result<
+    Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>,
+    (axum::http::StatusCode, Json<ErrorResponse>),
+> {
+    let req = build_request(
+        &request.messages,
+        request.temperature,
+        request.top_p,
+        request.max_tokens,
+    );
+
+    let model = Arc::clone(&state.model);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamMsg>(64);
+
+    // Spawn a task that holds the Arc<Model> borrow and forwards tokens.
+    tokio::spawn(async move {
+        let stream = match model.stream_chat_request(req).await {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(StreamMsg::Error(format!("stream init: {e}"))).await;
+                return;
+            }
+        };
+
+        let mut streamer = stream;
+        let mut in_think_block = false;
+        while let Some(response) = streamer.next().await {
+            match response {
+                Response::Chunk(chunk) => {
+                    if let Some(choice) = chunk.choices.first()
+                        && let Some(ref content) = choice.delta.content
+                    {
+                        if content.is_empty() {
+                            continue;
+                        }
+                        if content.contains("<think>") {
+                            in_think_block = true;
+                            continue;
+                        }
+                        if content.contains("</think>") {
+                            in_think_block = false;
+                            continue;
+                        }
+                        if in_think_block {
+                            continue;
+                        }
+                        if tx.send(StreamMsg::Token(content.clone())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Response::Done(_) => {
+                    let _ = tx.send(StreamMsg::Done("stop".to_owned())).await;
+                    break;
+                }
+                Response::ModelError(msg, _) => {
+                    let _ = tx.send(StreamMsg::Error(msg)).await;
+                    break;
+                }
+                Response::InternalError(e) => {
+                    let _ = tx.send(StreamMsg::Error(e.to_string())).await;
+                    break;
+                }
+                Response::ValidationError(e) => {
+                    let _ = tx.send(StreamMsg::Error(e.to_string())).await;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let id = completion_id();
+    let created = unix_timestamp();
+    let model_id = state.model_id.clone();
+
+    let sse_stream = async_stream::stream! {
+        // First chunk: send role
+        let first_chunk = ChatCompletionChunk {
+            id: id.clone(),
+            object: "chat.completion.chunk".to_owned(),
+            created,
+            model: model_id.clone(),
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta: Delta {
+                    role: Some("assistant".to_owned()),
+                    content: None,
+                },
+                finish_reason: None,
+            }],
+        };
+        if let Ok(json) = serde_json::to_string(&first_chunk) {
+            yield Ok(Event::default().data(json));
+        }
+
+        // Receive tokens from the background task
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                StreamMsg::Token(content) => {
+                    let sse_chunk = ChatCompletionChunk {
+                        id: id.clone(),
+                        object: "chat.completion.chunk".to_owned(),
+                        created,
+                        model: model_id.clone(),
+                        choices: vec![ChunkChoice {
+                            index: 0,
+                            delta: Delta {
+                                role: None,
+                                content: Some(content),
+                            },
+                            finish_reason: None,
+                        }],
+                    };
+                    if let Ok(json) = serde_json::to_string(&sse_chunk) {
+                        yield Ok(Event::default().data(json));
+                    }
+                }
+                StreamMsg::Done(reason) => {
+                    let final_chunk = ChatCompletionChunk {
+                        id: id.clone(),
+                        object: "chat.completion.chunk".to_owned(),
+                        created,
+                        model: model_id.clone(),
+                        choices: vec![ChunkChoice {
+                            index: 0,
+                            delta: Delta {
+                                role: None,
+                                content: None,
+                            },
+                            finish_reason: Some(reason),
+                        }],
+                    };
+                    if let Ok(json) = serde_json::to_string(&final_chunk) {
+                        yield Ok(Event::default().data(json));
+                    }
+                    yield Ok(Event::default().data("[DONE]"));
+                    break;
+                }
+                StreamMsg::Error(msg) => {
+                    let err_json = serde_json::json!({
+                        "error": {"message": msg, "type": "server_error"}
+                    });
+                    if let Ok(json) = serde_json::to_string(&err_json) {
+                        yield Ok(Event::default().data(json));
+                    }
+                    break;
+                }
+            }
+        }
+    };
+
+    Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
 }
 
 #[cfg(test)]
@@ -516,5 +819,58 @@ mod tests {
         assert_eq!(parsed.prompt_tokens, 42);
         assert_eq!(parsed.completion_tokens, 10);
         assert_eq!(parsed.total_tokens, 52);
+    }
+
+    #[test]
+    fn strip_think_blocks_removes_thinking() {
+        assert_eq!(
+            strip_think_blocks("Hello <think>reasoning here</think>World"),
+            "Hello World"
+        );
+    }
+
+    #[test]
+    fn strip_think_blocks_no_blocks() {
+        assert_eq!(strip_think_blocks("Hello World"), "Hello World");
+    }
+
+    #[test]
+    fn strip_think_blocks_unclosed() {
+        assert_eq!(strip_think_blocks("Hello <think>never ends"), "Hello ");
+    }
+
+    #[test]
+    fn strip_think_blocks_multiple() {
+        assert_eq!(
+            strip_think_blocks("A<think>1</think>B<think>2</think>C"),
+            "ABC"
+        );
+    }
+
+    #[test]
+    fn completion_id_has_prefix() {
+        let id = completion_id();
+        assert!(id.starts_with("chatcmpl-"));
+        assert!(id.len() > "chatcmpl-".len());
+    }
+
+    #[test]
+    fn build_request_maps_roles() {
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_owned(),
+                content: "You are helpful.".to_owned(),
+            },
+            ChatMessage {
+                role: "user".to_owned(),
+                content: "Hello".to_owned(),
+            },
+            ChatMessage {
+                role: "assistant".to_owned(),
+                content: "Hi there!".to_owned(),
+            },
+        ];
+        // Just verify it doesn't panic — the RequestBuilder is opaque.
+        let _req = build_request(&messages, Some(0.5), Some(0.8), Some(100));
     }
 }
