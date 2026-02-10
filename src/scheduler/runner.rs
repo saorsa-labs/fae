@@ -4,7 +4,7 @@
 //! executes them. Task state (last-run timestamps) is persisted to
 //! `~/.config/fae/scheduler.json`.
 
-use crate::scheduler::tasks::{ScheduledTask, Schedule, TaskResult};
+use crate::scheduler::tasks::{Schedule, ScheduledTask, TaskResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -235,8 +235,12 @@ impl Scheduler {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join(".config").join("fae").join("scheduler.json"))
+            std::env::var_os("HOME").map(|h| {
+                PathBuf::from(h)
+                    .join(".config")
+                    .join("fae")
+                    .join("scheduler.json")
+            })
         }
     }
 }
@@ -477,7 +481,11 @@ mod tests {
         let (mut scheduler, mut rx) = make_scheduler();
         scheduler.executor = Some(Box::new(|_| TaskResult::Success("ok".to_owned())));
 
-        scheduler.add_task(ScheduledTask::new("once", "Once", Schedule::Interval { secs: 3600 }));
+        scheduler.add_task(ScheduledTask::new(
+            "once",
+            "Once",
+            Schedule::Interval { secs: 3600 },
+        ));
 
         // First tick: executes.
         scheduler.tick();
@@ -493,9 +501,8 @@ mod tests {
         let (mut scheduler, mut rx) = make_scheduler();
         scheduler.with_update_checks();
         // Override with custom executor.
-        scheduler = scheduler.with_executor(Box::new(|id| {
-            TaskResult::Success(format!("custom: {id}"))
-        }));
+        scheduler =
+            scheduler.with_executor(Box::new(|id| TaskResult::Success(format!("custom: {id}"))));
 
         // Force all tasks to be due.
         for task in &mut scheduler.tasks {
@@ -517,15 +524,16 @@ mod tests {
         let mut scheduler = Scheduler::new(tx);
         scheduler.state_path = None;
         scheduler.executor = Some(Box::new(|_| TaskResult::Success("ran".to_owned())));
-        scheduler.add_task(ScheduledTask::new("async_test", "Async", Schedule::Interval { secs: 0 }));
+        scheduler.add_task(ScheduledTask::new(
+            "async_test",
+            "Async",
+            Schedule::Interval { secs: 0 },
+        ));
 
         let handle = scheduler.run();
 
         // Wait for the first tick result (should come within ~1 second).
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            rx.recv()
-        ).await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
 
         assert!(result.is_ok());
         let task_result = result.unwrap().unwrap();
@@ -547,7 +555,11 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut scheduler = Scheduler::new(tx);
         scheduler.state_path = Some(path.clone());
-        scheduler.add_task(ScheduledTask::new("t", "T", Schedule::Interval { secs: 60 }));
+        scheduler.add_task(ScheduledTask::new(
+            "t",
+            "T",
+            Schedule::Interval { secs: 60 },
+        ));
 
         scheduler.save_state();
 
@@ -573,7 +585,11 @@ mod tests {
             })
         }));
 
-        scheduler.add_task(ScheduledTask::new("update", "Update", Schedule::Interval { secs: 0 }));
+        scheduler.add_task(ScheduledTask::new(
+            "update",
+            "Update",
+            Schedule::Interval { secs: 0 },
+        ));
         scheduler.tick();
 
         let result = rx.try_recv().unwrap();

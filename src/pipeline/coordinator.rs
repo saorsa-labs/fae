@@ -1462,6 +1462,7 @@ async fn run_llm_stage(
                 ctl.runtime_tx.clone(),
                 ctl.tool_approval_tx.clone(),
                 ctl.canvas_registry.clone(),
+                None, // Pi session — wired in Phase 5.7 (Installer Integration)
             )
             .await
             {

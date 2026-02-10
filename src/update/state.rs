@@ -77,8 +77,12 @@ impl UpdateState {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join(".config").join("fae").join("update-state.json"))
+            std::env::var_os("HOME").map(|h| {
+                PathBuf::from(h)
+                    .join(".config")
+                    .join("fae")
+                    .join("update-state.json")
+            })
         }
     }
 
@@ -118,9 +122,8 @@ impl UpdateState {
             })?;
         }
 
-        let json = serde_json::to_string_pretty(self).map_err(|e| {
-            SpeechError::Update(format!("cannot serialize update state: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| SpeechError::Update(format!("cannot serialize update state: {e}")))?;
 
         std::fs::write(&path, json).map_err(|e| {
             SpeechError::Update(format!(

@@ -280,9 +280,7 @@ pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Rel
     let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
 
     // Return release if available and not dismissed.
-    if should_return_release
-        && let Some(rel) = release
-    {
+    if should_return_release && let Some(rel) = release {
         info!("update available: Fae v{}", rel.version);
         return Some(rel);
     }
@@ -306,7 +304,10 @@ pub fn start_scheduler() -> (
     let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
     scheduler.with_update_checks();
 
-    info!("starting background scheduler with {} tasks", scheduler.tasks().len());
+    info!(
+        "starting background scheduler with {} tasks",
+        scheduler.tasks().len()
+    );
     let handle = scheduler.run();
     (handle, rx)
 }

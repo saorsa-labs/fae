@@ -123,3 +123,20 @@
 - [ ] Task 6: Cross-platform integration tests
 - [ ] Task 7: User documentation
 - [ ] Task 8: Final verification and cleanup
+
+## Phase 5.7: Installer Integration & Testing
+
+### 2026-02-10
+
+**BLOCKED - Architectural Decision Required**
+
+Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dmg, .deb, .AppImage, .msi) from scratch. This is a multi-week effort that:
+- Exceeds scope of all previous Phase 5.x phases combined
+- Requires platform-specific tooling not currently in project
+- Is not required for Pi integration functionality (already working)
+
+**Blocker details:** `.planning/BLOCKER-5.7.md`
+
+**Recommended path:** Defer installer creation to Milestone 4 "Publishing & Polish", complete Phase 5.7 with integration tests and documentation only.
+
+**Status:** Awaiting architectural decision

@@ -178,12 +178,14 @@ impl PiSession {
                 ))
             })?;
 
-        let child_stdin = child.stdin.take().ok_or_else(|| {
-            SpeechError::Pi("failed to capture Pi stdin".to_owned())
-        })?;
-        let child_stdout = child.stdout.take().ok_or_else(|| {
-            SpeechError::Pi("failed to capture Pi stdout".to_owned())
-        })?;
+        let child_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| SpeechError::Pi("failed to capture Pi stdin".to_owned()))?;
+        let child_stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SpeechError::Pi("failed to capture Pi stdout".to_owned()))?;
 
         let stdin_writer = std::io::BufWriter::new(child_stdin);
 
@@ -207,9 +209,10 @@ impl PiSession {
     ///
     /// Returns an error if the process is not running or the write fails.
     pub fn send(&mut self, request: &PiRpcRequest) -> Result<()> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            SpeechError::Pi("Pi process not running".to_owned())
-        })?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| SpeechError::Pi("Pi process not running".to_owned()))?;
 
         let json = serde_json::to_string(request)
             .map_err(|e| SpeechError::Pi(format!("failed to serialize request: {e}")))?;
@@ -285,9 +288,7 @@ impl PiSession {
             let event = match self.recv().await {
                 Some(ev) => ev,
                 None => {
-                    return Err(SpeechError::Pi(
-                        "Pi process exited unexpectedly".to_owned(),
-                    ));
+                    return Err(SpeechError::Pi("Pi process exited unexpectedly".to_owned()));
                 }
             };
 
@@ -301,9 +302,7 @@ impl PiSession {
                     break;
                 }
                 PiEvent::ProcessExited => {
-                    return Err(SpeechError::Pi(
-                        "Pi process exited during task".to_owned(),
-                    ));
+                    return Err(SpeechError::Pi("Pi process exited during task".to_owned()));
                 }
                 _ => {}
             }

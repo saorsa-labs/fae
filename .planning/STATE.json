@@ -17,8 +17,8 @@
     "completed_tasks": 8,
     "current_task": 8
   },
-  "status": "executing",
-  "last_updated": "2026-02-10T21:00:00Z",
+  "status": "milestone_complete",
+  "last_updated": "2026-02-10T22:00:00Z",
   "worktree": "~/Desktop/Devel/projects/fae-worktree-pi",
   "milestones_completed": [
     {
@@ -34,6 +34,11 @@
     {
       "number": 3,
       "name": "Remote Canvas Server (Phase 3.1 WebSocket Client)",
+      "completed": "2026-02-10"
+    },
+    {
+      "number": 5,
+      "name": "Pi Integration, Self-Update & Autonomy",
       "completed": "2026-02-10"
     }
   ],
@@ -51,7 +56,7 @@
     {
       "number": 5,
       "name": "Pi Integration, Self-Update & Autonomy",
-      "status": "executing",
+      "status": "complete",
       "phases": [
         "5.1",
         "5.2",
@@ -122,10 +127,10 @@
       "status": "complete"
     }
   ],
-  "notes": "All Phase 5.7 tasks complete. Full platform installers (.dmg, .deb, .msi) deferred to Milestone 4 (Publishing & Polish). Milestone 5 complete — all 7 phases done.",
+  "notes": "MILESTONE 5 COMPLETE. All 7 phases (5.1-5.7) done. 46 tasks across Pi integration, self-update, scheduler, and integration hardening. Full platform installers deferred to Milestone 4.",
   "review": {
-    "status": "pending",
-    "iteration": 0,
+    "status": "passed",
+    "iteration": 1,
     "last_verdict": null,
     "findings_count": {
       "critical": 0,

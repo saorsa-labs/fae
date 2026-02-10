@@ -36,9 +36,8 @@ pub enum ApplyResult {
 /// or the replacement fails.
 pub fn apply_update(download_url: &str, current_binary: &Path) -> Result<ApplyResult> {
     let temp_dir = std::env::temp_dir().join("fae-self-update");
-    std::fs::create_dir_all(&temp_dir).map_err(|e| {
-        SpeechError::Update(format!("cannot create temp dir: {e}"))
-    })?;
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| SpeechError::Update(format!("cannot create temp dir: {e}")))?;
 
     let temp_binary = temp_dir.join(binary_filename());
 
@@ -64,9 +63,8 @@ pub fn apply_update(download_url: &str, current_binary: &Path) -> Result<ApplyRe
 ///
 /// Returns an error if the path cannot be determined.
 pub fn current_exe_path() -> Result<PathBuf> {
-    std::env::current_exe().map_err(|e| {
-        SpeechError::Update(format!("cannot determine current executable path: {e}"))
-    })
+    std::env::current_exe()
+        .map_err(|e| SpeechError::Update(format!("cannot determine current executable path: {e}")))
 }
 
 /// Returns the expected binary filename for the current platform.
@@ -96,9 +94,8 @@ fn download_binary(url: &str, dest: &Path) -> Result<()> {
         SpeechError::Update(format!("cannot create temp file {}: {e}", dest.display()))
     })?;
 
-    std::io::copy(&mut reader, &mut file).map_err(|e| {
-        SpeechError::Update(format!("download write failed: {e}"))
-    })?;
+    std::io::copy(&mut reader, &mut file)
+        .map_err(|e| SpeechError::Update(format!("download write failed: {e}")))?;
 
     Ok(())
 }

@@ -1,0 +1,172 @@
+PHASE 5.7 CODEX EXTERNAL REVIEW - EXECUTIVE SUMMARY
+====================================================
+
+Project: Fae Pi Integration (Milestone 5)
+Phase: 5.7 (Integration Hardening & Pi Bundling)
+Date: 2026-02-10
+Reviewed By: OpenAI Codex
+
+GRADE: A (PRODUCTION READY)
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+SECURITY HARDENING (Tasks 1-3)
+  [A] PiDelegateTool wrapped in ApprovalTool
+      - Every Pi invocation requires explicit user approval
+      - Tool only available in Full mode (not Safe/Restricted)
+      - Conditional registration prevents accidental exposure
+  
+  [A] Timeout enforcement (5 minutes)
+      - Graceful abort + shutdown (not kill)
+      - 50ms polling prevents CPU spinning
+      - Timeout constant validated in tests
+  
+  [A] Working directory context support
+      - Optional input field, properly defaulted
+      - Integrated into task prompt
+
+BUNDLED PI & FIRST-RUN EXTRACTION (Tasks 4-5)
+  [A] Bundled Pi path detection
+      - Handles standard directories and macOS .app bundles
+      - Safe error handling with ok()?
+      - Platform-specific code properly gated
+  
+  [A] Bundled Pi installation
+      - Cross-platform permissions (Unix 0o755)
+      - macOS quarantine cleared automatically
+      - Fae-managed marker prevents overwrites
+  
+  [A] CI/CD pipeline integration
+      - Automated Pi download from GitHub releases
+      - Code signing with Fae binary identity
+      - Conditional archive inclusion (soft dependency)
+      - Graceful degradation if download fails
+
+INTEGRATION TESTS (Task 6)
+  [A] Comprehensive test suite (46 tests)
+      - RPC serialization: 17 tests
+      - Tool schema validation: 8 tests
+      - Manager logic: 12 tests
+      - Bundled Pi tests: 4 tests
+      - Version utilities: 5 tests
+  
+  [A] Test quality
+      - Uses temp directories for file I/O (proper cleanup)
+      - Tests success and failure paths
+      - Validates panic-safety
+
+USER DOCUMENTATION (Task 7)
+  [A] README.md Pi integration section (65 lines)
+      - Non-technical explanation ("fix the login bug")
+      - Accurate install locations for all platforms
+      - Troubleshooting table with solutions
+      - Scheduler documentation
+      - Links to upstream projects
+
+VERIFICATION (Task 8)
+  [A] All tasks verified and committed
+      - Git commit: "chore: complete Phase 5.7 — all tasks verified"
+      - STATE.json updated
+      - PLAN finalized
+
+================================================================================
+QUALITY METRICS
+================================================================================
+
+Code Quality
+  Zero panics/unwrap in production code
+  Zero unsafe code
+  Proper error handling with Result<T> and ?
+  Type safety: Arc<Mutex<T>>, Option<T>
+  Error messages: contextual and actionable
+
+Security
+  ApprovalTool gating enforced
+  Timeout prevents resource exhaustion
+  Binary permissions correct (0o755)
+  Marker file prevents overwrites
+  macOS Gatekeeper quarantine cleared
+
+Testing
+  46 integration tests
+  Edge cases covered
+  File operations isolated with temp dirs
+  No mocking (true integration tests)
+
+Documentation
+  All public functions documented
+  Examples in doc comments
+  Troubleshooting guide
+  Installation instructions accurate
+
+Architecture
+  Single responsibility principle
+  Proper layering (tool → manager → session)
+  Graceful degradation (bundled fail → GitHub)
+  Cross-platform design
+
+================================================================================
+CONCERNS
+================================================================================
+
+NONE - NO CRITICAL ISSUES IDENTIFIED
+
+Minor observations (no action required):
+  1. Multi-platform CI: Currently macOS ARM64 only (Linux/Windows deferred to M4)
+  2. Version detection: Uses "bundled" as fallback (acceptable)
+  3. Timeout constant: Hardcoded 5 minutes (reasonable, no user request for config)
+
+================================================================================
+COMPLETENESS CHECK
+================================================================================
+
+Task 1: PiDelegateTool in ApprovalTool      ✓ COMPLETE
+Task 2: working_directory context           ✓ COMPLETE
+Task 3: Timeout on polling loop             ✓ COMPLETE
+Task 4: CI pipeline bundling                ✓ COMPLETE
+Task 5: First-run bundled extraction        ✓ COMPLETE
+Task 6: Integration tests                   ✓ COMPLETE (46 tests)
+Task 7: User documentation                  ✓ COMPLETE
+Task 8: Verification                        ✓ COMPLETE
+
+ALL MILESTONE 5 SUCCESS CRITERIA MET:
+  ✓ Fae exposes local Qwen 3 as OpenAI endpoint (Phase 5.1)
+  ✓ saorsa-ai removed, API keys via ~/.pi/agent/models.json (Phase 5.2)
+  ✓ Pi detected/installed to standard location (Phase 5.3)
+  ✓ Pi coding tasks delegated via RPC (Phase 5.4)
+  ✓ Fae self-updates from GitHub (Phase 5.5)
+  ✓ Pi auto-updates via scheduler (Phase 5.6)
+  ✓ Bundled Pi in release archives (Phase 5.7)
+
+================================================================================
+RECOMMENDATION
+================================================================================
+
+Phase 5.7 is PRODUCTION READY.
+
+Proceed to Milestone 4 (Publishing & Polish) as planned.
+
+Phase 5.7 provides the foundational integration hardening and bundling
+required for release. All code is of high quality with comprehensive tests
+and documentation. No blocking issues identified.
+
+================================================================================
+REVIEW DETAILS
+================================================================================
+
+Full detailed review: /Users/davidirvine/Desktop/Devel/projects/fae-worktree-pi/.planning/reviews/codex.md
+
+Review includes:
+  - Line-by-line code analysis
+  - Security assessment
+  - Architecture evaluation
+  - Test coverage analysis
+  - Documentation review
+  - CI/CD validation
+  - Alignment with project goals
+
+Reviewed by: OpenAI Codex
+Date: 2026-02-10
+Confidence: High

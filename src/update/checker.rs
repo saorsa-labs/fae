@@ -73,10 +73,7 @@ impl UpdateChecker {
     /// Returns an error if the HTTP request fails or the response cannot be
     /// parsed.
     pub fn check(&self, etag: Option<&str>) -> Result<(Option<Release>, Option<String>)> {
-        let url = format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            self.repo
-        );
+        let url = format!("https://api.github.com/repos/{}/releases/latest", self.repo);
 
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
@@ -109,9 +106,9 @@ impl UpdateChecker {
         // Capture the new ETag header.
         let new_etag = resp.header("ETag").map(String::from);
 
-        let body: serde_json::Value = resp.into_json().map_err(|e| {
-            SpeechError::Update(format!("cannot parse GitHub release JSON: {e}"))
-        })?;
+        let body: serde_json::Value = resp
+            .into_json()
+            .map_err(|e| SpeechError::Update(format!("cannot parse GitHub release JSON: {e}")))?;
 
         let release = parse_github_release(&body, &self.repo)?;
 
@@ -168,23 +165,29 @@ pub fn fae_asset_name() -> Option<&'static str> {
     }
 }
 
+/// Select a platform asset from a GitHub release assets array by name.
+fn select_platform_asset(
+    assets: &[serde_json::Value],
+    expected_name: &str,
+) -> Option<(String, u64)> {
+    assets.iter().find_map(|asset| {
+        let name = asset["name"].as_str()?;
+        if name != expected_name {
+            return None;
+        }
+        let url = asset["browser_download_url"].as_str()?.to_owned();
+        let size = asset["size"].as_u64().unwrap_or(0);
+        if url.is_empty() {
+            return None;
+        }
+        Some((url, size))
+    })
+}
+
 /// Select the matching Fae asset from a GitHub release assets array.
 fn select_fae_platform_asset(assets: &[serde_json::Value]) -> Option<(String, u64)> {
     let expected = fae_asset_name()?;
-    for asset in assets {
-        let name = asset["name"].as_str().unwrap_or("");
-        if name == expected {
-            let url = asset["browser_download_url"]
-                .as_str()
-                .unwrap_or("")
-                .to_owned();
-            let size = asset["size"].as_u64().unwrap_or(0);
-            if !url.is_empty() {
-                return Some((url, size));
-            }
-        }
-    }
-    None
+    select_platform_asset(assets, expected)
 }
 
 /// Select the matching Pi asset from a GitHub release assets array.
@@ -192,20 +195,7 @@ fn select_fae_platform_asset(assets: &[serde_json::Value]) -> Option<(String, u6
 /// Pi uses names like `pi-darwin-arm64.tar.gz`, `pi-linux-x64.tar.gz`, etc.
 fn select_pi_platform_asset(assets: &[serde_json::Value]) -> Option<(String, u64)> {
     let expected = crate::pi::manager::platform_asset_name()?;
-    for asset in assets {
-        let name = asset["name"].as_str().unwrap_or("");
-        if name == expected {
-            let url = asset["browser_download_url"]
-                .as_str()
-                .unwrap_or("")
-                .to_owned();
-            let size = asset["size"].as_u64().unwrap_or(0);
-            if !url.is_empty() {
-                return Some((url, size));
-            }
-        }
-    }
-    None
+    select_platform_asset(assets, expected)
 }
 
 #[cfg(test)]

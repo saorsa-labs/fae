@@ -863,7 +863,8 @@ fn app() -> Element {
                             let result = tokio::task::spawn_blocking(move || {
                                 let checker = fae::update::UpdateChecker::for_fae();
                                 checker.check(etag.as_deref())
-                            }).await;
+                            })
+                            .await;
                             if let Ok(Ok((Some(release), _))) = result {
                                 update_available.set(Some(release));
                             }

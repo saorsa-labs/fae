@@ -207,9 +207,10 @@ fn check_fae_update() -> TaskResult {
                         },
                     ],
                 }),
-                AutoUpdatePreference::Never => {
-                    TaskResult::Success(format!("Fae {} available (auto-update disabled)", release.version))
-                }
+                AutoUpdatePreference::Never => TaskResult::Success(format!(
+                    "Fae {} available (auto-update disabled)",
+                    release.version
+                )),
             }
         }
         Ok((None, new_etag)) => {
@@ -274,9 +275,10 @@ fn check_pi_update() -> TaskResult {
                         },
                     ],
                 }),
-                AutoUpdatePreference::Never => {
-                    TaskResult::Success(format!("Pi {} available (auto-update disabled)", release.version))
-                }
+                AutoUpdatePreference::Never => TaskResult::Success(format!(
+                    "Pi {} available (auto-update disabled)",
+                    release.version
+                )),
             }
         }
         Ok((None, new_etag)) => {
@@ -369,8 +371,11 @@ mod tests {
 
     #[test]
     fn task_serde_round_trip() {
-        let mut task =
-            ScheduledTask::new("check_fae", "Check Fae Update", Schedule::Interval { secs: 86400 });
+        let mut task = ScheduledTask::new(
+            "check_fae",
+            "Check Fae Update",
+            Schedule::Interval { secs: 86400 },
+        );
         task.mark_run();
 
         let json = serde_json::to_string(&task).unwrap();
@@ -464,9 +469,10 @@ mod tests {
         // This makes a real HTTP call, so it may fail in CI without network.
         // We just verify it doesn't panic and returns a valid TaskResult.
         let result = execute_builtin(TASK_CHECK_FAE_UPDATE);
-        assert!(
-            matches!(result, TaskResult::Success(_) | TaskResult::NeedsUserAction(_) | TaskResult::Error(_))
-        );
+        assert!(matches!(
+            result,
+            TaskResult::Success(_) | TaskResult::NeedsUserAction(_) | TaskResult::Error(_)
+        ));
     }
 
     #[test]
@@ -475,7 +481,9 @@ mod tests {
         // the check should succeed with a skip message.
         let result = execute_builtin(TASK_CHECK_PI_UPDATE);
         match &result {
-            TaskResult::Success(msg) => assert!(msg.contains("not installed") || msg.contains("up to date")),
+            TaskResult::Success(msg) => {
+                assert!(msg.contains("not installed") || msg.contains("up to date"))
+            }
             TaskResult::Error(_) => {} // Network error is acceptable
             TaskResult::NeedsUserAction(_) => {} // Update available is fine too
         }
