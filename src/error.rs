@@ -50,6 +50,10 @@ pub enum SpeechError {
     /// HTTP server error (LLM API endpoint).
     #[error("server error: {0}")]
     Server(String),
+
+    /// Pi coding agent error (detection, installation, RPC).
+    #[error("pi error: {0}")]
+    Pi(String),
 }
 
 /// Convenience result type.

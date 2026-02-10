@@ -35,6 +35,7 @@ pub mod memory;
 pub mod model_picker;
 pub mod models;
 pub mod personality;
+pub mod pi;
 pub mod pipeline;
 pub mod progress;
 pub mod runtime;
