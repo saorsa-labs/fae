@@ -58,6 +58,10 @@ pub enum SpeechError {
     /// Self-update error (version check, download, apply).
     #[error("update error: {0}")]
     Update(String),
+
+    /// Scheduler error (task execution, state persistence).
+    #[error("scheduler error: {0}")]
+    Scheduler(String),
 }
 
 /// Convenience result type.

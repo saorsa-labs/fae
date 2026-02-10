@@ -121,18 +121,15 @@ pub async fn initialize_models_with_progress(
     let tts = load_tts(config, callback)?;
 
     // --- Phase 3: Start LLM HTTP server (if enabled and model is loaded) ---
-    let llm_server = if config.llm_server.enabled
-        && let Some(ref local_llm) = llm
-    {
-        match start_llm_server(local_llm, config).await {
+    let llm_server = match (config.llm_server.enabled, &llm) {
+        (true, Some(local_llm)) => match start_llm_server(local_llm, config).await {
             Ok(server) => Some(server),
             Err(e) => {
                 tracing::warn!("failed to start LLM server: {e}");
                 None
             }
-        }
-    } else {
-        None
+        },
+        _ => None,
     };
 
     Ok(InitializedModels {
@@ -163,9 +160,12 @@ async fn start_llm_server(llm: &LocalLlm, config: &SpeechConfig) -> Result<LlmSe
     Ok(server)
 }
 
-/// Load STT with a status message and optional progress callback.
-fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<ParakeetStt> {
-    let model_name = "STT (Parakeet TDT)".to_owned();
+/// Generic wrapper for model loading with timing, logging, and progress callbacks.
+fn load_model_with_progress<T>(
+    model_name: String,
+    callback: Option<&ProgressCallback>,
+    loader: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     print!("  Loading {model_name}...");
     if let Some(cb) = callback {
         cb(ProgressEvent::LoadStarted {
@@ -174,8 +174,7 @@ fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Resul
     }
 
     let start = Instant::now();
-    let mut stt = ParakeetStt::new(&config.stt, &config.models)?;
-    stt.ensure_loaded()?;
+    let model = loader()?;
     let elapsed = start.elapsed();
 
     println!("  done ({:.1}s)", elapsed.as_secs_f64());
@@ -185,7 +184,16 @@ fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Resul
             duration_secs: elapsed.as_secs_f64(),
         });
     }
-    Ok(stt)
+    Ok(model)
+}
+
+/// Load STT with a status message and optional progress callback.
+fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<ParakeetStt> {
+    load_model_with_progress("STT (Parakeet TDT)".to_owned(), callback, || {
+        let mut stt = ParakeetStt::new(&config.stt, &config.models)?;
+        stt.ensure_loaded()?;
+        Ok(stt)
+    })
 }
 
 /// Load LLM with a status message and optional progress callback.
@@ -214,26 +222,9 @@ async fn load_llm(config: &SpeechConfig, callback: Option<&ProgressCallback>) ->
 
 /// Load TTS with a status message and optional progress callback.
 fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<KokoroTts> {
-    let model_name = "TTS (Kokoro-82M)".to_owned();
-    print!("  Loading {model_name}...");
-    if let Some(cb) = callback {
-        cb(ProgressEvent::LoadStarted {
-            model_name: model_name.clone(),
-        });
-    }
-
-    let start = Instant::now();
-    let tts = KokoroTts::new(&config.tts)?;
-    let elapsed = start.elapsed();
-
-    println!("  done ({:.1}s)", elapsed.as_secs_f64());
-    if let Some(cb) = callback {
-        cb(ProgressEvent::LoadComplete {
-            model_name,
-            duration_secs: elapsed.as_secs_f64(),
-        });
-    }
-    Ok(tts)
+    load_model_with_progress("TTS (Kokoro-82M)".to_owned(), callback, || {
+        KokoroTts::new(&config.tts)
+    })
 }
 
 /// Run a background update check for Fae.
@@ -262,36 +253,39 @@ pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Rel
     })
     .await;
 
-    match result {
-        Ok(Ok((Some(release), new_etag))) => {
-            let dismissed = state.dismissed_release.as_deref();
-            if dismissed == Some(release.version.as_str()) {
-                return None;
-            }
-
-            // Persist the new state.
-            let mut new_state = state;
-            new_state.etag_fae = new_etag;
-            new_state.mark_checked();
-            let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
-
-            info!("update available: Fae v{}", release.version);
-            Some(release)
-        }
-        Ok(Ok((None, new_etag))) => {
-            let mut new_state = state;
-            new_state.etag_fae = new_etag;
-            new_state.mark_checked();
-            let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
-            None
-        }
+    let (release, new_etag) = match result {
+        Ok(Ok((release, new_etag))) => (release, new_etag),
         Ok(Err(e)) => {
             tracing::debug!("update check failed: {e}");
-            None
+            return None;
         }
         Err(e) => {
             tracing::debug!("update check task failed: {e}");
-            None
+            return None;
         }
+    };
+
+    // Update state with new ETag and timestamp.
+    let mut new_state = state;
+    new_state.etag_fae = new_etag;
+    new_state.mark_checked();
+
+    // Check if release should be returned before moving state.
+    let should_return_release = match &release {
+        Some(rel) => new_state.dismissed_release.as_deref() != Some(rel.version.as_str()),
+        None => false,
+    };
+
+    // Persist state update.
+    let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
+
+    // Return release if available and not dismissed.
+    if should_return_release
+        && let Some(rel) = release
+    {
+        info!("update available: Fae v{}", rel.version);
+        return Some(rel);
     }
+
+    None
 }

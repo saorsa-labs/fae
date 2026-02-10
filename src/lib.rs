@@ -39,6 +39,7 @@ pub mod pi;
 pub mod pipeline;
 pub mod progress;
 pub mod runtime;
+pub mod scheduler;
 pub mod skills;
 pub mod startup;
 pub mod stt;

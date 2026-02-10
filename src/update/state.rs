@@ -299,8 +299,10 @@ mod tests {
 
     #[test]
     fn check_is_stale_with_invalid_timestamp() {
-        let mut state = UpdateState::default();
-        state.last_check = Some("not-a-number".to_owned());
+        let state = UpdateState {
+            last_check: Some("not-a-number".to_owned()),
+            ..Default::default()
+        };
         assert!(state.check_is_stale(24));
     }
 
@@ -338,8 +340,10 @@ mod tests {
 
     #[test]
     fn state_dismissed_release_round_trip() {
-        let mut state = UpdateState::default();
-        state.dismissed_release = Some("0.5.0".to_owned());
+        let state = UpdateState {
+            dismissed_release: Some("0.5.0".to_owned()),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&state).unwrap();
         let restored: UpdateState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.dismissed_release.as_deref(), Some("0.5.0"));
