@@ -193,7 +193,7 @@ impl PipelineCoordinator {
         let (preloaded_stt, preloaded_llm, preloaded_tts) = match self.models.take() {
             Some(m) => {
                 self.llm_server = m.llm_server;
-                (Some(m.stt), m.llm, Some(m.tts))
+                (Some(m.stt), m.llm, m.tts)
             }
             None => (None, None, None),
         };

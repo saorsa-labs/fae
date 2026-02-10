@@ -23,8 +23,8 @@ pub struct InitializedModels {
     pub stt: ParakeetStt,
     /// Local LLM engine (only loaded for local backend).
     pub llm: Option<LocalLlm>,
-    /// Kokoro TTS engine.
-    pub tts: KokoroTts,
+    /// Kokoro TTS engine (None if using Fish Speech or other backend).
+    pub tts: Option<KokoroTts>,
     /// OpenAI-compatible HTTP server for local LLM inference.
     pub llm_server: Option<LlmServer>,
 }

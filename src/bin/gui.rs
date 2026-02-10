@@ -690,9 +690,9 @@ fn app() -> Element {
     let mut gate_active_arc = use_signal(|| None::<std::sync::Arc<std::sync::atomic::AtomicBool>>);
     let mut voices_status = use_signal(String::new);
     let mut voices_name = use_signal(|| "voice_1".to_owned());
-    let mut canvas_search = use_signal(String::new);
-    let mut canvas_ctx_menu = use_signal(|| None::<usize>);
-    let mut clipboard_text = use_signal(String::new);
+    let _canvas_search = use_signal(String::new);
+    let _canvas_ctx_menu = use_signal(|| None::<usize>);
+    let _clipboard_text = use_signal(String::new);
     let mut update_state = use_signal(fae::update::UpdateState::load);
     let mut update_available = use_signal(|| None::<fae::update::Release>);
     let mut update_banner_dismissed = use_signal(|| false);
@@ -817,7 +817,7 @@ fn app() -> Element {
     });
 
     // Button click handler
-    let on_button_click = move |_| {
+    let mut on_button_click = move |_args: ()| {
         let current = status.read().clone();
         match current {
             AppStatus::Idle | AppStatus::Error(_) => {
@@ -1049,7 +1049,7 @@ fn app() -> Element {
                     let currently_active = gate_active_arc
                         .read()
                         .as_ref()
-                        .map_or(false, |a| a.load(std::sync::atomic::Ordering::Relaxed));
+                        .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed));
                     let cmd = if currently_active {
                         fae::GateCommand::Sleep
                     } else {
@@ -1065,7 +1065,7 @@ fn app() -> Element {
     // Auto-start model loading on app launch.
     if !*auto_started.read() {
         auto_started.set(true);
-        on_button_click();
+        on_button_click(());
     }
 
     let current_status = status.read().clone();
@@ -1086,7 +1086,7 @@ fn app() -> Element {
     let gate_is_active = gate_active_arc
         .read()
         .as_ref()
-        .map_or(false, |a| a.load(std::sync::atomic::Ordering::Relaxed));
+        .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed));
     let button_label = if !is_running {
         "Starting..."
     } else if gate_is_active {
@@ -1491,7 +1491,7 @@ fn app() -> Element {
                     class: "main-button",
                     style: "background: {button_bg}; opacity: {button_opacity};",
                     disabled: !button_enabled,
-                    onclick: move |_| on_button_click(),
+                    onclick: move |_| on_button_click(()),
                     "{button_label}"
                 }
 
