@@ -143,15 +143,19 @@ async fn render_tool_adds_element_to_session() {
     let result = tool.execute(input).await;
     assert!(result.is_ok());
 
-    let output: serde_json::Value = serde_json::from_str(&result.unwrap_or_default())
-        .unwrap_or_default();
+    let output: serde_json::Value =
+        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
     assert_eq!(output["success"], true);
 
     // Session now has 1 element.
     let reg_guard = reg.lock().unwrap_or_else(|e| e.into_inner());
     let session_arc = reg_guard.get("gui");
     assert!(session_arc.is_some());
-    let session = session_arc.as_ref().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    let session = session_arc
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     assert_eq!(session.element_count(), 1);
 }
 
@@ -195,8 +199,8 @@ async fn interact_tool_touch_returns_interpretation() {
     let result = tool.execute(input).await;
     assert!(result.is_ok());
 
-    let output: serde_json::Value = serde_json::from_str(&result.unwrap_or_default())
-        .unwrap_or_default();
+    let output: serde_json::Value =
+        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
     assert_eq!(output["success"], true);
     assert_eq!(output["interpretation"]["type"], "touch");
     assert_eq!(output["interpretation"]["element"], "chart-1");
@@ -220,8 +224,8 @@ async fn interact_tool_voice_with_context() {
 
     let result = tool.execute(input).await;
     assert!(result.is_ok());
-    let output: serde_json::Value = serde_json::from_str(&result.unwrap_or_default())
-        .unwrap_or_default();
+    let output: serde_json::Value =
+        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
     assert_eq!(output["interpretation"]["transcript"], "Make this bar red");
     assert_eq!(output["interpretation"]["context_element"], "bar-2");
 }
@@ -253,13 +257,18 @@ async fn export_tool_local_returns_metadata() {
     let result = tool.execute(input).await;
     assert!(result.is_ok());
 
-    let output: serde_json::Value = serde_json::from_str(&result.unwrap_or_default())
-        .unwrap_or_default();
+    let output: serde_json::Value =
+        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
     assert_eq!(output["success"], true);
     assert_eq!(output["format"], "image/png");
     assert_eq!(output["element_count"], 1);
     // Local session returns a note about needing canvas-server.
-    assert!(output["note"].as_str().unwrap_or_default().contains("Local"));
+    assert!(
+        output["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Local")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -469,17 +478,35 @@ fn resize_relayouts_all_messages() {
     let id2 = session.push_message(&CanvasMessage::new(MessageRole::User, "B", 2));
 
     // Original widths.
-    let w_before = session.scene().get_element(id1).map(|e| e.transform.width).unwrap_or(0.0);
+    let w_before = session
+        .scene()
+        .get_element(id1)
+        .map(|e| e.transform.width)
+        .unwrap_or(0.0);
 
     // Resize to narrower viewport.
     session.resize_viewport(400.0, 300.0);
 
-    let w_after = session.scene().get_element(id1).map(|e| e.transform.width).unwrap_or(0.0);
-    assert!(w_after < w_before, "width should decrease after narrowing viewport");
+    let w_after = session
+        .scene()
+        .get_element(id1)
+        .map(|e| e.transform.width)
+        .unwrap_or(0.0);
+    assert!(
+        w_after < w_before,
+        "width should decrease after narrowing viewport"
+    );
 
     // Both elements updated.
-    let w2 = session.scene().get_element(id2).map(|e| e.transform.width).unwrap_or(0.0);
-    assert!((w_after - w2).abs() < f32::EPSILON, "both messages should have same width");
+    let w2 = session
+        .scene()
+        .get_element(id2)
+        .map(|e| e.transform.width)
+        .unwrap_or(0.0);
+    assert!(
+        (w_after - w2).abs() < f32::EPSILON,
+        "both messages should have same width"
+    );
 }
 
 // ---------------------------------------------------------------------------
