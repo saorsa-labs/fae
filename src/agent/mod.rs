@@ -16,7 +16,7 @@ use saorsa_agent::{
     AgentConfig, AgentEvent, AgentLoop, BashTool, EditTool, FindTool, GrepTool, LsTool, ReadTool,
     WebSearchTool, WriteTool,
 };
-use saorsa_ai::{MistralrsConfig, MistralrsProvider, StreamingProvider};
+use saorsa_ai::StreamingProvider;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -45,20 +45,11 @@ impl SaorsaAgentLlm {
             None => LocalLlm::load_local_model(config).await?,
         };
 
-        // Use upstream `saorsa-ai`'s mistralrs provider when tools are disabled.
-        // When tools are enabled, we must emit structured tool events; upstream
-        // mistralrs provider currently rejects tool definitions/blocks, so we
-        // use our local tool-aware shim.
-        let provider: Box<dyn StreamingProvider> = match config.tool_mode {
-            AgentToolMode::Off => Box::new(MistralrsProvider::new(
-                model,
-                MistralrsConfig {
-                    temperature: config.temperature,
-                    top_p: config.top_p,
-                },
-            )),
-            _ => Box::new(ToolingMistralrsProvider::new(model, config.clone())),
-        };
+        // Use our local provider for ALL tool modes — it handles both plain text
+        // streaming and structured tool-use tag parsing. This removes the need
+        // for saorsa-ai's built-in mistralrs provider entirely.
+        let provider: Box<dyn StreamingProvider> =
+            Box::new(ToolingMistralrsProvider::new(model, config.clone()));
 
         let mut tools = saorsa_agent::ToolRegistry::new();
         let approval_timeout = Duration::from_secs(60);

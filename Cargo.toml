@@ -91,7 +91,7 @@ dioxus = { version = "0.6", features = ["desktop"], optional = true }
 
 # Agent runtime + multi-provider LLM API (saorsa ecosystem)
 saorsa-agent = "0.4"
-saorsa-ai = { version = "0.4", features = ["mistralrs"] }
+saorsa-ai = { version = "0.4", default-features = false }
 
 # Canvas visual output (saorsa-canvas scene graph)
 canvas-core = "0.2"
@@ -113,6 +113,9 @@ tower-http = { version = "0.6", features = ["cors"] }
 
 # UUID generation (request IDs for OpenAI-compatible API)
 uuid = { version = "1", features = ["v4"] }
+
+# Async stream combinator (SSE streaming for LLM server)
+async-stream = "0.3"
 
 # WebSocket client (for remote canvas-server)
 tokio-tungstenite = "0.24"
