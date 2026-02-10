@@ -219,6 +219,17 @@ pub struct LlmConfig {
     /// This is appended to the core prompt + personality profile.
     /// Keep this short and specific.
     pub system_prompt: String,
+    /// Cloud provider name from Pi's `~/.pi/agent/models.json`.
+    ///
+    /// When set (and backend is `Agent` or `Api`), this provider's base_url
+    /// and api_key are read from models.json instead of from `api_url`/`api_key`.
+    #[serde(default)]
+    pub cloud_provider: Option<String>,
+    /// Cloud model ID within the selected provider from models.json.
+    ///
+    /// When set, overrides `api_model` for the cloud provider.
+    #[serde(default)]
+    pub cloud_model: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -243,6 +254,8 @@ impl Default for LlmConfig {
             personality: "fae".to_owned(),
             // User add-on prompt (optional). The fixed base prompt is always applied.
             system_prompt: String::new(),
+            cloud_provider: None,
+            cloud_model: None,
         }
     }
 }
@@ -337,6 +350,26 @@ Personal context:\n\
 - Prefer addressing the primary user by name when you know it.\n\
 - If you do not know the primary user's name, say exactly: \"Hello, I'm Fae. What's your name?\"",
     ];
+
+    /// Returns a display name for the effective provider.
+    pub fn effective_provider_name(&self) -> String {
+        if let Some(ref name) = self.cloud_provider {
+            if let Some(ref model) = self.cloud_model {
+                format!("{name}/{model}")
+            } else {
+                name.clone()
+            }
+        } else {
+            match self.backend {
+                LlmBackend::Local | LlmBackend::Agent => {
+                    format!("local/{}", self.model_id)
+                }
+                LlmBackend::Api => {
+                    format!("{}/{}", self.api_url, self.api_model)
+                }
+            }
+        }
+    }
 
     /// Returns the fully assembled system prompt.
     ///

@@ -41,16 +41,46 @@ impl SaorsaAgentLlm {
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     ) -> Result<Self> {
-        let model = match preloaded_llm {
-            Some(llm) => llm.shared_model(),
-            None => LocalLlm::load_local_model(config).await?,
-        };
+        // Decide between local (in-process) inference and cloud provider.
+        let provider: Box<dyn StreamingProvider> = if let Some(ref cloud_name) = config.cloud_provider
+        {
+            // Cloud: look up provider in Pi's models.json.
+            let pi_path = crate::llm::pi_config::default_pi_models_path().ok_or_else(|| {
+                SpeechError::Config("cannot determine HOME for Pi models.json".to_owned())
+            })?;
+            let pi_config = crate::llm::pi_config::read_pi_config(&pi_path)?;
+            let provider_info = pi_config.find_provider(cloud_name).ok_or_else(|| {
+                SpeechError::Config(format!(
+                    "cloud provider '{cloud_name}' not found in {}",
+                    pi_path.display()
+                ))
+            })?;
+            let model_id = config
+                .cloud_model
+                .clone()
+                .or_else(|| provider_info.models.first().map(|m| m.id.clone()))
+                .unwrap_or_else(|| config.api_model.clone());
 
-        // Use our local provider for ALL tool modes — it handles both plain text
-        // streaming and structured tool-use tag parsing. This removes the need
-        // for saorsa-ai's built-in mistralrs provider entirely.
-        let provider: Box<dyn StreamingProvider> =
-            Box::new(ToolingMistralrsProvider::new(model, config.clone()));
+            tracing::info!(
+                "agent using cloud provider: {} (model={}, url={})",
+                cloud_name,
+                model_id,
+                provider_info.base_url
+            );
+
+            Box::new(http_provider::HttpStreamingProvider::new(
+                provider_info.base_url.clone(),
+                provider_info.api_key.clone(),
+                model_id,
+            ))
+        } else {
+            // Local: use in-process mistralrs inference.
+            let model = match preloaded_llm {
+                Some(llm) => llm.shared_model(),
+                None => LocalLlm::load_local_model(config).await?,
+            };
+            Box::new(ToolingMistralrsProvider::new(model, config.clone()))
+        };
 
         let mut tools = saorsa_agent::ToolRegistry::new();
         let approval_timeout = Duration::from_secs(60);
