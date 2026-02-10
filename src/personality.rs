@@ -26,9 +26,21 @@ Speak naturally. Do not use emojis, action descriptions, roleplay narration, or 
 Do not narrate your reasoning. If unsure, ask one focused question.\n\
 If you do not know the answer, say so briefly.";
 
-/// The full Fae identity profile, compiled into the binary from
+/// The voice-optimized Fae identity profile, compiled into the binary from
 /// `Personality/fae-identity-profile.md`.
+///
+/// This is the concise version used in the system prompt for voice assistant
+/// interactions (78 lines, ~3000 chars).
 pub const FAE_PERSONALITY: &str = include_str!("../Personality/fae-identity-profile.md");
+
+/// The full Fae identity reference document, compiled into the binary from
+/// `Personality/fae-identity-full.md`.
+///
+/// This 291-line character bible contains the complete backstory, abilities,
+/// vulnerabilities, and personality details. It is available for future use
+/// (e.g. RAG, detailed character queries) but is **not** included in the
+/// system prompt to keep token usage manageable.
+pub const FAE_IDENTITY_REFERENCE: &str = include_str!("../Personality/fae-identity-full.md");
 
 /// Returns the directory where user-created personality profiles are stored.
 ///
@@ -211,5 +223,69 @@ mod tests {
         let dir_str = dir.to_string_lossy();
         assert!(dir_str.contains(".fae"));
         assert!(dir_str.ends_with("personalities"));
+    }
+
+    // --- Personality Enhancement Tests ---
+
+    #[test]
+    fn fae_personality_contains_scottish_identity() {
+        let prompt = assemble_prompt("fae", "");
+        assert!(
+            prompt.contains("Scottish nature spirit"),
+            "prompt should mention Scottish nature spirit"
+        );
+        assert!(
+            prompt.contains("Highland"),
+            "prompt should mention Highland"
+        );
+    }
+
+    #[test]
+    fn fae_personality_contains_speech_examples() {
+        let prompt = assemble_prompt("fae", "");
+        assert!(
+            prompt.contains("Right then"),
+            "prompt should contain 'Right then' example phrase"
+        );
+        assert!(
+            prompt.contains("What drives you"),
+            "prompt should contain 'What drives you' example phrase"
+        );
+    }
+
+    #[test]
+    fn fae_personality_has_voice_constraints() {
+        let prompt = assemble_prompt("fae", "");
+        assert!(
+            prompt.contains("1-3 short"),
+            "prompt should specify 1-3 short sentences"
+        );
+        assert!(
+            prompt.contains("Never use emojis"),
+            "prompt should prohibit emojis"
+        );
+    }
+
+    #[test]
+    fn fae_identity_reference_is_nonempty() {
+        assert!(
+            !FAE_IDENTITY_REFERENCE.is_empty(),
+            "full identity reference should not be empty"
+        );
+        assert!(
+            FAE_IDENTITY_REFERENCE.len() > FAE_PERSONALITY.len(),
+            "full reference ({} bytes) should be longer than voice-optimized profile ({} bytes)",
+            FAE_IDENTITY_REFERENCE.len(),
+            FAE_PERSONALITY.len()
+        );
+    }
+
+    #[test]
+    fn fae_personality_is_voice_optimized() {
+        assert!(
+            FAE_PERSONALITY.len() < 5000,
+            "voice-optimized profile should be under 5000 chars, got {}",
+            FAE_PERSONALITY.len()
+        );
     }
 }
