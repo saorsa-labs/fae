@@ -142,8 +142,7 @@ impl Tool for CanvasExportTool {
                 drop(registry);
 
                 let data = self.export_remote(&params)?;
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(&data);
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
 
                 let response = serde_json::json!({
                     "success": true,
@@ -232,7 +231,12 @@ mod tests {
         assert_eq!(output["format"], "image/png");
         assert_eq!(output["quality"], 95);
         // Local sessions return metadata with a note.
-        assert!(output["note"].as_str().unwrap_or_default().contains("Local"));
+        assert!(
+            output["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Local")
+        );
     }
 
     #[tokio::test]
