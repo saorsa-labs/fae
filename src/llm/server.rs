@@ -9,7 +9,17 @@
 //! - `GET /v1/models` — list available models
 //! - `POST /v1/chat/completions` — chat completions (streaming and non-streaming)
 
+use axum::extract::State;
+use axum::response::Json;
+use axum::routing::{get, post};
+use axum::Router;
+use mistralrs::Model;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
+use tracing::info;
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -174,6 +184,160 @@ pub struct ModelObject {
     pub owned_by: String,
 }
 
+// ---------------------------------------------------------------------------
+// Server configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for the local LLM HTTP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmServerConfig {
+    /// Whether the server is enabled.
+    pub enabled: bool,
+    /// Port to bind on. Use `0` for automatic assignment.
+    pub port: u16,
+    /// Host address to bind on (default: `127.0.0.1`).
+    pub host: String,
+}
+
+impl Default for LlmServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: 0,
+            host: "127.0.0.1".to_owned(),
+        }
+    }
+}
+
+/// Default model ID exposed by the server.
+const MODEL_ID: &str = "fae-qwen3";
+
+// ---------------------------------------------------------------------------
+// Shared application state
+// ---------------------------------------------------------------------------
+
+/// Shared state for axum handlers.
+#[derive(Clone)]
+struct AppState {
+    /// The mistralrs model instance shared with the voice pipeline.
+    model: Arc<Model>,
+    /// Model ID to report in API responses.
+    model_id: String,
+}
+
+// ---------------------------------------------------------------------------
+// LlmServer
+// ---------------------------------------------------------------------------
+
+/// OpenAI-compatible HTTP server backed by a shared `mistralrs` model.
+///
+/// The server exposes `GET /v1/models` and `POST /v1/chat/completions`
+/// endpoints on localhost. It shares the same `Model` instance used by
+/// the voice pipeline, so no extra VRAM/RAM is consumed.
+pub struct LlmServer {
+    /// The address the server is listening on.
+    addr: SocketAddr,
+    /// Handle to the background server task.
+    handle: JoinHandle<()>,
+}
+
+impl LlmServer {
+    /// Start the LLM HTTP server.
+    ///
+    /// Binds to `{config.host}:{config.port}` (use port `0` for auto-assign)
+    /// and begins serving in a background tokio task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TCP listener cannot bind.
+    pub async fn start(model: Arc<Model>, config: &LlmServerConfig) -> crate::error::Result<Self> {
+        let state = AppState {
+            model,
+            model_id: MODEL_ID.to_owned(),
+        };
+
+        let app = Router::new()
+            .route("/v1/models", get(handle_models))
+            .route("/v1/chat/completions", post(handle_chat_completions))
+            .with_state(state);
+
+        let bind_addr = format!("{}:{}", config.host, config.port);
+        let listener = TcpListener::bind(&bind_addr)
+            .await
+            .map_err(|e| crate::error::SpeechError::Llm(format!("LLM server bind failed: {e}")))?;
+
+        let addr = listener
+            .local_addr()
+            .map_err(|e| crate::error::SpeechError::Llm(format!("failed to get local addr: {e}")))?;
+
+        info!("LLM server listening on http://{addr}/v1");
+
+        let handle = tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!("LLM server error: {e}");
+            }
+        });
+
+        Ok(Self { addr, handle })
+    }
+
+    /// Returns the address the server is listening on.
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// Returns the port the server is listening on.
+    pub fn port(&self) -> u16 {
+        self.addr.port()
+    }
+
+    /// Abort the server task.
+    pub fn shutdown(&self) {
+        self.handle.abort();
+    }
+}
+
+impl Drop for LlmServer {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Route handlers
+// ---------------------------------------------------------------------------
+
+/// `GET /v1/models` — list available models.
+async fn handle_models(State(state): State<AppState>) -> Json<ModelListResponse> {
+    Json(ModelListResponse {
+        object: "list".to_owned(),
+        data: vec![ModelObject {
+            id: state.model_id,
+            object: "model".to_owned(),
+            owned_by: "fae-local".to_owned(),
+        }],
+    })
+}
+
+/// `POST /v1/chat/completions` — chat completions (placeholder, implemented in Task 3).
+async fn handle_chat_completions(
+    State(state): State<AppState>,
+    Json(_request): Json<ChatCompletionRequest>,
+) -> (axum::http::StatusCode, Json<ErrorResponse>) {
+    // Reference the model to prove it's wired through state.
+    let _model = &state.model;
+    (
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        Json(ErrorResponse {
+            error: ErrorBody {
+                message: "chat completions not yet implemented".to_owned(),
+                error_type: "not_implemented".to_owned(),
+            },
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -311,6 +475,33 @@ mod tests {
         assert_eq!(parsed.data.len(), 1);
         assert_eq!(parsed.data[0].id, "fae-qwen3");
         assert_eq!(parsed.data[0].owned_by, "fae-local");
+    }
+
+    #[test]
+    fn llm_server_config_defaults() {
+        let config = LlmServerConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.port, 0);
+        assert_eq!(config.host, "127.0.0.1");
+    }
+
+    #[test]
+    fn llm_server_config_serde_round_trip() {
+        let config = LlmServerConfig {
+            enabled: false,
+            port: 8080,
+            host: "0.0.0.0".to_owned(),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: LlmServerConfig = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.enabled);
+        assert_eq!(parsed.port, 8080);
+        assert_eq!(parsed.host, "0.0.0.0");
+    }
+
+    #[test]
+    fn model_id_constant_is_fae_qwen3() {
+        assert_eq!(MODEL_ID, "fae-qwen3");
     }
 
     #[test]
