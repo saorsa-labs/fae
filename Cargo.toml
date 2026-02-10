@@ -125,11 +125,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 [target.'cfg(target_os = "macos")'.dependencies]
 mistralrs = { version = "0.7", features = ["metal"] }
 
-# Local path overrides for development.
-# These let `cargo check/build/test` use the local saorsa-canvas checkout
-# while keeping the Cargo.toml dependency versions pointed at crates.io for
-# publishing. Remove or comment these lines to build against the published crates.
-[patch.crates-io]
-canvas-core = { path = "../saorsa-canvas/canvas-core" }
-canvas-mcp = { path = "../saorsa-canvas/canvas-mcp" }
-canvas-renderer = { path = "../saorsa-canvas/canvas-renderer" }
+# Local path overrides for development (uncomment to use local saorsa-canvas checkout):
+# [patch.crates-io]
+# canvas-core = { path = "../saorsa-canvas/canvas-core" }
+# canvas-mcp = { path = "../saorsa-canvas/canvas-mcp" }
+# canvas-renderer = { path = "../saorsa-canvas/canvas-renderer" }
