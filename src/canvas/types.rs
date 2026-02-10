@@ -41,6 +41,10 @@ pub struct CanvasMessage {
     pub timestamp_ms: u64,
     /// For tool messages: the tool name.
     pub tool_name: Option<String>,
+    /// For tool messages: the JSON input to the tool call.
+    pub tool_input: Option<String>,
+    /// For tool messages: the result text from the tool execution.
+    pub tool_result_text: Option<String>,
 }
 
 impl CanvasMessage {
@@ -51,6 +55,8 @@ impl CanvasMessage {
             text: text.into(),
             timestamp_ms,
             tool_name: None,
+            tool_input: None,
+            tool_result_text: None,
         }
     }
 
@@ -61,6 +67,26 @@ impl CanvasMessage {
             text: text.into(),
             timestamp_ms,
             tool_name: Some(name.into()),
+            tool_input: None,
+            tool_result_text: None,
+        }
+    }
+
+    /// Create a tool message with full details including input and result.
+    pub fn tool_with_details(
+        name: impl Into<String>,
+        text: impl Into<String>,
+        timestamp_ms: u64,
+        tool_input: Option<String>,
+        tool_result_text: Option<String>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            text: text.into(),
+            timestamp_ms,
+            tool_name: Some(name.into()),
+            tool_input,
+            tool_result_text,
         }
     }
 
@@ -183,6 +209,8 @@ mod tests {
             text: "done".into(),
             timestamp_ms: 1000,
             tool_name: None,
+            tool_input: None,
+            tool_result_text: None,
         };
         let el = msg.to_element();
         match &el.kind {

@@ -599,6 +599,102 @@ fn fit_label(file_bytes: Option<u64>, ram_bytes: Option<u64>) -> Option<String> 
     Some(format!("{label} ({:.0}% of RAM)", ratio * 100.0))
 }
 
+/// Highlight case-insensitive search matches in HTML content by wrapping
+/// them in `<mark>` tags. Only operates on text outside of HTML tags.
+#[cfg(feature = "gui")]
+fn highlight_search_matches(html: &str, query: &str) -> String {
+    if query.is_empty() {
+        return html.to_owned();
+    }
+    let lower_query = query.to_lowercase();
+    let mut result = String::with_capacity(html.len() + 64);
+    let mut in_tag = false;
+    let mut text_buf = String::new();
+
+    for ch in html.chars() {
+        if ch == '<' {
+            // Flush text buffer with highlights.
+            if !text_buf.is_empty() {
+                highlight_text_segment(&text_buf, &lower_query, &mut result);
+                text_buf.clear();
+            }
+            in_tag = true;
+            result.push(ch);
+        } else if ch == '>' {
+            in_tag = false;
+            result.push(ch);
+        } else if in_tag {
+            result.push(ch);
+        } else {
+            text_buf.push(ch);
+        }
+    }
+    // Flush remaining text.
+    if !text_buf.is_empty() {
+        highlight_text_segment(&text_buf, &lower_query, &mut result);
+    }
+    result
+}
+
+/// Insert `<mark>` tags around case-insensitive matches of `query` in `text`.
+///
+/// Works by lowercasing both sides and matching on char indices to avoid
+/// byte-offset mismatches between different-length Unicode casings.
+#[cfg(feature = "gui")]
+fn highlight_text_segment(text: &str, lower_query: &str, out: &mut String) {
+    let lower_text = text.to_lowercase();
+    let query_chars: usize = lower_query.chars().count();
+    if query_chars == 0 {
+        out.push_str(text);
+        return;
+    }
+
+    // Build a mapping from char index to byte offset in `text`.
+    let char_to_byte: Vec<usize> = text
+        .char_indices()
+        .map(|(byte_off, _)| byte_off)
+        .chain(std::iter::once(text.len()))
+        .collect();
+
+    // Build a mapping from char index to byte offset in `lower_text`.
+    let lower_char_to_byte: Vec<usize> = lower_text
+        .char_indices()
+        .map(|(byte_off, _)| byte_off)
+        .chain(std::iter::once(lower_text.len()))
+        .collect();
+
+    let mut last_char = 0usize;
+    let total_chars = char_to_byte.len() - 1; // exclude sentinel
+
+    // Find matches in the lowered text, convert byte offsets to char indices.
+    for (lower_byte_start, _) in lower_text.match_indices(lower_query) {
+        // Convert lower-text byte offset to char index.
+        let Some(match_char_start) = lower_char_to_byte
+            .iter()
+            .position(|&b| b == lower_byte_start)
+        else {
+            continue;
+        };
+        let match_char_end = match_char_start + query_chars;
+        if match_char_end > total_chars || match_char_start < last_char {
+            continue;
+        }
+
+        // Map char indices back to byte offsets in original `text`.
+        let orig_start = char_to_byte[match_char_start];
+        let orig_end = char_to_byte[match_char_end];
+        let last_byte = char_to_byte[last_char];
+
+        out.push_str(&text[last_byte..orig_start]);
+        out.push_str("<mark>");
+        out.push_str(&text[orig_start..orig_end]);
+        out.push_str("</mark>");
+        last_char = match_char_end;
+    }
+    let last_byte = char_to_byte[last_char];
+    out.push_str(&text[last_byte..]);
+}
+
 /// Root application component.
 #[cfg(feature = "gui")]
 fn app() -> Element {
@@ -635,6 +731,9 @@ fn app() -> Element {
         use_signal(|| fae::canvas::bridge::CanvasBridge::new("gui", 800.0, 600.0));
     let mut voices_status = use_signal(String::new);
     let mut voices_name = use_signal(|| "voice_1".to_owned());
+    let mut canvas_search = use_signal(String::new);
+    let mut canvas_ctx_menu = use_signal(|| None::<usize>);
+    let mut clipboard_text = use_signal(String::new);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
@@ -647,6 +746,17 @@ fn app() -> Element {
             if (el) el.scrollTop = el.scrollHeight;
             "#,
         );
+    });
+
+    // Copy text to clipboard when clipboard_text signal is set.
+    use_effect(move || {
+        let text = clipboard_text.read().clone();
+        if !text.is_empty() {
+            let escaped = text.replace('\\', "\\\\").replace('`', "\\`");
+            document::eval(&format!(
+                "navigator.clipboard.writeText(`{escaped}`).catch(function(){{}});"
+            ));
+        }
     });
 
     use_hook(move || {
@@ -1416,8 +1526,159 @@ fn app() -> Element {
                         }
                         h2 { class: "screen-title", "Canvas" }
                     }
-                    div { id: "canvas-pane", class: "canvas-pane",
-                        dangerous_inner_html: canvas_bridge.read().session().to_html(),
+                    // Search bar
+                    div { class: "canvas-search",
+                        input {
+                            r#type: "text",
+                            class: "canvas-search-input",
+                            placeholder: "Search messages\u{2026}",
+                            value: "{canvas_search.read()}",
+                            oninput: move |e| canvas_search.set(e.value().to_string()),
+                        }
+                        if !canvas_search.read().is_empty() {
+                            button {
+                                class: "canvas-search-clear",
+                                onclick: move |_| canvas_search.set(String::new()),
+                                "\u{00d7}"
+                            }
+                        }
+                    }
+                    // Per-message Dioxus components
+                    div {
+                        id: "canvas-pane",
+                        class: "canvas-pane",
+                        role: "log",
+                        aria_label: "Conversation messages",
+                        tabindex: "0",
+                        onkeydown: move |e| {
+                            if e.key() == dioxus::prelude::Key::Escape {
+                                canvas_ctx_menu.set(None);
+                            }
+                        },
+                        {
+                            let search = canvas_search.read().to_lowercase();
+                            let views = canvas_bridge.read().session().message_views();
+                            views.into_iter().enumerate().filter_map(|(i, mv)| {
+                                if !search.is_empty() && !mv.text.to_lowercase().contains(&search) {
+                                    return None;
+                                }
+                                let role_label = match mv.role {
+                                    fae::canvas::types::MessageRole::User => "user",
+                                    fae::canvas::types::MessageRole::Assistant => "assistant",
+                                    fae::canvas::types::MessageRole::System => "system",
+                                    fae::canvas::types::MessageRole::Tool => "tool",
+                                };
+
+                                // Highlight search matches.
+                                let body_html = if !search.is_empty() {
+                                    highlight_search_matches(&mv.html, &search)
+                                } else {
+                                    mv.html.clone()
+                                };
+
+                                // Tool detail card (collapsible).
+                                let tool_details = if mv.tool_input.is_some() || mv.tool_result_text.is_some() {
+                                    let input_html = mv.tool_input.as_deref().map(|inp| {
+                                        format!(
+                                            "<pre class=\"tool-detail-json\">{}</pre>",
+                                            fae::canvas::session::html_escape(inp),
+                                        )
+                                    }).unwrap_or_default();
+                                    let result_html = mv.tool_result_text.as_deref().map(|r| {
+                                        format!(
+                                            "<div class=\"tool-detail-result\">{}</div>",
+                                            fae::canvas::session::html_escape(r),
+                                        )
+                                    }).unwrap_or_default();
+                                    format!(
+                                        "<details class=\"tool-details\">\
+                                         <summary>Details</summary>\
+                                         {input_html}{result_html}\
+                                         </details>"
+                                    )
+                                } else {
+                                    String::new()
+                                };
+
+                                let full_html = format!("{body_html}{tool_details}");
+                                let msg_text = mv.text.clone();
+
+                                Some(rsx! {
+                                    div {
+                                        key: "{i}",
+                                        class: "canvas-msg-wrapper",
+                                        role: "article",
+                                        aria_label: "{role_label} message",
+                                        tabindex: "0",
+                                        oncontextmenu: move |e| {
+                                            e.prevent_default();
+                                            canvas_ctx_menu.set(Some(i));
+                                        },
+                                        dangerous_inner_html: full_html,
+                                        // Action bar (copy)
+                                        div { class: "msg-actions",
+                                            button {
+                                                class: "msg-action-btn",
+                                                title: "Copy text",
+                                                onclick: {
+                                                    let text = msg_text.clone();
+                                                    move |_| {
+                                                        clipboard_text.set(text.clone());
+                                                    }
+                                                },
+                                                "\u{1f4cb}"
+                                            }
+                                        }
+                                    }
+                                    // Context menu
+                                    if *canvas_ctx_menu.read() == Some(i) {
+                                        div { class: "canvas-context-menu",
+                                            button {
+                                                class: "ctx-menu-item",
+                                                onclick: {
+                                                    let text = mv.text.clone();
+                                                    move |_| {
+                                                        clipboard_text.set(text.clone());
+                                                        canvas_ctx_menu.set(None);
+                                                    }
+                                                },
+                                                "Copy"
+                                            }
+                                            button {
+                                                class: "ctx-menu-item",
+                                                onclick: move |_| canvas_ctx_menu.set(None),
+                                                "Close"
+                                            }
+                                        }
+                                    }
+                                })
+                            }).collect::<Vec<_>>().into_iter()
+                        }
+                        // Thinking indicator
+                        if *assistant_generating.read() {
+                            div {
+                                class: "thinking-indicator",
+                                role: "status",
+                                aria_live: "polite",
+                                aria_label: "Assistant is thinking",
+                                span { class: "thinking-dot" }
+                                span { class: "thinking-dot" }
+                                span { class: "thinking-dot" }
+                            }
+                        }
+                    }
+                    // Tool-pushed content (charts, images)
+                    {
+                        let tools_html = canvas_bridge.read().session().tool_elements_html();
+                        if !tools_html.is_empty() {
+                            rsx! {
+                                div { class: "canvas-tools-section",
+                                    dangerous_inner_html: tools_html,
+                                }
+                            }
+                        } else {
+                            rsx! {}
+                        }
                     }
                     if !is_running {
                         p { class: "canvas-hint", "Start the pipeline to see messages here." }
@@ -3832,6 +4093,137 @@ const GLOBAL_CSS: &str = r#"
     }
     .model-label, .video-label { font-weight: 600; }
     .model-info, .video-info { opacity: 0.7; font-size: 0.8rem; }
+
+    /* --- Canvas interactive elements --- */
+    .canvas-search {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 0.5rem;
+    }
+    .canvas-search-input {
+        flex: 1;
+        background: var(--bg-primary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 6px 10px;
+        color: var(--text-primary);
+        font-size: 0.85rem;
+    }
+    .canvas-search-input::placeholder { color: var(--text-tertiary); }
+    .canvas-search-clear {
+        background: none;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        color: var(--text-secondary);
+        cursor: pointer;
+        padding: 2px 8px;
+        font-size: 1rem;
+    }
+    .canvas-msg-wrapper {
+        position: relative;
+        padding: 8px 12px;
+        border-radius: var(--radius-sm);
+        font-size: 0.9rem;
+        line-height: 1.4;
+        word-wrap: break-word;
+        transition: background 0.15s;
+    }
+    .canvas-msg-wrapper:hover { background: rgba(255,255,255,0.03); }
+    .canvas-msg-wrapper:focus { outline: 2px solid rgba(59, 130, 246, 0.5); outline-offset: -2px; }
+    .msg-actions {
+        display: none;
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        gap: 2px;
+    }
+    .canvas-msg-wrapper:hover .msg-actions { display: flex; }
+    .msg-action-btn {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-size: 0.75rem;
+        padding: 2px 6px;
+    }
+    .msg-action-btn:hover { background: rgba(255,255,255,0.15); }
+    .canvas-context-menu {
+        position: absolute;
+        z-index: 100;
+        background: var(--bg-primary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        padding: 4px;
+        min-width: 120px;
+        margin-top: 4px;
+    }
+    .ctx-menu-item {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        color: var(--text-primary);
+        font-size: 0.85rem;
+        padding: 6px 12px;
+        text-align: left;
+        cursor: pointer;
+        border-radius: 3px;
+    }
+    .ctx-menu-item:hover { background: rgba(255,255,255,0.08); }
+    .thinking-indicator {
+        display: flex;
+        gap: 6px;
+        padding: 12px;
+        justify-content: center;
+    }
+    .thinking-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--text-tertiary);
+        animation: thinking-pulse 1.4s infinite;
+    }
+    .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes thinking-pulse {
+        0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+        40% { opacity: 1; transform: scale(1); }
+    }
+    .tool-details {
+        margin-top: 4px;
+        font-size: 0.82rem;
+    }
+    .tool-details summary {
+        cursor: pointer;
+        color: var(--text-secondary);
+        font-size: 0.8rem;
+    }
+    .tool-detail-json {
+        background: rgba(0,0,0,0.2);
+        padding: 6px 8px;
+        border-radius: 3px;
+        font-size: 0.78rem;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    .tool-detail-result {
+        padding: 4px 0;
+        color: var(--text-secondary);
+    }
+    .canvas-tools-section {
+        border-top: 1px solid var(--border-subtle);
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+    }
+    mark {
+        background: rgba(250, 204, 21, 0.3);
+        color: inherit;
+        border-radius: 2px;
+        padding: 0 1px;
+    }
 
     /* --- Scrollbar --- */
     ::-webkit-scrollbar { width: 5px; }

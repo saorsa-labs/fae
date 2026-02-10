@@ -15,12 +15,33 @@ const MESSAGE_PADDING: f32 = 8.0;
 /// Horizontal margin on each side of messages (pixels).
 const MESSAGE_MARGIN_X: f32 = 16.0;
 
+/// A read-only view of a message suitable for GUI rendering.
+pub struct MessageView {
+    /// Message role (user, assistant, system, tool).
+    pub role: MessageRole,
+    /// Timestamp in milliseconds.
+    pub timestamp_ms: u64,
+    /// Pre-rendered HTML body for the message content.
+    pub html: String,
+    /// Plain text content of the message.
+    pub text: String,
+    /// Tool name (for tool messages).
+    pub tool_name: Option<String>,
+    /// JSON input to the tool call.
+    pub tool_input: Option<String>,
+    /// Tool execution result text.
+    pub tool_result_text: Option<String>,
+}
+
 /// Tracks a message element within the scene.
 struct MessageEntry {
     element_id: ElementId,
     role: MessageRole,
-    #[allow(dead_code)]
     timestamp_ms: u64,
+    text: String,
+    tool_name: Option<String>,
+    tool_input: Option<String>,
+    tool_result_text: Option<String>,
 }
 
 /// A canvas session that owns a scene and manages message layout.
@@ -95,6 +116,10 @@ impl CanvasSession {
             element_id: id,
             role: message.role,
             timestamp_ms: message.timestamp_ms,
+            text: message.text.clone(),
+            tool_name: message.tool_name.clone(),
+            tool_input: message.tool_input.clone(),
+            tool_result_text: message.tool_result_text.clone(),
         });
 
         self.next_y += MESSAGE_HEIGHT + MESSAGE_PADDING;
@@ -159,6 +184,64 @@ impl CanvasSession {
             self.cached_generation = self.generation;
         }
         &self.cached_html
+    }
+
+    /// Build a list of `MessageView` structs for per-message GUI rendering.
+    ///
+    /// Each view carries the pre-rendered HTML body, plain text, role,
+    /// and optional tool metadata so the GUI can wrap each message in
+    /// interactive Dioxus components.
+    pub fn message_views(&self) -> Vec<MessageView> {
+        use super::render::render_element_html;
+
+        self.messages
+            .iter()
+            .map(|entry| {
+                let html = self
+                    .scene
+                    .get_element(entry.element_id)
+                    .map(|el| render_element_html(el, entry.role.css_class()))
+                    .unwrap_or_default();
+
+                MessageView {
+                    role: entry.role,
+                    timestamp_ms: entry.timestamp_ms,
+                    html,
+                    text: entry.text.clone(),
+                    tool_name: entry.tool_name.clone(),
+                    tool_input: entry.tool_input.clone(),
+                    tool_result_text: entry.tool_result_text.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// Render non-message elements (MCP tool-pushed content) to HTML.
+    pub fn tool_elements_html(&self) -> String {
+        use super::render::render_element_html;
+        use std::collections::HashSet;
+
+        let message_ids: HashSet<canvas_core::ElementId> =
+            self.messages.iter().map(|e| e.element_id).collect();
+
+        let tool_elements: Vec<_> = self
+            .scene
+            .elements()
+            .filter(|el| !message_ids.contains(&el.id))
+            .collect();
+
+        if tool_elements.is_empty() {
+            return String::new();
+        }
+
+        let mut html = String::from("<div class=\"canvas-tools\">\n");
+        for el in tool_elements {
+            html.push_str("  ");
+            html.push_str(&render_element_html(el, "tool-content"));
+            html.push('\n');
+        }
+        html.push_str("</div>\n");
+        html
     }
 
     /// Update the viewport dimensions and re-layout existing messages.

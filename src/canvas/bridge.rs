@@ -3,6 +3,8 @@
 //! Subscribes to [`RuntimeEvent`]s and converts them into
 //! [`CanvasMessage`]s pushed to a [`CanvasSession`].
 
+use std::collections::HashMap;
+
 use crate::pipeline::messages::ControlEvent;
 use crate::runtime::RuntimeEvent;
 
@@ -22,6 +24,9 @@ pub struct CanvasBridge {
     group_count: usize,
     /// Monotonic timestamp counter (ms) for message ordering.
     next_ts: u64,
+    /// Pending tool inputs keyed by tool name (captured on ToolCall,
+    /// consumed on ToolResult).
+    pending_tool_inputs: HashMap<String, String>,
 }
 
 impl CanvasBridge {
@@ -34,12 +39,18 @@ impl CanvasBridge {
             last_role: None,
             group_count: 0,
             next_ts: 0,
+            pending_tool_inputs: HashMap::new(),
         }
     }
 
     /// Reference to the underlying canvas session.
     pub fn session(&self) -> &CanvasSession {
         &self.session
+    }
+
+    /// Mutable reference to the underlying canvas session.
+    pub fn session_mut(&mut self) -> &mut CanvasSession {
+        &mut self.session
     }
 
     /// Number of consecutive messages with the same role.
@@ -73,7 +84,10 @@ impl CanvasBridge {
                 }
             }
 
-            RuntimeEvent::ToolCall { name, .. } => {
+            RuntimeEvent::ToolCall { name, input_json } => {
+                // Store the input for attachment to the ToolResult message.
+                self.pending_tool_inputs
+                    .insert(name.clone(), input_json.clone());
                 let text = format!("{name} called");
                 self.push_tool(name, &text);
             }
@@ -81,7 +95,8 @@ impl CanvasBridge {
             RuntimeEvent::ToolResult { name, success } => {
                 let status = if *success { "success" } else { "failed" };
                 let text = format!("{name} \u{2192} {status}");
-                self.push_tool(name, &text);
+                let tool_input = self.pending_tool_inputs.remove(name.as_str());
+                self.push_tool_with_details(name, &text, tool_input, Some(status.to_owned()));
             }
 
             RuntimeEvent::Control(ControlEvent::UserSpeechStart { .. }) => {
@@ -142,6 +157,29 @@ impl CanvasBridge {
         }
 
         let msg = CanvasMessage::tool(name, text, ts);
+        self.session.push_message(&msg);
+    }
+
+    /// Push a tool message with input/result details.
+    fn push_tool_with_details(
+        &mut self,
+        name: &str,
+        text: &str,
+        tool_input: Option<String>,
+        tool_result_text: Option<String>,
+    ) {
+        let ts = self.next_ts;
+        self.next_ts += 1;
+
+        let role = MessageRole::Tool;
+        if self.last_role == Some(role) {
+            self.group_count += 1;
+        } else {
+            self.last_role = Some(role);
+            self.group_count = 1;
+        }
+
+        let msg = CanvasMessage::tool_with_details(name, text, ts, tool_input, tool_result_text);
         self.session.push_message(&msg);
     }
 }
