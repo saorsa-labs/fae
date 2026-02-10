@@ -15,6 +15,8 @@ use crate::canvas::tools::{CanvasExportTool, CanvasInteractTool, CanvasRenderToo
 use crate::config::{AgentToolMode, LlmConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
+use crate::pi::session::PiSession;
+use crate::pi::tool::PiDelegateTool;
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
 use saorsa_agent::{
@@ -45,6 +47,7 @@ impl SaorsaAgentLlm {
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+        pi_session: Option<Arc<Mutex<PiSession>>>,
     ) -> Result<Self> {
         // Decide between local (in-process) inference and cloud provider.
         let provider: Box<dyn StreamingProvider> = if let Some(ref cloud_name) =
@@ -173,6 +176,19 @@ impl SaorsaAgentLlm {
             tools.register(Box::new(CanvasRenderTool::new(registry.clone())));
             tools.register(Box::new(CanvasInteractTool::new(registry.clone())));
             tools.register(Box::new(CanvasExportTool::new(registry)));
+        }
+
+        // Register Pi coding agent delegate tool when a session is available.
+        // Pi has full system access (bash, file writes), so it requires approval
+        // gating and is only available in Full tool mode.
+        if let Some(session) = pi_session
+            && matches!(config.tool_mode, AgentToolMode::Full)
+        {
+            tools.register(Box::new(approval_tool::ApprovalTool::new(
+                Box::new(PiDelegateTool::new(session)),
+                tool_approval_tx.clone(),
+                approval_timeout,
+            )));
         }
 
         let max_tokens_u32 = if config.max_tokens > u32::MAX as usize {
