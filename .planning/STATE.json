@@ -4,28 +4,21 @@
   "active": true,
   "milestone": {
     "number": 3,
-    "name": "Remote Canvas Server"
+    "name": "Canvas Server Enhancement"
   },
   "phase": {
-    "number": "3.2",
-    "name": "Server-Side Rendering",
-    "plan": null,
-    "status": "pending"
+    "number": "3.3",
+    "name": "Server-Side Export",
+    "plan": null
   },
   "progress": {
-    "total_tasks": 8,
+    "total_tasks": 0,
     "completed_tasks": 0,
     "current_task": null
   },
-  "status": "blocked",
-  "blocked_reason": "Phase 3.2 modifies canvas-server (separate project at ../saorsa-canvas). Requires cross-project work.",
-  "last_updated": "2026-02-10T14:05:00Z",
+  "status": "designed",
+  "last_updated": "2026-02-10T17:30:00Z",
   "milestones_completed": [
-    {
-      "number": 0,
-      "name": "Dioxus Desktop GUI (previous project)",
-      "completed_at": "2026-02-08T15:45:00Z"
-    },
     {
       "number": 1,
       "name": "Canvas Core Integration & Dioxus Pane",
@@ -42,6 +35,11 @@
       "number": "3.1",
       "name": "WebSocket Client",
       "completed_at": "2026-02-10T14:00:00Z"
+    },
+    {
+      "number": "3.2",
+      "name": "Protocol Alignment & Persistence",
+      "completed_at": "2026-02-10T17:30:00Z"
     }
   ]
 }
