@@ -34,4 +34,15 @@
 
 ---
 
-## Milestone 3: Remote Canvas Server — NEXT
+## Milestone 3: Remote Canvas Server — IN PROGRESS
+
+### Phase 3.1: WebSocket Client — COMPLETE
+- [x] Task 1: CanvasBackend trait + ConnectionStatus enum (backend.rs)
+- [x] Task 2: Impl CanvasBackend for CanvasSession (session.rs)
+- [x] Task 3: Update CanvasBridge to use Box<dyn CanvasBackend> (bridge.rs)
+- [x] Task 4: Update registry to use dyn CanvasBackend (registry.rs)
+- [x] Task 5: Update tools to use CanvasBackend trait (render.rs, export.rs, interact.rs)
+- [x] Task 6: RemoteCanvasSession with WebSocket client (remote.rs)
+- [x] Task 7: Connection status badge in GUI + CanvasConfig (gui.rs, config.rs)
+- [x] Task 8: Tests for all modules (inline in each file)
+- (commits: 4fa9550, f584bc7)
