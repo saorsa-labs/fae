@@ -33,6 +33,8 @@ pub struct SpeechConfig {
     pub canvas: CanvasConfig,
     /// Local LLM HTTP server settings.
     pub llm_server: LlmServerConfig,
+    /// Pi coding agent settings.
+    pub pi: PiConfig,
 }
 
 /// Audio I/O configuration.
@@ -599,6 +601,29 @@ impl Default for LlmServerConfig {
             enabled: true,
             port: 0,
             host: "127.0.0.1".to_owned(),
+        }
+    }
+}
+
+/// Pi coding agent configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PiConfig {
+    /// Whether Fae should auto-install Pi when not found on the system.
+    pub auto_install: bool,
+    /// Custom install directory override.
+    ///
+    /// When `None`, uses the platform default:
+    /// - Linux/macOS: `~/.local/bin`
+    /// - Windows: `%LOCALAPPDATA%\pi`
+    pub install_dir: Option<PathBuf>,
+}
+
+impl Default for PiConfig {
+    fn default() -> Self {
+        Self {
+            auto_install: true,
+            install_dir: None,
         }
     }
 }
