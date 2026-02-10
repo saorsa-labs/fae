@@ -165,6 +165,52 @@ impl PiManager {
     pub fn auto_install(&self) -> bool {
         self.config.auto_install
     }
+
+    /// Detect whether Pi is installed on the system.
+    ///
+    /// Checks in order:
+    /// 1. The Fae-managed install location (`install_dir`)
+    /// 2. Standard system locations via `which` / `where`
+    ///
+    /// Updates and returns the current [`PiInstallState`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if running `pi --version` fails for a found binary.
+    pub fn detect(&mut self) -> Result<&PiInstallState> {
+        // Check the Fae-managed location first.
+        let managed_path = self.pi_binary_path();
+        if managed_path.is_file()
+            && let Some(version) = run_pi_version(&managed_path)
+        {
+            let is_managed = self.marker_path.is_file();
+            self.state = if is_managed {
+                PiInstallState::FaeManaged {
+                    path: managed_path,
+                    version,
+                }
+            } else {
+                PiInstallState::UserInstalled {
+                    path: managed_path,
+                    version,
+                }
+            };
+            return Ok(&self.state);
+        }
+
+        // Check PATH via `which` (Unix) or `where` (Windows).
+        // Filter out npm/npx shims — these are not native Pi binaries.
+        if let Some(path) = find_pi_in_path()
+            && !is_npm_shim(&path)
+            && let Some(version) = run_pi_version(&path)
+        {
+            self.state = PiInstallState::UserInstalled { path, version };
+            return Ok(&self.state);
+        }
+
+        self.state = PiInstallState::NotFound;
+        Ok(&self.state)
+    }
 }
 
 /// Returns the platform-specific Pi binary filename.
@@ -252,6 +298,61 @@ pub fn parse_pi_version(output: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Run `pi --version` and parse the output into a version string.
+fn run_pi_version(pi_path: &Path) -> Option<String> {
+    let output = std::process::Command::new(pi_path)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_pi_version(&stdout)
+}
+
+/// Find `pi` in the system PATH using `which` (Unix) or `where` (Windows).
+fn find_pi_in_path() -> Option<PathBuf> {
+    let cmd = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
+
+    let output = std::process::Command::new(cmd)
+        .arg(pi_binary_name())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path_str = stdout.lines().next()?.trim();
+    if path_str.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(path_str))
+}
+
+/// Returns `true` if the given path appears to be an npm/npx shim rather than
+/// a native Pi binary.
+///
+/// npx-installed Pi resolves through `node_modules/.bin/pi` or similar.
+fn is_npm_shim(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    // Check if the resolved path goes through node_modules or npm directories.
+    path_str.contains("node_modules") || path_str.contains(".npm") || path_str.contains("npx")
 }
 
 #[cfg(test)]
@@ -450,5 +551,54 @@ mod tests {
         };
         let manager = PiManager::new(&config).unwrap();
         assert_eq!(manager.install_dir(), Path::new("/custom/path"));
+    }
+
+    #[test]
+    fn is_npm_shim_detects_node_modules() {
+        assert!(is_npm_shim(Path::new(
+            "/home/user/.nvm/versions/node/v20/lib/node_modules/.bin/pi"
+        )));
+        assert!(is_npm_shim(Path::new(
+            "/usr/local/lib/node_modules/.bin/pi"
+        )));
+    }
+
+    #[test]
+    fn is_npm_shim_detects_npx() {
+        assert!(is_npm_shim(Path::new("/home/user/.npm/_npx/123/node_modules/.bin/pi")));
+    }
+
+    #[test]
+    fn is_npm_shim_allows_native() {
+        assert!(!is_npm_shim(Path::new("/usr/local/bin/pi")));
+        assert!(!is_npm_shim(Path::new("/home/user/.local/bin/pi")));
+    }
+
+    #[test]
+    fn detect_returns_not_found_for_nonexistent_dir() {
+        let config = PiConfig {
+            install_dir: Some(PathBuf::from("/nonexistent/fae-test-pi-detect")),
+            auto_install: false,
+        };
+        let mut manager = PiManager::new(&config).unwrap();
+        let state = manager.detect().unwrap();
+        // May find Pi in PATH on dev machines, but the managed location won't exist.
+        // The important thing is that it doesn't error out.
+        assert!(
+            matches!(state, PiInstallState::NotFound | PiInstallState::UserInstalled { .. }),
+            "expected NotFound or UserInstalled, got: {state}"
+        );
+    }
+
+    #[test]
+    fn pi_manager_marker_path_is_set() {
+        let config = PiConfig::default();
+        let manager = PiManager::new(&config).unwrap();
+        let marker = manager.marker_path();
+        let marker_str = marker.to_string_lossy();
+        assert!(
+            marker_str.contains("fae") && marker_str.contains("pi-managed"),
+            "unexpected marker path: {marker_str}"
+        );
     }
 }
