@@ -45,9 +45,7 @@ impl PiInstallState {
     pub fn version(&self) -> Option<&str> {
         match self {
             Self::NotFound => None,
-            Self::UserInstalled { version, .. } | Self::FaeManaged { version, .. } => {
-                Some(version)
-            }
+            Self::UserInstalled { version, .. } | Self::FaeManaged { version, .. } => Some(version),
         }
     }
 
@@ -130,9 +128,8 @@ impl PiManager {
                 SpeechError::Pi("cannot determine default Pi install directory".to_owned())
             })?;
 
-        let marker_path = default_marker_path().ok_or_else(|| {
-            SpeechError::Pi("cannot determine Pi marker file path".to_owned())
-        })?;
+        let marker_path = default_marker_path()
+            .ok_or_else(|| SpeechError::Pi("cannot determine Pi marker file path".to_owned()))?;
 
         Ok(Self {
             install_dir,
@@ -371,8 +368,7 @@ pub fn default_install_dir() -> Option<PathBuf> {
 fn default_marker_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        std::env::var_os("LOCALAPPDATA")
-            .map(|d| PathBuf::from(d).join("fae").join("pi-managed"))
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("fae").join("pi-managed"))
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -484,8 +480,7 @@ fn is_npm_shim(path: &Path) -> bool {
 }
 
 /// GitHub API URL for the latest Pi release.
-const PI_LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/badlogic/pi-mono/releases/latest";
+const PI_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/badlogic/pi-mono/releases/latest";
 
 /// Download a Pi release asset and install the binary.
 ///
@@ -771,7 +766,11 @@ mod tests {
         // This test runs on the build platform; macOS/Linux CI should pass.
         let name = platform_asset_name();
         // May be None on exotic platforms, but should be Some on CI.
-        if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
             assert!(name.is_some());
         }
     }
@@ -942,7 +941,9 @@ mod tests {
 
     #[test]
     fn is_npm_shim_detects_npx() {
-        assert!(is_npm_shim(Path::new("/home/user/.npm/_npx/123/node_modules/.bin/pi")));
+        assert!(is_npm_shim(Path::new(
+            "/home/user/.npm/_npx/123/node_modules/.bin/pi"
+        )));
     }
 
     #[test]
@@ -962,7 +963,10 @@ mod tests {
         // May find Pi in PATH on dev machines, but the managed location won't exist.
         // The important thing is that it doesn't error out.
         assert!(
-            matches!(state, PiInstallState::NotFound | PiInstallState::UserInstalled { .. }),
+            matches!(
+                state,
+                PiInstallState::NotFound | PiInstallState::UserInstalled { .. }
+            ),
             "expected NotFound or UserInstalled, got: {state}"
         );
     }
@@ -1083,7 +1087,10 @@ mod tests {
         // With auto_install disabled and no Pi at the custom path,
         // should return NotFound (or UserInstalled if Pi is in PATH on dev machine).
         assert!(
-            matches!(state, PiInstallState::NotFound | PiInstallState::UserInstalled { .. }),
+            matches!(
+                state,
+                PiInstallState::NotFound | PiInstallState::UserInstalled { .. }
+            ),
             "expected NotFound or UserInstalled, got: {state}"
         );
     }
