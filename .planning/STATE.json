@@ -1,70 +1,28 @@
 {
   "version": 1,
-  "project": "fae-canvas-integration",
+  "project": "fae-skill-system",
   "active": false,
   "milestone": {
-    "number": 4,
-    "name": "Publishing & Polish"
+    "number": 1,
+    "name": "Canvas SKILL.md + Fae Skill System"
   },
   "phase": {
-    "number": "4.2",
-    "name": "Documentation & Polish",
-    "plan": "PLAN-phase-4.2.md"
+    "number": "1.1",
+    "name": "Skill System Implementation",
+    "plan": "PLAN-phase-1.1.md"
   },
   "progress": {
-    "total_tasks": 8,
-    "completed_tasks": 8,
-    "current_task": null
+    "total_tasks": 5,
+    "completed_tasks": 5,
+    "current_task": 5
   },
   "status": "milestone_complete",
-  "last_updated": "2026-02-11T01:30:00Z",
+  "last_updated": "2026-02-10T11:45:00Z",
   "milestones_completed": [
     {
       "number": 1,
-      "name": "Canvas Core Integration & Dioxus Pane",
-      "completed_at": "2026-02-10T01:00:00Z"
-    },
-    {
-      "number": 2,
-      "name": "Rich Content & MCP Tools",
-      "completed_at": "2026-02-10T05:20:00Z"
-    },
-    {
-      "number": 3,
-      "name": "Canvas Server Enhancement",
-      "completed_at": "2026-02-10T22:45:00Z"
-    },
-    {
-      "number": 4,
-      "name": "Publishing & Polish",
-      "completed_at": "2026-02-11T01:30:00Z"
-    }
-  ],
-  "phases_completed": [
-    {
-      "number": "3.1",
-      "name": "WebSocket Client",
-      "completed_at": "2026-02-10T14:00:00Z"
-    },
-    {
-      "number": "3.2",
-      "name": "Protocol Alignment & Persistence",
-      "completed_at": "2026-02-10T17:30:00Z"
-    },
-    {
-      "number": "3.3",
-      "name": "Server-Side Export",
-      "completed_at": "2026-02-10T22:45:00Z"
-    },
-    {
-      "number": "4.1",
-      "name": "crates.io Publishing",
-      "completed_at": "2026-02-11T00:30:00Z"
-    },
-    {
-      "number": "4.2",
-      "name": "Documentation & Polish",
-      "completed_at": "2026-02-11T01:30:00Z"
+      "name": "Canvas SKILL.md + Fae Skill System",
+      "completed": "2026-02-10T11:45:00Z"
     }
   ]
 }
