@@ -101,8 +101,8 @@ pub fn read_pi_config(path: &Path) -> Result<PiModelsConfig> {
     if !path.exists() {
         return Ok(PiModelsConfig::default());
     }
-    let content =
-        std::fs::read_to_string(path).map_err(|e| SpeechError::Config(format!("read pi config: {e}")))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| SpeechError::Config(format!("read pi config: {e}")))?;
     serde_json::from_str(&content).map_err(|e| SpeechError::Config(format!("parse pi config: {e}")))
 }
 
@@ -271,8 +271,14 @@ mod tests {
         let updated = read_pi_config(&path).unwrap();
         assert!(updated.providers.contains_key("ollama"));
         assert!(updated.providers.contains_key("fae-local"));
-        assert_eq!(updated.providers["ollama"].base_url, "http://localhost:11434/v1");
-        assert_eq!(updated.providers["fae-local"].base_url, "http://127.0.0.1:9090/v1");
+        assert_eq!(
+            updated.providers["ollama"].base_url,
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(
+            updated.providers["fae-local"].base_url,
+            "http://127.0.0.1:9090/v1"
+        );
 
         cleanup(&path);
     }
@@ -283,10 +289,20 @@ mod tests {
         cleanup(&path);
 
         write_fae_local_provider(&path, 8080).unwrap();
-        assert!(read_pi_config(&path).unwrap().providers.contains_key("fae-local"));
+        assert!(
+            read_pi_config(&path)
+                .unwrap()
+                .providers
+                .contains_key("fae-local")
+        );
 
         remove_fae_local_provider(&path).unwrap();
-        assert!(!read_pi_config(&path).unwrap().providers.contains_key("fae-local"));
+        assert!(
+            !read_pi_config(&path)
+                .unwrap()
+                .providers
+                .contains_key("fae-local")
+        );
 
         cleanup(&path);
     }
@@ -308,7 +324,10 @@ mod tests {
         write_fae_local_provider(&path, 9999).unwrap();
 
         let config = read_pi_config(&path).unwrap();
-        assert_eq!(config.providers["fae-local"].base_url, "http://127.0.0.1:9999/v1");
+        assert_eq!(
+            config.providers["fae-local"].base_url,
+            "http://127.0.0.1:9999/v1"
+        );
 
         cleanup(&path);
     }

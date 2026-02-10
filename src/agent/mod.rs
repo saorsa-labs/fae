@@ -1,8 +1,8 @@
 //! Agent-backed LLM engine using `saorsa-agent`.
 //!
 //! Supports two inference backends:
-//! - **Local** (default): In-process via `mistralrs` using [`ToolingMistralrsProvider`].
-//! - **Cloud**: Any OpenAI-compatible API via [`HttpStreamingProvider`], configured
+//! - **Local** (default): In-process via `mistralrs` using `ToolingMistralrsProvider`.
+//! - **Cloud**: Any OpenAI-compatible API via `HttpStreamingProvider`, configured
 //!   through Pi's `~/.pi/agent/models.json`.
 //!
 //! `saorsa-ai` is used only for trait definitions (`Provider`, `StreamingProvider`)
@@ -47,7 +47,8 @@ impl SaorsaAgentLlm {
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     ) -> Result<Self> {
         // Decide between local (in-process) inference and cloud provider.
-        let provider: Box<dyn StreamingProvider> = if let Some(ref cloud_name) = config.cloud_provider
+        let provider: Box<dyn StreamingProvider> = if let Some(ref cloud_name) =
+            config.cloud_provider
         {
             // Cloud: look up provider in Pi's models.json.
             let pi_path = crate::llm::pi_config::default_pi_models_path().ok_or_else(|| {
@@ -332,9 +333,7 @@ impl SaorsaAgentLlm {
 ///
 /// Returns `None` if no cloud providers are available, allowing the caller
 /// to propagate the original local-model error.
-fn try_cloud_fallback(
-    config: &LlmConfig,
-) -> Option<Box<dyn StreamingProvider>> {
+fn try_cloud_fallback(config: &LlmConfig) -> Option<Box<dyn StreamingProvider>> {
     let pi_path = crate::llm::pi_config::default_pi_models_path()?;
     let pi_config = crate::llm::pi_config::read_pi_config(&pi_path).ok()?;
     let cloud = pi_config.cloud_providers();

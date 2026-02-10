@@ -7,17 +7,17 @@
     "name": "Pi Integration, Self-Update & Autonomy"
   },
   "phase": {
-    "number": "5.1",
-    "name": "Local LLM HTTP Server",
-    "plan": "PLAN-phase-5.1.md"
+    "number": "5.2",
+    "name": "Drop saorsa-ai / API Unification",
+    "plan": "PLAN-phase-5.2.md"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 8,
+    "completed_tasks": 7,
     "current_task": 8
   },
   "status": "executing",
-  "last_updated": "2026-02-10T17:00:00Z",
+  "last_updated": "2026-02-10T19:00:00Z",
   "worktree": "~/Desktop/Devel/projects/fae-worktree-pi",
   "milestones_completed": [
     {
@@ -63,5 +63,5 @@
     { "id": "5.6", "name": "Scheduler", "deps": ["5.5"] },
     { "id": "5.7", "name": "Installer Integration & Testing", "deps": ["5.1", "5.2", "5.3", "5.4", "5.5", "5.6"] }
   ],
-  "notes": "Phases 5.1+5.3 can run in parallel (no dependencies). Phase 5.2 depends on 5.1. Phase 5.4 depends on 5.3. Phase 5.5 depends on 5.3. Phase 5.6 depends on 5.5. Phase 5.7 is the final integration phase."
+  "notes": "Phase 5.1 COMPLETE. Phase 5.2 in progress. saorsa-ai kept for trait defs (required by saorsa-agent) but MistralrsProvider/MistralrsConfig removed."
 }

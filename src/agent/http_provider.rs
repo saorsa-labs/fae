@@ -109,10 +109,7 @@ impl HttpStreamingProvider {
 
     /// Generate a unique message ID.
     fn next_id(&self) -> String {
-        format!(
-            "msg_{}",
-            self.next_msg_id.fetch_add(1, Ordering::Relaxed)
-        )
+        format!("msg_{}", self.next_msg_id.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -150,9 +147,8 @@ impl StreamingProvider for HttpStreamingProvider {
         request: CompletionRequest,
     ) -> SaorsaResult<tokio::sync::mpsc::Receiver<SaorsaResult<StreamEvent>>> {
         let body = self.build_openai_body(&request);
-        let body_str = serde_json::to_string(&body).map_err(|e| SaorsaAiError::Internal(
-            format!("JSON serialization failed: {e}"),
-        ))?;
+        let body_str = serde_json::to_string(&body)
+            .map_err(|e| SaorsaAiError::Internal(format!("JSON serialization failed: {e}")))?;
 
         let base = self.base_url.trim_end_matches('/');
         let url = format!("{base}/chat/completions");

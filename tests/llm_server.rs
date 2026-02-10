@@ -1,4 +1,4 @@
-//! Integration tests for the local LLM HTTP server.
+//! Integration tests for the local LLM HTTP server and provider resolution.
 //!
 //! Tests marked `#[ignore]` require a loaded mistralrs model and are too
 //! expensive for CI. Run them manually with `cargo test -- --ignored`.
@@ -87,16 +87,20 @@ fn pi_config_cleanup_on_remove() {
 
     // Write fae-local, then remove it
     pi_config::write_fae_local_provider(&path, 8080).unwrap();
-    assert!(pi_config::read_pi_config(&path)
-        .unwrap()
-        .providers
-        .contains_key("fae-local"));
+    assert!(
+        pi_config::read_pi_config(&path)
+            .unwrap()
+            .providers
+            .contains_key("fae-local")
+    );
 
     pi_config::remove_fae_local_provider(&path).unwrap();
-    assert!(!pi_config::read_pi_config(&path)
-        .unwrap()
-        .providers
-        .contains_key("fae-local"));
+    assert!(
+        !pi_config::read_pi_config(&path)
+            .unwrap()
+            .providers
+            .contains_key("fae-local")
+    );
 
     cleanup(&path);
 }
@@ -226,6 +230,123 @@ fn model_list_response_matches_openai_format() {
     let json = serde_json::to_string(&resp).unwrap();
     assert!(json.contains("\"object\":\"list\""));
     assert!(json.contains("\"owned_by\":\"fae-local\""));
+}
+
+// ---------------------------------------------------------------------------
+// Provider resolution tests (Phase 5.2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pi_config_provider_lookup_helpers() {
+    let path = temp_pi_path("provider-helpers");
+    cleanup(&path);
+
+    // Set up providers.
+    let mut config = pi_config::PiModelsConfig::default();
+    config.providers.insert(
+        "openai".to_owned(),
+        pi_config::PiProvider {
+            base_url: "https://api.openai.com/v1".to_owned(),
+            api: "openai".to_owned(),
+            api_key: "sk-openai".to_owned(),
+            models: vec![pi_config::PiModel {
+                id: "gpt-4o".to_owned(),
+                name: "GPT-4o".to_owned(),
+                reasoning: false,
+                input: vec!["text".to_owned()],
+                context_window: 128_000,
+                max_tokens: 4096,
+                cost: 0.005,
+            }],
+        },
+    );
+    config.providers.insert(
+        "fae-local".to_owned(),
+        pi_config::PiProvider {
+            base_url: "http://127.0.0.1:8080/v1".to_owned(),
+            api: "openai".to_owned(),
+            api_key: String::new(),
+            models: vec![pi_config::PiModel {
+                id: "fae-qwen3".to_owned(),
+                name: "Fae Local".to_owned(),
+                reasoning: false,
+                input: vec!["text".to_owned()],
+                context_window: 32_768,
+                max_tokens: 2048,
+                cost: 0.0,
+            }],
+        },
+    );
+
+    // Test find_provider.
+    assert!(config.find_provider("openai").is_some());
+    assert!(config.find_provider("nonexistent").is_none());
+
+    // Test find_model.
+    let model = config.find_model("openai", "gpt-4o");
+    assert!(model.is_some());
+    assert_eq!(model.unwrap().context_window, 128_000);
+    assert!(config.find_model("openai", "nonexistent").is_none());
+
+    // Test cloud_providers (excludes fae-local).
+    let cloud = config.cloud_providers();
+    assert_eq!(cloud.len(), 1);
+    assert_eq!(cloud[0].0, "openai");
+
+    // Test list_providers.
+    let mut names = config.list_providers();
+    names.sort();
+    assert_eq!(names, vec!["fae-local", "openai"]);
+
+    cleanup(&path);
+}
+
+#[test]
+fn http_streaming_provider_construction() {
+    use fae::agent::http_provider::HttpStreamingProvider;
+
+    let _provider = HttpStreamingProvider::new(
+        "https://api.openai.com/v1".to_owned(),
+        "sk-test".to_owned(),
+        "gpt-4o".to_owned(),
+    );
+    // Construction should succeed without panicking.
+}
+
+#[test]
+fn llm_config_cloud_provider_fields_default_none() {
+    let config = fae::config::LlmConfig::default();
+    assert!(config.cloud_provider.is_none());
+    assert!(config.cloud_model.is_none());
+}
+
+#[test]
+fn llm_config_effective_provider_name_local() {
+    let config = fae::config::LlmConfig::default();
+    let name = config.effective_provider_name();
+    assert!(name.starts_with("local/"));
+}
+
+#[test]
+fn llm_config_effective_provider_name_cloud() {
+    let config = fae::config::LlmConfig {
+        cloud_provider: Some("anthropic".to_owned()),
+        cloud_model: Some("claude-3-haiku".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(config.effective_provider_name(), "anthropic/claude-3-haiku");
+}
+
+#[test]
+fn llm_config_cloud_fields_toml_round_trip() {
+    let toml_str = r#"
+[llm]
+cloud_provider = "openai"
+cloud_model = "gpt-4o"
+"#;
+    let config: fae::config::SpeechConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.llm.cloud_provider.as_deref(), Some("openai"));
+    assert_eq!(config.llm.cloud_model.as_deref(), Some("gpt-4o"));
 }
 
 // ---------------------------------------------------------------------------

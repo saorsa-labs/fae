@@ -331,10 +331,9 @@ impl ApiLlm {
 /// or direct config fields.
 fn resolve_connection(config: &LlmConfig) -> Result<ResolvedConnection> {
     if let Some(ref cloud_name) = config.cloud_provider {
-        let pi_path =
-            crate::llm::pi_config::default_pi_models_path().ok_or_else(|| {
-                SpeechError::Config("cannot determine HOME for Pi models.json".to_owned())
-            })?;
+        let pi_path = crate::llm::pi_config::default_pi_models_path().ok_or_else(|| {
+            SpeechError::Config("cannot determine HOME for Pi models.json".to_owned())
+        })?;
         let pi_config = crate::llm::pi_config::read_pi_config(&pi_path)?;
         let provider = pi_config.find_provider(cloud_name).ok_or_else(|| {
             SpeechError::Config(format!(

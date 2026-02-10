@@ -9,11 +9,11 @@
 //! - `GET /v1/models` — list available models
 //! - `POST /v1/chat/completions` — chat completions (streaming and non-streaming)
 
+use axum::Router;
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
-use axum::Router;
 use futures_util::stream::Stream;
 use mistralrs::{Model, RequestBuilder, Response, TextMessageRole, TextMessages};
 use serde::{Deserialize, Serialize};
@@ -256,9 +256,9 @@ impl LlmServer {
             .await
             .map_err(|e| crate::error::SpeechError::Llm(format!("LLM server bind failed: {e}")))?;
 
-        let addr = listener
-            .local_addr()
-            .map_err(|e| crate::error::SpeechError::Llm(format!("failed to get local addr: {e}")))?;
+        let addr = listener.local_addr().map_err(|e| {
+            crate::error::SpeechError::Llm(format!("failed to get local addr: {e}"))
+        })?;
 
         info!("LLM server listening on http://{addr}/v1");
 

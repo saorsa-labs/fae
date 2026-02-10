@@ -5,12 +5,12 @@ use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::canvas::registry::CanvasSessionRegistry;
 use crate::config::SpeechConfig;
 use crate::error::Result;
+use crate::llm::server::LlmServer;
 use crate::memory::{MemoryStore, Person, PrimaryUser};
 use crate::pipeline::messages::{
     AudioChunk, ControlEvent, SentenceChunk, SpeechSegment, SynthesizedAudio, TextInjection,
     Transcription,
 };
-use crate::llm::server::LlmServer;
 use crate::runtime::RuntimeEvent;
 use crate::startup::InitializedModels;
 use std::io::Write;
