@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::session::CanvasSession;
+use super::backend::CanvasBackend;
 
 /// Registry of active canvas sessions, keyed by session ID.
 ///
-/// Wraps sessions in `Arc<Mutex<_>>` so they can be shared across the agent
-/// tool system (which requires `Send + Sync`).
+/// Wraps sessions in `Arc<Mutex<dyn CanvasBackend>>` so they can be shared
+/// across the agent tool system (which requires `Send + Sync`).
 pub struct CanvasSessionRegistry {
-    sessions: HashMap<String, Arc<Mutex<CanvasSession>>>,
+    sessions: HashMap<String, Arc<Mutex<dyn CanvasBackend>>>,
 }
 
 impl CanvasSessionRegistry {
@@ -28,18 +28,18 @@ impl CanvasSessionRegistry {
     pub fn register(
         &mut self,
         id: impl Into<String>,
-        session: Arc<Mutex<CanvasSession>>,
-    ) -> Option<Arc<Mutex<CanvasSession>>> {
+        session: Arc<Mutex<dyn CanvasBackend>>,
+    ) -> Option<Arc<Mutex<dyn CanvasBackend>>> {
         self.sessions.insert(id.into(), session)
     }
 
     /// Look up a session by ID.
-    pub fn get(&self, id: &str) -> Option<Arc<Mutex<CanvasSession>>> {
+    pub fn get(&self, id: &str) -> Option<Arc<Mutex<dyn CanvasBackend>>> {
         self.sessions.get(id).cloned()
     }
 
     /// Remove a session by ID, returning it if it existed.
-    pub fn remove(&mut self, id: &str) -> Option<Arc<Mutex<CanvasSession>>> {
+    pub fn remove(&mut self, id: &str) -> Option<Arc<Mutex<dyn CanvasBackend>>> {
         self.sessions.remove(id)
     }
 
@@ -68,8 +68,9 @@ impl Default for CanvasSessionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas::session::CanvasSession;
 
-    fn make_session(id: &str) -> Arc<Mutex<CanvasSession>> {
+    fn make_session(id: &str) -> Arc<Mutex<dyn CanvasBackend>> {
         Arc::new(Mutex::new(CanvasSession::new(id, 800.0, 600.0)))
     }
 
@@ -163,5 +164,22 @@ mod tests {
             let guard = s.map(|s| s.lock());
             assert!(guard.is_some());
         }
+    }
+
+    #[test]
+    fn test_backend_trait_through_registry() {
+        let mut reg = CanvasSessionRegistry::new();
+        reg.register("test", make_session("test"));
+
+        let session_arc = reg.get("test");
+        assert!(session_arc.is_some());
+
+        let session_arc = session_arc.as_ref();
+        let mut guard = session_arc.map(|s| s.lock()).unwrap();
+        let backend = guard.as_deref_mut().unwrap();
+
+        assert_eq!(backend.session_id(), "test");
+        assert_eq!(backend.message_count(), 0);
+        assert_eq!(backend.element_count(), 0);
     }
 }

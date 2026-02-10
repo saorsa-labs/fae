@@ -1,19 +1,20 @@
 //! Pipeline-to-canvas bridge.
 //!
 //! Subscribes to [`RuntimeEvent`]s and converts them into
-//! [`CanvasMessage`]s pushed to a [`CanvasSession`].
+//! [`CanvasMessage`]s pushed to a [`CanvasBackend`](super::backend::CanvasBackend).
 
 use std::collections::HashMap;
 
 use crate::pipeline::messages::ControlEvent;
 use crate::runtime::RuntimeEvent;
 
+use super::backend::CanvasBackend;
 use super::session::CanvasSession;
 use super::types::{CanvasMessage, MessageRole};
 
 /// Bridges fae's pipeline events to the canvas scene graph.
 pub struct CanvasBridge {
-    session: CanvasSession,
+    session: Box<dyn CanvasBackend>,
     /// Accumulates assistant sentence chunks into a single message.
     pending_assistant_text: String,
     /// Whether the assistant is currently generating a response.
@@ -30,10 +31,15 @@ pub struct CanvasBridge {
 }
 
 impl CanvasBridge {
-    /// Create a new bridge with the given session dimensions.
+    /// Create a new bridge with a local canvas session.
     pub fn new(session_id: impl Into<String>, width: f32, height: f32) -> Self {
+        Self::with_backend(Box::new(CanvasSession::new(session_id, width, height)))
+    }
+
+    /// Create a new bridge with an arbitrary backend.
+    pub fn with_backend(backend: Box<dyn CanvasBackend>) -> Self {
         Self {
-            session: CanvasSession::new(session_id, width, height),
+            session: backend,
             pending_assistant_text: String::new(),
             generating: false,
             last_role: None,
@@ -43,14 +49,24 @@ impl CanvasBridge {
         }
     }
 
-    /// Reference to the underlying canvas session.
-    pub fn session(&self) -> &CanvasSession {
-        &self.session
+    /// Reference to the underlying canvas backend.
+    pub fn backend(&self) -> &dyn CanvasBackend {
+        &*self.session
     }
 
-    /// Mutable reference to the underlying canvas session.
-    pub fn session_mut(&mut self) -> &mut CanvasSession {
-        &mut self.session
+    /// Mutable reference to the underlying canvas backend.
+    pub fn backend_mut(&mut self) -> &mut dyn CanvasBackend {
+        &mut *self.session
+    }
+
+    /// Reference to the underlying canvas session (backward compatibility).
+    pub fn session(&self) -> &dyn CanvasBackend {
+        &*self.session
+    }
+
+    /// Mutable reference to the underlying canvas session (backward compatibility).
+    pub fn session_mut(&mut self) -> &mut dyn CanvasBackend {
+        &mut *self.session
     }
 
     /// Number of consecutive messages with the same role.

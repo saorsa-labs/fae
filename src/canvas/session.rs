@@ -264,6 +264,65 @@ impl CanvasSession {
     }
 }
 
+impl super::backend::CanvasBackend for CanvasSession {
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn push_message(&mut self, message: &CanvasMessage) -> canvas_core::ElementId {
+        CanvasSession::push_message(self, message)
+    }
+
+    fn add_element(&mut self, element: canvas_core::Element) -> canvas_core::ElementId {
+        self.generation += 1;
+        self.scene.add_element(element)
+    }
+
+    fn remove_element(&mut self, id: &canvas_core::ElementId) -> Option<canvas_core::Element> {
+        self.generation += 1;
+        self.scene.remove_element(id).ok()
+    }
+
+    fn clear(&mut self) {
+        self.scene.clear();
+        self.messages.clear();
+        self.next_y = MESSAGE_PADDING;
+        self.generation += 1;
+    }
+
+    fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+
+    fn element_count(&self) -> usize {
+        self.scene.element_count()
+    }
+
+    fn message_views(&self) -> Vec<MessageView> {
+        CanvasSession::message_views(self)
+    }
+
+    fn tool_elements_html(&self) -> String {
+        CanvasSession::tool_elements_html(self)
+    }
+
+    fn to_html(&self) -> String {
+        CanvasSession::to_html(self)
+    }
+
+    fn to_html_cached(&mut self) -> &str {
+        CanvasSession::to_html_cached(self)
+    }
+
+    fn resize_viewport(&mut self, width: f32, height: f32) {
+        CanvasSession::resize_viewport(self, width, height);
+    }
+
+    fn connection_status(&self) -> super::backend::ConnectionStatus {
+        super::backend::ConnectionStatus::Local
+    }
+}
+
 /// Escape HTML special characters.
 pub fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")

@@ -76,7 +76,7 @@ impl Tool for CanvasExportTool {
             .lock()
             .map_err(|_| SaorsaAgentError::Tool("session lock poisoned".to_owned()))?;
 
-        let element_count = session.scene().element_count();
+        let element_count = session.element_count();
 
         let mime_type = format_mime_type(params.format);
 
@@ -108,11 +108,13 @@ fn format_mime_type(format: ExportFormat) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas::backend::CanvasBackend;
     use crate::canvas::session::CanvasSession;
 
     fn setup_registry(session_id: &str) -> Arc<Mutex<CanvasSessionRegistry>> {
         let mut reg = CanvasSessionRegistry::new();
-        let session = Arc::new(Mutex::new(CanvasSession::new(session_id, 800.0, 600.0)));
+        let session: Arc<Mutex<dyn CanvasBackend>> =
+            Arc::new(Mutex::new(CanvasSession::new(session_id, 800.0, 600.0)));
         reg.register(session_id, session);
         Arc::new(Mutex::new(reg))
     }

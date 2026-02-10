@@ -970,19 +970,22 @@ dependencies = [
 
 [[package]]
 name = "canvas-core"
-version = "0.1.2"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "827e0a0af970209263191e9eadbec1b06cbfaf6ac9a6baba4b399ab33b1e4ad2"
 dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tracing",
  "uuid 1.20.0",
- "workspace-hack",
 ]
 
 [[package]]
 name = "canvas-mcp"
-version = "0.1.2"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f7fd5e7fc593bf637061a5b9e84b7517b9b2cf458a0430b7d8e0c367e87c192"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -996,12 +999,13 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid 1.20.0",
- "workspace-hack",
 ]
 
 [[package]]
 name = "canvas-renderer"
-version = "0.1.2"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33016658ef8895a0330fc73ed4ed687a1c112eed296539bd6c5ab473328cd40b"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1016,7 +1020,6 @@ dependencies = [
  "tracing",
  "wgpu",
  "winit",
- "workspace-hack",
 ]
 
 [[package]]
@@ -2850,6 +2853,7 @@ dependencies = [
  "crossbeam-channel",
  "dioxus",
  "fdaf-aec",
+ "futures-util",
  "half",
  "hf-hub",
  "hound",
@@ -2871,11 +2875,13 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers 0.22.2",
  "tokio",
+ "tokio-tungstenite 0.24.0",
  "tokio-util",
  "toml 0.8.2",
  "tracing",
  "tracing-subscriber",
  "ureq 2.12.1",
+ "url",
  "urlencoding",
 ]
 
@@ -4220,12 +4226,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
-name = "httpdate"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
-
-[[package]]
 name = "hyper"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4239,7 +4239,6 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
- "httpdate",
  "itoa 1.0.17",
  "pin-project-lite",
  "pin-utils",
@@ -5408,7 +5407,7 @@ dependencies = [
  "tokenizers 0.21.4",
  "tokio",
  "tokio-rayon",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "toktrie_hf_tokenizers",
  "toml 0.9.11+spec-1.1.0",
  "tqdm",
@@ -5447,7 +5446,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tracing",
  "utoipa",
  "uuid 1.20.0",
@@ -9686,6 +9685,18 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.24.0",
+]
+
+[[package]]
+name = "tokio-tungstenite"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
@@ -9895,7 +9906,6 @@ version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
- "log",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
@@ -10016,6 +10026,24 @@ name = "tungstenite"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e2e2ce1e47ed2994fd43b04c8f618008d4cabdd5ee34027cf14f9d918edd9c8"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.8.5",
+ "sha1",
+ "thiserror 1.0.69",
+ "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
 dependencies = [
  "byteorder",
  "bytes",
@@ -11627,37 +11655,6 @@ name = "wit-bindgen"
 version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7249219f66ced02969388cf2bb044a09756a083d0fab1e566056b04d9fbcaa5"
-
-[[package]]
-name = "workspace-hack"
-version = "0.1.0"
-dependencies = [
- "futures-channel",
- "futures-core",
- "futures-sink",
- "futures-util",
- "hyper",
- "js-sys",
- "log",
- "memchr",
- "nu-ansi-term",
- "num-traits",
- "percent-encoding",
- "proc-macro2",
- "quote",
- "regex-automata",
- "regex-syntax",
- "serde_core",
- "serde_json",
- "smallvec 1.15.1",
- "syn 2.0.114",
- "tokio",
- "tracing",
- "tracing-core",
- "uuid 1.20.0",
- "wasm-bindgen",
- "web-sys",
-]
 
 [[package]]
 name = "writeable"
