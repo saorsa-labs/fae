@@ -7,3 +7,6 @@
 pub mod applier;
 pub mod checker;
 pub mod state;
+
+pub use checker::{Release, UpdateChecker};
+pub use state::{AutoUpdatePreference, UpdateState};

@@ -54,6 +54,10 @@ pub enum SpeechError {
     /// Pi coding agent error (detection, installation, RPC).
     #[error("pi error: {0}")]
     Pi(String),
+
+    /// Self-update error (version check, download, apply).
+    #[error("update error: {0}")]
+    Update(String),
 }
 
 /// Convenience result type.
