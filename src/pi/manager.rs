@@ -167,6 +167,31 @@ impl PiManager {
         self.config.auto_install
     }
 
+    /// Check if a newer version of Pi is available on GitHub.
+    ///
+    /// Compares the installed version (if any) against the latest GitHub release.
+    /// Returns `Some(release)` if a newer version is available, `None` if up-to-date
+    /// or not installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the GitHub API call fails.
+    pub fn check_update(&self) -> Result<Option<PiRelease>> {
+        let current_version = match self.state.version() {
+            Some(v) => v,
+            None => return Ok(None), // Not installed, nothing to update.
+        };
+
+        let release = fetch_latest_release()?;
+        let latest_version = release.version();
+
+        if version_is_newer(current_version, latest_version) {
+            Ok(Some(release))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Detect whether Pi is installed on the system.
     ///
     /// Checks in order:
@@ -457,6 +482,34 @@ fn download_file(url: &str, dest: &Path) -> Result<()> {
     })?;
 
     Ok(())
+}
+
+/// Compare two semver-like version strings.
+///
+/// Returns `true` if `latest` is newer than `current`.
+/// Handles 2-part (major.minor) and 3-part (major.minor.patch) versions.
+pub fn version_is_newer(current: &str, latest: &str) -> bool {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.')
+            .filter_map(|part| part.parse::<u64>().ok())
+            .collect()
+    };
+
+    let c = parse(current);
+    let l = parse(latest);
+
+    // Compare component by component, treating missing components as 0.
+    let max_len = c.len().max(l.len());
+    for i in 0..max_len {
+        let cv = c.get(i).copied().unwrap_or(0);
+        let lv = l.get(i).copied().unwrap_or(0);
+        match lv.cmp(&cv) {
+            std::cmp::Ordering::Greater => return true,
+            std::cmp::Ordering::Less => return false,
+            std::cmp::Ordering::Equal => continue,
+        }
+    }
+    false // Versions are equal.
 }
 
 /// Extract the Pi binary from a downloaded archive.
@@ -860,6 +913,43 @@ mod tests {
     fn parse_release_json_missing_assets() {
         let json = serde_json::json!({ "tag_name": "v1.0.0" });
         assert!(parse_release_json(&json).is_err());
+    }
+
+    #[test]
+    fn version_is_newer_patch_bump() {
+        assert!(version_is_newer("0.52.8", "0.52.9"));
+    }
+
+    #[test]
+    fn version_is_newer_minor_bump() {
+        assert!(version_is_newer("0.52.9", "0.53.0"));
+    }
+
+    #[test]
+    fn version_is_newer_major_bump() {
+        assert!(version_is_newer("0.52.9", "1.0.0"));
+    }
+
+    #[test]
+    fn version_is_newer_equal() {
+        assert!(!version_is_newer("0.52.9", "0.52.9"));
+    }
+
+    #[test]
+    fn version_is_newer_older() {
+        assert!(!version_is_newer("0.52.9", "0.52.8"));
+    }
+
+    #[test]
+    fn version_is_newer_two_vs_three_parts() {
+        assert!(version_is_newer("1.0", "1.0.1"));
+        assert!(!version_is_newer("1.0.1", "1.0"));
+    }
+
+    #[test]
+    fn version_is_newer_big_numbers() {
+        assert!(version_is_newer("0.52.9", "0.52.10"));
+        assert!(version_is_newer("0.9.99", "0.10.0"));
     }
 
     #[test]
