@@ -32,6 +32,12 @@ enum ClientMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         message_id: Option<String>,
     },
+    UpdateElement {
+        id: String,
+        changes: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+    },
     RemoveElement {
         id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,10 +57,15 @@ enum ServerMessage {
         session_id: String,
     },
     SceneUpdate {
-        scene: SceneSnapshot,
+        scene: SceneDocument,
     },
     ElementAdded {
         element: ElementDocument,
+    },
+    ElementUpdated {
+        element: ElementDocument,
+        #[serde(default)]
+        timestamp: u64,
     },
     ElementRemoved {
         id: String,
@@ -69,17 +80,63 @@ enum ServerMessage {
         #[serde(default)]
         message: String,
     },
+    SyncResult {
+        #[serde(default)]
+        synced_count: usize,
+        #[serde(default)]
+        conflict_count: usize,
+        #[serde(default)]
+        timestamp: u64,
+        #[serde(default)]
+        failed_operations: Vec<serde_json::Value>,
+    },
     Pong {},
 }
 
-/// Minimal scene snapshot from the server.
+/// Viewport metadata from the server scene.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[allow(dead_code)] // Fields populated by deserialization only.
+struct ViewportInfo {
+    #[serde(default)]
+    width: f32,
+    #[serde(default)]
+    height: f32,
+    #[serde(default = "default_zoom")]
+    zoom: f32,
+    #[serde(default)]
+    pan_x: f32,
+    #[serde(default)]
+    pan_y: f32,
+}
+
+fn default_zoom() -> f32 {
+    1.0
+}
+
+impl Default for ViewportInfo {
+    fn default() -> Self {
+        Self {
+            width: 800.0,
+            height: 600.0,
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+        }
+    }
+}
+
+/// Scene document matching canvas-server's `SceneDocument` schema.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)] // Fields populated by deserialization only.
-struct SceneSnapshot {
+struct SceneDocument {
     #[serde(default)]
     session_id: String,
     #[serde(default)]
+    viewport: ViewportInfo,
+    #[serde(default)]
     elements: Vec<ElementDocument>,
+    #[serde(default)]
+    timestamp: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -638,14 +695,19 @@ fn handle_server_message(text: &str, shared: &Arc<Mutex<SharedState>>) {
         ServerMessage::Welcome { session_id } => {
             tracing::info!("Connected to canvas session: {session_id}");
         }
-        ServerMessage::SceneUpdate { scene: snapshot } => {
+        ServerMessage::SceneUpdate { scene: doc } => {
             if let Ok(mut s) = shared.lock() {
-                // Rebuild scene from server snapshot.
+                // Rebuild scene from server document.
                 s.scene.clear();
-                for doc in &snapshot.elements {
-                    let element = Element::new(doc.kind.clone())
-                        .with_transform(doc.transform)
-                        .with_interactive(doc.interactive);
+                // Apply viewport if the server provided dimensions.
+                if doc.viewport.width > 0.0 && doc.viewport.height > 0.0 {
+                    s.scene
+                        .set_viewport(doc.viewport.width, doc.viewport.height);
+                }
+                for elem_doc in &doc.elements {
+                    let element = Element::new(elem_doc.kind.clone())
+                        .with_transform(elem_doc.transform)
+                        .with_interactive(elem_doc.interactive);
                     s.scene.add_element(element);
                 }
                 s.generation += 1;
@@ -653,6 +715,19 @@ fn handle_server_message(text: &str, shared: &Arc<Mutex<SharedState>>) {
         }
         ServerMessage::ElementAdded { element: doc, .. } => {
             if let Ok(mut s) = shared.lock() {
+                let element = Element::new(doc.kind.clone())
+                    .with_transform(doc.transform)
+                    .with_interactive(doc.interactive);
+                s.scene.add_element(element);
+                s.generation += 1;
+            }
+        }
+        ServerMessage::ElementUpdated { element: doc, .. } => {
+            if let Ok(mut s) = shared.lock() {
+                // Replace element in scene — remove old, add updated.
+                if let Ok(eid) = ElementId::parse(&doc.id) {
+                    let _ = s.scene.remove_element(&eid);
+                }
                 let element = Element::new(doc.kind.clone())
                     .with_transform(doc.transform)
                     .with_interactive(doc.interactive);
@@ -668,7 +743,10 @@ fn handle_server_message(text: &str, shared: &Arc<Mutex<SharedState>>) {
                 s.generation += 1;
             }
         }
-        ServerMessage::Ack { .. } | ServerMessage::Error { .. } | ServerMessage::Pong { .. } => {
+        ServerMessage::Ack { .. }
+        | ServerMessage::Error { .. }
+        | ServerMessage::SyncResult { .. }
+        | ServerMessage::Pong { .. } => {
             // Logged at trace level if needed.
         }
     }
@@ -891,5 +969,206 @@ mod tests {
                 .min(MAX_RECONNECT_DELAY);
             assert!(delay <= MAX_RECONNECT_DELAY);
         }
+    }
+
+    // --- Task 1: SceneDocument with viewport ---
+
+    #[test]
+    fn scene_document_deserialization_with_viewport() {
+        let json = r##"{
+            "type": "scene_update",
+            "scene": {
+                "session_id": "v-test",
+                "viewport": {
+                    "width": 1920.0,
+                    "height": 1080.0,
+                    "zoom": 2.0,
+                    "pan_x": 10.0,
+                    "pan_y": 20.0
+                },
+                "elements": [],
+                "timestamp": 42
+            }
+        }"##;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap_or_else(|e| {
+            panic!("parse failed: {e}");
+        });
+        match msg {
+            ServerMessage::SceneUpdate { scene } => {
+                assert_eq!(scene.session_id, "v-test");
+                assert!((scene.viewport.width - 1920.0).abs() < f32::EPSILON);
+                assert!((scene.viewport.height - 1080.0).abs() < f32::EPSILON);
+                assert!((scene.viewport.zoom - 2.0).abs() < f32::EPSILON);
+                assert!((scene.viewport.pan_x - 10.0).abs() < f32::EPSILON);
+                assert!((scene.viewport.pan_y - 20.0).abs() < f32::EPSILON);
+                assert_eq!(scene.timestamp, 42);
+            }
+            _ => unreachable!("expected SceneUpdate"),
+        }
+    }
+
+    #[test]
+    fn scene_document_defaults_for_missing_viewport() {
+        // Backward compat: no viewport field should use defaults.
+        let json = r#"{
+            "type": "scene_update",
+            "scene": {
+                "session_id": "old",
+                "elements": []
+            }
+        }"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap_or_else(|e| {
+            panic!("parse failed: {e}");
+        });
+        match msg {
+            ServerMessage::SceneUpdate { scene } => {
+                assert_eq!(scene.session_id, "old");
+                // Default viewport values
+                assert!((scene.viewport.zoom - 1.0).abs() < f32::EPSILON);
+                assert_eq!(scene.timestamp, 0);
+            }
+            _ => unreachable!("expected SceneUpdate"),
+        }
+    }
+
+    #[test]
+    fn handle_scene_update_applies_viewport() {
+        let shared = Arc::new(Mutex::new(SharedState {
+            status: ConnectionStatus::Connected,
+            scene: Scene::new(800.0, 600.0),
+            messages: Vec::new(),
+            next_y: MESSAGE_PADDING,
+            generation: 0,
+        }));
+
+        let json = r##"{
+            "type": "scene_update",
+            "scene": {
+                "session_id": "vp",
+                "viewport": { "width": 1024.0, "height": 768.0, "zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0 },
+                "elements": [],
+                "timestamp": 1
+            }
+        }"##;
+        handle_server_message(json, &shared);
+
+        let state = shared.lock().unwrap_or_else(|p| p.into_inner());
+        assert!((state.scene.viewport_width - 1024.0).abs() < f32::EPSILON);
+        assert!((state.scene.viewport_height - 768.0).abs() < f32::EPSILON);
+        assert_eq!(state.generation, 1);
+    }
+
+    // --- Task 2: ElementUpdated and SyncResult ---
+
+    #[test]
+    fn server_message_deserialize_element_updated() {
+        let json = r##"{
+            "type": "element_updated",
+            "element": {
+                "id": "00000000-0000-0000-0000-000000000002",
+                "kind": { "type": "Text", "data": { "content": "updated", "font_size": 16.0, "color": "#000" } },
+                "transform": { "x": 10, "y": 20, "width": 200, "height": 40, "rotation": 0, "z_index": 1 },
+                "interactive": true,
+                "selected": false
+            },
+            "timestamp": 999
+        }"##;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap_or_else(|e| {
+            panic!("parse failed: {e}");
+        });
+        match msg {
+            ServerMessage::ElementUpdated {
+                element, timestamp, ..
+            } => {
+                assert_eq!(element.id, "00000000-0000-0000-0000-000000000002");
+                assert!(element.interactive);
+                assert_eq!(timestamp, 999);
+            }
+            _ => unreachable!("expected ElementUpdated"),
+        }
+    }
+
+    #[test]
+    fn server_message_deserialize_sync_result() {
+        let json = r#"{
+            "type": "sync_result",
+            "synced_count": 3,
+            "conflict_count": 1,
+            "timestamp": 500,
+            "failed_operations": [{"op": "add", "reason": "conflict"}]
+        }"#;
+        let msg: ServerMessage = serde_json::from_str(json).unwrap_or_else(|e| {
+            panic!("parse failed: {e}");
+        });
+        match msg {
+            ServerMessage::SyncResult {
+                synced_count,
+                conflict_count,
+                ..
+            } => {
+                assert_eq!(synced_count, 3);
+                assert_eq!(conflict_count, 1);
+            }
+            _ => unreachable!("expected SyncResult"),
+        }
+    }
+
+    #[test]
+    fn handle_element_updated_replaces_in_scene() {
+        let shared = Arc::new(Mutex::new(SharedState {
+            status: ConnectionStatus::Connected,
+            scene: Scene::new(800.0, 600.0),
+            messages: Vec::new(),
+            next_y: MESSAGE_PADDING,
+            generation: 0,
+        }));
+
+        // Add an element first.
+        let id = {
+            let mut state = shared.lock().unwrap_or_else(|p| p.into_inner());
+            let el = Element::new(canvas_core::ElementKind::Text {
+                content: "original".into(),
+                font_size: 14.0,
+                color: "#FFF".into(),
+            });
+            state.scene.add_element(el)
+        };
+
+        // Send an update for that element.
+        let json = format!(
+            r##"{{
+                "type": "element_updated",
+                "element": {{
+                    "id": "{id}",
+                    "kind": {{ "type": "Text", "data": {{ "content": "changed", "font_size": 14.0, "color": "#FFF" }} }},
+                    "transform": {{ "x": 0, "y": 0, "width": 100, "height": 30, "rotation": 0, "z_index": 0 }},
+                    "interactive": false,
+                    "selected": false
+                }},
+                "timestamp": 1
+            }}"##
+        );
+        handle_server_message(&json, &shared);
+
+        let state = shared.lock().unwrap_or_else(|p| p.into_inner());
+        // Still 1 element (replaced, not duplicated).
+        assert_eq!(state.scene.element_count(), 1);
+        assert_eq!(state.generation, 1);
+    }
+
+    // --- Task 3: UpdateElement client message ---
+
+    #[test]
+    fn client_message_serialize_update_element() {
+        let msg = ClientMessage::UpdateElement {
+            id: "el-1".into(),
+            changes: serde_json::json!({"transform": {"x": 50}}),
+            message_id: Some("msg-1".into()),
+        };
+        let json = serde_json::to_string(&msg).unwrap_or_default();
+        assert!(json.contains("\"type\":\"update_element\""));
+        assert!(json.contains("\"id\":\"el-1\""));
+        assert!(json.contains("\"changes\""));
+        assert!(json.contains("\"message_id\":\"msg-1\""));
     }
 }
