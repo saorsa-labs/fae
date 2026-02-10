@@ -3,27 +3,21 @@
   "project": "fae-canvas-integration",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "Rich Content & MCP Tools"
+    "number": 3,
+    "name": "Remote Canvas Server"
   },
   "phase": {
-    "number": "2.3",
-    "name": "Interactive Elements",
-    "plan": ".planning/PLAN-phase-2.3.md"
+    "number": "3.1",
+    "name": "WebSocket Client",
+    "plan": null
   },
   "progress": {
-    "total_tasks": 8,
-    "completed_tasks": 8,
+    "total_tasks": 0,
+    "completed_tasks": 0,
     "current_task": null
   },
-  "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "PASS",
-    "findings_count": { "critical": 0, "important": 0, "minor": 0 }
-  },
-  "status": "task_complete",
-  "last_updated": "2026-02-10T05:15:00Z",
+  "status": "milestone_complete",
+  "last_updated": "2026-02-10T05:20:00Z",
   "milestones_completed": [
     {
       "number": 0,
@@ -34,6 +28,11 @@
       "number": 1,
       "name": "Canvas Core Integration & Dioxus Pane",
       "completed_at": "2026-02-10T01:00:00Z"
+    },
+    {
+      "number": 2,
+      "name": "Rich Content & MCP Tools",
+      "completed_at": "2026-02-10T05:20:00Z"
     }
   ]
 }
