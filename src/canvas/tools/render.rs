@@ -107,7 +107,7 @@ impl Tool for CanvasRenderTool {
 }
 
 /// Convert `RenderContent` + optional position into a canvas-core `Element`.
-fn render_content_to_element(params: &RenderParams) -> Element {
+pub(crate) fn render_content_to_element(params: &RenderParams) -> Element {
     let kind = match &params.content {
         RenderContent::Chart {
             chart_type, data, ..

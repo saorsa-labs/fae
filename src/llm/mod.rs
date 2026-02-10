@@ -12,8 +12,8 @@ use crate::config::LlmConfig;
 use crate::error::{Result, SpeechError};
 use crate::pipeline::messages::SentenceChunk;
 use mistralrs::{
-    GgufModelBuilder, Model, PagedAttentionMetaBuilder, RequestBuilder, Response, TextMessageRole,
-    TextMessages,
+    GgufModelBuilder, MemoryGpuConfig, Model, PagedAttentionMetaBuilder, RequestBuilder, Response,
+    TextMessageRole, TextMessages,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,7 +47,11 @@ impl LocalLlm {
         }
 
         let model = builder
-            .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())
+            .with_paged_attn(|| {
+                PagedAttentionMetaBuilder::default()
+                    .with_gpu_memory(MemoryGpuConfig::ContextSize(8192))
+                    .build()
+            })
             .map_err(|e| SpeechError::Llm(format!("paged attention config failed: {e}")))?
             .build()
             .await

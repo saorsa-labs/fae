@@ -7,7 +7,7 @@
 
 mod export;
 mod interact;
-mod render;
+pub(crate) mod render;
 
 pub use export::CanvasExportTool;
 pub use interact::CanvasInteractTool;

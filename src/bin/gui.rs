@@ -27,8 +27,8 @@ fn main() {
             Config::new().with_window(
                 WindowBuilder::new()
                     .with_title("Fae")
-                    .with_inner_size(LogicalSize::new(400.0, 620.0))
-                    .with_min_inner_size(LogicalSize::new(320.0, 480.0))
+                    .with_inner_size(LogicalSize::new(480.0, 700.0))
+                    .with_min_inner_size(LogicalSize::new(400.0, 560.0))
                     .with_resizable(true),
             ),
         )
@@ -61,8 +61,6 @@ mod gui {
         },
         /// Pipeline is running — listening for speech.
         Running,
-        /// Pipeline is shutting down.
-        Stopping,
         /// An error occurred.
         Error(String),
     }
@@ -77,7 +75,6 @@ mod gui {
                 }
                 Self::Loading { model_name } => format!("Loading {model_name}..."),
                 Self::Running => "Listening...".into(),
-                Self::Stopping => "Stopping...".into(),
                 Self::Error(msg) => format!("Error: {msg}"),
             }
         }
@@ -175,11 +172,6 @@ mod gui {
         }
 
         #[test]
-        fn stopping_display_text() {
-            assert_eq!(AppStatus::Stopping.display_text(), "Stopping...");
-        }
-
-        #[test]
         fn error_display_text() {
             let s = AppStatus::Error("network failure".into());
             assert_eq!(s.display_text(), "Error: network failure");
@@ -192,7 +184,6 @@ mod gui {
             assert!(AppStatus::Idle.show_start());
             assert!(AppStatus::Error("x".into()).show_start());
             assert!(!AppStatus::Running.show_start());
-            assert!(!AppStatus::Stopping.show_start());
         }
 
         #[test]
@@ -200,7 +191,6 @@ mod gui {
             assert!(AppStatus::Idle.buttons_enabled());
             assert!(AppStatus::Running.buttons_enabled());
             assert!(AppStatus::Error("x".into()).buttons_enabled());
-            assert!(!AppStatus::Stopping.buttons_enabled());
             assert!(
                 !AppStatus::Loading {
                     model_name: "x".into()
@@ -330,29 +320,99 @@ use std::path::Path;
 #[cfg(feature = "gui")]
 use std::sync::OnceLock;
 
+/// A subtitle bubble that auto-expires after a timeout.
 #[cfg(feature = "gui")]
-#[derive(Clone)]
-struct LogEntry {
-    kind: LogKind,
+#[derive(Clone, Default)]
+struct Subtitle {
+    /// Text to display.
     text: String,
+    /// Instant when the subtitle was set (monotonic).
+    set_at: Option<std::time::Instant>,
+    /// When true, the expiry timer will not clear this subtitle.
+    pinned: bool,
 }
 
-#[cfg(feature = "gui")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LogKind {
-    User,
-    Assistant,
-    Tool,
-    System,
+impl Subtitle {
+    const DURATION_SECS: f64 = 5.0;
+
+    fn set(&mut self, text: String) {
+        self.text = text;
+        self.set_at = Some(std::time::Instant::now());
+    }
+
+    fn is_visible(&self) -> bool {
+        self.pinned
+            || self
+                .set_at
+                .is_some_and(|t| t.elapsed().as_secs_f64() < Self::DURATION_SECS)
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+        self.set_at = None;
+        self.pinned = false;
+    }
 }
 
 #[cfg(feature = "gui")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MainView {
     Home,
-    Canvas,
     Settings,
     Voices,
+}
+
+/// Build the messages HTML from the current canvas bridge state.
+#[cfg(feature = "gui")]
+fn build_canvas_messages_html(bridge: &fae::canvas::bridge::CanvasBridge) -> String {
+    let views = bridge.session().message_views();
+    let mut html = String::new();
+    for mv in &views {
+        let role_label = match mv.role {
+            fae::canvas::types::MessageRole::User => "user",
+            fae::canvas::types::MessageRole::Assistant => "assistant",
+            fae::canvas::types::MessageRole::System => "system",
+            fae::canvas::types::MessageRole::Tool => "tool",
+        };
+        // Tool detail card (collapsible).
+        let tool_details = if mv.tool_input.is_some() || mv.tool_result_text.is_some() {
+            let input_html = mv
+                .tool_input
+                .as_deref()
+                .map(|inp| {
+                    format!(
+                        "<pre class=\"tool-detail-json\">{}</pre>",
+                        fae::canvas::session::html_escape(inp),
+                    )
+                })
+                .unwrap_or_default();
+            let result_html = mv
+                .tool_result_text
+                .as_deref()
+                .map(|r| {
+                    format!(
+                        "<div class=\"tool-detail-result\">{}</div>",
+                        fae::canvas::session::html_escape(r),
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "<details class=\"tool-details\">\
+                 <summary>Details</summary>\
+                 {input_html}{result_html}\
+                 </details>"
+            )
+        } else {
+            String::new()
+        };
+        html.push_str(&format!(
+            "<div class=\"canvas-msg-wrapper\" role=\"article\" aria-label=\"{role_label} message\">\
+             {}{tool_details}\
+             </div>",
+            mv.html,
+        ));
+    }
+    html
 }
 
 #[cfg(feature = "gui")]
@@ -538,30 +598,6 @@ struct ModelDetails {
 }
 
 #[cfg(feature = "gui")]
-impl LogEntry {
-    fn class_name(&self) -> &'static str {
-        match self.kind {
-            LogKind::User => "log-line log-user",
-            LogKind::Assistant => "log-line log-assistant",
-            LogKind::Tool => "log-line log-tool",
-            LogKind::System => "log-line log-system",
-        }
-    }
-}
-
-/// Given the activity log and a fork index, compute how many LLM history
-/// entries to keep. Counts User + Assistant entries up to (and including)
-/// the fork index, adds 1 for the system prompt.
-#[cfg(feature = "gui")]
-fn compute_history_keep_count(log: &[LogEntry], fork_index: usize) -> usize {
-    let conversation_entries = log[..=fork_index.min(log.len().saturating_sub(1))]
-        .iter()
-        .filter(|e| matches!(e.kind, LogKind::User | LogKind::Assistant))
-        .count();
-    conversation_entries + 1 // +1 for system prompt
-}
-
-#[cfg(feature = "gui")]
 fn fmt_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -599,102 +635,6 @@ fn fit_label(file_bytes: Option<u64>, ram_bytes: Option<u64>) -> Option<String> 
     Some(format!("{label} ({:.0}% of RAM)", ratio * 100.0))
 }
 
-/// Highlight case-insensitive search matches in HTML content by wrapping
-/// them in `<mark>` tags. Only operates on text outside of HTML tags.
-#[cfg(feature = "gui")]
-fn highlight_search_matches(html: &str, query: &str) -> String {
-    if query.is_empty() {
-        return html.to_owned();
-    }
-    let lower_query = query.to_lowercase();
-    let mut result = String::with_capacity(html.len() + 64);
-    let mut in_tag = false;
-    let mut text_buf = String::new();
-
-    for ch in html.chars() {
-        if ch == '<' {
-            // Flush text buffer with highlights.
-            if !text_buf.is_empty() {
-                highlight_text_segment(&text_buf, &lower_query, &mut result);
-                text_buf.clear();
-            }
-            in_tag = true;
-            result.push(ch);
-        } else if ch == '>' {
-            in_tag = false;
-            result.push(ch);
-        } else if in_tag {
-            result.push(ch);
-        } else {
-            text_buf.push(ch);
-        }
-    }
-    // Flush remaining text.
-    if !text_buf.is_empty() {
-        highlight_text_segment(&text_buf, &lower_query, &mut result);
-    }
-    result
-}
-
-/// Insert `<mark>` tags around case-insensitive matches of `query` in `text`.
-///
-/// Works by lowercasing both sides and matching on char indices to avoid
-/// byte-offset mismatches between different-length Unicode casings.
-#[cfg(feature = "gui")]
-fn highlight_text_segment(text: &str, lower_query: &str, out: &mut String) {
-    let lower_text = text.to_lowercase();
-    let query_chars: usize = lower_query.chars().count();
-    if query_chars == 0 {
-        out.push_str(text);
-        return;
-    }
-
-    // Build a mapping from char index to byte offset in `text`.
-    let char_to_byte: Vec<usize> = text
-        .char_indices()
-        .map(|(byte_off, _)| byte_off)
-        .chain(std::iter::once(text.len()))
-        .collect();
-
-    // Build a mapping from char index to byte offset in `lower_text`.
-    let lower_char_to_byte: Vec<usize> = lower_text
-        .char_indices()
-        .map(|(byte_off, _)| byte_off)
-        .chain(std::iter::once(lower_text.len()))
-        .collect();
-
-    let mut last_char = 0usize;
-    let total_chars = char_to_byte.len() - 1; // exclude sentinel
-
-    // Find matches in the lowered text, convert byte offsets to char indices.
-    for (lower_byte_start, _) in lower_text.match_indices(lower_query) {
-        // Convert lower-text byte offset to char index.
-        let Some(match_char_start) = lower_char_to_byte
-            .iter()
-            .position(|&b| b == lower_byte_start)
-        else {
-            continue;
-        };
-        let match_char_end = match_char_start + query_chars;
-        if match_char_end > total_chars || match_char_start < last_char {
-            continue;
-        }
-
-        // Map char indices back to byte offsets in original `text`.
-        let orig_start = char_to_byte[match_char_start];
-        let orig_end = char_to_byte[match_char_end];
-        let last_byte = char_to_byte[last_char];
-
-        out.push_str(&text[last_byte..orig_start]);
-        out.push_str("<mark>");
-        out.push_str(&text[orig_start..orig_end]);
-        out.push_str("</mark>");
-        last_char = match_char_end;
-    }
-    let last_byte = char_to_byte[last_char];
-    out.push_str(&text[last_byte..]);
-}
-
 /// Root application component.
 #[cfg(feature = "gui")]
 fn app() -> Element {
@@ -705,7 +645,6 @@ fn app() -> Element {
     let mut assistant_generating = use_signal(|| false);
     let mut assistant_rms = use_signal(|| 0.0f32);
     let blink = use_signal(|| false);
-    let mut activity_log = use_signal(Vec::<LogEntry>::new);
     let mut assistant_buf = use_signal(String::new);
     let mut llm_backend = use_signal(|| None::<fae::config::LlmBackend>);
     let mut tool_mode = use_signal(|| None::<fae::config::AgentToolMode>);
@@ -718,9 +657,25 @@ fn app() -> Element {
     let mut stt_stage = use_signal(|| StagePhase::Pending);
     let mut llm_stage = use_signal(|| StagePhase::Pending);
     let mut tts_stage = use_signal(|| StagePhase::Pending);
+    let mut auto_started = use_signal(|| false);
+
+    let mut sub_fae = use_signal(Subtitle::default);
+    let mut sub_user = use_signal(Subtitle::default);
+
+    // Tick every 500ms to expire subtitles.
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            if !sub_fae.read().is_visible() && sub_fae.read().set_at.is_some() {
+                sub_fae.write().clear();
+            }
+            if !sub_user.read().is_visible() && sub_user.read().set_at.is_some() {
+                sub_user.write().clear();
+            }
+        }
+    });
 
     let mut text_input = use_signal(String::new);
-    let mut fork_point = use_signal(|| None::<usize>);
     let mut text_injection_tx = use_signal(|| {
         None::<tokio::sync::mpsc::UnboundedSender<fae::pipeline::messages::TextInjection>>
     });
@@ -729,35 +684,14 @@ fn app() -> Element {
     let mut view = use_signal(|| MainView::Home);
     let mut canvas_bridge =
         use_signal(|| fae::canvas::bridge::CanvasBridge::new("gui", 800.0, 600.0));
+    let mut canvas_visible = use_signal(|| false);
+    let mut gate_cmd_tx =
+        use_signal(|| None::<tokio::sync::mpsc::UnboundedSender<fae::GateCommand>>);
+    let mut gate_active_arc = use_signal(|| None::<std::sync::Arc<std::sync::atomic::AtomicBool>>);
     let mut voices_status = use_signal(String::new);
     let mut voices_name = use_signal(|| "voice_1".to_owned());
-    let mut canvas_search = use_signal(String::new);
-    let mut canvas_ctx_menu = use_signal(|| None::<usize>);
-    let mut clipboard_text = use_signal(String::new);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
-
-    // Auto-scroll the activity log to the bottom when new messages arrive.
-    use_effect(move || {
-        let _len = activity_log.read().len();
-        document::eval(
-            r#"
-            let el = document.getElementById('activity-log');
-            if (el) el.scrollTop = el.scrollHeight;
-            "#,
-        );
-    });
-
-    // Copy text to clipboard when clipboard_text signal is set.
-    use_effect(move || {
-        let text = clipboard_text.read().clone();
-        if !text.is_empty() {
-            let escaped = text.replace('\\', "\\\\").replace('`', "\\`");
-            document::eval(&format!(
-                "navigator.clipboard.writeText(`{escaped}`).catch(function(){{}});"
-            ));
-        }
-    });
 
     use_hook(move || {
         let mut config_state = config_state;
@@ -790,8 +724,7 @@ fn app() -> Element {
         });
     });
 
-    // Button click handler
-    let on_button_click = move |_| {
+    let mut on_button_click = move || {
         let current = status.read().clone();
         match current {
             AppStatus::Idle | AppStatus::Error(_) => {
@@ -865,7 +798,6 @@ fn app() -> Element {
                                         assistant_speaking.set(false);
                                         assistant_generating.set(false);
                                         assistant_buf.set(String::new());
-                                        activity_log.set(Vec::new());
                                         llm_backend.set(Some(config.llm.backend));
                                         tool_mode.set(Some(config.llm.tool_mode));
 
@@ -874,6 +806,10 @@ fn app() -> Element {
                                         let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<fae::ToolApprovalRequest>();
                                         let (inj_tx, inj_rx) = tokio::sync::mpsc::unbounded_channel::<fae::pipeline::messages::TextInjection>();
                                         text_injection_tx.set(Some(inj_tx));
+
+                                        // Gate command channel for Start/Stop Listening button.
+                                        let (gate_tx, gate_rx) = tokio::sync::mpsc::unbounded_channel::<fae::GateCommand>();
+                                        gate_cmd_tx.set(Some(gate_tx));
 
                                         // Canvas tool registry — tools write here, GUI reads for display.
                                         let canvas_registry = {
@@ -892,7 +828,10 @@ fn app() -> Element {
                                                 .with_tool_approvals(approval_tx)
                                                 .with_canvas_registry(canvas_registry)
                                                 .with_text_injection(inj_rx)
+                                                .with_gate_commands(gate_rx)
                                                 .with_console_output(false);
+                                        let gate_active_flag = pipeline.gate_active();
+                                        gate_active_arc.set(Some(gate_active_flag));
                                         let cancel = pipeline.cancel_token();
                                         shared.write().cancel_token = Some(cancel);
 
@@ -936,54 +875,60 @@ fn app() -> Element {
                                                     // Route event through canvas bridge
                                                     canvas_bridge.write().on_event(&ev);
 
-                                                    match ev {
+                                                    match &ev {
                                                         fae::RuntimeEvent::Control(ctrl) => match ctrl {
                                                             fae::pipeline::messages::ControlEvent::AssistantSpeechStart => assistant_speaking.set(true),
-                                                            fae::pipeline::messages::ControlEvent::AssistantSpeechEnd { .. } => assistant_speaking.set(false),
+                                                            fae::pipeline::messages::ControlEvent::AssistantSpeechEnd { .. } => {
+                                                                assistant_speaking.set(false);
+                                                                // Unpin Fae's subtitle so the 5-second timer starts.
+                                                                let mut sf = sub_fae.write();
+                                                                sf.pinned = false;
+                                                                sf.set_at = Some(std::time::Instant::now());
+                                                            }
                                                             fae::pipeline::messages::ControlEvent::UserSpeechStart { .. } => {}
                                                             fae::pipeline::messages::ControlEvent::WakewordDetected => {}
                                                         },
-                                                        fae::RuntimeEvent::AssistantGenerating { active } => assistant_generating.set(active),
-                                                        fae::RuntimeEvent::AssistantAudioLevel { rms } => assistant_rms.set(rms),
+                                                        fae::RuntimeEvent::AssistantGenerating { active } => assistant_generating.set(*active),
+                                                        fae::RuntimeEvent::AssistantAudioLevel { rms } => assistant_rms.set(*rms),
                                                         fae::RuntimeEvent::Transcription(t) => {
                                                             let text = t.text.trim().to_owned();
                                                             if !text.is_empty() {
-                                                                activity_log.write().push(LogEntry { kind: LogKind::User, text });
+                                                                sub_user.write().set(text);
                                                             }
                                                         }
                                                         fae::RuntimeEvent::AssistantSentence(chunk) => {
                                                             if !chunk.text.is_empty() {
                                                                 assistant_buf.write().push_str(&chunk.text);
                                                             }
+                                                            // Show the current sentence as it streams.
+                                                            let current = assistant_buf.read().trim().to_owned();
+                                                            if !current.is_empty() {
+                                                                let mut sf = sub_fae.write();
+                                                                sf.set(current);
+                                                                sf.pinned = true;
+                                                            }
+                                                            // Detect Fae saying she's closing the canvas.
+                                                            let lower = chunk.text.to_lowercase();
+                                                            if lower.contains("closing") && lower.contains("canvas") {
+                                                                canvas_visible.set(false);
+                                                            }
                                                             if chunk.is_final {
-                                                                let msg = { assistant_buf.read().trim().to_owned() };
                                                                 assistant_buf.set(String::new());
-                                                                if !msg.is_empty() {
-                                                                    activity_log.write().push(LogEntry { kind: LogKind::Assistant, text: msg });
-                                                                }
                                                             }
                                                         }
-                                                        fae::RuntimeEvent::ToolCall { name, input_json } => {
-                                                            activity_log.write().push(LogEntry {
-                                                                kind: LogKind::Tool,
-                                                                text: format!("Tool call: {name} {input_json}"),
-                                                            });
+                                                        fae::RuntimeEvent::ToolCall { name, .. } => {
+                                                            // Auto-open canvas panel when Fae uses a canvas tool.
+                                                            if name.starts_with("canvas_") && name != "canvas_clear" {
+                                                                canvas_visible.set(true);
+                                                            }
+                                                            // Auto-close canvas panel when Fae clears the canvas.
+                                                            if name == "canvas_clear" {
+                                                                canvas_visible.set(false);
+                                                            }
                                                         }
-                                                        fae::RuntimeEvent::ToolResult { name, success } => {
-                                                            activity_log.write().push(LogEntry {
-                                                                kind: LogKind::Tool,
-                                                                text: format!("Tool result: {name} success={success}"),
-                                                            });
-                                                        }
+                                                        fae::RuntimeEvent::ToolResult { .. } => {}
                                                     }
 
-                                                    // Prevent unbounded growth.
-                                                    const MAX_LOG_LINES: usize = 200;
-                                                    let current_len = activity_log.read().len();
-                                                    if current_len > MAX_LOG_LINES {
-                                                        let drain = current_len - MAX_LOG_LINES;
-                                                        activity_log.write().drain(0..drain);
-                                                    }
                                                 }
                                             }
                                         }
@@ -991,7 +936,6 @@ fn app() -> Element {
                                         assistant_speaking.set(false);
                                         assistant_generating.set(false);
                                         text_injection_tx.set(None);
-                                        fork_point.set(None);
                                     }
                                     PipelineMessage::ModelsReady(Err(e)) => {
                                         status.set(AppStatus::Error(e.to_string()));
@@ -1007,15 +951,29 @@ fn app() -> Element {
                 });
             }
             AppStatus::Running => {
-                // --- STOP ---
-                status.set(AppStatus::Stopping);
-                if let Some(token) = &shared.read().cancel_token {
-                    token.cancel();
+                // --- Toggle conversation gate (Start/Stop Listening) ---
+                if let Some(tx) = gate_cmd_tx.read().as_ref() {
+                    let currently_active = gate_active_arc
+                        .read()
+                        .as_ref()
+                        .map_or(false, |a| a.load(std::sync::atomic::Ordering::Relaxed));
+                    let cmd = if currently_active {
+                        fae::GateCommand::Sleep
+                    } else {
+                        fae::GateCommand::Wake
+                    };
+                    let _ = tx.send(cmd);
                 }
             }
             _ => {}
         }
     };
+
+    // Auto-start model loading on app launch.
+    if !*auto_started.read() {
+        auto_started.set(true);
+        on_button_click();
+    }
 
     let current_status = status.read().clone();
     let status_text = match &current_status {
@@ -1030,13 +988,19 @@ fn app() -> Element {
         }
         _ => current_status.display_text(),
     };
-    let button_label = if current_status.show_start() {
-        "Start"
-    } else {
-        "Stop"
-    };
     let button_enabled = current_status.buttons_enabled();
     let is_running = matches!(current_status, AppStatus::Running);
+    let gate_is_active = gate_active_arc
+        .read()
+        .as_ref()
+        .map_or(false, |a| a.load(std::sync::atomic::Ordering::Relaxed));
+    let button_label = if !is_running {
+        "Starting..."
+    } else if gate_is_active {
+        "Stop Listening"
+    } else {
+        "Start Listening"
+    };
     let is_loading = matches!(
         current_status,
         AppStatus::Downloading { .. } | AppStatus::Loading { .. }
@@ -1208,11 +1172,36 @@ fn app() -> Element {
     // For the idle/stopped portrait: always use the full uncropped woodland image.
     let portrait_src = embedded_fae_jpg_data_uri();
 
+    // Resize the main window when the canvas panel opens/closes.
+    // Poll the signal on a short timer so the resize happens regardless
+    // of which context sets canvas_visible (event loop, UI handler, etc.).
+    {
+        let desktop = desktop.clone();
+        let mut prev_visible = use_signal(|| false);
+        use_future(move || {
+            let desktop = desktop.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let now = *canvas_visible.read();
+                    if now != *prev_visible.read() {
+                        prev_visible.set(now);
+                        if now {
+                            desktop.set_inner_size(LogicalSize::new(960.0, 700.0));
+                        } else {
+                            desktop.set_inner_size(LogicalSize::new(480.0, 700.0));
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     rsx! {
         // Global styles
         style { {GLOBAL_CSS} }
 
-        div { class: "container",
+        div { class: if *canvas_visible.read() { "container container-with-canvas" } else { "container" },
             div { class: "topbar",
                 button {
                     class: "hamburger",
@@ -1265,14 +1254,6 @@ fn app() -> Element {
                         button {
                             class: "drawer-item",
                             onclick: move |_| {
-                                view.set(MainView::Canvas);
-                                drawer_open.set(false);
-                            },
-                            "Canvas"
-                        }
-                        button {
-                            class: "drawer-item",
-                            onclick: move |_| {
                                 view.set(MainView::Voices);
                                 drawer_open.set(false);
                             },
@@ -1295,6 +1276,8 @@ fn app() -> Element {
             }
 
             if *view.read() == MainView::Home {
+              div { class: "home-layout",
+                div { class: "home-main",
                 if is_running {
                     // Animated circular avatar while running — swap full-frame poses
                     div {
@@ -1381,7 +1364,7 @@ fn app() -> Element {
                     class: "main-button",
                     style: "background: {button_bg}; opacity: {button_opacity};",
                     disabled: !button_enabled,
-                    onclick: on_button_click,
+                    onclick: move |_| on_button_click(),
                     "{button_label}"
                 }
 
@@ -1392,58 +1375,40 @@ fn app() -> Element {
                         }
                     }
 
-                    div { class: "log-panel",
-                        h2 { class: "log-title", "Activity" }
-                        div { id: "activity-log", class: "log",
-                            {
-                                let current_fork = *fork_point.read();
-                                let log_snapshot = activity_log.read();
-                                rsx! {
-                                    for (i, entry) in log_snapshot.iter().enumerate() {
-                                        {
-                                            let is_fork_point = current_fork == Some(i);
-                                            let is_forked_below = current_fork.is_some_and(|fp| i > fp);
-                                            let show_fork_btn = matches!(entry.kind, LogKind::User | LogKind::Assistant);
-                                            let entry_class = if is_fork_point {
-                                                "log-entry fork-point".to_owned()
-                                            } else if is_forked_below {
-                                                "log-entry forked-below".to_owned()
-                                            } else {
-                                                "log-entry".to_owned()
-                                            };
-                                            rsx! {
-                                                div { key: "{i}", class: "{entry_class}",
-                                                    p { class: "{entry.class_name()}",
-                                                        "{entry.text}"
-                                                    }
-                                                    if show_fork_btn {
-                                                        button {
-                                                            class: "fork-btn",
-                                                            onclick: move |_| {
-                                                                let current = *fork_point.read();
-                                                                if current == Some(i) {
-                                                                    fork_point.set(None);
-                                                                } else {
-                                                                    fork_point.set(Some(i));
-                                                                }
-                                                            },
-                                                            "+"
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                    // Subtitle bubbles — most recent speaker at the bottom.
+                    div { class: "subtitle-area",
+                        {
+                            let fae_snap = sub_fae.read();
+                            let user_snap = sub_user.read();
+                            let fae_vis = fae_snap.is_visible();
+                            let user_vis = user_snap.is_visible();
+                            // Determine who spoke most recently (that one goes to the bottom).
+                            let fae_newer = match (fae_snap.set_at, user_snap.set_at) {
+                                (Some(f), Some(u)) => f > u,
+                                (Some(_), None) => true,
+                                _ => false,
+                            };
+                            let fae_text = fae_snap.text.clone();
+                            let user_text = user_snap.text.clone();
+                            drop(fae_snap);
+                            drop(user_snap);
+                            rsx! {
+                                if fae_vis && user_vis {
+                                    if fae_newer {
+                                        // User spoke first, Fae is newer → Fae at bottom
+                                        div { class: "subtitle-bubble subtitle-user", "{user_text}" }
+                                        div { class: "subtitle-bubble subtitle-fae", "{fae_text}" }
+                                    } else {
+                                        // Fae spoke first, user is newer → user at bottom
+                                        div { class: "subtitle-bubble subtitle-fae", "{fae_text}" }
+                                        div { class: "subtitle-bubble subtitle-user", "{user_text}" }
                                     }
-                                    if let Some(_fp) = current_fork {
-                                        div { class: "fork-indicator",
-                                            "\u{2934} Fork from here \u{2014} type a new message below. "
-                                            button {
-                                                class: "fork-cancel",
-                                                onclick: move |_| fork_point.set(None),
-                                                "Cancel"
-                                            }
-                                        }
-                                    }
+                                } else if fae_vis {
+                                    div { class: "subtitle-bubble subtitle-fae", "{fae_text}" }
+                                } else if user_vis {
+                                    div { class: "subtitle-bubble subtitle-user", "{user_text}" }
+                                } else {
+                                    div { class: "subtitle-spacer" }
                                 }
                             }
                         }
@@ -1453,7 +1418,7 @@ fn app() -> Element {
                             input {
                                 class: "text-input",
                                 r#type: "text",
-                                placeholder: if fork_point.read().is_some() { "Type forked message..." } else { "Type a message..." },
+                                placeholder: "Type a message...",
                                 value: "{text_input.read()}",
                                 oninput: move |evt| text_input.set(evt.value()),
                                 onkeydown: move |evt: KeyboardEvent| {
@@ -1461,22 +1426,11 @@ fn app() -> Element {
                                         let msg = text_input.read().trim().to_owned();
                                         if !msg.is_empty() {
                                             if let Some(tx) = text_injection_tx.read().as_ref() {
-                                                let fp_val = *fork_point.read();
-                                                let fork_keep = fp_val.map(|fp| {
-                                                    compute_history_keep_count(&activity_log.read(), fp)
-                                                });
-
                                                 let injection = fae::pipeline::messages::TextInjection {
                                                     text: msg,
-                                                    fork_at_keep_count: fork_keep,
+                                                    fork_at_keep_count: None,
                                                 };
                                                 let _ = tx.send(injection);
-
-                                                // If forking, truncate the visible activity log too.
-                                                if let Some(fp) = fp_val {
-                                                    activity_log.write().truncate(fp + 1);
-                                                    fork_point.set(None);
-                                                }
                                             }
                                             text_input.set(String::new());
                                         }
@@ -1490,21 +1444,11 @@ fn app() -> Element {
                                     let msg = text_input.read().trim().to_owned();
                                     if !msg.is_empty() {
                                         if let Some(tx) = text_injection_tx.read().as_ref() {
-                                            let fp_val = *fork_point.read();
-                                            let fork_keep = fp_val.map(|fp| {
-                                                compute_history_keep_count(&activity_log.read(), fp)
-                                            });
-
                                             let injection = fae::pipeline::messages::TextInjection {
                                                 text: msg,
-                                                fork_at_keep_count: fork_keep,
+                                                fork_at_keep_count: None,
                                             };
                                             let _ = tx.send(injection);
-
-                                            if let Some(fp) = fp_val {
-                                                activity_log.write().truncate(fp + 1);
-                                                fork_point.set(None);
-                                            }
                                         }
                                         text_input.set(String::new());
                                     }
@@ -1514,188 +1458,54 @@ fn app() -> Element {
                         }
                     }
                 }
-            }
 
-            if *view.read() == MainView::Canvas {
-                div { class: "canvas-view",
-                    div { class: "screen-header",
-                        button {
-                            class: "back-btn",
-                            onclick: move |_| view.set(MainView::Home),
-                            "\u{2190} Back"
-                        }
-                        h2 { class: "screen-title", "Canvas" }
-                        {
-                            let status = canvas_bridge.read().session().connection_status();
-                            let (class, label) = match &status {
-                                fae::canvas::backend::ConnectionStatus::Local => ("canvas-status local", "Local"),
-                                fae::canvas::backend::ConnectionStatus::Connected => ("canvas-status connected", "Connected"),
-                                fae::canvas::backend::ConnectionStatus::Connecting => ("canvas-status connecting", "Connecting\u{2026}"),
-                                fae::canvas::backend::ConnectionStatus::Reconnecting { .. } => ("canvas-status reconnecting", "Reconnecting\u{2026}"),
-                                fae::canvas::backend::ConnectionStatus::Disconnected => ("canvas-status disconnected", "Disconnected"),
-                                fae::canvas::backend::ConnectionStatus::Failed(_) => ("canvas-status failed", "Failed"),
-                            };
-                            rsx! { span { class: "{class}", "{label}" } }
-                        }
-                    }
-                    // Search bar
-                    div { class: "canvas-search",
-                        input {
-                            r#type: "text",
-                            class: "canvas-search-input",
-                            placeholder: "Search messages\u{2026}",
-                            value: "{canvas_search.read()}",
-                            oninput: move |e| canvas_search.set(e.value().to_string()),
-                        }
-                        if !canvas_search.read().is_empty() {
+                } // end home-main
+
+                // Canvas panel — right-side panel visible when Fae pushes
+                // rich content (charts, images). Window expands to fit.
+                if *canvas_visible.read() {
+                    div { class: "canvas-panel",
+                        div { class: "canvas-panel-header",
+                            h3 { class: "canvas-panel-title", "Canvas" }
                             button {
-                                class: "canvas-search-clear",
-                                onclick: move |_| canvas_search.set(String::new()),
-                                "\u{00d7}"
+                                class: "canvas-close-btn",
+                                title: "Close canvas",
+                                onclick: move |_| canvas_visible.set(false),
+                                "X"
                             }
                         }
-                    }
-                    // Per-message Dioxus components
-                    div {
-                        id: "canvas-pane",
-                        class: "canvas-pane",
-                        role: "log",
-                        aria_label: "Conversation messages",
-                        tabindex: "0",
-                        onkeydown: move |e| {
-                            if e.key() == dioxus::prelude::Key::Escape {
-                                canvas_ctx_menu.set(None);
+                        div {
+                            class: "canvas-pane",
+                            role: "log",
+                            aria_label: "Canvas content",
+                            dangerous_inner_html: "{build_canvas_messages_html(&canvas_bridge.read())}",
+                            if *assistant_generating.read() {
+                                div {
+                                    class: "thinking-indicator",
+                                    role: "status",
+                                    aria_live: "polite",
+                                    aria_label: "Assistant is thinking",
+                                    span { class: "thinking-dot" }
+                                    span { class: "thinking-dot" }
+                                    span { class: "thinking-dot" }
+                                }
                             }
-                        },
+                        }
                         {
-                            let search = canvas_search.read().to_lowercase();
-                            let views = canvas_bridge.read().session().message_views();
-                            views.into_iter().enumerate().filter_map(|(i, mv)| {
-                                if !search.is_empty() && !mv.text.to_lowercase().contains(&search) {
-                                    return None;
+                            let tools_html = canvas_bridge.read().session().tool_elements_html();
+                            if !tools_html.is_empty() {
+                                rsx! {
+                                    div { class: "canvas-tools-section",
+                                        dangerous_inner_html: "{tools_html}",
+                                    }
                                 }
-                                let role_label = match mv.role {
-                                    fae::canvas::types::MessageRole::User => "user",
-                                    fae::canvas::types::MessageRole::Assistant => "assistant",
-                                    fae::canvas::types::MessageRole::System => "system",
-                                    fae::canvas::types::MessageRole::Tool => "tool",
-                                };
-
-                                // Highlight search matches.
-                                let body_html = if !search.is_empty() {
-                                    highlight_search_matches(&mv.html, &search)
-                                } else {
-                                    mv.html.clone()
-                                };
-
-                                // Tool detail card (collapsible).
-                                let tool_details = if mv.tool_input.is_some() || mv.tool_result_text.is_some() {
-                                    let input_html = mv.tool_input.as_deref().map(|inp| {
-                                        format!(
-                                            "<pre class=\"tool-detail-json\">{}</pre>",
-                                            fae::canvas::session::html_escape(inp),
-                                        )
-                                    }).unwrap_or_default();
-                                    let result_html = mv.tool_result_text.as_deref().map(|r| {
-                                        format!(
-                                            "<div class=\"tool-detail-result\">{}</div>",
-                                            fae::canvas::session::html_escape(r),
-                                        )
-                                    }).unwrap_or_default();
-                                    format!(
-                                        "<details class=\"tool-details\">\
-                                         <summary>Details</summary>\
-                                         {input_html}{result_html}\
-                                         </details>"
-                                    )
-                                } else {
-                                    String::new()
-                                };
-
-                                let full_html = format!("{body_html}{tool_details}");
-                                let msg_text = mv.text.clone();
-
-                                Some(rsx! {
-                                    div {
-                                        key: "{i}",
-                                        class: "canvas-msg-wrapper",
-                                        role: "article",
-                                        aria_label: "{role_label} message",
-                                        tabindex: "0",
-                                        oncontextmenu: move |e| {
-                                            e.prevent_default();
-                                            canvas_ctx_menu.set(Some(i));
-                                        },
-                                        dangerous_inner_html: full_html,
-                                        // Action bar (copy)
-                                        div { class: "msg-actions",
-                                            button {
-                                                class: "msg-action-btn",
-                                                title: "Copy text",
-                                                onclick: {
-                                                    let text = msg_text.clone();
-                                                    move |_| {
-                                                        clipboard_text.set(text.clone());
-                                                    }
-                                                },
-                                                "\u{1f4cb}"
-                                            }
-                                        }
-                                    }
-                                    // Context menu
-                                    if *canvas_ctx_menu.read() == Some(i) {
-                                        div { class: "canvas-context-menu",
-                                            button {
-                                                class: "ctx-menu-item",
-                                                onclick: {
-                                                    let text = mv.text.clone();
-                                                    move |_| {
-                                                        clipboard_text.set(text.clone());
-                                                        canvas_ctx_menu.set(None);
-                                                    }
-                                                },
-                                                "Copy"
-                                            }
-                                            button {
-                                                class: "ctx-menu-item",
-                                                onclick: move |_| canvas_ctx_menu.set(None),
-                                                "Close"
-                                            }
-                                        }
-                                    }
-                                })
-                            }).collect::<Vec<_>>().into_iter()
-                        }
-                        // Thinking indicator
-                        if *assistant_generating.read() {
-                            div {
-                                class: "thinking-indicator",
-                                role: "status",
-                                aria_live: "polite",
-                                aria_label: "Assistant is thinking",
-                                span { class: "thinking-dot" }
-                                span { class: "thinking-dot" }
-                                span { class: "thinking-dot" }
+                            } else {
+                                rsx! {}
                             }
                         }
-                    }
-                    // Tool-pushed content (charts, images)
-                    {
-                        let tools_html = canvas_bridge.read().session().tool_elements_html();
-                        if !tools_html.is_empty() {
-                            rsx! {
-                                div { class: "canvas-tools-section",
-                                    dangerous_inner_html: tools_html,
-                                }
-                            }
-                        } else {
-                            rsx! {}
-                        }
-                    }
-                    if !is_running {
-                        p { class: "canvas-hint", "Start the pipeline to see messages here." }
                     }
                 }
+              } // end home-layout
             }
 
             if *view.read() == MainView::Settings {
@@ -2531,12 +2341,7 @@ fn app() -> Element {
                                 class: "modal-btn modal-approve",
                                 onclick: move |_| {
                                     if let Some(req) = pending_approval.write().take() {
-                                        let name = req.name.clone();
                                         let _ = req.respond(true);
-                                        activity_log.write().push(LogEntry {
-                                            kind: LogKind::System,
-                                            text: format!("Approved tool: {name}"),
-                                        });
                                     }
                                     if pending_approval.read().is_none()
                                         && let Some(next) = approval_queue.write().pop_front()
@@ -2550,12 +2355,7 @@ fn app() -> Element {
                                 class: "modal-btn modal-deny",
                                 onclick: move |_| {
                                     if let Some(req) = pending_approval.write().take() {
-                                        let name = req.name.clone();
                                         let _ = req.respond(false);
-                                        activity_log.write().push(LogEntry {
-                                            kind: LogKind::System,
-                                            text: format!("Denied tool: {name}"),
-                                        });
                                     }
                                     if pending_approval.read().is_none()
                                         && let Some(next) = approval_queue.write().pop_front()
@@ -3141,6 +2941,31 @@ const GLOBAL_CSS: &str = r#"
         padding: 0 1.25rem 2rem;
         gap: 0.8rem;
         overflow-y: auto;
+    }
+    .container-with-canvas {
+        align-items: stretch;
+    }
+
+    /* --- Home Layout (horizontal split when canvas visible) --- */
+    .home-layout {
+        display: flex;
+        flex-direction: row;
+        gap: 1rem;
+        width: 100%;
+        flex: 1;
+        min-height: 0;
+    }
+    .home-main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        flex: 0 0 auto;
+        width: 100%;
+        gap: 0.8rem;
+    }
+    .container-with-canvas .home-main {
+        flex: 0 0 440px;
+        width: 440px;
     }
 
     /* --- Topbar / Drawer --- */
@@ -3806,62 +3631,52 @@ const GLOBAL_CSS: &str = r#"
         border-radius: var(--radius-sm);
     }
 
-    /* --- Activity Log --- */
-    .log-panel {
+    /* --- Subtitle Bubbles --- */
+    .subtitle-area {
         width: 100%;
-        max-width: 420px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-lg);
-        padding: 0.75rem;
-        margin-top: 0.2rem;
+        max-width: 440px;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-top: 0.4rem;
+        min-height: 80px;
+        justify-content: flex-end;
     }
 
-    .log-title {
-        font-size: 0.72rem;
-        font-weight: 600;
-        color: var(--text-tertiary);
-        letter-spacing: 0.08em;
-        margin-bottom: 0.5rem;
-        text-transform: uppercase;
-    }
-
-    .log {
-        max-height: 220px;
-        overflow: auto;
-        padding-right: 0.2rem;
-    }
-
-    .log-line {
-        font-size: 0.8rem;
-        line-height: 1.3;
-        padding: 0.3rem 0.45rem;
-        border-radius: var(--radius-sm);
-        margin-bottom: 0.25rem;
+    .subtitle-bubble {
+        max-width: 85%;
+        padding: 0.55rem 0.85rem;
+        border-radius: 1rem;
+        font-size: 0.88rem;
+        line-height: 1.35;
         word-break: break-word;
         white-space: pre-wrap;
+        animation: subtitleFadeIn 0.2s ease;
     }
 
-    .log-user {
-        background: var(--green-dim);
-        border: 1px solid rgba(34, 197, 94, 0.15);
+    .subtitle-fae {
+        align-self: flex-start;
+        background: rgba(59, 130, 246, 0.18);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        color: #93bbfc;
+        border-bottom-left-radius: 0.25rem;
     }
 
-    .log-assistant {
-        background: var(--accent-dim);
-        border: 1px solid rgba(167, 139, 250, 0.15);
+    .subtitle-user {
+        align-self: flex-end;
+        background: rgba(34, 197, 94, 0.18);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        color: #86efac;
+        border-bottom-right-radius: 0.25rem;
     }
 
-    .log-tool {
-        background: rgba(59, 130, 246, 0.08);
-        border: 1px solid rgba(59, 130, 246, 0.12);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 0.75rem;
+    .subtitle-spacer {
+        min-height: 40px;
     }
 
-    .log-system {
-        background: rgba(251, 191, 36, 0.05);
-        border: 1px solid rgba(251, 191, 36, 0.1);
+    @keyframes subtitleFadeIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
     }
 
     /* --- Text Input Bar --- */
@@ -3905,58 +3720,6 @@ const GLOBAL_CSS: &str = r#"
     .text-send-btn:hover:not(:disabled) { opacity: 0.85; }
     .text-send-btn:disabled { opacity: 0.35; cursor: default; }
 
-    /* --- Log Entry with Fork Button --- */
-    .log-entry {
-        display: flex;
-        align-items: flex-start;
-        gap: 4px;
-        margin-bottom: 0.25rem;
-    }
-    .log-entry p {
-        flex: 1;
-    }
-
-    .fork-btn {
-        opacity: 0.15;
-        background: none;
-        border: none;
-        color: var(--text-tertiary);
-        cursor: pointer;
-        font-size: 0.85rem;
-        padding: 0.2rem 0.3rem;
-        line-height: 1;
-        border-radius: 4px;
-        transition: opacity 0.15s, color 0.15s;
-        flex-shrink: 0;
-    }
-    .log-entry:hover .fork-btn { opacity: 0.6; }
-    .fork-btn:hover { opacity: 1 !important; color: var(--accent); background: var(--accent-dim); }
-
-    /* Fork active state */
-    .log-entry.fork-point {
-        background: var(--accent-dim);
-        border-radius: var(--radius-sm);
-        padding: 2px;
-    }
-    .log-entry.forked-below p { opacity: 0.3; }
-    .log-entry.forked-below .fork-btn { opacity: 0.15; }
-
-    .fork-indicator {
-        font-size: 0.75rem;
-        color: var(--accent);
-        padding: 4px 6px;
-        margin-top: 4px;
-    }
-
-    .fork-cancel {
-        background: none;
-        border: none;
-        color: var(--text-secondary);
-        cursor: pointer;
-        text-decoration: underline;
-        font-size: 0.75rem;
-    }
-    .fork-cancel:hover { color: var(--text-primary); }
 
     /* --- Modal --- */
     .modal-overlay {
@@ -4053,10 +3816,58 @@ const GLOBAL_CSS: &str = r#"
     .canvas-status.disconnected { background: rgba(255, 69, 58, 0.12); color: #ff453a; }
     .canvas-status.failed { background: rgba(255, 69, 58, 0.15); color: #ff453a; }
 
-    /* --- Canvas Pane --- */
-    .canvas-view { flex: 1; display: flex; flex-direction: column; padding: 1rem; }
+    /* --- Canvas Right-Side Panel --- */
+    .canvas-panel {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0;
+        min-width: 0;
+        max-height: calc(100vh - 5rem);
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 0.5rem 0.75rem;
+        gap: 0.5rem;
+        box-sizing: border-box;
+        overflow: hidden;
+        animation: canvas-fade-in 0.15s ease-out;
+    }
+    @keyframes canvas-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    .canvas-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 0.25rem;
+        border-bottom: 1px solid var(--border-subtle);
+        flex-shrink: 0;
+    }
+    .canvas-panel-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0;
+    }
+    .canvas-close-btn {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: var(--text-secondary);
+        border-radius: var(--radius-sm);
+        padding: 2px 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 600;
+        line-height: 1;
+    }
+    .canvas-close-btn:hover {
+        background: rgba(239, 68, 68, 0.25);
+        color: #fca5a5;
+        border-color: rgba(239, 68, 68, 0.4);
+    }
     .canvas-pane {
         flex: 1;
+        min-height: 0;
         overflow-y: auto;
         background: var(--bg-secondary);
         border: 1px solid var(--border-subtle);

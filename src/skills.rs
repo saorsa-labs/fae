@@ -88,8 +88,8 @@ mod tests {
     }
 
     #[test]
-    fn canvas_skill_mentions_canvas_render() {
-        assert!(CANVAS_SKILL.contains("canvas_render"));
+    fn canvas_skill_mentions_chart() {
+        assert!(CANVAS_SKILL.contains("Chart"));
     }
 
     #[test]
@@ -102,7 +102,7 @@ mod tests {
     fn load_all_includes_canvas() {
         let all = load_all_skills();
         assert!(all.contains("Canvas"));
-        assert!(all.contains("canvas_render"));
+        assert!(all.contains("Chart"));
     }
 
     #[test]

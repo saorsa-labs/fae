@@ -52,6 +52,7 @@ pub use approval::ToolApprovalRequest;
 pub use config::SpeechConfig;
 pub use error::{Result, SpeechError};
 pub use pipeline::coordinator::{PipelineCoordinator, PipelineMode};
+pub use pipeline::messages::GateCommand;
 pub use progress::{ProgressCallback, ProgressEvent};
 pub use runtime::RuntimeEvent;
 pub use startup::InitializedModels;

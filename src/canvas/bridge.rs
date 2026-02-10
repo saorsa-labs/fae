@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use tracing::info;
+
 use crate::pipeline::messages::ControlEvent;
 use crate::runtime::RuntimeEvent;
 
@@ -101,6 +103,13 @@ impl CanvasBridge {
             }
 
             RuntimeEvent::ToolCall { name, input_json } => {
+                // If this is a canvas_render call, parse the input and render
+                // the element directly into the bridge's session so it appears
+                // in the canvas window.
+                if name == "canvas_render" {
+                    self.try_render_tool_element(input_json);
+                }
+
                 // Store the input for attachment to the ToolResult message.
                 self.pending_tool_inputs
                     .insert(name.clone(), input_json.clone());
@@ -131,6 +140,40 @@ impl CanvasBridge {
             RuntimeEvent::Control(_)
             | RuntimeEvent::AssistantAudioLevel { .. }
             | RuntimeEvent::Transcription(_) => {}
+        }
+    }
+
+    /// Try to parse a `canvas_render` tool input and add the element to the
+    /// bridge's session so it appears in the canvas window.
+    fn try_render_tool_element(&mut self, input_json: &str) {
+        use canvas_mcp::tools::RenderParams;
+
+        // Try full RenderParams first (has session_id + content + position).
+        let params: Option<RenderParams> = serde_json::from_str(input_json).ok();
+        if let Some(params) = params {
+            let element = crate::canvas::tools::render::render_content_to_element(&params);
+            self.session.add_element(element);
+            info!("bridge: rendered canvas_render element from ToolCall");
+            return;
+        }
+
+        // Fallback: try parsing just as RenderContent (the content field only).
+        use canvas_mcp::tools::{Position, RenderContent};
+        let content: Option<RenderContent> = serde_json::from_str(input_json).ok();
+        if let Some(content) = content {
+            let params = RenderParams {
+                session_id: "gui".to_owned(),
+                content,
+                position: Some(Position {
+                    x: 0.0,
+                    y: 0.0,
+                    width: Some(600.0),
+                    height: Some(400.0),
+                }),
+            };
+            let element = crate::canvas::tools::render::render_content_to_element(&params);
+            self.session.add_element(element);
+            info!("bridge: rendered canvas_render element from RenderContent fallback");
         }
     }
 
@@ -401,5 +444,76 @@ mod tests {
         let html = b.session().to_html();
         assert!(html.contains("canvas-messages"));
         assert!(!html.contains("canvas-tools"));
+    }
+
+    #[test]
+    fn test_canvas_render_tool_call_adds_element() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+
+        // Simulate a canvas_render ToolCall with valid RenderParams JSON.
+        let input_json = serde_json::json!({
+            "session_id": "gui",
+            "content": {
+                "type": "Text",
+                "data": {
+                    "content": "Hello from canvas",
+                    "font_size": 16.0
+                }
+            }
+        })
+        .to_string();
+
+        b.on_event(&RuntimeEvent::ToolCall {
+            name: "canvas_render".into(),
+            input_json,
+        });
+
+        // Should have 1 tool message + 1 scene element (the rendered text).
+        assert_eq!(b.session().message_count(), 1); // The tool call message
+        assert_eq!(b.session().element_count(), 2); // message + rendered element
+
+        // The rendered element should appear in tool_elements_html.
+        let tools_html = b.session().tool_elements_html();
+        assert!(tools_html.contains("Hello from canvas"));
+    }
+
+    #[test]
+    fn test_canvas_render_with_render_content_json() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+
+        // Simulate a ToolCall with just RenderContent (no session_id wrapper).
+        let input_json = serde_json::json!({
+            "type": "Chart",
+            "data": {
+                "chart_type": "bar",
+                "data": {"labels": ["A", "B"], "values": [10, 20]},
+                "title": "Test Chart"
+            }
+        })
+        .to_string();
+
+        b.on_event(&RuntimeEvent::ToolCall {
+            name: "canvas_render".into(),
+            input_json,
+        });
+
+        // The chart element should be in the scene.
+        assert_eq!(b.session().element_count(), 2); // message + chart
+        let tools_html = b.session().tool_elements_html();
+        assert!(!tools_html.is_empty());
+    }
+
+    #[test]
+    fn test_non_canvas_tool_call_ignored() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+
+        // A non-canvas tool call should NOT add an element.
+        b.on_event(&RuntimeEvent::ToolCall {
+            name: "search".into(),
+            input_json: "{}".into(),
+        });
+
+        assert_eq!(b.session().message_count(), 1); // Just the tool message
+        assert_eq!(b.session().element_count(), 1); // Only the message element
     }
 }

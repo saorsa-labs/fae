@@ -5,10 +5,10 @@ use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::canvas::registry::CanvasSessionRegistry;
 use crate::config::SpeechConfig;
 use crate::error::Result;
-use crate::memory::{MemoryStore, Person, PrimaryUser};
+use crate::memory::{MemoryStore, PrimaryUser};
 use crate::pipeline::messages::{
-    AudioChunk, ControlEvent, SentenceChunk, SpeechSegment, SynthesizedAudio, TextInjection,
-    Transcription,
+    AudioChunk, ControlEvent, GateCommand, SentenceChunk, SpeechSegment, SynthesizedAudio,
+    TextInjection, Transcription,
 };
 use crate::runtime::RuntimeEvent;
 use crate::startup::InitializedModels;
@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Channel buffer sizes.
 const AUDIO_CHANNEL_SIZE: usize = 64;
@@ -27,9 +27,6 @@ const SPEECH_CHANNEL_SIZE: usize = 8;
 const TRANSCRIPTION_CHANNEL_SIZE: usize = 8;
 const SENTENCE_CHANNEL_SIZE: usize = 8;
 const SYNTH_CHANNEL_SIZE: usize = 16;
-
-const PRIMARY_MATCH_THRESHOLD: f32 = 0.82;
-const UNKNOWN_MATCH_THRESHOLD: f32 = 0.78;
 
 /// Commands sent to the playback stage (e.g., barge-in stop).
 enum PlaybackCommand {
@@ -55,6 +52,8 @@ pub struct PipelineCoordinator {
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
     text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+    gate_cmd_rx: Option<mpsc::UnboundedReceiver<GateCommand>>,
+    gate_active: Arc<AtomicBool>,
     console_output: bool,
 }
 
@@ -70,6 +69,8 @@ impl PipelineCoordinator {
             tool_approval_tx: None,
             text_injection_rx: None,
             canvas_registry: None,
+            gate_cmd_rx: None,
+            gate_active: Arc::new(AtomicBool::new(false)),
             console_output: true,
         }
     }
@@ -87,6 +88,8 @@ impl PipelineCoordinator {
             tool_approval_tx: None,
             text_injection_rx: None,
             canvas_registry: None,
+            gate_cmd_rx: None,
+            gate_active: Arc::new(AtomicBool::new(false)),
             console_output: true,
         }
     }
@@ -127,6 +130,23 @@ impl PipelineCoordinator {
     pub fn with_text_injection(mut self, rx: mpsc::UnboundedReceiver<TextInjection>) -> Self {
         self.text_injection_rx = Some(rx);
         self
+    }
+
+    /// Attach a conversation gate command channel.
+    ///
+    /// The GUI sends [`GateCommand::Wake`] / [`GateCommand::Sleep`] to toggle
+    /// the conversation gate between active and idle — equivalent to the wake
+    /// word and stop phrase.
+    pub fn with_gate_commands(mut self, rx: mpsc::UnboundedReceiver<GateCommand>) -> Self {
+        self.gate_cmd_rx = Some(rx);
+        self
+    }
+
+    /// Returns a shared flag that tracks whether the conversation gate is
+    /// currently active (listening).  The GUI reads this to show the correct
+    /// button label.
+    pub fn gate_active(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.gate_active)
     }
 
     /// Enable or disable console (stdout) output from the pipeline.
@@ -369,6 +389,8 @@ impl PipelineCoordinator {
                         console_output,
                         cancel: cancel.clone(),
                         wakeword_rx: wakeword_gate_rx,
+                        gate_cmd_rx: self.gate_cmd_rx.take(),
+                        gate_active: Arc::clone(&self.gate_active),
                     };
                     let handle = Some(tokio::spawn(async move {
                         run_conversation_gate(config, ident_rx, gated_tx, gate_ctl).await;
@@ -379,13 +401,16 @@ impl PipelineCoordinator {
                 };
 
                 // Forward LLM sentences to both TTS and runtime event stream.
+                // Also intercepts JSON canvas output from local models.
                 let sentence_forward_handle = {
                     let runtime_tx = runtime_tx.clone();
+                    let canvas_reg = canvas_registry.clone();
                     tokio::spawn(async move {
                         forward_sentences(
                             llm_sentence_rx,
                             tts_sentence_tx,
                             runtime_tx,
+                            canvas_reg,
                             console_output,
                         )
                         .await;
@@ -955,17 +980,17 @@ async fn run_identity_gate(
         error!("voice dir init failed: {e}");
     }
 
-    let mut primary = match store.load_primary_user() {
-        Ok(v) => v,
+    let has_primary = match store.load_primary_user() {
+        Ok(v) => v.is_some(),
         Err(e) => {
             error!("failed to load primary user memory: {e}");
-            None
+            false
         }
     };
 
     // One-shot onboarding if missing.
-    if primary.is_none() {
-        if let Err(e) = run_onboarding(
+    if !has_primary
+        && let Err(e) = run_onboarding(
             &store,
             &memory_root,
             &tts_tx,
@@ -974,14 +999,9 @@ async fn run_identity_gate(
             &cancel,
         )
         .await
-        {
-            error!("onboarding failed: {e}");
-        } else {
-            primary = store.load_primary_user().ok().flatten();
-        }
+    {
+        error!("onboarding failed: {e}");
     }
-
-    let mut pending_unknown: Option<Vec<f32>> = None;
 
     loop {
         tokio::select! {
@@ -989,64 +1009,8 @@ async fn run_identity_gate(
             msg = rx.recv() => {
                 let Some(t) = msg else { break };
 
-                // Best-effort: only forward speech from the primary user once we have a voiceprint.
-                if let (Some(p), Some(vp)) = (primary.as_ref(), t.voiceprint.as_ref())
-                    && let Some(pvp) = p.voiceprint.as_ref()
-                {
-                    let sim = crate::voiceprint::similarity(pvp, vp).unwrap_or(0.0);
-                    if sim < PRIMARY_MATCH_THRESHOLD {
-                        // Unknown speaker.
-                        if pending_unknown.is_none() && sim < UNKNOWN_MATCH_THRESHOLD {
-                            pending_unknown = Some(vp.clone());
-                            let name = &p.name;
-                            let _ = speak(
-                                &tts_tx,
-                                &format!(
-                                    "{name}, I heard a new voice. If you want me to remember them, say: remember them as NAME. Otherwise say: don't remember."
-                                ),
-                                &cancel,
-                            )
-                            .await;
-                        }
-                        continue;
-                    }
-                }
-
-                // If we have a pending unknown speaker enrollment and the primary user is speaking,
-                // treat matching phrases as control commands (do not forward to the LLM).
-                if pending_unknown.is_some()
-                    && let Some(cmd) = parse_unknown_enrollment_command(&t.text)
-                {
-                    match cmd {
-                        UnknownEnrollCommand::RememberAs(person_name) => {
-                            if let Some(vp) = pending_unknown.take() {
-                                if let Err(e) = remember_person(&store, person_name.clone(), vp) {
-                                    error!("failed to remember person: {e}");
-                                    let _ = speak(
-                                        &tts_tx,
-                                        "Sorry, I couldn't save that memory.",
-                                        &cancel,
-                                    )
-                                    .await;
-                                } else {
-                                    let _ = speak(
-                                        &tts_tx,
-                                        &format!("Okay. I'll remember {person_name}."),
-                                        &cancel,
-                                    )
-                                    .await;
-                                }
-                            }
-                            continue;
-                        }
-                        UnknownEnrollCommand::DontRemember => {
-                            pending_unknown = None;
-                            let _ =
-                                speak(&tts_tx, "Okay. I won't remember them.", &cancel).await;
-                            continue;
-                        }
-                    }
-                }
+                // TODO: Speaker detection disabled — respond to all speech.
+                // Re-enable voiceprint gating once embeddings are more stable.
 
                 if tx.send(t).await.is_err() {
                     break;
@@ -1214,58 +1178,6 @@ fn write_wav_i16(
         writer.write_sample(x).map_err(|e| e.to_string())?;
     }
     writer.finalize().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-enum UnknownEnrollCommand {
-    RememberAs(String),
-    DontRemember,
-}
-
-fn parse_unknown_enrollment_command(text: &str) -> Option<UnknownEnrollCommand> {
-    let t = text.trim().to_ascii_lowercase();
-    if t.contains("don't remember") || t.contains("dont remember") || t == "no" {
-        return Some(UnknownEnrollCommand::DontRemember);
-    }
-    let needles = [
-        "remember them as ",
-        "remember as ",
-        "remember them ",
-        "remember ",
-    ];
-    for n in needles {
-        if let Some(rest) = t.strip_prefix(n) {
-            let name = rest.split_whitespace().next().unwrap_or("");
-            if !name.is_empty() {
-                return Some(UnknownEnrollCommand::RememberAs(capitalize_first(name)));
-            }
-        }
-    }
-    None
-}
-
-fn remember_person(
-    store: &MemoryStore,
-    name: String,
-    voiceprint: Vec<f32>,
-) -> crate::error::Result<()> {
-    let mut people = store.load_people()?;
-    // Upsert by case-insensitive name.
-    if let Some(p) = people
-        .iter_mut()
-        .find(|p| p.name.eq_ignore_ascii_case(&name))
-    {
-        p.voiceprint = Some(voiceprint);
-        p.voice_sample_wav = None;
-    } else {
-        people.push(Person {
-            name,
-            voiceprint: Some(voiceprint),
-            voice_sample_wav: None,
-        });
-    }
-    store.save_people(&people)?;
     Ok(())
 }
 
@@ -1898,6 +1810,11 @@ struct ConversationGateControl {
     /// Optional channel for MFCC+DTW wake word detections from the spotter stage.
     /// When received in Idle state, transitions to Active immediately.
     wakeword_rx: Option<mpsc::UnboundedReceiver<()>>,
+    /// Optional channel for GUI-driven gate commands (wake/sleep button).
+    gate_cmd_rx: Option<mpsc::UnboundedReceiver<GateCommand>>,
+    /// Shared flag indicating whether the gate is currently active.
+    /// Written by the gate, read by the GUI for button state.
+    gate_active: Arc<AtomicBool>,
 }
 
 /// Conversation gate: filters transcriptions based on wake word / stop phrase.
@@ -1924,6 +1841,8 @@ async fn run_conversation_gate(
     // Take the wakeword receiver out of ctl so we can use it in the select loop
     // without a mutable borrow conflict.
     let mut wakeword_rx = ctl.wakeword_rx.take();
+    let mut gate_cmd_rx = ctl.gate_cmd_rx.take();
+    let gate_active = ctl.gate_active.clone();
 
     // Auto-idle: track when the last conversational activity happened.
     let mut last_activity = Instant::now();
@@ -1941,11 +1860,45 @@ async fn run_conversation_gate(
             }
         };
 
+        // Create a future for the GUI gate command channel.
+        let gate_cmd_fut = async {
+            match &mut gate_cmd_rx {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
         tokio::select! {
             () = ctl.cancel.cancelled() => break,
+            // GUI-driven gate command (start/stop listening button).
+            Some(cmd) = gate_cmd_fut => {
+                match cmd {
+                    GateCommand::Wake if state == GateState::Idle => {
+                        state = GateState::Active;
+                        gate_active.store(true, Ordering::Relaxed);
+                        last_activity = Instant::now();
+                        if ctl.console_output {
+                            println!("\n[{display_name}] Listening...");
+                        }
+                        info!("gate wake command received, transitioning to active");
+                    }
+                    GateCommand::Sleep if state == GateState::Active => {
+                        ctl.interrupt.store(true, Ordering::Relaxed);
+                        let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
+                        state = GateState::Idle;
+                        gate_active.store(false, Ordering::Relaxed);
+                        if ctl.console_output {
+                            println!("\n[{display_name}] Standing by.\n");
+                        }
+                        info!("gate sleep command received, returning to idle");
+                    }
+                    _ => {} // Already in requested state, ignore.
+                }
+            }
             // MFCC+DTW wake word detection from the spotter stage.
             Some(()) = wakeword_fut, if state == GateState::Idle => {
                 state = GateState::Active;
+                gate_active.store(true, Ordering::Relaxed);
                 last_activity = Instant::now();
                 if ctl.console_output {
                     println!("\n[{display_name}] Listening...");
@@ -1961,6 +1914,7 @@ async fn run_conversation_gate(
                     && last_activity.elapsed() >= Duration::from_secs(idle_timeout_s as u64)
                 {
                     state = GateState::Idle;
+                    gate_active.store(false, Ordering::Relaxed);
                     if ctl.console_output {
                         println!("\n[{display_name}] Standing by.\n");
                     }
@@ -1987,6 +1941,7 @@ async fn run_conversation_gate(
                                 {
                                     // Wake word detected — transition to Active
                                     state = GateState::Active;
+                                    gate_active.store(true, Ordering::Relaxed);
                                     last_activity = Instant::now();
                                     if ctl.console_output {
                                         println!("\n[{display_name}] Listening...");
@@ -2031,6 +1986,7 @@ async fn run_conversation_gate(
                                     ctl.interrupt.store(true, Ordering::Relaxed);
                                     let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
                                     state = GateState::Idle;
+                                    gate_active.store(false, Ordering::Relaxed);
                                     if ctl.console_output {
                                         println!("\n[{display_name}] Standing by.\n");
                                     }
@@ -2373,24 +2329,345 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
+/// Forward LLM sentence chunks to TTS and the runtime event stream.
+///
+/// When a local model outputs raw JSON that matches the `canvas_render`
+/// content schema (`{ "type": "Chart"|"Image"|"Text", "data": {...} }`),
+/// the JSON is intercepted and rendered directly to the canvas session
+/// instead of being sent to TTS. A brief spoken description is sent in
+/// its place so Fae doesn't try to speak JSON.
+///
+/// JSON detection uses a three-phase approach:
+/// 1. **Deciding** — initial chunks are buffered (up to ~120 chars) to
+///    detect JSON preambles like "aaa json ```json {..."
+/// 2. **JSON mode** — once `{` is seen, everything from `{` onward is
+///    accumulated and rendered to canvas on `is_final`.
+/// 3. **Speech mode** — if enough text accumulates without `{`, all
+///    buffered text is flushed and subsequent chunks stream normally.
 async fn forward_sentences(
     mut rx: mpsc::Receiver<SentenceChunk>,
     tx: mpsc::Sender<SentenceChunk>,
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     console_output: bool,
 ) {
-    while let Some(chunk) = rx.recv().await {
-        if let Some(rt) = &runtime_tx {
+    /// Send a chunk to both the runtime event stream and TTS.
+    async fn emit(
+        chunk: &SentenceChunk,
+        runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
+        tx: &mpsc::Sender<SentenceChunk>,
+        console_output: bool,
+    ) {
+        if let Some(rt) = runtime_tx {
             let _ = rt.send(RuntimeEvent::AssistantSentence(chunk.clone()));
         }
         if console_output && !chunk.text.is_empty() {
             print!("{}", chunk.text);
             let _ = std::io::stdout().flush();
         }
-        if tx.send(chunk).await.is_err() {
-            break;
+        let _ = tx.send(chunk.clone()).await;
+    }
+
+    /// How many characters of preamble to buffer before deciding this is
+    /// normal speech (not JSON). Covers "aaa json ```json" and similar.
+    const DECIDE_THRESHOLD: usize = 120;
+
+    #[derive(PartialEq)]
+    enum Mode {
+        /// Buffering initial text to detect JSON.
+        Deciding,
+        /// Accumulating `{...}` for canvas rendering.
+        Json,
+        /// Normal speech — forward chunks immediately.
+        Speech,
+    }
+
+    let mut mode = Mode::Deciding;
+    let mut pending = String::new(); // buffered text while Deciding
+    let mut json_buf = String::new(); // JSON accumulator in Json mode
+
+    while let Some(chunk) = rx.recv().await {
+        match mode {
+            Mode::Json => {
+                json_buf.push_str(&chunk.text);
+            }
+            Mode::Speech => {
+                emit(&chunk, &runtime_tx, &tx, console_output).await;
+            }
+            Mode::Deciding => {
+                pending.push_str(&chunk.text);
+
+                // Check the combined pending text for a `{`.
+                if let Some(brace_pos) = pending.find('{') {
+                    // Found JSON start — everything from `{` onward goes
+                    // to json_buf. Everything before is preamble (discarded).
+                    mode = Mode::Json;
+                    json_buf.push_str(&pending[brace_pos..]);
+                } else if pending.len() >= DECIDE_THRESHOLD {
+                    // Enough text without `{` — this is normal speech.
+                    mode = Mode::Speech;
+                    emit(
+                        &SentenceChunk {
+                            text: std::mem::take(&mut pending),
+                            is_final: false,
+                        },
+                        &runtime_tx,
+                        &tx,
+                        console_output,
+                    )
+                    .await;
+                }
+                // else: keep buffering
+            }
+        }
+
+        if chunk.is_final {
+            match mode {
+                Mode::Json => {
+                    // Strip markdown code fences (```json ... ```) that
+                    // some models wrap around the JSON output.
+                    let stripped = strip_markdown_fences(&json_buf);
+                    let cleaned = clean_model_json(stripped.trim());
+                    let json_str = extract_json_object(&cleaned);
+
+                    let spoken = json_str
+                        .and_then(|js| try_render_canvas_json(js, &canvas_registry, &runtime_tx));
+
+                    let output_text = if let Some(description) = spoken {
+                        description
+                    } else {
+                        warn!(
+                            "JSON canvas output detected but parsing failed: {}",
+                            &cleaned[..cleaned.len().min(200)]
+                        );
+                        "I tried to create a chart but had trouble with the data format.".to_owned()
+                    };
+
+                    emit(
+                        &SentenceChunk {
+                            text: output_text,
+                            is_final: true,
+                        },
+                        &runtime_tx,
+                        &tx,
+                        console_output,
+                    )
+                    .await;
+                }
+                Mode::Deciding => {
+                    // Response ended while still buffering — check one
+                    // last time for JSON, otherwise emit as speech.
+                    if pending.contains('{') {
+                        let stripped = strip_markdown_fences(&pending);
+                        let cleaned = clean_model_json(stripped.trim());
+                        let json_str = extract_json_object(&cleaned);
+
+                        let spoken = json_str.and_then(|js| {
+                            try_render_canvas_json(js, &canvas_registry, &runtime_tx)
+                        });
+
+                        let output_text = spoken.unwrap_or_else(|| pending.clone());
+                        emit(
+                            &SentenceChunk {
+                                text: output_text,
+                                is_final: true,
+                            },
+                            &runtime_tx,
+                            &tx,
+                            console_output,
+                        )
+                        .await;
+                    } else if !pending.is_empty() {
+                        emit(
+                            &SentenceChunk {
+                                text: std::mem::take(&mut pending),
+                                is_final: true,
+                            },
+                            &runtime_tx,
+                            &tx,
+                            console_output,
+                        )
+                        .await;
+                    }
+                }
+                Mode::Speech => {
+                    // Final chunk already emitted above.
+                }
+            }
+
+            // Reset for the next response.
+            mode = Mode::Deciding;
+            pending.clear();
+            json_buf.clear();
         }
     }
+}
+
+/// Strip markdown code fences from text. Removes leading/trailing
+/// ` ```json ` / ` ``` ` markers that models sometimes wrap JSON in.
+fn strip_markdown_fences(text: &str) -> String {
+    let mut s = text.to_owned();
+    // Remove opening fence: ```json or ```
+    if let Some(start) = s.find("```") {
+        let fence_end = s[start + 3..]
+            .find('\n')
+            .map(|i| start + 3 + i + 1)
+            .unwrap_or(start + 3);
+        s.replace_range(start..fence_end, "");
+    }
+    // Remove closing fence
+    if let Some(end) = s.rfind("```") {
+        s.replace_range(end..end + 3, "");
+    }
+    s
+}
+
+/// Extract the outermost `{...}` JSON object from `text`, accounting
+/// for nested braces and quoted strings. Returns the slice if balanced
+/// braces are found, `None` otherwise.
+fn extract_json_object(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, ch) in text[start..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..start + i + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Clean up common JSON formatting issues from local LLM output.
+///
+/// Local models sometimes output values like `1 billion` or `1.25 billion`
+/// instead of proper numeric literals. This function normalizes those
+/// patterns so the JSON can be parsed by serde.
+fn clean_model_json(text: &str) -> String {
+    let mut result = text.to_owned();
+
+    // Process multiplier words from largest to smallest.
+    for (word, multiplier) in [
+        (" trillion", 1_000_000_000_000_f64),
+        (" billion", 1_000_000_000_f64),
+        (" million", 1_000_000_f64),
+    ] {
+        while let Some(word_pos) = result.find(word) {
+            // Walk backward from the space before the word to find the number.
+            let before = &result[..word_pos];
+            let num_start = before
+                .rfind(|c: char| !c.is_ascii_digit() && c != '.')
+                .map_or(0, |i| i + 1);
+            let num_str = &result[num_start..word_pos];
+
+            if let Ok(n) = num_str.parse::<f64>() {
+                let expanded = format!("{}", (n * multiplier) as i64);
+                result.replace_range(num_start..word_pos + word.len(), &expanded);
+            } else {
+                // Can't parse the preceding text as a number; leave it and
+                // break to avoid an infinite loop.
+                break;
+            }
+        }
+    }
+
+    result
+}
+
+/// Attempt to parse `text` as a canvas `RenderContent` JSON blob and
+/// render it to the `"gui"` canvas session.
+///
+/// On success, emits `ToolCall` + `ToolResult` runtime events (so the GUI
+/// opens the canvas window) and returns a brief spoken description.
+///
+/// Returns `None` if the text doesn't parse as valid canvas content.
+fn try_render_canvas_json(
+    text: &str,
+    canvas_registry: &Option<Arc<Mutex<CanvasSessionRegistry>>>,
+    runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
+) -> Option<String> {
+    use canvas_mcp::tools::{RenderContent, RenderParams};
+
+    let registry = canvas_registry.as_ref()?;
+
+    // The local model outputs the `content` part directly — a JSON object
+    // with `"type"` and `"data"` fields matching `RenderContent`.
+    let content: RenderContent = serde_json::from_str(text).ok()?;
+
+    // Build full render params with a reasonable default size for chart/image
+    // rendering (Transform::default() gives only 100x100 which is too small).
+    use canvas_mcp::tools::Position;
+    let params = RenderParams {
+        session_id: "gui".to_owned(),
+        content,
+        position: Some(Position {
+            x: 0.0,
+            y: 0.0,
+            width: Some(600.0),
+            height: Some(400.0),
+        }),
+    };
+
+    // Render the element into the canvas session.
+    let element = crate::canvas::tools::render::render_content_to_element(&params);
+    let reg = registry.lock().ok()?;
+    let session_arc = reg.get("gui")?;
+    let mut session = session_arc.lock().ok()?;
+    session.add_element(element);
+    drop(session);
+    drop(reg);
+
+    // Emit ToolCall/ToolResult so the GUI opens the canvas window.
+    if let Some(rt) = runtime_tx {
+        let input_json = serde_json::to_string(&params).unwrap_or_default();
+        let _ = rt.send(RuntimeEvent::ToolCall {
+            name: "canvas_render".to_owned(),
+            input_json,
+        });
+        let _ = rt.send(RuntimeEvent::ToolResult {
+            name: "canvas_render".to_owned(),
+            success: true,
+        });
+    }
+
+    // Generate a brief spoken description for TTS.
+    let description = match &params.content {
+        RenderContent::Chart {
+            title, chart_type, ..
+        } => {
+            if let Some(title) = title {
+                format!("I've put that on the canvas. {title}.")
+            } else {
+                format!("Here's the {chart_type} chart on the canvas.")
+            }
+        }
+        RenderContent::Image { alt, .. } => {
+            if let Some(alt) = alt {
+                format!("I've shown the image on the canvas. {alt}.")
+            } else {
+                "I've shown the image on the canvas.".to_owned()
+            }
+        }
+        RenderContent::Text { .. } => "I've put that text on the canvas.".to_owned(),
+        _ => "I've rendered that on the canvas.".to_owned(),
+    };
+
+    info!("intercepted JSON canvas output → rendered to canvas session");
+    Some(description)
 }
 
 #[cfg(test)]
@@ -2398,6 +2675,123 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    // ── clean_model_json ─────────────────────────────────────────────
+
+    #[test]
+    fn clean_json_billion() {
+        let input = r#"[500000000, 1 billion, 1.25 billion]"#;
+        let cleaned = clean_model_json(input);
+        assert_eq!(cleaned, "[500000000, 1000000000, 1250000000]");
+    }
+
+    #[test]
+    fn clean_json_million() {
+        let input = r#"[900 million, 2.5 million]"#;
+        let cleaned = clean_model_json(input);
+        assert_eq!(cleaned, "[900000000, 2500000]");
+    }
+
+    #[test]
+    fn clean_json_no_change_needed() {
+        let input = r#"{"values": [100, 200, 300]}"#;
+        let cleaned = clean_model_json(input);
+        assert_eq!(cleaned, input);
+    }
+
+    #[test]
+    fn clean_json_mixed() {
+        let input = r#"[500000000, 550000000, 1 billion, 6.7 billion]"#;
+        let cleaned = clean_model_json(input);
+        assert_eq!(cleaned, "[500000000, 550000000, 1000000000, 6700000000]");
+    }
+
+    // ── extract_json_object ───────────────────────────────────────
+
+    #[test]
+    fn extract_json_pure_object() {
+        let text = r#"{"type":"Chart","data":{"chart_type":"bar"}}"#;
+        assert_eq!(extract_json_object(text), Some(text));
+    }
+
+    #[test]
+    fn extract_json_with_preamble() {
+        let text = r#"Here is a chart: {"type":"Chart","data":{"chart_type":"bar"}}"#;
+        assert_eq!(
+            extract_json_object(text),
+            Some(r#"{"type":"Chart","data":{"chart_type":"bar"}}"#)
+        );
+    }
+
+    #[test]
+    fn extract_json_with_trailing_text() {
+        let text = r#"{"type":"Chart","data":{}} I hope this helps!"#;
+        assert_eq!(
+            extract_json_object(text),
+            Some(r#"{"type":"Chart","data":{}}"#)
+        );
+    }
+
+    #[test]
+    fn extract_json_nested_braces() {
+        let text = r#"{"a":{"b":{"c":1}}}"#;
+        assert_eq!(extract_json_object(text), Some(text));
+    }
+
+    #[test]
+    fn extract_json_braces_in_strings() {
+        let text = r#"{"label":"value {x}"}"#;
+        assert_eq!(extract_json_object(text), Some(text));
+    }
+
+    #[test]
+    fn extract_json_escaped_quotes() {
+        let text = r#"{"label":"say \"hello\""}"#;
+        assert_eq!(extract_json_object(text), Some(text));
+    }
+
+    #[test]
+    fn extract_json_no_json() {
+        assert_eq!(extract_json_object("no json here"), None);
+    }
+
+    #[test]
+    fn extract_json_unbalanced() {
+        assert_eq!(extract_json_object("{unclosed"), None);
+    }
+
+    // ── strip_markdown_fences ─────────────────────────────────────
+
+    #[test]
+    fn strip_fences_json_block() {
+        let input = "```json\n{\"type\":\"Chart\"}\n```";
+        let result = strip_markdown_fences(input);
+        assert!(result.contains("{\"type\":\"Chart\"}"));
+        assert!(!result.contains("```"));
+    }
+
+    #[test]
+    fn strip_fences_plain_backticks() {
+        let input = "```\n{\"key\":\"val\"}\n```";
+        let result = strip_markdown_fences(input);
+        assert!(result.contains("{\"key\":\"val\"}"));
+        assert!(!result.contains("```"));
+    }
+
+    #[test]
+    fn strip_fences_no_fences() {
+        let input = "{\"key\":\"val\"}";
+        let result = strip_markdown_fences(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn strip_fences_with_preamble() {
+        let input = "here is the json ```json\n{\"a\":1}\n```";
+        let result = strip_markdown_fences(input);
+        assert!(result.contains("{\"a\":1}"));
+        assert!(!result.contains("```"));
+    }
 
     // ── find_wake_word ──────────────────────────────────────────────
 

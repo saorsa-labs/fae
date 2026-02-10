@@ -91,6 +91,15 @@ pub struct TextInjection {
     pub fork_at_keep_count: Option<usize>,
 }
 
+/// Commands sent from the GUI to the conversation gate.
+#[derive(Debug, Clone)]
+pub enum GateCommand {
+    /// Activate the gate (equivalent to wake word).
+    Wake,
+    /// Deactivate the gate (equivalent to stop phrase).
+    Sleep,
+}
+
 /// Synthesized audio from TTS, ready for playback.
 #[derive(Debug, Clone)]
 pub struct SynthesizedAudio {

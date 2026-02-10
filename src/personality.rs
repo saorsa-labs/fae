@@ -166,7 +166,7 @@ mod tests {
         let prompt = assemble_prompt("default", "");
         // Core + skills (no personality for "default")
         assert!(prompt.starts_with(CORE_PROMPT));
-        assert!(prompt.contains("canvas_render"));
+        assert!(prompt.contains("Canvas"));
     }
 
     #[test]
@@ -175,14 +175,14 @@ mod tests {
         assert!(prompt.starts_with(CORE_PROMPT));
         assert!(prompt.contains("Fae"));
         // Skills appear after personality
-        assert!(prompt.contains("canvas_render"));
+        assert!(prompt.contains("Canvas"));
     }
 
     #[test]
     fn assemble_with_addon() {
         let prompt = assemble_prompt("default", "Be formal.");
         assert!(prompt.starts_with(CORE_PROMPT));
-        assert!(prompt.contains("canvas_render"));
+        assert!(prompt.contains("Canvas"));
         assert!(prompt.ends_with("Be formal."));
     }
 
@@ -191,7 +191,7 @@ mod tests {
         let prompt = assemble_prompt("fae", "  Be formal.  ");
         assert!(prompt.starts_with(CORE_PROMPT));
         assert!(prompt.contains("Fae"));
-        assert!(prompt.contains("canvas_render"));
+        assert!(prompt.contains("Canvas"));
         assert!(prompt.ends_with("Be formal."));
     }
 
@@ -208,7 +208,7 @@ mod tests {
         let prompt = assemble_prompt("fae", "Be formal.");
         // Verify ordering: personality before skills, skills before add-on
         let fae_pos = prompt.find("Fae");
-        let canvas_pos = prompt.find("canvas_render");
+        let canvas_pos = prompt.find("Canvas");
         let addon_pos = prompt.find("Be formal.");
         assert!(fae_pos.is_some());
         assert!(canvas_pos.is_some());
@@ -261,7 +261,7 @@ mod tests {
             "prompt should specify 1-3 short sentences"
         );
         assert!(
-            prompt.contains("Never use emojis"),
+            prompt.contains("No emojis"),
             "prompt should prohibit emojis"
         );
     }
