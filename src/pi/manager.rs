@@ -167,6 +167,108 @@ impl PiManager {
         self.config.auto_install
     }
 
+    /// Convenience accessor for the Pi binary path if installed.
+    pub fn pi_path(&self) -> Option<&Path> {
+        self.state.path()
+    }
+
+    /// Ensure Pi is available on the system.
+    ///
+    /// 1. Runs [`detect()`](Self::detect) to find an existing installation.
+    /// 2. If not found and `auto_install` is enabled, downloads and installs
+    ///    the latest version from GitHub.
+    /// 3. If not found and `auto_install` is disabled, returns `NotFound`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if detection fails, or if auto-install is triggered
+    /// but the download/installation fails.
+    pub fn ensure_pi(&mut self) -> Result<&PiInstallState> {
+        self.detect()?;
+
+        if self.state.is_installed() {
+            return Ok(&self.state);
+        }
+
+        if !self.config.auto_install {
+            tracing::info!("Pi not found and auto_install is disabled");
+            return Ok(&self.state);
+        }
+
+        tracing::info!("Pi not found, auto-installing from GitHub releases");
+
+        let release = fetch_latest_release()?;
+        let asset = select_platform_asset(&release).ok_or_else(|| {
+            SpeechError::Pi(format!(
+                "no Pi release asset for this platform ({}/{})",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ))
+        })?;
+
+        let dest = download_and_install(asset, &self.install_dir, &self.marker_path)?;
+
+        let version = run_pi_version(&dest).unwrap_or_else(|| release.version().to_owned());
+
+        self.state = PiInstallState::FaeManaged {
+            path: dest,
+            version,
+        };
+
+        Ok(&self.state)
+    }
+
+    /// Update a Fae-managed Pi installation to the latest version.
+    ///
+    /// Only updates if:
+    /// - Pi is currently installed and Fae-managed
+    /// - A newer version is available on GitHub
+    ///
+    /// User-installed Pi binaries are never modified.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the GitHub API check or download fails.
+    pub fn update(&mut self) -> Result<&PiInstallState> {
+        if !self.state.is_fae_managed() {
+            tracing::info!("Pi is not Fae-managed, skipping update");
+            return Ok(&self.state);
+        }
+
+        let release = match self.check_update()? {
+            Some(r) => r,
+            None => {
+                tracing::info!("Pi is already up to date");
+                return Ok(&self.state);
+            }
+        };
+
+        let asset = select_platform_asset(&release).ok_or_else(|| {
+            SpeechError::Pi(format!(
+                "no Pi release asset for this platform ({}/{})",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ))
+        })?;
+
+        tracing::info!(
+            "Updating Pi from {} to {}",
+            self.state.version().unwrap_or("unknown"),
+            release.version()
+        );
+
+        let dest = download_and_install(asset, &self.install_dir, &self.marker_path)?;
+
+        let version = run_pi_version(&dest).unwrap_or_else(|| release.version().to_owned());
+
+        self.state = PiInstallState::FaeManaged {
+            path: dest,
+            version,
+        };
+
+        Ok(&self.state)
+    }
+
     /// Check if a newer version of Pi is available on GitHub.
     ///
     /// Compares the installed version (if any) against the latest GitHub release.
@@ -967,5 +1069,41 @@ mod tests {
         // First two skipped (empty name or URL), only the third included.
         assert_eq!(release.assets.len(), 1);
         assert_eq!(release.assets[0].size, 300);
+    }
+
+    #[test]
+    fn ensure_pi_with_auto_install_disabled_returns_not_found() {
+        let config = PiConfig {
+            install_dir: Some(PathBuf::from("/nonexistent/fae-test-ensure-pi")),
+            auto_install: false,
+        };
+        let mut manager = PiManager::new(&config).unwrap();
+        let state = manager.ensure_pi().unwrap();
+
+        // With auto_install disabled and no Pi at the custom path,
+        // should return NotFound (or UserInstalled if Pi is in PATH on dev machine).
+        assert!(
+            matches!(state, PiInstallState::NotFound | PiInstallState::UserInstalled { .. }),
+            "expected NotFound or UserInstalled, got: {state}"
+        );
+    }
+
+    #[test]
+    fn update_skips_non_managed() {
+        let config = PiConfig {
+            install_dir: Some(PathBuf::from("/nonexistent/fae-test-update")),
+            auto_install: false,
+        };
+        let mut manager = PiManager::new(&config).unwrap();
+        // State is NotFound, which is not Fae-managed.
+        let state = manager.update().unwrap();
+        assert!(!state.is_fae_managed());
+    }
+
+    #[test]
+    fn pi_path_returns_none_when_not_found() {
+        let config = PiConfig::default();
+        let manager = PiManager::new(&config).unwrap();
+        assert!(manager.pi_path().is_none());
     }
 }
