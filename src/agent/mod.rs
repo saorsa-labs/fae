@@ -1,7 +1,12 @@
-//! Agent-backed LLM engine using `saorsa-agent` + `saorsa-ai`.
+//! Agent-backed LLM engine using `saorsa-agent`.
 //!
-//! This runs fully in-process by default (via `mistralrs`), so the app stays
-//! as a single binary and does not require an external HTTP model server.
+//! Supports two inference backends:
+//! - **Local** (default): In-process via `mistralrs` using [`ToolingMistralrsProvider`].
+//! - **Cloud**: Any OpenAI-compatible API via [`HttpStreamingProvider`], configured
+//!   through Pi's `~/.pi/agent/models.json`.
+//!
+//! `saorsa-ai` is used only for trait definitions (`Provider`, `StreamingProvider`)
+//! required by `saorsa-agent`. The `mistralrs` feature is disabled.
 
 use crate::agent::local_provider::ToolingMistralrsProvider;
 use crate::approval::ToolApprovalRequest;
