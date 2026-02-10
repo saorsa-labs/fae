@@ -79,12 +79,28 @@ impl SaorsaAgentLlm {
                 model_id,
             ))
         } else {
-            // Local: use in-process mistralrs inference.
-            let model = match preloaded_llm {
-                Some(llm) => llm.shared_model(),
-                None => LocalLlm::load_local_model(config).await?,
+            // Local: use in-process mistralrs inference, with cloud fallback.
+            let local_result = match preloaded_llm {
+                Some(llm) => Ok(llm.shared_model()),
+                None => LocalLlm::load_local_model(config).await,
             };
-            Box::new(ToolingMistralrsProvider::new(model, config.clone()))
+
+            match local_result {
+                Ok(model) => {
+                    tracing::info!("agent using local provider: {}", config.model_id);
+                    Box::new(ToolingMistralrsProvider::new(model, config.clone()))
+                }
+                Err(local_err) => {
+                    // Fallback: try to find a cloud provider in models.json.
+                    tracing::warn!(
+                        "local model failed to load: {local_err}; checking models.json for fallback"
+                    );
+                    match try_cloud_fallback(config) {
+                        Some(provider) => provider,
+                        None => return Err(local_err),
+                    }
+                }
+            }
         };
 
         let mut tools = saorsa_agent::ToolRegistry::new();
@@ -309,4 +325,37 @@ impl SaorsaAgentLlm {
 
         Ok(false)
     }
+}
+
+/// Try to find a cloud provider in Pi's models.json as a fallback when
+/// the local model fails to load.
+///
+/// Returns `None` if no cloud providers are available, allowing the caller
+/// to propagate the original local-model error.
+fn try_cloud_fallback(
+    config: &LlmConfig,
+) -> Option<Box<dyn StreamingProvider>> {
+    let pi_path = crate::llm::pi_config::default_pi_models_path()?;
+    let pi_config = crate::llm::pi_config::read_pi_config(&pi_path).ok()?;
+    let cloud = pi_config.cloud_providers();
+    let (name, provider) = cloud.first()?;
+
+    let model_id = provider
+        .models
+        .first()
+        .map(|m| m.id.clone())
+        .unwrap_or_else(|| config.api_model.clone());
+
+    tracing::info!(
+        "falling back to cloud provider: {} (model={}, url={})",
+        name,
+        model_id,
+        provider.base_url
+    );
+
+    Some(Box::new(http_provider::HttpStreamingProvider::new(
+        provider.base_url.clone(),
+        provider.api_key.clone(),
+        model_id,
+    )))
 }
