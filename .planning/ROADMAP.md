@@ -177,3 +177,149 @@ Pipeline → RuntimeEvent → CanvasBridge → RemoteCanvasSession → WebSocket
 - Messages are `ElementKind::Text` elements with metadata for role/timestamp
 - Rich content uses existing `ElementKind` variants (Chart, Image, Model3D)
 - `CanvasBackend` trait abstracts local vs remote — code doesn't care which
+
+---
+
+## Milestone 5: Pi Integration, Self-Update & Autonomy
+
+> **Worktree**: `~/Desktop/Devel/projects/fae-worktree-pi`
+> **Spec**: `specs/pi-integration-spec.md`
+> **Archived predecessor**: `archive/ROADMAP-milestone2-self-update.md`
+
+### Problem
+Fae can think and speak, but she can't **do things** — she can't write code, edit
+configs, manage files, or automate tasks on the user's computer. Pi is the coding
+agent that gives her hands. Additionally, Fae has no self-update capability and
+depends on `saorsa-ai` for LLM providers when Pi's `~/.pi/agent/models.json`
+already handles multi-provider configuration.
+
+### Design Philosophy (inspired by OpenClaw)
+- **Pi is the hands, Fae is the brain.** Fae delegates coding/file tasks to Pi via
+  RPC, just as OpenClaw uses Pi as its core intelligence engine.
+- **Self-extension over plugins.** Following Pi/OpenClaw's philosophy: the LLM
+  writes code to extend its own capabilities rather than downloading pre-built plugins.
+- **Gateway pattern.** Fae acts as the gateway (voice channel) routing user intent
+  to Pi's agent tools, similar to OpenClaw's multi-channel gateway architecture.
+- **Single source of truth for AI config.** `~/.pi/agent/models.json` is the one
+  place for API keys, model providers, and endpoints. No separate saorsa-ai config.
+- **Local-first intelligence.** Fae's Qwen 3 (via mistralrs) is exposed as an
+  OpenAI-compatible HTTP endpoint so Pi can use it — zero cloud dependency for
+  coding tasks.
+- **Install tools properly.** Pi is installed as `pi` in the standard system
+  location. Standard config at `~/.pi/agent/`. Interoperates with user-installed Pi.
+- **Fae is for non-technical users.** They don't have Node.js, Homebrew, or a
+  terminal. Everything must be handled by the installer and the app itself.
+
+### Success Criteria
+- Fae exposes local Qwen 3 as OpenAI-compatible endpoint; Pi uses it for inference
+- saorsa-ai removed; all API keys managed via `~/.pi/agent/models.json`
+- Pi detected/installed to standard location on all platforms
+- Pi coding tasks delegated via RPC from voice commands
+- Fae self-updates from GitHub releases (Mac, Linux, Windows)
+- Pi auto-updates via scheduler with user preference control
+- Scheduler infrastructure ready for future user tasks
+- Zero terminal interaction required from the user
+
+### Phase 5.1: Local LLM HTTP Server (8 tasks)
+Expose Fae's Qwen 3 (mistralrs GGUF) as an OpenAI-compatible HTTP endpoint on
+localhost. This lets Pi (and any other local tool) use Fae's brain without cloud
+API keys. Write a `"fae-local"` provider entry to `~/.pi/agent/models.json`.
+
+### Phase 5.2: API Key Unification — Drop saorsa-ai (8 tasks)
+Replace `saorsa-ai` dependency with direct `~/.pi/agent/models.json` parsing.
+Read provider configs, API keys, and base URLs from Pi's config. Fae's agent
+backend uses a new `PiConfigProvider` that loads from this single source.
+
+### Phase 5.3: Pi Manager — Detection & Installation (8 tasks)
+`PiManager` finds or installs Pi. Check PATH → check standard locations → download
+from GitHub releases → install to `~/.local/bin/pi` (Linux/Mac) or
+`%LOCALAPPDATA%\pi\pi.exe` (Windows). Track managed vs user-installed. Verify via
+`pi --version`.
+
+### Phase 5.4: Pi RPC Session & Coding Skill (8 tasks)
+`PiSession` spawns `pi --mode rpc --no-session`, communicates via JSON over
+stdin/stdout. New `Skills/pi.md` tells Fae when to delegate tasks to Pi (coding,
+file management, config editing, research). Register as agent tool so Fae can
+invoke Pi from voice commands.
+
+### Phase 5.5: Self-Update System (8 tasks)
+`UpdateChecker` polls GitHub releases API for both Fae and Pi. Platform-specific
+binary replacement (Linux: rename+replace, macOS: +xattr, Windows: .bat script).
+Update notification UI in Dioxus. User preferences: Ask / Always / Never.
+
+### Phase 5.6: Scheduler (8 tasks)
+Background `Scheduler` running periodic tasks. Built-in: daily Fae update check,
+daily Pi update check. Future: user-defined scheduled tasks (calendar, research,
+reminders). Persisted task definitions in `~/.config/fae/scheduler.json`.
+
+### Phase 5.7: Installer Integration & Testing (8 tasks)
+Platform installers (macOS .dmg, Linux .deb/.AppImage, Windows .msi) bundle Pi
+binary at build time. Post-install places Pi in standard location. Cross-platform
+testing of full lifecycle. Documentation.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              FAE                                        │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    Voice Pipeline                                  │  │
+│  │  Mic → AEC → VAD → STT → LLM (Qwen 3 via mistralrs) → TTS → Spk │  │
+│  └──────────────────────────┬────────────────────────────────────────┘  │
+│                              │                                          │
+│              ┌───────────────┼───────────────┐                          │
+│              ▼               ▼               ▼                          │
+│  ┌───────────────┐ ┌─────────────────┐ ┌──────────────────┐           │
+│  │  Canvas Tools  │ │  Pi Delegator   │ │  Local LLM HTTP  │           │
+│  │  (MCP render)  │ │  (RPC session)  │ │  (OpenAI compat) │           │
+│  └───────────────┘ └────────┬────────┘ └────────┬─────────┘           │
+│                              │                    │                     │
+│  ┌───────────────────────────┼────────────────────┼──────────────────┐ │
+│  │                    Pi Manager                                      │ │
+│  │  find_pi() → install() → spawn pi --mode rpc                     │ │
+│  │  Pi reads ~/.pi/agent/models.json → uses fae-local provider       │ │
+│  └───────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+│  ┌──────────────────┐  ┌──────────────────┐                           │
+│  │  Self-Updater     │  │  Scheduler        │                           │
+│  │  (GitHub releases)│  │  (cron-like tasks) │                           │
+│  └──────────────────┘  └──────────────────┘                           │
+└─────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     System (user's machine)                              │
+│                                                                         │
+│  ~/.local/bin/pi             ← Pi binary (standard location)            │
+│  ~/.pi/agent/models.json     ← ALL AI config: keys, providers, Fae     │
+│  ~/.pi/agent/                ← Pi config, auth, extensions, skills      │
+│  ~/.config/fae/              ← Fae config, state, scheduler             │
+│  ~/.fae/skills/              ← User skill .md files                     │
+│  http://localhost:PORT/v1    ← Fae's local LLM endpoint (when running) │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow: Voice → Pi Coding Task
+```
+User speaks "fix the login bug in my website"
+  → STT → "fix the login bug in my website"
+  → LLM (Qwen 3) reads Pi skill → decides to delegate to Pi
+  → Agent invokes pi_delegate tool with task description
+  → PiSession sends JSON-RPC request to Pi subprocess
+  → Pi uses Fae's local LLM (http://localhost:PORT/v1) for reasoning
+  → Pi executes: read files, edit code, run tests via bash
+  → Pi streams progress events back via stdout
+  → Fae narrates progress to user via TTS
+  → Pi returns final result
+  → Fae speaks summary to user
+```
+
+### Key Integration Points
+- **Pi reads `~/.pi/agent/models.json`** — Fae writes a `"fae-local"` provider
+  entry pointing to `http://localhost:{PORT}/v1` with `api: "openai-completions"`
+- **No saorsa-ai** — Fae reads the same `models.json` for any cloud API keys
+  it needs (fallback providers, etc.)
+- **Fae's skill system** already supports dynamic skills — `Skills/pi.md` is
+  compiled in, users can add more in `~/.fae/skills/`
+- **Scheduler** uses same infrastructure as OpenClaw's system-level scheduling

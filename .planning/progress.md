@@ -46,3 +46,80 @@
 - [x] Task 7: Connection status badge in GUI + CanvasConfig (gui.rs, config.rs)
 - [x] Task 8: Tests for all modules (inline in each file)
 - (commits: 4fa9550, f584bc7)
+
+---
+
+## Milestone 5: Pi Integration, Self-Update & Autonomy — READY
+
+> Worktree: ~/Desktop/Devel/projects/fae-worktree-pi
+> Spec: specs/pi-integration-spec.md
+
+### Phase 5.1: Local LLM HTTP Server — NOT STARTED
+- [ ] Task 1: Create src/llm/server.rs — HTTP server scaffold
+- [ ] Task 2: Implement /v1/chat/completions endpoint
+- [ ] Task 3: Implement /v1/models endpoint
+- [ ] Task 4: Write Pi provider config to ~/.pi/agent/models.json
+- [ ] Task 5: Wire LLM server into GUI startup
+- [ ] Task 6: Add LLM server config to config.rs
+- [ ] Task 7: Add LLM server status to GUI settings
+- [ ] Task 8: Tests
+
+### Phase 5.2: Drop saorsa-ai / API Unification — NOT STARTED
+- [ ] Task 1: Create src/providers/mod.rs — provider abstraction
+- [ ] Task 2: Create src/providers/pi_config.rs — read models.json
+- [ ] Task 3: Create src/providers/streaming.rs — streaming provider
+- [ ] Task 4: Replace saorsa-ai in agent module
+- [ ] Task 5: Remove saorsa-ai from Cargo.toml
+- [ ] Task 6: Add provider selection logic
+- [ ] Task 7: API key management in GUI settings
+- [ ] Task 8: Tests
+
+### Phase 5.3: Pi Manager — Detection & Installation — NOT STARTED
+- [ ] Task 1: Create src/pi/mod.rs — module scaffold
+- [ ] Task 2: Create src/pi/manager.rs — PiManager struct
+- [ ] Task 3: Implement find_pi() — detection
+- [ ] Task 4: Implement install() — download from GitHub
+- [ ] Task 5: Implement update() — update existing Pi
+- [ ] Task 6: Implement ensure_pi() — first-run flow
+- [ ] Task 7: Wire PiManager into GUI
+- [ ] Task 8: Tests
+
+### Phase 5.4: Pi RPC Session & Coding Skill — NOT STARTED
+- [ ] Task 1: Create src/pi/session.rs — PiSession struct
+- [ ] Task 2: Implement RPC protocol — send/receive
+- [ ] Task 3: Implement prompt() — high-level task delegation
+- [ ] Task 4: Create Skills/pi.md — Pi coding skill
+- [ ] Task 5: Register Pi skill in src/skills.rs
+- [ ] Task 6: Create src/pi/tool.rs — pi_delegate agent tool
+- [ ] Task 7: Register pi_delegate tool in agent
+- [ ] Task 8: Tests
+
+### Phase 5.5: Self-Update System — NOT STARTED
+- [ ] Task 1: Create src/update/mod.rs — module scaffold
+- [ ] Task 2: Create src/update/checker.rs — GitHub release checker
+- [ ] Task 3: Create src/update/state.rs — update state persistence
+- [ ] Task 4: Create src/update/applier.rs — platform-specific update
+- [ ] Task 5: Implement update notification UI
+- [ ] Task 6: Implement auto-update preference UI
+- [ ] Task 7: Wire update checks into startup
+- [ ] Task 8: Tests
+
+### Phase 5.6: Scheduler — NOT STARTED
+- [ ] Task 1: Create src/scheduler/mod.rs — module scaffold
+- [ ] Task 2: Create src/scheduler/tasks.rs — task definitions
+- [ ] Task 3: Create src/scheduler/runner.rs — scheduler loop
+- [ ] Task 4: Implement built-in update check tasks
+- [ ] Task 5: Task result handling in GUI
+- [ ] Task 6: Scheduler status in GUI settings
+- [ ] Task 7: Wire scheduler into GUI startup
+- [ ] Task 8: Tests
+
+### Phase 5.7: Installer Integration & Testing — NOT STARTED
+- [ ] Task 1: macOS installer (.dmg) — bundle Pi
+- [ ] Task 2: Linux installer (.deb/.AppImage) — bundle Pi
+- [ ] Task 3: Windows installer (.msi) — bundle Pi
+- [ ] Task 4: CI pipeline — download Pi assets
+- [ ] Task 5: First-run detection and Pi extraction
+- [ ] Task 6: Cross-platform integration tests
+- [ ] Task 7: User documentation
+- [ ] Task 8: Final verification and cleanup
