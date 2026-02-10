@@ -46,6 +46,10 @@ pub enum SpeechError {
     /// Channel send/receive error.
     #[error("channel error: {0}")]
     Channel(String),
+
+    /// HTTP server error (LLM API endpoint).
+    #[error("server error: {0}")]
+    Server(String),
 }
 
 /// Convenience result type.

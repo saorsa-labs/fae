@@ -188,31 +188,7 @@ pub struct ModelObject {
     pub owned_by: String,
 }
 
-// ---------------------------------------------------------------------------
-// Server configuration
-// ---------------------------------------------------------------------------
-
-/// Configuration for the local LLM HTTP server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LlmServerConfig {
-    /// Whether the server is enabled.
-    pub enabled: bool,
-    /// Port to bind on. Use `0` for automatic assignment.
-    pub port: u16,
-    /// Host address to bind on (default: `127.0.0.1`).
-    pub host: String,
-}
-
-impl Default for LlmServerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            port: 0,
-            host: "127.0.0.1".to_owned(),
-        }
-    }
-}
+use crate::config::LlmServerConfig;
 
 /// Default model ID exposed by the server.
 const MODEL_ID: &str = "fae-qwen3";

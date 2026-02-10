@@ -31,6 +31,8 @@ pub struct SpeechConfig {
     pub wakeword: WakewordConfig,
     /// Canvas visual output settings.
     pub canvas: CanvasConfig,
+    /// Local LLM HTTP server settings.
+    pub llm_server: LlmServerConfig,
 }
 
 /// Audio I/O configuration.
@@ -541,6 +543,31 @@ pub struct CanvasConfig {
     /// (e.g., `ws://localhost:9473/ws/sync`). When `None`, a local-only
     /// canvas session is used.
     pub server_url: Option<String>,
+}
+
+/// Configuration for the local LLM HTTP server.
+///
+/// When enabled, Fae exposes an OpenAI-compatible endpoint on localhost
+/// so that Pi and other local tools can use the loaded model for inference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmServerConfig {
+    /// Whether the server is enabled.
+    pub enabled: bool,
+    /// Port to bind on. Use `0` for automatic assignment.
+    pub port: u16,
+    /// Host address to bind on.
+    pub host: String,
+}
+
+impl Default for LlmServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: 0,
+            host: "127.0.0.1".to_owned(),
+        }
+    }
 }
 
 fn default_memory_root_dir() -> PathBuf {
