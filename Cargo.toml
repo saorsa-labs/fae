@@ -93,10 +93,10 @@ dioxus = { version = "0.6", features = ["desktop"], optional = true }
 saorsa-agent = "0.4"
 saorsa-ai = { version = "0.4", features = ["mistralrs"] }
 
-# Canvas visual output (saorsa-canvas scene graph — published v0.1.4)
-canvas-core = "0.1.4"
-canvas-mcp = "0.1.4"
-canvas-renderer = { version = "0.1.4", default-features = false, features = ["charts", "images"] }
+# Canvas visual output (saorsa-canvas scene graph)
+canvas-core = "0.2"
+canvas-mcp = "0.2"
+canvas-renderer = { version = "0.2", default-features = false, features = ["charts", "images"] }
 
 # Markdown → HTML rendering
 pulldown-cmark = "0.13"
@@ -125,5 +125,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 [target.'cfg(target_os = "macos")'.dependencies]
 mistralrs = { version = "0.7", features = ["metal"] }
 
-#
-# NOTE: We intentionally use the published crates.io versions of the saorsa ecosystem.
+# Local path overrides for development.
+# These let `cargo check/build/test` use the local saorsa-canvas checkout
+# while keeping the Cargo.toml dependency versions pointed at crates.io for
+# publishing. Remove or comment these lines to build against the published crates.
+[patch.crates-io]
+canvas-core = { path = "../saorsa-canvas/canvas-core" }
+canvas-mcp = { path = "../saorsa-canvas/canvas-mcp" }
+canvas-renderer = { path = "../saorsa-canvas/canvas-renderer" }
