@@ -38,6 +38,7 @@ pub mod personality;
 pub mod pipeline;
 pub mod progress;
 pub mod runtime;
+pub mod skills;
 pub mod startup;
 pub mod stt;
 pub mod system_profile;

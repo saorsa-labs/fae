@@ -1915,6 +1915,31 @@ fn app() -> Element {
                         }
                     }
 
+                    // --- Skills (read-only info) ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Skills" }
+                        div { class: "settings-section-body",
+                            p { class: "note",
+                                "Behavioural guides injected into the system prompt."
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Active skills" }
+                                p { class: "settings-value",
+                                    {fae::skills::list_skills().join(", ")}
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Custom skills" }
+                                p { class: "settings-value",
+                                    "{fae::skills::skills_dir().display()}/"
+                                }
+                            }
+                            p { class: "note",
+                                "Add .md files to the custom skills directory for extra skills."
+                            }
+                        }
+                    }
+
                     // --- Audio ---
                     details { class: "settings-section",
                         summary { class: "settings-section-summary", "Audio" }

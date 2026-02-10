@@ -1,10 +1,11 @@
 //! Personality profile loading for Fae.
 //!
-//! The system prompt is assembled from three layers:
+//! The system prompt is assembled from four layers:
 //!
 //! 1. **Core prompt** ([`CORE_PROMPT`]) — minimal voice-assistant output rules.
 //! 2. **Personality** — character definition loaded by name (see [`load_personality`]).
-//! 3. **User add-on** — optional free-text instructions from the user's config.
+//! 3. **Skills** — behavioural guides for tool usage (see [`crate::skills`]).
+//! 4. **User add-on** — optional free-text instructions from the user's config.
 //!
 //! Two built-in personalities ship with the binary:
 //!
@@ -80,19 +81,25 @@ pub fn load_personality(name: &str) -> String {
     }
 }
 
-/// Assembles the full system prompt from core prompt, personality, and user add-on.
+/// Assembles the full system prompt from core prompt, personality, skills,
+/// and user add-on.
 ///
 /// Empty sections are skipped so the result never contains double blank lines
 /// between layers.
 pub fn assemble_prompt(personality_name: &str, user_add_on: &str) -> String {
     let personality = load_personality(personality_name);
+    let skills = crate::skills::load_all_skills();
     let add_on = user_add_on.trim();
 
-    let mut parts: Vec<&str> = Vec::with_capacity(3);
+    let mut parts: Vec<&str> = Vec::with_capacity(4);
     parts.push(CORE_PROMPT);
     let personality_trimmed = personality.trim();
     if !personality_trimmed.is_empty() {
         parts.push(personality_trimmed);
+    }
+    let skills_trimmed = skills.trim();
+    if !skills_trimmed.is_empty() {
+        parts.push(skills_trimmed);
     }
     if !add_on.is_empty() {
         parts.push(add_on);
@@ -145,7 +152,9 @@ mod tests {
     #[test]
     fn assemble_core_only() {
         let prompt = assemble_prompt("default", "");
-        assert_eq!(prompt, CORE_PROMPT);
+        // Core + skills (no personality for "default")
+        assert!(prompt.starts_with(CORE_PROMPT));
+        assert!(prompt.contains("canvas_render"));
     }
 
     #[test]
@@ -153,16 +162,16 @@ mod tests {
         let prompt = assemble_prompt("fae", "");
         assert!(prompt.starts_with(CORE_PROMPT));
         assert!(prompt.contains("Fae"));
-        // Core + personality, separated by double newline
-        let expected = format!("{}\n\n{}", CORE_PROMPT, FAE_PERSONALITY.trim());
-        assert_eq!(prompt, expected);
+        // Skills appear after personality
+        assert!(prompt.contains("canvas_render"));
     }
 
     #[test]
     fn assemble_with_addon() {
         let prompt = assemble_prompt("default", "Be formal.");
-        let expected = format!("{CORE_PROMPT}\n\nBe formal.");
-        assert_eq!(prompt, expected);
+        assert!(prompt.starts_with(CORE_PROMPT));
+        assert!(prompt.contains("canvas_render"));
+        assert!(prompt.ends_with("Be formal."));
     }
 
     #[test]
@@ -170,6 +179,7 @@ mod tests {
         let prompt = assemble_prompt("fae", "  Be formal.  ");
         assert!(prompt.starts_with(CORE_PROMPT));
         assert!(prompt.contains("Fae"));
+        assert!(prompt.contains("canvas_render"));
         assert!(prompt.ends_with("Be formal."));
     }
 
@@ -179,6 +189,20 @@ mod tests {
         // Should be same as no add-on
         let no_addon = assemble_prompt("fae", "");
         assert_eq!(prompt, no_addon);
+    }
+
+    #[test]
+    fn assemble_skills_between_personality_and_addon() {
+        let prompt = assemble_prompt("fae", "Be formal.");
+        // Verify ordering: personality before skills, skills before add-on
+        let fae_pos = prompt.find("Fae");
+        let canvas_pos = prompt.find("canvas_render");
+        let addon_pos = prompt.find("Be formal.");
+        assert!(fae_pos.is_some());
+        assert!(canvas_pos.is_some());
+        assert!(addon_pos.is_some());
+        assert!(fae_pos < canvas_pos);
+        assert!(canvas_pos < addon_pos);
     }
 
     #[test]
