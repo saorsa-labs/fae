@@ -146,10 +146,13 @@ impl CanvasBridge {
                 }
             }
 
-            // Control events and audio levels don't produce canvas messages.
+            // Control events, audio levels, and model selection events don't
+            // produce canvas messages (model selection is handled elsewhere).
             RuntimeEvent::Control(_)
             | RuntimeEvent::AssistantAudioLevel { .. }
-            | RuntimeEvent::Transcription(_) => {}
+            | RuntimeEvent::Transcription(_)
+            | RuntimeEvent::ModelSelectionPrompt { .. }
+            | RuntimeEvent::ModelSelected { .. } => {}
         }
     }
 

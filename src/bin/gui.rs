@@ -1356,6 +1356,12 @@ fn app() -> Element {
                                                             }
                                                         }
                                                         fae::RuntimeEvent::ToolResult { .. } => {}
+                                                        fae::RuntimeEvent::ModelSelectionPrompt { .. } => {
+                                                            // TODO: Task 5 will implement the model picker UI
+                                                        }
+                                                        fae::RuntimeEvent::ModelSelected { .. } => {
+                                                            // TODO: Task 5 will handle model selection confirmation
+                                                        }
                                                     }
 
                                                 }

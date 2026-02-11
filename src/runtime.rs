@@ -36,4 +36,22 @@ pub enum RuntimeEvent {
     ///
     /// Intended for driving simple avatar animation (mouth open/close).
     AssistantAudioLevel { rms: f32 },
+    /// Model selection prompt for GUI (when multiple top-tier models available).
+    ///
+    /// The GUI should display a picker UI with the candidate models and
+    /// allow the user to select one. If no selection is made within the
+    /// timeout period, the first candidate will be auto-selected.
+    ModelSelectionPrompt {
+        /// List of "provider/model" strings to display in picker.
+        candidates: Vec<String>,
+        /// Timeout in seconds before auto-selecting first candidate.
+        timeout_secs: u32,
+    },
+    /// Model selection confirmed (either by user or auto-selected).
+    ///
+    /// Emitted after model selection completes, for UI feedback.
+    ModelSelected {
+        /// Selected model in "provider/model" format.
+        provider_model: String,
+    },
 }
