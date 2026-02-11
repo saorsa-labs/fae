@@ -1362,6 +1362,12 @@ fn app() -> Element {
                                                         fae::RuntimeEvent::ModelSelected { .. } => {
                                                             // TODO: Task 5 will handle model selection confirmation
                                                         }
+                                                        fae::RuntimeEvent::VoiceCommandDetected { .. } => {
+                                                            // TODO: Phase 2.3 will show voice command feedback in GUI
+                                                        }
+                                                        fae::RuntimeEvent::ModelSwitchRequested { .. } => {
+                                                            // TODO: Phase 2.3 will show model switch transition in GUI
+                                                        }
                                                     }
 
                                                 }

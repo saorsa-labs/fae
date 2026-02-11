@@ -54,4 +54,21 @@ pub enum RuntimeEvent {
         /// Selected model in "provider/model" format.
         provider_model: String,
     },
+    /// A voice command was detected in a transcription.
+    ///
+    /// Emitted when the voice command filter intercepts a command phrase
+    /// (e.g. "switch to Claude") before it reaches the LLM.
+    VoiceCommandDetected {
+        /// Human-readable description of the detected command.
+        command: String,
+    },
+    /// A model switch was requested via voice command.
+    ///
+    /// Emitted after a `SwitchModel` voice command is parsed and before
+    /// the actual switch is executed. The GUI can use this to show a
+    /// transitional state.
+    ModelSwitchRequested {
+        /// Target model description (e.g. "anthropic" or "local").
+        target: String,
+    },
 }
