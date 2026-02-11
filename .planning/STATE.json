@@ -18,9 +18,9 @@
     "current_task": 0
   },
   "task": {
-    "current": 7,
+    "current": 8,
     "total": 8,
-    "name": "Documentation - user guide"
+    "name": "Documentation - developer guide"
   },
   "review": {
     "status": "passed",
