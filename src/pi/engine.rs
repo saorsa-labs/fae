@@ -405,6 +405,11 @@ impl PiLlm {
         self.model_candidates.len()
     }
 
+    /// Returns the index of the currently active model in the candidate list.
+    pub fn active_model_index(&self) -> usize {
+        self.active_model_idx
+    }
+
     /// Takes the voice-command receiver out of this engine.
     ///
     /// The caller (typically the LLM stage loop) uses the returned receiver
@@ -448,17 +453,17 @@ impl PiLlm {
     /// If the resolved model is already the active model, this is a no-op that
     /// returns an "already using" message.
     pub fn switch_model_by_voice(&mut self, target: &ModelTarget) -> std::result::Result<String, String> {
+        use crate::voice_command::{
+            already_using_acknowledgment, model_not_found_response, switch_acknowledgment,
+        };
+
         let Some(idx) = resolve_model_target(target, &self.model_candidates) else {
-            return Err(format!(
-                "I couldn't find a model matching {target:?} among my {} candidates",
-                self.model_candidates.len()
-            ));
+            return Err(model_not_found_response(&format!("{target:?}")));
         };
 
         // Already using this model — no-op.
         if idx == self.active_model_idx {
-            let name = self.active_model().display();
-            return Ok(format!("I'm already using {name}"));
+            return Ok(already_using_acknowledgment(&self.active_model().display()));
         }
 
         let target_name = self.model_candidates[idx].display();
@@ -475,7 +480,7 @@ impl PiLlm {
         // Emit "switch complete" event.
         self.emit_model_selected(&target_name);
 
-        Ok(format!("Switching to {target_name}"))
+        Ok(switch_acknowledgment(&target_name))
     }
 
     fn active_model(&self) -> &ProviderModelRef {

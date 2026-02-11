@@ -237,6 +237,42 @@ pub fn resolve_model_target(
     }
 }
 
+// ---------------------------------------------------------------------------
+// TTS acknowledgment helpers
+// ---------------------------------------------------------------------------
+
+/// Acknowledgment for a successful model switch.
+pub fn switch_acknowledgment(model_name: &str) -> String {
+    format!("Switching to {model_name}.")
+}
+
+/// Acknowledgment when the requested model is already active.
+pub fn already_using_acknowledgment(model_name: &str) -> String {
+    format!("I'm already using {model_name}.")
+}
+
+/// Response when the requested model cannot be found.
+pub fn model_not_found_response(target: &str) -> String {
+    format!("I couldn't find a model matching {target}.")
+}
+
+/// Response listing all available models and the current one.
+pub fn list_models_response(models: &[String], current_idx: usize) -> String {
+    if models.is_empty() {
+        return "I don't have any models configured.".to_owned();
+    }
+    let list = models.join(", ");
+    let current = models
+        .get(current_idx)
+        .map_or("unknown", |s| s.as_str());
+    format!("I have access to {list}. Currently using {current}.")
+}
+
+/// Response stating which model is currently active.
+pub fn current_model_response(model_name: &str) -> String {
+    format!("I'm currently using {model_name}.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,5 +652,58 @@ mod tests {
         assert_eq!(parse_voice_command("switch to claude"), expected);
         assert_eq!(parse_voice_command("change to claude"), expected);
         assert_eq!(parse_voice_command("fae switch to anthropic"), expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // TTS acknowledgment helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn switch_acknowledgment_formats_correctly() {
+        assert_eq!(
+            switch_acknowledgment("openai/gpt-4o"),
+            "Switching to openai/gpt-4o."
+        );
+    }
+
+    #[test]
+    fn already_using_acknowledgment_formats_correctly() {
+        assert_eq!(
+            already_using_acknowledgment("anthropic/claude-opus-4"),
+            "I'm already using anthropic/claude-opus-4."
+        );
+    }
+
+    #[test]
+    fn model_not_found_response_formats_correctly() {
+        assert_eq!(
+            model_not_found_response("gemini"),
+            "I couldn't find a model matching gemini."
+        );
+    }
+
+    #[test]
+    fn list_models_response_multiple_models() {
+        let models = vec![
+            "anthropic/claude-opus-4".to_owned(),
+            "openai/gpt-4o".to_owned(),
+        ];
+        let response = list_models_response(&models, 0);
+        assert!(response.contains("anthropic/claude-opus-4, openai/gpt-4o"));
+        assert!(response.contains("Currently using anthropic/claude-opus-4"));
+    }
+
+    #[test]
+    fn list_models_response_empty() {
+        let response = list_models_response(&[], 0);
+        assert_eq!(response, "I don't have any models configured.");
+    }
+
+    #[test]
+    fn current_model_response_formats_correctly() {
+        assert_eq!(
+            current_model_response("local/qwen3-4b"),
+            "I'm currently using local/qwen3-4b."
+        );
     }
 }

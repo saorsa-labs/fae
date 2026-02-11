@@ -1701,16 +1701,11 @@ fn handle_voice_command(
         },
         VoiceCommand::ListModels => {
             let names = pi.list_model_names();
-            if names.is_empty() {
-                return "I don't have any models configured.".to_owned();
-            }
-            let current = pi.current_model_name();
-            let list = names.join(", ");
-            format!("I have access to {list}. Currently using {current}.")
+            let active_idx = pi.active_model_index();
+            crate::voice_command::list_models_response(&names, active_idx)
         }
         VoiceCommand::CurrentModel => {
-            let current = pi.current_model_name();
-            format!("I'm currently using {current}.")
+            crate::voice_command::current_model_response(&pi.current_model_name())
         }
     }
 }
