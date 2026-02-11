@@ -1,83 +1,76 @@
-# Phase 2.3: Interactive Elements
+# Phase 2.3: Integration & Polish
 
 ## Goal
-Make the canvas pane interactive: message actions, thinking indicator, tool-call
-cards, search/filter, and keyboard navigation. Use a hybrid approach — Dioxus
-components for interactivity wrapping the existing HTML content rendering.
+Complete the Runtime Voice Switching feature with GUI integration, help/query commands, and comprehensive documentation. Make the model switching experience seamless and user-friendly.
 
 ## Approach
-Replace `dangerous_inner_html` one-shot rendering with per-message Dioxus
-components. Each message becomes a Dioxus `rsx!` element with onclick/hover
-handlers, while the message *body* still uses `dangerous_inner_html` for
-markdown/chart content.
+Build on the complete voice command detection (Phase 2.1) and live switching (Phase 2.2) to add visual feedback in the GUI, handle query commands (list/current), and provide full documentation and testing.
 
 ## Tasks
 
-### Task 1: Expose message iteration from CanvasSession
-**Files:** `src/canvas/session.rs`, `src/canvas/types.rs`
-- Add `CanvasSession::messages_iter()` returning `impl Iterator<Item = &MessageView>`
-- Create `MessageView` struct: element_id, role, timestamp_ms, html (rendered body)
-- Add `tool_input` and `tool_output` fields to `CanvasMessage` for tool detail cards
-- Update `CanvasBridge::on_event()` to capture tool input/output JSON
-- Tests: message iteration, tool message with input/output
-
-### Task 2: Thinking indicator
+### Task 1: GUI active model indicator
 **Files:** `src/bin/gui.rs`
-- When `assistant_generating` is true and we're in Canvas view, show animated
-  thinking dots at the bottom of the canvas pane (below messages)
-- CSS keyframe animation for pulsing dots
-- Tests (GUI tests): generating state shows/hides indicator
+- Add `active_model: Option<String>` to `AppState`
+- Display active model name in status bar or header when known
+- Update on startup after model selection completes
+- Update when model switch events occur
+- Style: subtle indicator, e.g., "🤖 Claude Opus 4" or "Model: gpt-4o"
+- Tests: GUI state updates when model changes
 
-### Task 3: Tool-call collapsible cards
-**Files:** `src/canvas/render.rs`, `src/canvas/types.rs`
-- Extend `CanvasMessage` with `tool_input: Option<String>` and `tool_result_text: Option<String>`
-- When rendering tool messages, produce `<details><summary>` collapsible HTML
-  with syntax-highlighted JSON input and result text
-- Update `CanvasBridge` to capture input_json on ToolCall events and result on ToolResult
-- Tests: tool card HTML contains `<details>`, JSON is highlighted
+### Task 2: Wire ListModels command to Pi query
+**Files:** `src/pipeline/coordinator.rs`, `src/pi/engine.rs`
+- When VoiceCommand::ListModels detected, call `pi.list_model_names()`
+- Build spoken response using `list_models_response()`
+- Send to TTS for voice output (bypass LLM generation)
+- Update GUI to show brief "listing models" status
+- Tests: ListModels command produces correct spoken output
 
-### Task 4: Message actions — copy and details
-**Files:** `src/bin/gui.rs`
-- Replace `dangerous_inner_html: session().to_html()` with per-message Dioxus loop
-- Each message: outer `div` with hover → show action bar (copy button)
-- Copy button: `onclick` → write message text to clipboard via Dioxus eval
-- Details: `onclick` → toggle details panel showing raw JSON / metadata
-- CSS for action bar: absolute positioned, fade on hover
-- Tests: action bar renders, copy click handler
+### Task 3: Wire CurrentModel command to Pi query
+**Files:** `src/pipeline/coordinator.rs`, `src/pi/engine.rs`
+- When VoiceCommand::CurrentModel detected, call `pi.current_model_name()`
+- Build spoken response using `current_model_response()`
+- Send to TTS for voice output
+- Tests: CurrentModel query returns active model name
 
-### Task 5: Message search/filter
-**Files:** `src/bin/gui.rs`
-- Add search input above canvas pane (only visible in Canvas view)
-- Filter messages by case-insensitive substring match on text
-- Highlight matching text in rendered messages (wrap matches in `<mark>`)
-- Clear search button
-- CSS for search input and `<mark>` highlighting
-- Tests: search filters messages, clear restores all
+### Task 4: Help command for model switching
+**Files:** `src/voice_command.rs`, `src/pipeline/coordinator.rs`
+- Add VoiceCommand::Help variant
+- Recognize "help", "what can I say", "model commands"
+- Return spoken help text listing all model switch patterns
+- Example: "You can say: switch to Claude, use the local model, list models, or what model are you using."
+- Tests: Help command returns correct text
 
-### Task 6: Context menu
-**Files:** `src/bin/gui.rs`
-- Add `oncontextmenu` handler to each message div
-- Show floating menu at cursor position with options: Copy, View Source, Fork Here
-- Fork Here: set fork point (like activity log fork)
-- Dismiss on click outside or Escape
-- CSS for floating context menu
-- Tests: context menu shows/hides, actions fire
+### Task 5: Error handling and edge cases
+**Files:** `src/pipeline/coordinator.rs`, `src/pi/engine.rs`
+- Handle model switch during active generation gracefully
+- Validate model switch didn't break Pi session continuity
+- Handle unavailable model requests with fallback message
+- Timeout handling for slow model switches
+- Tests: Edge cases return appropriate error messages
 
-### Task 7: Keyboard navigation and accessibility
-**Files:** `src/bin/gui.rs`
-- Add `tabindex` and `role` attributes to message elements
-- Arrow keys navigate between messages (Tab/Shift+Tab)
-- Enter/Space activates focused message (shows action bar)
-- Escape closes menus/details
-- ARIA labels: `aria-label` on messages with role + timestamp
-- `aria-live="polite"` region for new messages (screen reader)
-- Tests: keyboard events, ARIA attributes present
+### Task 6: Integration tests — end-to-end flow
+**Files:** `tests/model_switching_integration.rs` (new)
+- Full flow: startup → auto-select → voice command → switch → query
+- Test: "switch to Claude" changes active model and GUI state
+- Test: "list models" produces correct spoken output
+- Test: "what model" returns current model
+- Test: switch to unavailable model handles gracefully
+- All tests use mock Pi/TTS to avoid real API calls
 
-### Task 8: Integration and non-message element rendering
-**Files:** `src/bin/gui.rs`, `src/canvas/session.rs`
-- Render non-message elements (tool-pushed charts/images) in a separate
-  Dioxus section below messages
-- Ensure `to_html_cached()` works correctly with the new per-message approach
-- Add `CanvasSession::tool_elements_html()` for tool-pushed content HTML
-- Full integration test: conversation with messages, tool calls, charts, search
-- Tests: mixed content renders, cache works with new approach
+### Task 7: Documentation — user guide
+**Files:** `docs/model-switching.md` (new), `README.md`
+- Document all supported voice commands with examples
+- Explain tier-based auto-selection behavior
+- Document priority field override in models.json
+- Document fallback to local model
+- Add troubleshooting section (model not found, switch failed)
+- Update main README with "Runtime Model Switching" section
+
+### Task 8: Documentation — developer guide
+**Files:** `docs/architecture/model-selection.md` (new)
+- Document three-layer selection architecture (tier → priority → picker)
+- Document voice command pipeline flow
+- Document PiLlm model switching internals
+- Document how to add new model tier mappings
+- Document testing approach for voice commands
+- Add architecture diagram if helpful

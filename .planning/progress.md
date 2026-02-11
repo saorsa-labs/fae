@@ -180,3 +180,8 @@ Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dm
 - [x] Task 6: Edge case — switch during active generation (commit: f0f1547)
 - [x] Task 7: Edge case — unavailable model and fallback (commit: 63f549f)
 - [x] Task 8: Integration tests and verification
+
+### Phase 2.3: Integration & Polish — IN PROGRESS
+- Planning complete (8 tasks defined)
+- Starting task execution...
+
