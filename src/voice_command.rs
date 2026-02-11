@@ -478,4 +478,113 @@ mod tests {
             None
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Integration: parse → resolve end-to-end
+    // -----------------------------------------------------------------------
+
+    /// Parse a voice command then resolve it against real candidates.
+    fn parse_and_resolve(text: &str) -> Option<usize> {
+        let cmd = parse_voice_command(text)?;
+        match cmd {
+            VoiceCommand::SwitchModel { target } => {
+                resolve_model_target(&target, &test_candidates())
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn end_to_end_switch_to_claude_resolves() {
+        assert_eq!(parse_and_resolve("switch to claude"), Some(0));
+    }
+
+    #[test]
+    fn end_to_end_switch_to_openai_resolves() {
+        assert_eq!(parse_and_resolve("fae switch to openai"), Some(1));
+    }
+
+    #[test]
+    fn end_to_end_switch_to_local_resolves() {
+        assert_eq!(parse_and_resolve("use the local model"), Some(3));
+    }
+
+    #[test]
+    fn end_to_end_switch_to_best_resolves() {
+        assert_eq!(parse_and_resolve("switch to the best model"), Some(0));
+    }
+
+    #[test]
+    fn end_to_end_switch_by_name_partial() {
+        // "gemini" resolves by provider
+        assert_eq!(parse_and_resolve("change to gemini"), Some(2));
+    }
+
+    #[test]
+    fn end_to_end_switch_by_model_name() {
+        assert_eq!(parse_and_resolve("switch to gpt-4o"), Some(1));
+    }
+
+    #[test]
+    fn end_to_end_non_command_returns_none() {
+        assert_eq!(parse_and_resolve("hello how are you"), None);
+    }
+
+    #[test]
+    fn end_to_end_list_models_not_switch() {
+        // ListModels should not resolve to a candidate index
+        let cmd = parse_voice_command("list models");
+        assert_eq!(cmd, Some(VoiceCommand::ListModels));
+        // parse_and_resolve returns None for non-switch commands
+        assert_eq!(parse_and_resolve("list models"), None);
+    }
+
+    #[test]
+    fn end_to_end_current_model_not_switch() {
+        assert_eq!(
+            parse_voice_command("what model are you using"),
+            Some(VoiceCommand::CurrentModel)
+        );
+        assert_eq!(parse_and_resolve("what model are you using"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn very_long_input_no_crash() {
+        let long = "a ".repeat(10_000);
+        assert_eq!(parse_voice_command(&long), None);
+    }
+
+    #[test]
+    fn unicode_input_no_crash() {
+        assert_eq!(parse_voice_command("切り替えてクロード"), None);
+    }
+
+    #[test]
+    fn numbers_only() {
+        assert_eq!(parse_voice_command("12345"), None);
+    }
+
+    #[test]
+    fn switch_with_extra_whitespace() {
+        assert_eq!(
+            parse_voice_command("  switch to claude  "),
+            Some(VoiceCommand::SwitchModel {
+                target: ModelTarget::ByProvider("anthropic".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn multiple_synonyms_same_result() {
+        let expected = Some(VoiceCommand::SwitchModel {
+            target: ModelTarget::ByProvider("anthropic".into()),
+        });
+        assert_eq!(parse_voice_command("switch to claude"), expected);
+        assert_eq!(parse_voice_command("change to claude"), expected);
+        assert_eq!(parse_voice_command("fae switch to anthropic"), expected);
+    }
 }
