@@ -188,3 +188,5 @@ Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dm
 - [x] Task 1: GUI active model indicator (commit: e292b95, review: PASS)
 - [x] Task 2: Wire ListModels command (ALREADY COMPLETE in Phase 2.2)
 - [x] Task 3: Wire CurrentModel command (ALREADY COMPLETE in Phase 2.2)
+- [x] Task 4: Help command for model switching (commit: 415b460, review: PASS)
+- [x] Task 5: Error handling and edge cases (ALREADY COMPLETE in Phase 2.2 Tasks 6-7)
