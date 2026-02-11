@@ -436,13 +436,12 @@ impl PiLlm {
         .await
         .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
 
-        let input_json = serde_json::json!({
-            "title": title,
-            "message": message,
-            "timeout_ms": UI_CONFIRM_TIMEOUT.as_millis() as u64,
-            "kind": "model_failover",
-        })
-        .to_string();
+        let input_json = make_dialog_json(
+            "model_failover",
+            title,
+            &message,
+            UI_CONFIRM_TIMEOUT.as_millis() as u64,
+        );
 
         let approved = matches!(
             self.request_ui_dialog_response("pi.model_failover", input_json, UI_CONFIRM_TIMEOUT)
@@ -588,13 +587,8 @@ impl PiLlm {
                 .await
                 .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
 
-                let input_json = serde_json::json!({
-                    "kind": "confirm",
-                    "title": title,
-                    "message": message,
-                    "timeout_ms": timeout,
-                })
-                .to_string();
+                let timeout_ms = timeout.unwrap_or(UI_CONFIRM_TIMEOUT.as_millis() as u64);
+                let input_json = make_dialog_json("confirm", &title, &message, timeout_ms);
 
                 let t = timeout
                     .map(Duration::from_millis)
@@ -632,12 +626,13 @@ impl PiLlm {
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
+                let timeout_ms = timeout.unwrap_or(UI_CONFIRM_TIMEOUT.as_millis() as u64);
                 let input_json = serde_json::json!({
                     "kind": "select",
                     "title": title,
                     "message": message,
                     "options": options,
-                    "timeout_ms": timeout,
+                    "timeout_ms": timeout_ms,
                 })
                 .to_string();
 
@@ -676,12 +671,13 @@ impl PiLlm {
                 .await
                 .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
 
+                let timeout_ms = timeout.unwrap_or(UI_CONFIRM_TIMEOUT.as_millis() as u64);
                 let input_json = serde_json::json!({
                     "kind": "input",
                     "title": title,
                     "message": title,
                     "placeholder": placeholder,
-                    "timeout_ms": timeout,
+                    "timeout_ms": timeout_ms,
                 })
                 .to_string();
 
@@ -769,16 +765,22 @@ impl PiLlm {
     }
 }
 
+/// Returns the base read-only tools common to all modes.
+#[inline]
+fn base_read_tools() -> Vec<String> {
+    vec![
+        "read".to_owned(),
+        "grep".to_owned(),
+        "find".to_owned(),
+        "ls".to_owned(),
+    ]
+}
+
 fn tools_for_mode(mode: AgentToolMode, gate_loaded: bool) -> PiToolsConfig {
     match mode {
         AgentToolMode::Off => PiToolsConfig::None,
         AgentToolMode::ReadOnly => {
-            let mut tools = vec![
-                "read".to_owned(),
-                "grep".to_owned(),
-                "find".to_owned(),
-                "ls".to_owned(),
-            ];
+            let mut tools = base_read_tools();
             if gate_loaded {
                 // Allow gated shell only when the permission gate is active.
                 tools.push("bash".to_owned());
@@ -786,12 +788,7 @@ fn tools_for_mode(mode: AgentToolMode, gate_loaded: bool) -> PiToolsConfig {
             PiToolsConfig::Allowlist(tools)
         }
         AgentToolMode::ReadWrite => {
-            let mut tools = vec![
-                "read".to_owned(),
-                "grep".to_owned(),
-                "find".to_owned(),
-                "ls".to_owned(),
-            ];
+            let mut tools = base_read_tools();
             if gate_loaded {
                 tools.push("edit".to_owned());
                 tools.push("write".to_owned());
@@ -799,12 +796,7 @@ fn tools_for_mode(mode: AgentToolMode, gate_loaded: bool) -> PiToolsConfig {
             PiToolsConfig::Allowlist(tools)
         }
         AgentToolMode::Full => {
-            let mut tools = vec![
-                "read".to_owned(),
-                "grep".to_owned(),
-                "find".to_owned(),
-                "ls".to_owned(),
-            ];
+            let mut tools = base_read_tools();
             if gate_loaded {
                 tools.push("edit".to_owned());
                 tools.push("write".to_owned());
@@ -1103,6 +1095,21 @@ fn assistant_text_chunk(event: &serde_json::Value, accumulated: &str) -> Option<
     }
 }
 
+/// Constructs a JSON envelope for UI dialog requests.
+///
+/// Standardizes the JSON structure across different dialog kinds
+/// (confirm, select, input, editor, model_failover).
+#[inline]
+fn make_dialog_json(kind: &str, title: &str, message: &str, timeout_ms: u64) -> String {
+    serde_json::json!({
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "timeout_ms": timeout_ms,
+    })
+    .to_string()
+}
+
 fn ensure_fae_gate_extension() -> Result<PathBuf> {
     const EXT_SOURCE: &str = r#"/**
  * Fae Permission Gate
@@ -1383,5 +1390,220 @@ mod tests {
         // Should not panic even without runtime_tx.
         pi.emit_model_selected("test/model");
         pi.emit_model_selection_prompt(&["a".to_owned()], Duration::from_secs(5));
+    }
+
+    /// Helper: build a PiLlm with given candidates and optional selection channel.
+    fn test_pi(
+        candidates: Vec<ProviderModelRef>,
+        model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+    ) -> (PiLlm, broadcast::Receiver<RuntimeEvent>) {
+        let (tx, rx) = broadcast::channel(16);
+        let pi = PiLlm {
+            runtime_tx: Some(tx),
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: candidates,
+            active_model_idx: 0,
+            model_selection_rx,
+            assistant_delta_buffer: String::new(),
+        };
+        (pi, rx)
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_single_candidate_auto_selects() {
+        let candidates = vec![ProviderModelRef::new(
+            "anthropic".into(),
+            "claude-opus-4".into(),
+            0,
+        )];
+        let (mut pi, mut event_rx) = test_pi(candidates, None);
+
+        pi.select_startup_model(Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(pi.active_model_idx, 0);
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_no_candidates_returns_error() {
+        let (mut pi, _rx) = test_pi(vec![], None);
+
+        let result = pi.select_startup_model(Duration::from_secs(1)).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_multiple_top_tier_emits_prompt_then_times_out() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        // Channel with no sender = will never receive anything.
+        let (_sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        let (mut pi, mut event_rx) = test_pi(candidates, Some(sel_rx));
+
+        // Use a very short timeout to avoid slowing down tests.
+        pi.select_startup_model(Duration::from_millis(50))
+            .await
+            .unwrap();
+
+        // Should have emitted a prompt first.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt {
+                candidates,
+                timeout_secs: _,
+            }) => {
+                assert_eq!(candidates.len(), 2);
+                assert_eq!(candidates[0], "anthropic/claude-opus-4");
+                assert_eq!(candidates[1], "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+
+        // Then fell back to auto-select first.
+        assert_eq!(pi.active_model_idx, 0);
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_user_picks_second_candidate() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        let (mut pi, mut event_rx) = test_pi(candidates, Some(sel_rx));
+
+        // Simulate user picking second candidate after a tiny delay.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = sel_tx.send("openai/gpt-4o".to_owned());
+        });
+
+        pi.select_startup_model(Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // Prompt should have been emitted.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt { .. }) => {}
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+
+        // User's choice should be reflected.
+        assert_eq!(pi.active_model_idx, 1);
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_different_tiers_auto_selects_best() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+            ProviderModelRef::new("local".into(), "qwen3-4b".into(), 0),
+        ];
+        let (mut pi, mut event_rx) = test_pi(candidates, None);
+
+        pi.select_startup_model(Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        // Should auto-select the flagship model without prompting.
+        assert_eq!(pi.active_model_idx, 0);
+
+        // Verify no prompt was emitted (because both have same tier score of 0).
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected (no prompt), got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_channel_closed_falls_back_to_first() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        // Create channel and immediately drop the sender so recv returns None.
+        let (sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        drop(sel_tx);
+        let (mut pi, mut event_rx) = test_pi(candidates, Some(sel_rx));
+
+        pi.select_startup_model(Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // Prompt emitted, then channel closed → fallback to first.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt { .. }) => {}
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+        assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_invalid_user_choice_falls_back() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        let (mut pi, _event_rx) = test_pi(candidates, Some(sel_rx));
+
+        // Send an invalid model name that doesn't match any candidate.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = sel_tx.send("nonexistent/model-xyz".to_owned());
+        });
+
+        pi.select_startup_model(Duration::from_millis(100))
+            .await
+            .unwrap();
+
+        // Unknown selection → auto-select first candidate.
+        assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_no_channel_auto_selects_without_prompt() {
+        // Multiple top-tier models but NO selection channel (no GUI).
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut event_rx) = test_pi(candidates, None);
+
+        pi.select_startup_model(Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // Without a channel, no prompt is emitted — just a ModelSelected event.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected (no prompt), got: {other:?}"),
+        }
+        assert_eq!(pi.active_model_idx, 0);
     }
 }
