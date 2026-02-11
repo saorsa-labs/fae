@@ -18,9 +18,9 @@
     "current_task": 1
   },
   "task": {
-    "current": 1,
+    "current": 2,
     "total": 8,
-    "name": "Add public model query methods to PiLlm"
+    "name": "Add switch_model_by_voice() to PiLlm"
   },
   "review": {
     "status": "pending",

@@ -48,6 +48,7 @@ use crate::llm::pi_config::{FAE_MODEL_ID, FAE_PROVIDER_KEY};
 use crate::model_selection::{ModelSelectionDecision, ProviderModelRef, decide_model_selection};
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
+use crate::voice_command::{ModelTarget, resolve_model_target};
 
 use crate::pi::manager::PiManager;
 use crate::pi::session::{
@@ -396,6 +397,46 @@ impl PiLlm {
     /// Returns the number of model candidates available.
     pub fn candidate_count(&self) -> usize {
         self.model_candidates.len()
+    }
+
+    /// Switch model via a voice command target.
+    ///
+    /// Resolves the [`ModelTarget`] against the current candidate list, emits
+    /// runtime events, and performs the switch. Returns `Ok(message)` with a
+    /// human-readable TTS string on success, or `Err(message)` if the target
+    /// cannot be resolved.
+    ///
+    /// If the resolved model is already the active model, this is a no-op that
+    /// returns an "already using" message.
+    pub fn switch_model_by_voice(&mut self, target: &ModelTarget) -> std::result::Result<String, String> {
+        let Some(idx) = resolve_model_target(target, &self.model_candidates) else {
+            return Err(format!(
+                "I couldn't find a model matching {target:?} among my {} candidates",
+                self.model_candidates.len()
+            ));
+        };
+
+        // Already using this model — no-op.
+        if idx == self.active_model_idx {
+            let name = self.active_model().display();
+            return Ok(format!("I'm already using {name}"));
+        }
+
+        let target_name = self.model_candidates[idx].display();
+
+        // Emit "about to switch" event.
+        if let Some(tx) = &self.runtime_tx {
+            let _ = tx.send(RuntimeEvent::ModelSwitchRequested {
+                target: target_name.clone(),
+            });
+        }
+
+        self.switch_to_candidate(idx);
+
+        // Emit "switch complete" event.
+        self.emit_model_selected(&target_name);
+
+        Ok(format!("Switching to {target_name}"))
     }
 
     fn active_model(&self) -> &ProviderModelRef {
@@ -1703,5 +1744,87 @@ mod tests {
 
         let (pi, _rx) = test_pi_no_rx(vec![]);
         assert_eq!(pi.candidate_count(), 0);
+    }
+
+    #[test]
+    fn switch_model_by_voice_resolves_and_switches() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut rx) = test_pi_no_rx(candidates);
+
+        let result = pi.switch_model_by_voice(&ModelTarget::ByProvider("openai".into()));
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("openai/gpt-4o"));
+        assert_eq!(pi.active_model_idx, 1);
+
+        // Should have emitted ModelSwitchRequested then ModelSelected.
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSwitchRequested { target }) => {
+                assert_eq!(target, "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSwitchRequested, got: {other:?}"),
+        }
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_model_by_voice_already_active_is_noop() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut rx) = test_pi_no_rx(candidates);
+
+        let result = pi.switch_model_by_voice(&ModelTarget::ByProvider("anthropic".into()));
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("already using"));
+        assert_eq!(pi.active_model_idx, 0);
+
+        // No events emitted for no-op.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn switch_model_by_voice_not_found_returns_error() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![ProviderModelRef::new(
+            "anthropic".into(),
+            "claude-opus-4".into(),
+            10,
+        )];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+
+        let result = pi.switch_model_by_voice(&ModelTarget::ByProvider("google".into()));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("couldn't find"));
+    }
+
+    #[test]
+    fn switch_model_by_voice_best_selects_first() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+        // Start on second model.
+        pi.active_model_idx = 1;
+
+        let result = pi.switch_model_by_voice(&ModelTarget::Best);
+        assert!(result.is_ok());
+        assert_eq!(pi.active_model_idx, 0);
     }
 }
