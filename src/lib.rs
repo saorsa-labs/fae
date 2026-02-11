@@ -33,6 +33,7 @@ pub mod huggingface;
 pub mod llm;
 pub mod memory;
 pub mod model_picker;
+pub mod model_tier;
 pub mod models;
 pub mod personality;
 pub mod pi;
