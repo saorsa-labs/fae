@@ -1,6 +1,45 @@
 //! Pi-backed LLM engine.
 //!
 //! Architecture: Pi runs the agent loop and tool execution; Fae hosts voice + canvas UI.
+//!
+//! # Model Selection Flow
+//!
+//! When the Pi backend starts, it determines which model to use:
+//!
+//! 1. **Candidate Resolution**: The internal `resolve_pi_model_candidates` function builds a sorted list
+//!    of available models from local config, cloud providers, and the FAE fallback.
+//!
+//! 2. **Decision**: [`crate::model_selection::decide_model_selection`] determines whether to auto-select or prompt:
+//!    - No candidates → Error
+//!    - Single candidate → Auto-select
+//!    - Multiple top-tier models → Prompt user (if channel available)
+//!    - Mixed tiers → Auto-select best
+//!
+//! 3. **User Prompt**: If prompting, [`PiLlm::select_startup_model`] emits a
+//!    [`RuntimeEvent::ModelSelectionPrompt`] through the runtime event channel.
+//!
+//! 4. **GUI Response**: The GUI sends the user's selection through the
+//!    `model_selection_rx` mpsc channel (connected via the pipeline coordinator's
+//!    `with_model_selection` builder method).
+//!
+//! 5. **Fallback**: On timeout or invalid selection, the first candidate is auto-selected.
+//!
+//! 6. **Confirmation**: A [`RuntimeEvent::ModelSelected`] event is emitted for UI feedback.
+//!
+//! ```text
+//! ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+//! │  PiLlm::new()   │───►│ select_startup   │───►│ RuntimeEvent::  │
+//! │  (candidates)   │    │ _model()         │    │ ModelSelected   │
+//! └─────────────────┘    └────────┬─────────┘    └─────────────────┘
+//!                                 │
+//!                    ┌────────────▼────────────┐
+//!                    │ PromptUser?             │
+//!                    │ ├─ Yes: emit prompt     │
+//!                    │ │  wait for channel     │
+//!                    │ │  timeout → fallback   │
+//!                    │ └─ No: auto-select      │
+//!                    └─────────────────────────┘
+//! ```
 
 use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use crate::config::{AgentToolMode, LlmConfig, PiConfig};
@@ -1324,41 +1363,44 @@ mod tests {
         assert_eq!(candidates[3].tier, ModelTier::Small);
     }
 
-    #[test]
-    fn emit_model_selected_sends_event_when_tx_present() {
-        let (tx, mut rx) = broadcast::channel(4);
-        let pi = PiLlm {
-            runtime_tx: Some(tx),
-            tool_approval_tx: None,
-            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
-            next_approval_id: 1,
-            model_candidates: vec![],
-            active_model_idx: 0,
-            model_selection_rx: None,
-            assistant_delta_buffer: String::new(),
-        };
-        pi.emit_model_selected("openai/gpt-4o");
+    /// Helper: assert ModelSelected event matches expected provider/model.
+    fn assert_model_selected(rx: &mut broadcast::Receiver<RuntimeEvent>, expected: &str) {
         match rx.try_recv() {
             Ok(RuntimeEvent::ModelSelected { provider_model }) => {
-                assert_eq!(provider_model, "openai/gpt-4o");
+                assert_eq!(provider_model, expected);
             }
             other => panic!("expected ModelSelected, got: {other:?}"),
         }
     }
 
-    #[test]
-    fn emit_model_selection_prompt_sends_event() {
-        let (tx, mut rx) = broadcast::channel(4);
+    /// Helper: build PiLlm with runtime tx and no selection channel.
+    fn test_pi_no_rx(
+        candidates: Vec<ProviderModelRef>,
+    ) -> (PiLlm, broadcast::Receiver<RuntimeEvent>) {
+        let (tx, rx) = broadcast::channel(16);
         let pi = PiLlm {
             runtime_tx: Some(tx),
             tool_approval_tx: None,
             session: PiSession::new("/fake".into(), "p".into(), "m".into()),
             next_approval_id: 1,
-            model_candidates: vec![],
+            model_candidates: candidates,
             active_model_idx: 0,
             model_selection_rx: None,
             assistant_delta_buffer: String::new(),
         };
+        (pi, rx)
+    }
+
+    #[test]
+    fn emit_model_selected_sends_event_when_tx_present() {
+        let (pi, mut rx) = test_pi_no_rx(vec![]);
+        pi.emit_model_selected("openai/gpt-4o");
+        assert_model_selected(&mut rx, "openai/gpt-4o");
+    }
+
+    #[test]
+    fn emit_model_selection_prompt_sends_event() {
+        let (pi, mut rx) = test_pi_no_rx(vec![]);
         pi.emit_model_selection_prompt(
             &["openai/gpt-4o".to_owned(), "anthropic/claude".to_owned()],
             Duration::from_secs(30),

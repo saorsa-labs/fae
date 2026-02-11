@@ -826,4 +826,27 @@ mod tests {
         assert!(config.voice_reference.is_none());
         assert!(config.voice_reference_transcript.is_none());
     }
+
+    #[test]
+    fn llm_config_model_selection_timeout_default() {
+        let config = LlmConfig::default();
+        assert_eq!(config.model_selection_timeout_secs, 30);
+    }
+
+    #[test]
+    fn llm_config_model_selection_timeout_deserialize() {
+        let toml_str = r#"
+[llm]
+model_selection_timeout_secs = 60
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.llm.model_selection_timeout_secs, 60);
+    }
+
+    #[test]
+    fn llm_config_model_selection_timeout_missing_uses_default() {
+        let toml_str = "[llm]";
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.llm.model_selection_timeout_secs, 30);
+    }
 }
