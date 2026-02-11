@@ -45,6 +45,49 @@ Mic (16kHz) ──> AEC ──┬──> VAD ──> STT ──> Identity Gate �
 - **Pi Coding Agent**: Delegates coding, file editing, and research tasks to [Pi](https://github.com/badlogic/pi-mono)
 - **Self-Update**: Automatic update checks for both Fae and Pi from GitHub releases
 - **Task Scheduler**: Background periodic tasks (update checks, future user-defined tasks)
+- **Runtime Model Switching**: Switch between cloud models (Claude, GPT-4) and local models mid-conversation using voice commands
+
+## Runtime Model Switching
+
+Fae can switch between different LLM models during a conversation using voice commands. No restart needed.
+
+### Quick Start
+
+**Switching models:**
+```
+You: "Fae, switch to Claude"
+Fae: "Switching to Claude Opus 4."
+
+You: "use the local model"
+Fae: "Switching to fae-qwen3."
+```
+
+**Finding out what's available:**
+```
+You: "list models"
+Fae: "I have access to claude-opus-4, gpt-4o, fae-qwen3. Currently using claude-opus-4."
+```
+
+### How It Works
+
+1. **Tier-based auto-selection** — At startup, Fae selects the highest-tier available model (Claude Opus 4 > GPT-4o > Gemini 2.0 Flash > local Qwen3)
+2. **User priority override** — Set a `priority` field in `~/.pi/agent/models.json` to prefer a specific model
+3. **Interactive picker** — If multiple top-tier models exist, Fae shows a list and asks you to choose
+4. **Voice commands** — Switch models mid-conversation, query the active model, list all available models
+
+### Supported Commands
+
+| Voice Command | What It Does |
+|---------------|--------------|
+| `"switch to Claude"` | Switches to best available Anthropic model |
+| `"use the local model"` | Switches to on-device model (fae-qwen3) |
+| `"list models"` | Lists all available models |
+| `"what model are you using?"` | Tells you the current active model |
+| `"help"` | Lists all available voice commands |
+
+The GUI topbar shows the active model: **🤖 anthropic/claude-opus-4**
+
+**Full documentation:** [docs/model-switching.md](docs/model-switching.md)
 
 ## Pi Integration
 
