@@ -172,6 +172,50 @@ fn parse_model_target(text: &str) -> ModelTarget {
     }
 }
 
+/// The provider key used for the local on-device model.
+const LOCAL_PROVIDER: &str = "fae-local";
+
+/// Resolve a [`ModelTarget`] to a candidate index.
+///
+/// Given a parsed voice-command target and the list of available model
+/// candidates (already sorted by tier/priority), return the index of the
+/// best matching candidate, or `None` if no candidate matches.
+///
+/// # Examples
+///
+/// ```
+/// use fae::voice_command::{resolve_model_target, ModelTarget};
+/// use fae::model_selection::ProviderModelRef;
+///
+/// let candidates = vec![
+///     ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+///     ProviderModelRef::new("fae-local".into(), "fae-qwen3".into(), 0),
+/// ];
+/// assert_eq!(resolve_model_target(&ModelTarget::Local, &candidates), Some(1));
+/// assert_eq!(resolve_model_target(&ModelTarget::Best, &candidates), Some(0));
+/// ```
+pub fn resolve_model_target(
+    target: &ModelTarget,
+    candidates: &[crate::model_selection::ProviderModelRef],
+) -> Option<usize> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    match target {
+        ModelTarget::Best => Some(0), // candidates are pre-sorted by tier
+        ModelTarget::Local => candidates
+            .iter()
+            .position(|c| c.provider == LOCAL_PROVIDER),
+        ModelTarget::ByProvider(provider) => candidates.iter().position(|c| {
+            c.provider.eq_ignore_ascii_case(provider)
+        }),
+        ModelTarget::ByName(name) => candidates.iter().position(|c| {
+            c.model.to_lowercase().contains(&name.to_lowercase())
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +399,83 @@ mod tests {
     fn ambiguous_use() {
         // "use" without a model-ish target should not trigger
         assert_eq!(parse_voice_command("use the bathroom"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_model_target
+    // -----------------------------------------------------------------------
+
+    fn test_candidates() -> Vec<crate::model_selection::ProviderModelRef> {
+        vec![
+            crate::model_selection::ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            crate::model_selection::ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+            crate::model_selection::ProviderModelRef::new("google".into(), "gemini-2.5-flash".into(), 0),
+            crate::model_selection::ProviderModelRef::new("fae-local".into(), "fae-qwen3".into(), 0),
+        ]
+    }
+
+    #[test]
+    fn resolve_best() {
+        let c = test_candidates();
+        assert_eq!(resolve_model_target(&ModelTarget::Best, &c), Some(0));
+    }
+
+    #[test]
+    fn resolve_local() {
+        let c = test_candidates();
+        assert_eq!(resolve_model_target(&ModelTarget::Local, &c), Some(3));
+    }
+
+    #[test]
+    fn resolve_by_provider() {
+        let c = test_candidates();
+        assert_eq!(
+            resolve_model_target(&ModelTarget::ByProvider("openai".into()), &c),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn resolve_by_provider_case_insensitive() {
+        let c = test_candidates();
+        assert_eq!(
+            resolve_model_target(&ModelTarget::ByProvider("Anthropic".into()), &c),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn resolve_by_name_partial() {
+        let c = test_candidates();
+        assert_eq!(
+            resolve_model_target(&ModelTarget::ByName("opus".into()), &c),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn resolve_by_name_full() {
+        let c = test_candidates();
+        assert_eq!(
+            resolve_model_target(&ModelTarget::ByName("gpt-4o".into()), &c),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn resolve_no_match() {
+        let c = test_candidates();
+        assert_eq!(
+            resolve_model_target(&ModelTarget::ByName("nonexistent-model".into()), &c),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_empty_candidates() {
+        assert_eq!(
+            resolve_model_target(&ModelTarget::Best, &[]),
+            None
+        );
     }
 }
