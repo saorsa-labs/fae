@@ -379,6 +379,25 @@ impl PiLlm {
         self.session.shutdown();
     }
 
+    /// Returns the display names of all model candidates, in priority order.
+    ///
+    /// Each name is in `"provider/model"` format (e.g. `"anthropic/claude-opus-4"`).
+    pub fn list_model_names(&self) -> Vec<String> {
+        self.model_candidates.iter().map(|c| c.display()).collect()
+    }
+
+    /// Returns the display name of the currently active model.
+    ///
+    /// Format: `"provider/model"` (e.g. `"openai/gpt-4o"`).
+    pub fn current_model_name(&self) -> String {
+        self.active_model().display()
+    }
+
+    /// Returns the number of model candidates available.
+    pub fn candidate_count(&self) -> usize {
+        self.model_candidates.len()
+    }
+
     fn active_model(&self) -> &ProviderModelRef {
         // `active_model_idx` is always sourced from `model_candidates`.
         &self.model_candidates[self.active_model_idx]
@@ -1647,5 +1666,42 @@ mod tests {
             other => panic!("expected ModelSelected (no prompt), got: {other:?}"),
         }
         assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[test]
+    fn list_model_names_returns_display_strings() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+            ProviderModelRef::new(FAE_PROVIDER_KEY.into(), FAE_MODEL_ID.into(), 0),
+        ];
+        let (pi, _rx) = test_pi_no_rx(candidates);
+        let names = pi.list_model_names();
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[0], "anthropic/claude-opus-4");
+        assert_eq!(names[1], "openai/gpt-4o");
+        assert_eq!(names[2], format!("{FAE_PROVIDER_KEY}/{FAE_MODEL_ID}"));
+    }
+
+    #[test]
+    fn current_model_name_matches_active_index() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+        assert_eq!(pi.current_model_name(), "anthropic/claude-opus-4");
+        pi.active_model_idx = 1;
+        assert_eq!(pi.current_model_name(), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn candidate_count_returns_correct_count() {
+        let (pi, _rx) =
+            test_pi_no_rx(vec![ProviderModelRef::new("a".into(), "b".into(), 0)]);
+        assert_eq!(pi.candidate_count(), 1);
+
+        let (pi, _rx) = test_pi_no_rx(vec![]);
+        assert_eq!(pi.candidate_count(), 0);
     }
 }
