@@ -71,7 +71,15 @@ pub fn parse_voice_command(text: &str) -> Option<VoiceCommand> {
     let stripped = strip_wake_prefix(&text);
 
     // --- List models ---
-    if matches_any(stripped, &["list models", "show models", "available models", "what models"]) {
+    if matches_any(
+        stripped,
+        &[
+            "list models",
+            "show models",
+            "available models",
+            "what models",
+        ],
+    ) {
         return Some(VoiceCommand::ListModels);
     }
 
@@ -142,16 +150,31 @@ fn extract_switch_target(text: &str) -> Option<&str> {
 /// Heuristic: does `text` look like it refers to a model?
 fn looks_like_model_ref(text: &str) -> bool {
     let keywords = [
-        "model", "local", "best", "flagship", "offline",
-        "claude", "anthropic", "gpt", "openai", "gemini", "google",
-        "llama", "qwen", "mistral", "deepseek",
+        "model",
+        "local",
+        "best",
+        "flagship",
+        "offline",
+        "claude",
+        "anthropic",
+        "gpt",
+        "openai",
+        "gemini",
+        "google",
+        "llama",
+        "qwen",
+        "mistral",
+        "deepseek",
     ];
     keywords.iter().any(|k| text.contains(k))
 }
 
 /// Map the raw target text to a [`ModelTarget`] variant.
 fn parse_model_target(text: &str) -> ModelTarget {
-    let text = text.trim().trim_end_matches(" model").trim_end_matches(" please");
+    let text = text
+        .trim()
+        .trim_end_matches(" model")
+        .trim_end_matches(" please");
 
     match text {
         // Local
@@ -204,15 +227,13 @@ pub fn resolve_model_target(
 
     match target {
         ModelTarget::Best => Some(0), // candidates are pre-sorted by tier
-        ModelTarget::Local => candidates
+        ModelTarget::Local => candidates.iter().position(|c| c.provider == LOCAL_PROVIDER),
+        ModelTarget::ByProvider(provider) => candidates
             .iter()
-            .position(|c| c.provider == LOCAL_PROVIDER),
-        ModelTarget::ByProvider(provider) => candidates.iter().position(|c| {
-            c.provider.eq_ignore_ascii_case(provider)
-        }),
-        ModelTarget::ByName(name) => candidates.iter().position(|c| {
-            c.model.to_lowercase().contains(&name.to_lowercase())
-        }),
+            .position(|c| c.provider.eq_ignore_ascii_case(provider)),
+        ModelTarget::ByName(name) => candidates
+            .iter()
+            .position(|c| c.model.to_lowercase().contains(&name.to_lowercase())),
     }
 }
 
@@ -407,10 +428,22 @@ mod tests {
 
     fn test_candidates() -> Vec<crate::model_selection::ProviderModelRef> {
         vec![
-            crate::model_selection::ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            crate::model_selection::ProviderModelRef::new(
+                "anthropic".into(),
+                "claude-opus-4".into(),
+                10,
+            ),
             crate::model_selection::ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
-            crate::model_selection::ProviderModelRef::new("google".into(), "gemini-2.5-flash".into(), 0),
-            crate::model_selection::ProviderModelRef::new("fae-local".into(), "fae-qwen3".into(), 0),
+            crate::model_selection::ProviderModelRef::new(
+                "google".into(),
+                "gemini-2.5-flash".into(),
+                0,
+            ),
+            crate::model_selection::ProviderModelRef::new(
+                "fae-local".into(),
+                "fae-qwen3".into(),
+                0,
+            ),
         ]
     }
 
@@ -473,10 +506,7 @@ mod tests {
 
     #[test]
     fn resolve_empty_candidates() {
-        assert_eq!(
-            resolve_model_target(&ModelTarget::Best, &[]),
-            None
-        );
+        assert_eq!(resolve_model_target(&ModelTarget::Best, &[]), None);
     }
 
     // -----------------------------------------------------------------------

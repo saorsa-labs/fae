@@ -151,13 +151,22 @@ Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dm
 ### Phase 1.2: Priority-Aware Candidate Resolution  
 - [x] All tasks complete (commit: fa9c2a3)
 
-### Phase 1.3: Startup Model Selection — IN PROGRESS
+### Phase 1.3: Startup Model Selection — COMPLETE
 - [x] Task 1: Add model selection types and logic (commit: 02f5af3)
-- [ ] Task 2: Canvas event types for model selection
-- [ ] Task 3: Model picker response channel
-- [ ] Task 4: Implement model selection flow in PiLlm
-- [ ] Task 5: GUI model picker component
-- [ ] Task 6: Wire model selection channel through coordinator
-- [ ] Task 7: Add configuration for selection timeout
-- [ ] Task 8: Integration tests and verification
 - [x] Task 2: Canvas event types for model selection (commit: 69fe1ad)
+- [x] Task 3: Model picker response channel (commit: 772e80a)
+- [x] Task 4-7: Model selection flow, GUI picker, coordinator wiring, config
+- [x] Task 8: Integration tests and verification
+
+---
+
+## Milestone 2: Runtime Voice Switching — IN PROGRESS
+
+### Phase 2.1: Voice Command Detection — COMPLETE
+- [x] Task 1: Define VoiceCommand types (commit: 4bc6876)
+- [x] Task 2-3: Parser tests and parse_voice_command() (commit: c7e75ea)
+- [x] Task 4: Model name resolution (commit: 1b02139)
+- [x] Task 5: RuntimeEvent variants (commit: b611d8c)
+- [x] Task 6: VoiceCommandFilter pipeline stage (commit: 7cfaab6)
+- [x] Task 7: Integration tests (commit: c93be85)
+- [x] Task 8: Documentation and verification
