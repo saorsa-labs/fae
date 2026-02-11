@@ -14,17 +14,17 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 2,
-    "current_task": 2
+    "completed_tasks": 7,
+    "current_task": 7
   },
   "task": {
-    "current": 2,
+    "current": 7,
     "total": 8,
-    "name": "Canvas event types for model selection"
+    "name": "Add configuration for selection timeout"
   },
   "review": {
     "status": "passed",
-    "iteration": 3,
+    "iteration": 1,
     "last_verdict": "PASS",
     "findings_count": {
       "critical": 0,
@@ -32,7 +32,7 @@
       "minor": 0
     }
   },
-  "status": "task_complete",
-  "last_action": "task_2_complete",
-  "last_updated": "2026-02-11T14:41:43Z"
+  "status": "executing",
+  "last_action": "tasks_3_7_review_passed",
+  "last_updated": "2026-02-11T15:15:00Z"
 }

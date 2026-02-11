@@ -234,6 +234,13 @@ pub struct LlmConfig {
     /// When set, overrides `api_model` for the cloud provider.
     #[serde(default)]
     pub cloud_model: Option<String>,
+    /// Timeout in seconds for the interactive model selection prompt.
+    ///
+    /// When multiple top-tier models are available and the user is prompted to
+    /// choose, this controls how long to wait before auto-selecting the first
+    /// candidate. Defaults to 30 seconds.
+    #[serde(default = "default_model_selection_timeout_secs")]
+    pub model_selection_timeout_secs: u32,
 }
 
 impl Default for LlmConfig {
@@ -260,8 +267,13 @@ impl Default for LlmConfig {
             system_prompt: String::new(),
             cloud_provider: None,
             cloud_model: None,
+            model_selection_timeout_secs: default_model_selection_timeout_secs(),
         }
     }
+}
+
+fn default_model_selection_timeout_secs() -> u32 {
+    30
 }
 
 impl LlmConfig {

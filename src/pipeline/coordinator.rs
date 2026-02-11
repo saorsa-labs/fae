@@ -58,6 +58,8 @@ pub struct PipelineCoordinator {
     /// LLM HTTP server kept alive for the pipeline duration.
     llm_server: Option<LlmServer>,
     console_output: bool,
+    /// Receiver for model selection responses from the GUI.
+    model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
 }
 
 impl PipelineCoordinator {
@@ -76,6 +78,7 @@ impl PipelineCoordinator {
             gate_active: Arc::new(AtomicBool::new(false)),
             llm_server: None,
             console_output: true,
+            model_selection_rx: None,
         }
     }
 
@@ -96,6 +99,7 @@ impl PipelineCoordinator {
             gate_active: Arc::new(AtomicBool::new(false)),
             llm_server: None,
             console_output: true,
+            model_selection_rx: None,
         }
     }
 
@@ -134,6 +138,17 @@ impl PipelineCoordinator {
     /// into the LLM stage.
     pub fn with_text_injection(mut self, rx: mpsc::UnboundedReceiver<TextInjection>) -> Self {
         self.text_injection_rx = Some(rx);
+        self
+    }
+
+    /// Attach a model selection channel for the startup model picker.
+    ///
+    /// When the Pi backend detects multiple top-tier models, it emits a
+    /// [`RuntimeEvent::ModelSelectionPrompt`]. The GUI should send the user's
+    /// choice (a `"provider/model"` string) through the `tx` side of this
+    /// channel.
+    pub fn with_model_selection(mut self, rx: mpsc::UnboundedReceiver<String>) -> Self {
+        self.model_selection_rx = Some(rx);
         self
     }
 
@@ -199,6 +214,7 @@ impl PipelineCoordinator {
         };
 
         let text_injection_rx = self.text_injection_rx.take();
+        let model_selection_rx = self.model_selection_rx.take();
 
         // Create channels between stages
         let (audio_tx, audio_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
@@ -449,6 +465,7 @@ impl PipelineCoordinator {
                             canvas_registry,
                             console_output,
                             cancel,
+                            model_selection_rx,
                         };
                         run_llm_stage(
                             config,
@@ -1307,6 +1324,7 @@ struct LlmStageControl {
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     console_output: bool,
     cancel: CancellationToken,
+    model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
 }
 
 impl LlmEngine {
@@ -1342,7 +1360,7 @@ async fn run_llm_stage(
     preloaded: Option<crate::llm::LocalLlm>,
     mut rx: mpsc::Receiver<Transcription>,
     tx: mpsc::Sender<SentenceChunk>,
-    ctl: LlmStageControl,
+    mut ctl: LlmStageControl,
     mut text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
 ) {
     use crate::agent::SaorsaAgentLlm;
@@ -1394,14 +1412,23 @@ async fn run_llm_stage(
             let pi_cfg = config.pi.clone();
             let runtime_tx = ctl.runtime_tx.clone();
             let tool_approval_tx = ctl.tool_approval_tx.clone();
+            let model_sel_rx = ctl.model_selection_rx.take();
+            let timeout_secs = config.llm.model_selection_timeout_secs;
             let res = tokio::task::spawn_blocking(move || {
-                PiLlm::new(llm_cfg, pi_cfg, runtime_tx, tool_approval_tx)
+                PiLlm::new(llm_cfg, pi_cfg, runtime_tx, tool_approval_tx, model_sel_rx)
             })
             .await
             .map_err(|e| crate::error::SpeechError::Pi(format!("Pi init task failed: {e}")));
 
             match res {
-                Ok(Ok(pi)) => LlmEngine::Pi(Box::new(pi)),
+                Ok(Ok(mut pi)) => {
+                    let timeout = std::time::Duration::from_secs(u64::from(timeout_secs));
+                    if let Err(e) = pi.select_startup_model(timeout).await {
+                        error!("model selection failed: {e}");
+                        return;
+                    }
+                    LlmEngine::Pi(Box::new(pi))
+                }
                 Ok(Err(e)) => {
                     error!("failed to init Pi backend: {e}");
                     return;

@@ -6,7 +6,7 @@ use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use crate::config::{AgentToolMode, LlmConfig, PiConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::pi_config::{FAE_MODEL_ID, FAE_PROVIDER_KEY};
-use crate::model_selection::ProviderModelRef;
+use crate::model_selection::{ModelSelectionDecision, ProviderModelRef, decide_model_selection};
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
 
@@ -51,6 +51,10 @@ pub struct PiLlm {
     model_candidates: Vec<ProviderModelRef>,
     active_model_idx: usize,
 
+    /// Channel for receiving user model selection from the GUI picker.
+    /// When `None`, the engine auto-selects the best model without prompting.
+    model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+
     // Per-run state.
     assistant_delta_buffer: String,
 }
@@ -61,6 +65,7 @@ impl PiLlm {
         pi_config: PiConfig,
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+        model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
     ) -> Result<Self> {
         let model_candidates = resolve_pi_model_candidates(&llm_config)?;
         let primary = model_candidates
@@ -114,8 +119,105 @@ impl PiLlm {
             next_approval_id: 1,
             model_candidates,
             active_model_idx: 0,
+            model_selection_rx,
             assistant_delta_buffer: String::new(),
         })
+    }
+
+    /// Select the startup model, optionally prompting the user via the GUI.
+    ///
+    /// When multiple top-tier models are available and a `model_selection_rx`
+    /// channel exists, emits a [`RuntimeEvent::ModelSelectionPrompt`] and waits
+    /// for a response. Falls back to auto-selecting the first candidate on
+    /// timeout or if no channel is configured.
+    pub async fn select_startup_model(&mut self, timeout: Duration) -> Result<()> {
+        let decision = decide_model_selection(&self.model_candidates);
+
+        match decision {
+            ModelSelectionDecision::NoModels => {
+                return Err(SpeechError::Pi("no model candidates available".to_owned()));
+            }
+            ModelSelectionDecision::AutoSelect(model) => {
+                let label = model.display();
+                tracing::info!("auto-selected model: {label}");
+                self.emit_model_selected(&label);
+            }
+            ModelSelectionDecision::PromptUser(top_tier) => {
+                // Collect candidate names before taking &mut self for the channel.
+                let candidate_names: Vec<String> =
+                    top_tier.iter().map(ProviderModelRef::display).collect();
+                let first_display = self.model_candidates[0].display();
+
+                // Try to prompt the user if we have a selection channel.
+                let selected = self.prompt_user_for_model(&candidate_names, timeout).await;
+
+                if let Some(chosen) = selected {
+                    if let Some(idx) = self
+                        .model_candidates
+                        .iter()
+                        .position(|c| c.display() == chosen)
+                    {
+                        self.active_model_idx = idx;
+                        tracing::info!("user selected model: {chosen}");
+                        self.emit_model_selected(&chosen);
+                        return Ok(());
+                    }
+                    tracing::warn!("user selection '{chosen}' not found, auto-selecting first");
+                }
+
+                // Fallback: auto-select first candidate (already at index 0).
+                self.active_model_idx = 0;
+                tracing::info!("auto-selecting model: {first_display}");
+                self.emit_model_selected(&first_display);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// If a model selection channel is available, emit the prompt event and
+    /// wait for a user response (or timeout). Returns `Some(selection)` if the
+    /// user chose, `None` otherwise.
+    async fn prompt_user_for_model(
+        &mut self,
+        candidates: &[String],
+        timeout: Duration,
+    ) -> Option<String> {
+        // Confirm a receiver exists before emitting the prompt.
+        self.model_selection_rx.as_ref()?;
+        self.emit_model_selection_prompt(candidates, timeout);
+
+        let rx = self.model_selection_rx.as_mut()?;
+        match tokio::time::timeout(timeout, rx.recv()).await {
+            Ok(Some(selected)) => Some(selected),
+            Ok(None) => {
+                tracing::warn!("model selection channel closed, auto-selecting");
+                None
+            }
+            Err(_) => {
+                tracing::info!("model selection timed out, auto-selecting first");
+                None
+            }
+        }
+    }
+
+    /// Emit a `ModelSelectionPrompt` event if a runtime sender is available.
+    fn emit_model_selection_prompt(&self, candidates: &[String], timeout: Duration) {
+        if let Some(tx) = &self.runtime_tx {
+            let _ = tx.send(RuntimeEvent::ModelSelectionPrompt {
+                candidates: candidates.to_vec(),
+                timeout_secs: timeout.as_secs().min(u64::from(u32::MAX)) as u32,
+            });
+        }
+    }
+
+    /// Emit a `ModelSelected` event if a runtime sender is available.
+    fn emit_model_selected(&self, provider_model: &str) {
+        if let Some(tx) = &self.runtime_tx {
+            let _ = tx.send(RuntimeEvent::ModelSelected {
+                provider_model: provider_model.to_owned(),
+            });
+        }
     }
 
     pub async fn generate_response(
@@ -1213,5 +1315,73 @@ mod tests {
         // Small tier last.
         assert_eq!(candidates[3].model, "qwen3-4b");
         assert_eq!(candidates[3].tier, ModelTier::Small);
+    }
+
+    #[test]
+    fn emit_model_selected_sends_event_when_tx_present() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let pi = PiLlm {
+            runtime_tx: Some(tx),
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: vec![],
+            active_model_idx: 0,
+            model_selection_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        pi.emit_model_selected("openai/gpt-4o");
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_model_selection_prompt_sends_event() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let pi = PiLlm {
+            runtime_tx: Some(tx),
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: vec![],
+            active_model_idx: 0,
+            model_selection_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        pi.emit_model_selection_prompt(
+            &["openai/gpt-4o".to_owned(), "anthropic/claude".to_owned()],
+            Duration::from_secs(30),
+        );
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt {
+                candidates,
+                timeout_secs,
+            }) => {
+                assert_eq!(candidates.len(), 2);
+                assert_eq!(timeout_secs, 30);
+            }
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_functions_are_noop_without_runtime_tx() {
+        let pi = PiLlm {
+            runtime_tx: None,
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: vec![],
+            active_model_idx: 0,
+            model_selection_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        // Should not panic even without runtime_tx.
+        pi.emit_model_selected("test/model");
+        pi.emit_model_selection_prompt(&["a".to_owned()], Duration::from_secs(5));
     }
 }
