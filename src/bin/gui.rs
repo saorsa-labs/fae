@@ -38,6 +38,8 @@ fn main() {
 #[cfg(feature = "gui")]
 mod gui {
     use fae::progress::ProgressEvent;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tokio_util::sync::CancellationToken;
 
     /// Application state phases.
@@ -133,6 +135,64 @@ mod gui {
             }
             ProgressEvent::Error { message } => Some(AppStatus::Error(message)),
         }
+    }
+
+    /// Whether this runtime event should be hidden from the main-screen
+    /// conversational subtitle/event surface.
+    pub fn suppress_main_screen_runtime_event(event: &fae::RuntimeEvent) -> bool {
+        matches!(
+            event,
+            fae::RuntimeEvent::MemoryRecall { .. }
+                | fae::RuntimeEvent::MemoryWrite { .. }
+                | fae::RuntimeEvent::MemoryConflict { .. }
+                | fae::RuntimeEvent::MemoryMigration { .. }
+        )
+    }
+
+    /// Whether a scheduler telemetry event should force-open the canvas panel.
+    pub fn scheduler_telemetry_opens_canvas(event: &fae::RuntimeEvent) -> bool {
+        matches!(
+            event,
+            fae::RuntimeEvent::MemoryMigration { success: false, .. }
+        )
+    }
+
+    /// Scheduler-relevant memory settings.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SchedulerMemoryBinding {
+        pub root_dir: PathBuf,
+        pub retention_days: u32,
+    }
+
+    /// Extract only memory fields that affect scheduler task behavior.
+    pub fn scheduler_memory_binding(memory: &fae::config::MemoryConfig) -> SchedulerMemoryBinding {
+        SchedulerMemoryBinding {
+            root_dir: memory.root_dir.clone(),
+            retention_days: memory.retention_days,
+        }
+    }
+
+    /// Whether scheduler should restart after config changes.
+    pub fn scheduler_requires_restart(
+        current: &SchedulerMemoryBinding,
+        next: &SchedulerMemoryBinding,
+    ) -> bool {
+        current != next
+    }
+
+    /// Increment a scheduler metric counter and return the new total.
+    pub fn increment_counter(counter: &AtomicU64) -> u64 {
+        counter.fetch_add(1, Ordering::Relaxed).saturating_add(1)
+    }
+
+    fn scheduler_memory_restart_counter() -> &'static AtomicU64 {
+        static COUNTER: std::sync::OnceLock<AtomicU64> = std::sync::OnceLock::new();
+        COUNTER.get_or_init(|| AtomicU64::new(0))
+    }
+
+    /// Record a restart caused by memory configuration changes.
+    pub fn record_scheduler_memory_restart() -> u64 {
+        increment_counter(scheduler_memory_restart_counter())
     }
 
     #[cfg(test)]
@@ -303,6 +363,136 @@ mod gui {
                 AppStatus::Error(msg) => assert_eq!(msg, "download failed"),
                 other => unreachable!("expected Error, got {other:?}"),
             }
+        }
+
+        #[test]
+        fn memory_events_are_suppressed_on_main_screen() {
+            let memory_recall = fae::RuntimeEvent::MemoryRecall {
+                query: "name".to_owned(),
+                hits: 1,
+            };
+            let memory_write = fae::RuntimeEvent::MemoryWrite {
+                op: "insert".to_owned(),
+                target_id: Some("mem-1".to_owned()),
+            };
+            let memory_conflict = fae::RuntimeEvent::MemoryConflict {
+                existing_id: "mem-old".to_owned(),
+                replacement_id: Some("mem-new".to_owned()),
+            };
+            let memory_migration = fae::RuntimeEvent::MemoryMigration {
+                from: 0,
+                to: 1,
+                success: true,
+            };
+            assert!(suppress_main_screen_runtime_event(&memory_recall));
+            assert!(suppress_main_screen_runtime_event(&memory_write));
+            assert!(suppress_main_screen_runtime_event(&memory_conflict));
+            assert!(suppress_main_screen_runtime_event(&memory_migration));
+
+            let non_memory = fae::RuntimeEvent::AssistantGenerating { active: true };
+            assert!(!suppress_main_screen_runtime_event(&non_memory));
+        }
+
+        #[test]
+        fn only_migration_failures_force_canvas_open() {
+            let migration_ok = fae::RuntimeEvent::MemoryMigration {
+                from: 1,
+                to: 1,
+                success: true,
+            };
+            let migration_fail = fae::RuntimeEvent::MemoryMigration {
+                from: 0,
+                to: 1,
+                success: false,
+            };
+            let maintenance_write = fae::RuntimeEvent::MemoryWrite {
+                op: "reindex".to_owned(),
+                target_id: None,
+            };
+
+            assert!(!scheduler_telemetry_opens_canvas(&migration_ok));
+            assert!(scheduler_telemetry_opens_canvas(&migration_fail));
+            assert!(!scheduler_telemetry_opens_canvas(&maintenance_write));
+        }
+
+        #[test]
+        fn scheduler_restart_decision_tracks_memory_root_and_retention() {
+            let base = fae::config::MemoryConfig {
+                root_dir: std::path::PathBuf::from("/tmp/fae-a"),
+                retention_days: 365,
+                ..Default::default()
+            };
+            let current = scheduler_memory_binding(&base);
+
+            let mut same_effective = base.clone();
+            same_effective.auto_capture = !same_effective.auto_capture;
+            same_effective.auto_recall = !same_effective.auto_recall;
+            let same = scheduler_memory_binding(&same_effective);
+            assert!(!scheduler_requires_restart(&current, &same));
+
+            let mut changed_root = base.clone();
+            changed_root.root_dir = std::path::PathBuf::from("/tmp/fae-b");
+            let next_root = scheduler_memory_binding(&changed_root);
+            assert!(scheduler_requires_restart(&current, &next_root));
+
+            let mut changed_retention = base.clone();
+            changed_retention.retention_days = 30;
+            let next_retention = scheduler_memory_binding(&changed_retention);
+            assert!(scheduler_requires_restart(&current, &next_retention));
+        }
+
+        #[test]
+        fn scheduler_memory_telemetry_is_canvas_only_main_screen_suppressed() {
+            let mut bridge = fae::canvas::bridge::CanvasBridge::new("gui-test", 800.0, 600.0);
+            let mut main_screen_visible = 0usize;
+
+            for _ in 0..5 {
+                let event = fae::RuntimeEvent::MemoryWrite {
+                    op: "reindex".to_owned(),
+                    target_id: None,
+                };
+                bridge.on_event(&event);
+                if !suppress_main_screen_runtime_event(&event) {
+                    main_screen_visible = main_screen_visible.saturating_add(1);
+                }
+            }
+
+            let migration_fail = fae::RuntimeEvent::MemoryMigration {
+                from: 0,
+                to: 1,
+                success: false,
+            };
+            bridge.on_event(&migration_fail);
+            if !suppress_main_screen_runtime_event(&migration_fail) {
+                main_screen_visible = main_screen_visible.saturating_add(1);
+            }
+
+            let views = bridge.session().message_views();
+            assert!(
+                views.iter().any(|v| v.html.contains("[memory]")),
+                "expected memory content to be visible in canvas"
+            );
+            assert!(
+                views.iter().any(|v| {
+                    v.html.contains("maintenance writes")
+                        || v.html.contains("schema migration failed")
+                        || v.html.contains("migration failed")
+                }),
+                "expected collapsed maintenance and/or migration failure memory output in canvas"
+            );
+            assert_eq!(
+                main_screen_visible, 0,
+                "memory telemetry must not surface in the main-screen event stream"
+            );
+            assert!(scheduler_telemetry_opens_canvas(&migration_fail));
+        }
+
+        #[test]
+        fn increment_counter_returns_running_total() {
+            let counter = AtomicU64::new(0);
+            assert_eq!(increment_counter(&counter), 1);
+            assert_eq!(increment_counter(&counter), 2);
+            assert_eq!(counter.load(Ordering::Relaxed), 2);
         }
     }
 }
@@ -1004,7 +1194,7 @@ fn app() -> Element {
     let mut update_available = use_signal(|| None::<fae::update::Release>);
     let mut update_banner_dismissed = use_signal(|| false);
     let mut update_check_status = use_signal(String::new);
-    let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
+    let scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut pi_inventory = use_signal(load_pi_model_inventory);
     let mut pi_inventory_status = use_signal(String::new);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
@@ -1095,32 +1285,139 @@ fn app() -> Element {
     // --- Background scheduler ---
     // Start the scheduler and poll its result channel for notifications.
     use_hook(move || {
-        let (_handle, mut rx) = fae::startup::start_scheduler();
+        let mut canvas_bridge = canvas_bridge;
+        let mut canvas_revision = canvas_revision;
+        let mut canvas_visible = canvas_visible;
+        let mut scheduler_notification = scheduler_notification;
+        let mut update_available = update_available;
+        let update_state = update_state;
+        let mut config_state = config_state;
+
         spawn(async move {
-            while let Some(result) = rx.recv().await {
-                match result {
-                    fae::scheduler::tasks::TaskResult::Success(msg) => {
-                        tracing::debug!("scheduler task succeeded: {msg}");
-                    }
-                    fae::scheduler::tasks::TaskResult::NeedsUserAction(prompt) => {
-                        tracing::info!("scheduler notification: {}", prompt.title);
-                        // If the prompt is about an update, also set update_available.
-                        if prompt.title.contains("Fae Update") {
-                            // Re-check to get the Release struct for the banner.
-                            let etag = update_state.read().etag_fae.clone();
-                            let result = tokio::task::spawn_blocking(move || {
-                                let checker = fae::update::UpdateChecker::for_fae();
-                                checker.check(etag.as_deref())
-                            })
-                            .await;
-                            if let Ok(Ok((Some(release), _))) = result {
-                                update_available.set(Some(release));
+            let initial_cfg = config_state.read().memory.clone();
+            let mut active_binding = gui::scheduler_memory_binding(&initial_cfg);
+            let (mut scheduler_handle, mut scheduler_rx) =
+                fae::startup::start_scheduler_with_memory(&initial_cfg);
+            let mut cfg_rx = ui_bus().subscribe();
+
+            loop {
+                tokio::select! {
+                    result = scheduler_rx.recv() => {
+                        match result {
+                            Some(fae::scheduler::tasks::TaskResult::Success(msg)) => {
+                                tracing::debug!("scheduler task succeeded: {msg}");
+                            }
+                            Some(fae::scheduler::tasks::TaskResult::Telemetry(telemetry)) => {
+                                // Route scheduler memory telemetry into the canvas stream only.
+                                let event = telemetry.event.clone();
+                                canvas_bridge.write().on_event(&event);
+                                let next_rev = {
+                                    let current = *canvas_revision.read();
+                                    current.saturating_add(1)
+                                };
+                                canvas_revision.set(next_rev);
+
+                                if gui::scheduler_telemetry_opens_canvas(&event) {
+                                    canvas_visible.set(true);
+                                }
+
+                                match event {
+                                    fae::RuntimeEvent::MemoryMigration { from, to, success } => {
+                                        if success {
+                                            tracing::info!(
+                                                "scheduler memory migration: {} ({} -> {})",
+                                                telemetry.message,
+                                                from,
+                                                to
+                                            );
+                                        } else {
+                                            tracing::warn!(
+                                                "scheduler memory migration failed: {} ({} -> {})",
+                                                telemetry.message,
+                                                from,
+                                                to
+                                            );
+                                        }
+                                    }
+                                    fae::RuntimeEvent::MemoryWrite { .. } => {
+                                        tracing::debug!(
+                                            "scheduler memory maintenance: {}",
+                                            telemetry.message
+                                        );
+                                    }
+                                    _ => {
+                                        tracing::debug!("scheduler telemetry: {}", telemetry.message);
+                                    }
+                                }
+                            }
+                            Some(fae::scheduler::tasks::TaskResult::NeedsUserAction(prompt)) => {
+                                tracing::info!("scheduler notification: {}", prompt.title);
+                                // If the prompt is about an update, also set update_available.
+                                if prompt.title.contains("Fae Update") {
+                                    // Re-check to get the Release struct for the banner.
+                                    let etag = update_state.read().etag_fae.clone();
+                                    let result = tokio::task::spawn_blocking(move || {
+                                        let checker = fae::update::UpdateChecker::for_fae();
+                                        checker.check(etag.as_deref())
+                                    })
+                                    .await;
+                                    if let Ok(Ok((Some(release), _))) = result {
+                                        update_available.set(Some(release));
+                                    }
+                                }
+                                scheduler_notification.set(Some(prompt));
+                            }
+                            Some(fae::scheduler::tasks::TaskResult::Error(err)) => {
+                                tracing::warn!("scheduler task error: {err}");
+                            }
+                            None => {
+                                tracing::warn!("scheduler result channel closed; restarting");
+                                scheduler_handle.abort();
+                                let cfg = config_state.read().memory.clone();
+                                let launched = fae::startup::start_scheduler_with_memory(&cfg);
+                                scheduler_handle = launched.0;
+                                scheduler_rx = launched.1;
+                                active_binding = gui::scheduler_memory_binding(&cfg);
                             }
                         }
-                        scheduler_notification.set(Some(prompt));
                     }
-                    fae::scheduler::tasks::TaskResult::Error(err) => {
-                        tracing::warn!("scheduler task error: {err}");
+                    cfg_evt = cfg_rx.recv() => {
+                        match cfg_evt {
+                            Ok(UiBusEvent::ConfigUpdated) => {
+                                let cfg_res = tokio::task::spawn_blocking(read_config_or_default).await;
+                                let cfg = match cfg_res {
+                                    Ok(cfg) => cfg,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "config reload for scheduler failed: {e}; using in-memory config"
+                                        );
+                                        config_state.read().clone()
+                                    }
+                                };
+                                let next_binding = gui::scheduler_memory_binding(&cfg.memory);
+                                if gui::scheduler_requires_restart(&active_binding, &next_binding) {
+                                    let restart_count = gui::record_scheduler_memory_restart();
+                                    tracing::info!(
+                                        scheduler_memory_restarts_total = restart_count,
+                                        root = %cfg.memory.root_dir.display(),
+                                        retention_days = cfg.memory.retention_days,
+                                        "scheduler memory config changed; restarting"
+                                    );
+                                    scheduler_handle.abort();
+                                    let launched = fae::startup::start_scheduler_with_memory(&cfg.memory);
+                                    scheduler_handle = launched.0;
+                                    scheduler_rx = launched.1;
+                                    active_binding = next_binding;
+                                }
+                                config_state.set(cfg);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                tracing::debug!("ui bus closed; stopping scheduler manager");
+                                scheduler_handle.abort();
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
                     }
                 }
             }
@@ -1356,6 +1653,8 @@ fn app() -> Element {
                                                             }
                                                         }
                                                         fae::RuntimeEvent::ToolResult { .. } => {}
+                                                        other if gui::suppress_main_screen_runtime_event(other) => {}
+                                                        _ => {}
                                                     }
 
                                                 }
@@ -2226,6 +2525,25 @@ fn app() -> Element {
                                         }
                                     },
                                 }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Context window (tokens)" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "number",
+                                    min: "1024",
+                                    step: "1024",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().llm.context_size_tokens}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<usize>() {
+                                            config_state.write().llm.context_size_tokens = v;
+                                        }
+                                    },
+                                }
+                            }
+                            p { class: "note",
+                                "If omitted in config.toml, Fae auto-tunes context size from system RAM."
                             }
                             div { class: "settings-row",
                                 label { class: "settings-label", "Temperature" }

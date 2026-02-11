@@ -6,7 +6,7 @@
 //! For GUI consumers, use [`initialize_models_with_progress`] which accepts a
 //! [`ProgressCallback`] for structured progress events.
 
-use crate::config::{AgentToolMode, LlmBackend, SpeechConfig, TtsBackend};
+use crate::config::{AgentToolMode, LlmBackend, MemoryConfig, SpeechConfig, TtsBackend};
 use crate::error::Result;
 use crate::llm::LocalLlm;
 use crate::llm::server::LlmServer;
@@ -339,9 +339,32 @@ pub fn start_scheduler() -> (
     tokio::task::JoinHandle<()>,
     tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
 ) {
+    start_scheduler_with_memory(&MemoryConfig::default())
+}
+
+/// Start the background scheduler using explicit memory settings.
+///
+/// This binds memory maintenance tasks to the active configured memory root
+/// and retention policy while leaving other built-in tasks unchanged.
+pub fn start_scheduler_with_memory(
+    memory: &MemoryConfig,
+) -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
+) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
     scheduler.with_update_checks();
+    scheduler.with_memory_maintenance();
+    let memory_root = memory.root_dir.clone();
+    let retention_days = memory.retention_days;
+    scheduler = scheduler.with_executor(Box::new(move |task_id| {
+        crate::scheduler::tasks::execute_builtin_with_memory_root(
+            task_id,
+            &memory_root,
+            retention_days,
+        )
+    }));
 
     info!(
         "starting background scheduler with {} tasks",

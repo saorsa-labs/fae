@@ -23,6 +23,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+/// Minimum allowed local context size.
+const MIN_CONTEXT_SIZE_TOKENS: usize = 1024;
+
 /// Language model for generating conversational responses.
 ///
 /// Uses `mistralrs` for high-level GGUF inference with streaming token
@@ -48,10 +51,13 @@ impl LocalLlm {
             builder = builder.with_tok_model_id(&config.tokenizer_id);
         }
 
+        let context_size = effective_context_size_tokens(config);
+        info!("local LLM context_size_tokens={context_size}");
+
         let model = builder
             .with_paged_attn(|| {
                 PagedAttentionMetaBuilder::default()
-                    .with_gpu_memory(MemoryGpuConfig::ContextSize(8192))
+                    .with_gpu_memory(MemoryGpuConfig::ContextSize(context_size))
                     .build()
             })
             .map_err(|e| SpeechError::Llm(format!("paged attention config failed: {e}")))?
@@ -317,6 +323,17 @@ impl LocalLlm {
     }
 }
 
+pub(crate) fn effective_context_size_tokens(config: &LlmConfig) -> usize {
+    if config.context_size_tokens < MIN_CONTEXT_SIZE_TOKENS {
+        warn!(
+            "llm.context_size_tokens={} too small, clamping to {}",
+            config.context_size_tokens, MIN_CONTEXT_SIZE_TOKENS
+        );
+        return MIN_CONTEXT_SIZE_TOKENS;
+    }
+    config.context_size_tokens
+}
+
 /// Find the position of a sentence-ending character (`.`, `!`, `?`, `\n`).
 ///
 /// Returns the byte index of the boundary character, or `None` if no
@@ -374,4 +391,29 @@ pub(crate) fn find_clause_boundary(text: &str) -> Option<usize> {
         }
     }
     last_clause
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn effective_context_size_uses_config_value() {
+        let cfg = LlmConfig {
+            context_size_tokens: 65_536,
+            ..Default::default()
+        };
+        assert_eq!(effective_context_size_tokens(&cfg), 65_536);
+    }
+
+    #[test]
+    fn effective_context_size_clamps_small_values() {
+        let cfg = LlmConfig {
+            context_size_tokens: 0,
+            ..Default::default()
+        };
+        assert_eq!(effective_context_size_tokens(&cfg), MIN_CONTEXT_SIZE_TOKENS);
+    }
 }

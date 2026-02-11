@@ -6,7 +6,7 @@ use crate::canvas::registry::CanvasSessionRegistry;
 use crate::config::SpeechConfig;
 use crate::error::Result;
 use crate::llm::server::LlmServer;
-use crate::memory::{MemoryStore, PrimaryUser};
+use crate::memory::{MemoryOrchestrator, MemoryStore, PrimaryUser};
 use crate::pipeline::messages::{
     AudioChunk, ControlEvent, GateCommand, SentenceChunk, SpeechSegment, SynthesizedAudio,
     TextInjection, Transcription,
@@ -1415,6 +1415,45 @@ async fn run_llm_stage(
     };
 
     let name = "Fae".to_owned();
+    let memory_orchestrator = if config.memory.enabled {
+        let orchestrator = MemoryOrchestrator::new(&config.memory);
+        let migration_from = if config.memory.schema_auto_migrate {
+            orchestrator.schema_version().ok()
+        } else {
+            None
+        };
+
+        match orchestrator.ensure_ready_with_migration() {
+            Ok(Some((from, to))) => {
+                if let Some(rt) = &ctl.runtime_tx {
+                    let _ = rt.send(RuntimeEvent::MemoryMigration {
+                        from,
+                        to,
+                        success: true,
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!("memory orchestrator init failed: {e}");
+                if let Some(from) = migration_from {
+                    let to = orchestrator.target_schema_version();
+                    if from < to
+                        && let Some(rt) = &ctl.runtime_tx
+                    {
+                        let _ = rt.send(RuntimeEvent::MemoryMigration {
+                            from,
+                            to,
+                            success: false,
+                        });
+                    }
+                }
+            }
+        }
+        Some(orchestrator)
+    } else {
+        None
+    };
 
     let cancel = ctl.cancel;
     loop {
@@ -1505,14 +1544,66 @@ async fn run_llm_stage(
             }
         };
 
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let mut llm_input = user_text.clone();
+        if let Some(memory) = &memory_orchestrator
+            && let Ok(Some(memory_ctx)) = memory.recall_context(&user_text)
+        {
+            if let Some(rt) = &ctl.runtime_tx {
+                let hits = memory_ctx.matches("\n- [").count();
+                let _ = rt.send(RuntimeEvent::MemoryRecall {
+                    query: user_text.clone(),
+                    hits,
+                });
+            }
+            llm_input = format!("{memory_ctx}\n\nUser message:\n{user_text}");
+        }
+
         ctl.assistant_generating.store(true, Ordering::Relaxed);
         if let Some(rt) = &ctl.runtime_tx {
             let _ = rt.send(RuntimeEvent::AssistantGenerating { active: true });
         }
-        match engine
-            .generate_response(&user_text, &tx, &ctl.interrupt)
-            .await
-        {
+        let (proxy_tx, mut proxy_rx) = mpsc::channel::<SentenceChunk>(SENTENCE_CHANNEL_SIZE);
+        let final_tx = tx.clone();
+        let forward_handle = tokio::spawn(async move {
+            let mut assistant_text = String::new();
+            while let Some(chunk) = proxy_rx.recv().await {
+                let is_final = chunk.is_final;
+                let text = chunk.text.trim();
+                if !text.is_empty() {
+                    if !assistant_text.is_empty() {
+                        assistant_text.push(' ');
+                    }
+                    assistant_text.push_str(text);
+                }
+                final_tx.send(chunk).await.map_err(|e| {
+                    crate::error::SpeechError::Channel(format!("LLM output channel closed: {e}"))
+                })?;
+                if is_final {
+                    break;
+                }
+            }
+            Ok::<String, crate::error::SpeechError>(assistant_text)
+        });
+
+        let generation_result = engine
+            .generate_response(&llm_input, &proxy_tx, &ctl.interrupt)
+            .await;
+        drop(proxy_tx);
+
+        let assistant_text = match forward_handle.await {
+            Ok(Ok(text)) => text,
+            Ok(Err(e)) => {
+                error!("failed to forward LLM chunks: {e}");
+                String::new()
+            }
+            Err(e) => {
+                error!("failed to join LLM forwarding task: {e}");
+                String::new()
+            }
+        };
+
+        match generation_result {
             Ok(interrupted) => {
                 if ctl.console_output {
                     println!();
@@ -1534,6 +1625,28 @@ async fn run_llm_stage(
                 if let Some(rt) = &ctl.runtime_tx {
                     let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
                 }
+            }
+        }
+
+        if let Some(memory) = &memory_orchestrator {
+            match memory.capture_turn(&turn_id, &user_text, &assistant_text) {
+                Ok(report) => {
+                    if let Some(rt) = &ctl.runtime_tx {
+                        for write in &report.writes {
+                            let _ = rt.send(RuntimeEvent::MemoryWrite {
+                                op: write.op.clone(),
+                                target_id: write.target_id.clone(),
+                            });
+                        }
+                        for conflict in &report.conflicts {
+                            let _ = rt.send(RuntimeEvent::MemoryConflict {
+                                existing_id: conflict.existing_id.clone(),
+                                replacement_id: conflict.replacement_id.clone(),
+                            });
+                        }
+                    }
+                }
+                Err(e) => warn!("memory capture failed: {e}"),
             }
         }
     }
@@ -2721,6 +2834,14 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use crate::config::LlmBackend;
+    use crate::memory::{MemoryKind, MemoryOrchestrator, MemoryRepository};
+    use axum::{Json, Router, extract::State, routing::post};
+    use std::collections::VecDeque;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex as StdMutex;
+    use std::time::Duration;
+    use tokio::sync::broadcast::error::TryRecvError;
 
     // ── clean_model_json ─────────────────────────────────────────────
 
@@ -3344,5 +3465,417 @@ mod tests {
         assert!(!is_filler_word("david"));
         assert!(!is_filler_word("sarah"));
         assert!(!is_filler_word("alex"));
+    }
+
+    #[derive(Clone)]
+    struct MockApiState {
+        requests: Arc<StdMutex<Vec<serde_json::Value>>>,
+        responses: Arc<StdMutex<VecDeque<String>>>,
+    }
+
+    struct MockApiServer {
+        url: String,
+        requests: Arc<StdMutex<Vec<serde_json::Value>>>,
+        handle: tokio::task::JoinHandle<()>,
+    }
+
+    async fn mock_chat_completions(
+        State(state): State<MockApiState>,
+        Json(payload): Json<serde_json::Value>,
+    ) -> impl axum::response::IntoResponse {
+        state.requests.lock().expect("lock requests").push(payload);
+        let text = state
+            .responses
+            .lock()
+            .expect("lock responses")
+            .pop_front()
+            .unwrap_or_else(|| "Noted.".to_owned());
+
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": { "content": text },
+                "finish_reason": serde_json::Value::Null
+            }]
+        });
+        let done = serde_json::json!({
+            "choices": [{
+                "delta": {},
+                "finish_reason": "stop"
+            }]
+        });
+        let body = format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n");
+
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            body,
+        )
+    }
+
+    async fn start_mock_api_server(responses: &[&str]) -> MockApiServer {
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let responses = Arc::new(StdMutex::new(
+            responses
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<VecDeque<_>>(),
+        ));
+        let state = MockApiState {
+            requests: Arc::clone(&requests),
+            responses,
+        };
+
+        let app = Router::new()
+            .route("/v1/chat/completions", post(mock_chat_completions))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock API listener");
+        let addr = listener.local_addr().expect("mock API local addr");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("mock API server run");
+        });
+
+        MockApiServer {
+            url: format!("http://{addr}"),
+            requests,
+            handle,
+        }
+    }
+
+    impl MockApiServer {
+        fn request_user_inputs(&self) -> Vec<String> {
+            let requests = self.requests.lock().expect("lock requests");
+            requests
+                .iter()
+                .filter_map(extract_last_user_message)
+                .collect()
+        }
+
+        async fn shutdown(self) {
+            self.handle.abort();
+            let _ = self.handle.await;
+        }
+    }
+
+    fn extract_last_user_message(payload: &serde_json::Value) -> Option<String> {
+        let messages = payload.get("messages")?.as_array()?;
+        messages.iter().rev().find_map(|m| {
+            if m.get("role")?.as_str()? == "user" {
+                m.get("content")?.as_str().map(str::to_owned)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        crate::test_utils::temp_test_root("coordinator-memory", name)
+    }
+
+    fn api_test_config(root: &Path, api_url: String) -> SpeechConfig {
+        let mut config = SpeechConfig::default();
+        config.llm.backend = LlmBackend::Api;
+        config.llm.api_url = api_url;
+        config.llm.api_model = "fae-test".to_owned();
+        config.llm.api_key.clear();
+        config.llm.max_tokens = 64;
+        config.memory.root_dir = root.to_path_buf();
+        config.memory.enabled = true;
+        config.memory.auto_recall = true;
+        config.memory.auto_capture = true;
+        config
+    }
+
+    use crate::test_utils::seed_manifest_v0;
+
+    fn make_transcription(text: &str) -> Transcription {
+        let now = Instant::now();
+        Transcription {
+            text: text.to_owned(),
+            is_final: true,
+            voiceprint: None,
+            audio_captured_at: now,
+            transcribed_at: now,
+        }
+    }
+
+    fn make_llm_stage_control(
+        runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    ) -> LlmStageControl {
+        let (playback_cmd_tx, _playback_cmd_rx) = mpsc::unbounded_channel();
+        LlmStageControl {
+            interrupt: Arc::new(AtomicBool::new(false)),
+            assistant_speaking: Arc::new(AtomicBool::new(false)),
+            assistant_generating: Arc::new(AtomicBool::new(false)),
+            playback_cmd_tx,
+            runtime_tx,
+            tool_approval_tx: None,
+            canvas_registry: None,
+            console_output: false,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    fn collect_runtime_events(rx: &mut broadcast::Receiver<RuntimeEvent>) -> Vec<RuntimeEvent> {
+        let mut events = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(event) => events.push(event),
+                Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(_)) => {}
+            }
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn llm_stage_recall_injects_memory_context_and_emits_runtime_event() {
+        let root = temp_root("recall-context");
+        let server = start_mock_api_server(&["Your name is Alice."]).await;
+        let config = api_test_config(&root, server.url.clone());
+
+        let seed = MemoryOrchestrator::new(&config.memory);
+        seed.capture_turn("seed-turn", "My name is Alice.", "Noted.")
+            .expect("seed memory with name");
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(32);
+        let (runtime_tx, mut runtime_rx) = broadcast::channel(64);
+        let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
+
+        let stage = tokio::spawn(run_llm_stage(
+            config,
+            None,
+            input_rx,
+            sentence_tx,
+            ctl,
+            None,
+        ));
+
+        input_tx
+            .send(make_transcription("What is my name?"))
+            .await
+            .expect("send transcription");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(5), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let user_inputs = server.request_user_inputs();
+        assert_eq!(user_inputs.len(), 1);
+        assert!(user_inputs[0].contains("<memory_context>"));
+        assert!(user_inputs[0].contains("Primary user name is Alice."));
+        assert!(user_inputs[0].contains("User message:\nWhat is my name?"));
+
+        let events = collect_runtime_events(&mut runtime_rx);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::MemoryRecall { query, hits }
+            if query == "What is my name?" && *hits >= 1
+        )));
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_captures_turn_memories_after_generation() {
+        let root = temp_root("capture-turn");
+        let server = start_mock_api_server(&["Noted."]).await;
+        let config = api_test_config(&root, server.url.clone());
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(32);
+        let ctl = make_llm_stage_control(None);
+
+        let stage = tokio::spawn(run_llm_stage(
+            config,
+            None,
+            input_rx,
+            sentence_tx,
+            ctl,
+            None,
+        ));
+
+        input_tx
+            .send(make_transcription("I prefer tea."))
+            .await
+            .expect("send transcription");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(5), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let repo = MemoryRepository::new(&root);
+        let records = repo.list_records().expect("list memory records");
+        assert!(records.iter().any(|record| {
+            record.kind == MemoryKind::Episode && record.text.contains("User: I prefer tea.")
+        }));
+
+        let preferences = repo
+            .find_active_by_tag("preference")
+            .expect("find active preferences");
+        assert_eq!(preferences.len(), 1);
+        assert!(preferences[0].text.to_ascii_lowercase().contains("tea"));
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_emits_memory_write_and_conflict_events() {
+        let root = temp_root("event-emission");
+        let server = start_mock_api_server(&["Noted.", "Updated."]).await;
+        let config = api_test_config(&root, server.url.clone());
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(32);
+        let (runtime_tx, mut runtime_rx) = broadcast::channel(128);
+        let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
+
+        let stage = tokio::spawn(run_llm_stage(
+            config,
+            None,
+            input_rx,
+            sentence_tx,
+            ctl,
+            None,
+        ));
+
+        input_tx
+            .send(make_transcription("My name is Alice."))
+            .await
+            .expect("send first transcription");
+        input_tx
+            .send(make_transcription("Actually my name is Bob."))
+            .await
+            .expect("send second transcription");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(5), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let events = collect_runtime_events(&mut runtime_rx);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::MemoryWrite { op, target_id: Some(id) }
+            if op == "insert_episode" && !id.is_empty()
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::MemoryWrite { op, target_id: Some(id) }
+            if op == "update_profile" && !id.is_empty()
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::MemoryConflict {
+                existing_id,
+                replacement_id: Some(replacement_id)
+            } if existing_id != "conflict" && !existing_id.is_empty() && !replacement_id.is_empty()
+        )));
+
+        let repo = MemoryRepository::new(&root);
+        let active_name = repo
+            .find_active_by_tag("name")
+            .expect("find active names")
+            .into_iter()
+            .next()
+            .expect("active name record");
+        assert!(active_name.text.contains("Bob"));
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_emits_memory_migration_success_event_on_startup() {
+        let root = temp_root("migration-success-event");
+        seed_manifest_v0(&root);
+        let server = start_mock_api_server(&["Noted."]).await;
+        let config = api_test_config(&root, server.url.clone());
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(8);
+        let (runtime_tx, mut runtime_rx) = broadcast::channel(64);
+        let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
+
+        let stage = tokio::spawn(run_llm_stage(
+            config,
+            None,
+            input_rx,
+            sentence_tx,
+            ctl,
+            None,
+        ));
+
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(5), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let events = collect_runtime_events(&mut runtime_rx);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::MemoryMigration { from, to, success }
+            if *from == 0 && *to == 1 && *success
+        )));
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_emits_memory_migration_failure_event_on_startup() {
+        let root = temp_root("migration-failure-event");
+        seed_manifest_v0(&root);
+        std::fs::write(root.join("memory").join(".fail_migration"), "1").expect("write failpoint");
+        let server = start_mock_api_server(&["Noted."]).await;
+        let config = api_test_config(&root, server.url.clone());
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(8);
+        let (runtime_tx, mut runtime_rx) = broadcast::channel(64);
+        let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
+
+        let stage = tokio::spawn(run_llm_stage(
+            config,
+            None,
+            input_rx,
+            sentence_tx,
+            ctl,
+            None,
+        ));
+
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(5), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let events = collect_runtime_events(&mut runtime_rx);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::MemoryMigration { from, to, success }
+            if *from == 0 && *to == 1 && !*success
+        )));
+
+        let repo = MemoryRepository::new(&root);
+        let schema = repo.schema_version().expect("schema version");
+        assert_eq!(schema, 0);
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
     }
 }

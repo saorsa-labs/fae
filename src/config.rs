@@ -203,6 +203,11 @@ pub struct LlmConfig {
     pub tool_mode: AgentToolMode,
     /// Maximum tokens to generate per response.
     pub max_tokens: usize,
+    /// Context window size for local GGUF inference (tokens).
+    ///
+    /// This controls KV cache sizing and how much prompt/history can be
+    /// processed in one request for local backends.
+    pub context_size_tokens: usize,
     /// Sampling temperature (0.0 = greedy, higher = more random).
     pub temperature: f64,
     /// Top-p (nucleus) sampling threshold.
@@ -251,6 +256,7 @@ impl Default for LlmConfig {
             api_key: String::new(),
             tool_mode: AgentToolMode::default(),
             max_tokens: 200,
+            context_size_tokens: default_llm_context_size_tokens(),
             temperature: 0.7,
             top_p: 0.9,
             repeat_penalty: 1.1,
@@ -261,6 +267,26 @@ impl Default for LlmConfig {
             cloud_provider: None,
             cloud_model: None,
         }
+    }
+}
+
+fn default_llm_context_size_tokens() -> usize {
+    let total_memory = crate::system_profile::detect_total_memory_bytes();
+    recommended_context_size_tokens(total_memory)
+}
+
+/// Recommend a local LLM context window based on total system RAM.
+///
+/// This is intentionally conservative to avoid over-allocating KV cache on
+/// smaller machines while allowing larger context windows on high-memory hosts.
+pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    match total_memory_bytes {
+        Some(bytes) if bytes < 12 * GIB => 8_192,
+        Some(bytes) if bytes < 20 * GIB => 16_384,
+        Some(bytes) if bytes < 40 * GIB => 32_768,
+        Some(_) => 65_536,
+        None => 32_768,
     }
 }
 
@@ -568,12 +594,36 @@ impl Default for ModelConfig {
 pub struct MemoryConfig {
     /// Root directory for all persistent data (markdown memories + voice samples).
     pub root_dir: PathBuf,
+    /// Master switch for the memory orchestration system.
+    pub enabled: bool,
+    /// Whether durable memory candidates are auto-captured after each turn.
+    pub auto_capture: bool,
+    /// Whether relevant memories are auto-recalled before each LLM turn.
+    pub auto_recall: bool,
+    /// Maximum memory items to inject during recall.
+    pub recall_max_items: usize,
+    /// Maximum memory context size injected into prompts (characters).
+    pub recall_max_chars: usize,
+    /// Confidence threshold used when promoting profile/fact memories.
+    pub min_profile_confidence: f32,
+    /// Retention window in days for episodic memories (0 = keep forever).
+    pub retention_days: u32,
+    /// Whether schema migrations should run automatically on startup.
+    pub schema_auto_migrate: bool,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             root_dir: default_memory_root_dir(),
+            enabled: true,
+            auto_capture: true,
+            auto_recall: true,
+            recall_max_items: 6,
+            recall_max_chars: 1_200,
+            min_profile_confidence: 0.70,
+            retention_days: 365,
+            schema_auto_migrate: true,
         }
     }
 }
@@ -714,6 +764,7 @@ mod tests {
         assert!(!config.stt.model_id.is_empty());
         assert!(config.stt.chunk_size > 0);
         assert!(config.llm.max_tokens > 0);
+        assert!(config.llm.context_size_tokens > 0);
         assert!(config.llm.temperature >= 0.0);
         assert!(config.llm.top_p >= 0.0 && config.llm.top_p <= 1.0);
         assert!(config.tts.speed > 0.0);
@@ -813,5 +864,15 @@ mod tests {
         let config = TtsConfig::default();
         assert!(config.voice_reference.is_none());
         assert!(config.voice_reference_transcript.is_none());
+    }
+
+    #[test]
+    fn recommended_context_size_tokens_scales_with_memory() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(recommended_context_size_tokens(Some(8 * GIB)), 8_192);
+        assert_eq!(recommended_context_size_tokens(Some(16 * GIB)), 16_384);
+        assert_eq!(recommended_context_size_tokens(Some(32 * GIB)), 32_768);
+        assert_eq!(recommended_context_size_tokens(Some(64 * GIB)), 65_536);
+        assert_eq!(recommended_context_size_tokens(None), 32_768);
     }
 }

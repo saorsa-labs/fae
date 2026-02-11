@@ -4,6 +4,7 @@
 //! and built-in update-check task implementations.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How often a task should run.
@@ -44,10 +45,21 @@ impl std::fmt::Display for Schedule {
 pub enum TaskResult {
     /// Task completed successfully with a summary message.
     Success(String),
+    /// Structured telemetry payload suitable for runtime/event surfaces.
+    Telemetry(TaskTelemetry),
     /// Task completed but needs user attention.
     NeedsUserAction(UserPrompt),
     /// Task failed with an error message.
     Error(String),
+}
+
+/// Structured task telemetry.
+#[derive(Debug, Clone)]
+pub struct TaskTelemetry {
+    /// Human-readable summary.
+    pub message: String,
+    /// Machine-readable runtime event.
+    pub event: crate::runtime::RuntimeEvent,
 }
 
 /// A prompt presented to the user after a task completes.
@@ -146,15 +158,41 @@ pub const TASK_CHECK_FAE_UPDATE: &str = "check_fae_update";
 
 /// Well-known task ID for the Pi update check.
 pub const TASK_CHECK_PI_UPDATE: &str = "check_pi_update";
+/// Well-known task ID for memory reflection/consolidation.
+pub const TASK_MEMORY_REFLECT: &str = "memory_reflect";
+/// Well-known task ID for memory reindex/health checks.
+pub const TASK_MEMORY_REINDEX: &str = "memory_reindex";
+/// Well-known task ID for memory retention garbage collection.
+pub const TASK_MEMORY_GC: &str = "memory_gc";
+/// Well-known task ID for memory schema migration checks.
+pub const TASK_MEMORY_MIGRATE: &str = "memory_migrate";
 
 /// Execute a built-in scheduled task by ID.
 ///
 /// Returns [`TaskResult`] for any known built-in task, or
 /// [`TaskResult::Error`] for unknown task IDs.
 pub fn execute_builtin(task_id: &str) -> TaskResult {
+    let root = crate::memory::default_memory_root_dir();
+    let retention_days = crate::config::MemoryConfig::default().retention_days;
+    execute_builtin_with_memory_root(task_id, &root, retention_days)
+}
+
+/// Execute a built-in scheduled task by ID using an explicit memory root.
+///
+/// This is used by the GUI scheduler so memory maintenance tasks target the
+/// active configured memory store instead of process defaults.
+pub fn execute_builtin_with_memory_root(
+    task_id: &str,
+    memory_root: &Path,
+    retention_days: u32,
+) -> TaskResult {
     match task_id {
         TASK_CHECK_FAE_UPDATE => check_fae_update(),
         TASK_CHECK_PI_UPDATE => check_pi_update(),
+        TASK_MEMORY_REFLECT => run_memory_reflect_for_root(memory_root),
+        TASK_MEMORY_REINDEX => run_memory_reindex_for_root(memory_root),
+        TASK_MEMORY_GC => run_memory_gc_for_root(memory_root, retention_days),
+        TASK_MEMORY_MIGRATE => run_memory_migrate_for_root(memory_root),
         _ => TaskResult::Error(format!("unknown built-in task: {task_id}")),
     }
 }
@@ -291,11 +329,119 @@ fn check_pi_update() -> TaskResult {
     }
 }
 
+fn run_memory_reflect_for_root(root: &Path) -> TaskResult {
+    match crate::memory::run_memory_reflection(root) {
+        Ok(msg) => TaskResult::Telemetry(TaskTelemetry {
+            message: msg,
+            event: crate::runtime::RuntimeEvent::MemoryWrite {
+                op: "reflect".to_owned(),
+                target_id: None,
+            },
+        }),
+        Err(e) => TaskResult::Error(format!("memory reflection failed: {e}")),
+    }
+}
+
+fn run_memory_reindex_for_root(root: &Path) -> TaskResult {
+    match crate::memory::run_memory_reindex(root) {
+        Ok(msg) => TaskResult::Telemetry(TaskTelemetry {
+            message: msg,
+            event: crate::runtime::RuntimeEvent::MemoryWrite {
+                op: "reindex".to_owned(),
+                target_id: None,
+            },
+        }),
+        Err(e) => TaskResult::Error(format!("memory reindex failed: {e}")),
+    }
+}
+
+fn run_memory_gc_for_root(root: &Path, retention_days: u32) -> TaskResult {
+    match crate::memory::run_memory_gc(root, retention_days) {
+        Ok(msg) => TaskResult::Telemetry(TaskTelemetry {
+            message: msg,
+            event: crate::runtime::RuntimeEvent::MemoryWrite {
+                op: "retention_gc".to_owned(),
+                target_id: None,
+            },
+        }),
+        Err(e) => TaskResult::Error(format!("memory retention failed: {e}")),
+    }
+}
+
+fn run_memory_migrate_for_root(root: &Path) -> TaskResult {
+    let repo = crate::memory::MemoryRepository::new(root);
+    let target = crate::memory::current_memory_schema_version();
+    match repo.migrate_if_needed(target) {
+        Ok(Some((from, to))) => TaskResult::Telemetry(TaskTelemetry {
+            message: format!("memory migration completed ({from} -> {to})"),
+            event: crate::runtime::RuntimeEvent::MemoryMigration {
+                from,
+                to,
+                success: true,
+            },
+        }),
+        Ok(None) => {
+            let from = repo.schema_version().unwrap_or(target);
+            TaskResult::Telemetry(TaskTelemetry {
+                message: "memory migration not needed".to_owned(),
+                event: crate::runtime::RuntimeEvent::MemoryMigration {
+                    from,
+                    to: target,
+                    success: true,
+                },
+            })
+        }
+        Err(e) => {
+            let from = repo.schema_version().unwrap_or(target);
+            TaskResult::Telemetry(TaskTelemetry {
+                message: format!("memory migration failed: {e}"),
+                event: crate::runtime::RuntimeEvent::MemoryMigration {
+                    from,
+                    to: target,
+                    success: false,
+                },
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::runtime::RuntimeEvent;
+    use crate::test_utils::{seed_manifest_v0, temp_test_root};
+
+    fn temp_root(name: &str) -> std::path::PathBuf {
+        temp_test_root("scheduler-task", name)
+    }
+
+    fn seed_old_episode_record(root: &std::path::Path, id: &str) {
+        use crate::memory::{MemoryKind, MemoryRecord, MemoryStatus};
+
+        let memory_dir = root.join("memory");
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        let repo = crate::memory::MemoryRepository::new(root);
+        repo.ensure_layout().expect("ensure memory layout");
+
+        let old = super::now_epoch_secs().saturating_sub(400 * 24 * 3600);
+        let record = MemoryRecord {
+            id: id.to_owned(),
+            kind: MemoryKind::Episode,
+            status: MemoryStatus::Active,
+            text: "old episode".to_owned(),
+            confidence: 0.8,
+            source_turn_id: Some("turn-old".to_owned()),
+            tags: vec!["episode".to_owned()],
+            supersedes: None,
+            created_at: old,
+            updated_at: old,
+        };
+        let line = serde_json::to_string(&record).expect("serialize old record");
+        std::fs::write(memory_dir.join("records.jsonl"), format!("{line}\n"))
+            .expect("write record");
+    }
 
     #[test]
     fn new_task_has_correct_defaults() {
@@ -443,6 +589,15 @@ mod tests {
         let success = TaskResult::Success("done".to_owned());
         assert!(matches!(success, TaskResult::Success(_)));
 
+        let telemetry = TaskResult::Telemetry(TaskTelemetry {
+            message: "telemetry".to_owned(),
+            event: RuntimeEvent::MemoryWrite {
+                op: "reindex".to_owned(),
+                target_id: None,
+            },
+        });
+        assert!(matches!(telemetry, TaskResult::Telemetry(_)));
+
         let error = TaskResult::Error("fail".to_owned());
         assert!(matches!(error, TaskResult::Error(_)));
 
@@ -465,13 +620,36 @@ mod tests {
     }
 
     #[test]
+    fn execute_builtin_with_memory_root_respects_custom_retention_days() {
+        let root = temp_root("custom-retention");
+        seed_old_episode_record(&root, "episode-custom-retention");
+
+        let result =
+            execute_builtin_with_memory_root(TASK_MEMORY_GC, &root, /* retention_days */ 0);
+        assert!(matches!(result, TaskResult::Telemetry(_)));
+
+        let repo = crate::memory::MemoryRepository::new(&root);
+        let records = repo.list_records().expect("list records");
+        let kept = records
+            .iter()
+            .find(|r| r.id == "episode-custom-retention")
+            .expect("record should exist");
+        assert_eq!(kept.status, crate::memory::MemoryStatus::Active);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn execute_builtin_fae_check_returns_result() {
         // This makes a real HTTP call, so it may fail in CI without network.
         // We just verify it doesn't panic and returns a valid TaskResult.
         let result = execute_builtin(TASK_CHECK_FAE_UPDATE);
         assert!(matches!(
             result,
-            TaskResult::Success(_) | TaskResult::NeedsUserAction(_) | TaskResult::Error(_)
+            TaskResult::Success(_)
+                | TaskResult::Telemetry(_)
+                | TaskResult::NeedsUserAction(_)
+                | TaskResult::Error(_)
         ));
     }
 
@@ -484,9 +662,71 @@ mod tests {
             TaskResult::Success(msg) => {
                 assert!(msg.contains("not installed") || msg.contains("up to date"))
             }
+            TaskResult::Telemetry(_) => {}
             TaskResult::Error(_) => {} // Network error is acceptable
             TaskResult::NeedsUserAction(_) => {} // Update available is fine too
         }
+    }
+
+    #[test]
+    fn run_memory_migrate_for_root_emits_migration_telemetry_success() {
+        let root = temp_root("migration-success");
+        seed_manifest_v0(&root);
+
+        let result = run_memory_migrate_for_root(&root);
+        match result {
+            TaskResult::Telemetry(TaskTelemetry {
+                event: RuntimeEvent::MemoryMigration { from, to, success },
+                ..
+            }) => {
+                assert_eq!(from, 0);
+                assert_eq!(to, crate::memory::current_memory_schema_version());
+                assert!(success);
+            }
+            other => panic!("expected migration telemetry, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_memory_migrate_for_root_emits_migration_telemetry_failure() {
+        let root = temp_root("migration-failure");
+        seed_manifest_v0(&root);
+        std::fs::write(root.join("memory").join(".fail_migration"), "1").expect("write failpoint");
+
+        let result = run_memory_migrate_for_root(&root);
+        match result {
+            TaskResult::Telemetry(TaskTelemetry {
+                event: RuntimeEvent::MemoryMigration { to, success, .. },
+                ..
+            }) => {
+                assert_eq!(to, crate::memory::current_memory_schema_version());
+                assert!(!success);
+            }
+            other => panic!("expected migration telemetry, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_memory_reflect_for_root_emits_write_telemetry() {
+        let root = temp_root("reflect-telemetry");
+
+        let result = run_memory_reflect_for_root(&root);
+        match result {
+            TaskResult::Telemetry(TaskTelemetry {
+                event: RuntimeEvent::MemoryWrite { op, target_id },
+                ..
+            }) => {
+                assert_eq!(op, "reflect");
+                assert!(target_id.is_none());
+            }
+            other => panic!("expected reflect telemetry, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

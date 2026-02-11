@@ -51,6 +51,9 @@ pub mod voice_clone;
 pub mod voiceprint;
 pub mod wakeword;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 pub use approval::ToolApprovalRequest;
 pub use config::SpeechConfig;
 pub use error::{Result, SpeechError};

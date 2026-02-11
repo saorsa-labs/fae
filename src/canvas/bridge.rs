@@ -14,6 +14,8 @@ use super::backend::CanvasBackend;
 use super::session::CanvasSession;
 use super::types::{CanvasMessage, MessageRole};
 
+const MEMORY_WRITE_SUMMARY_THRESHOLD: usize = 5;
+
 /// Bridges fae's pipeline events to the canvas scene graph.
 pub struct CanvasBridge {
     session: Box<dyn CanvasBackend>,
@@ -30,6 +32,8 @@ pub struct CanvasBridge {
     /// Pending tool inputs keyed by tool call ID (captured on ToolCall,
     /// consumed on ToolResult).
     pending_tool_inputs: HashMap<String, String>,
+    /// Number of routine memory-write events suppressed from direct display.
+    suppressed_memory_writes: usize,
 }
 
 impl CanvasBridge {
@@ -48,6 +52,7 @@ impl CanvasBridge {
             group_count: 0,
             next_ts: 0,
             pending_tool_inputs: HashMap::new(),
+            suppressed_memory_writes: 0,
         }
     }
 
@@ -143,6 +148,45 @@ impl CanvasBridge {
                     }
                     self.push(MessageRole::System, "interrupted");
                     self.generating = false;
+                }
+            }
+
+            RuntimeEvent::MemoryRecall { .. } => {}
+
+            RuntimeEvent::MemoryWrite { op, target_id } => {
+                if op.contains("fail") || op.contains("error") {
+                    self.flush_suppressed_memory_writes();
+                    let text = match target_id {
+                        Some(id) => format!("write {op} ({id})"),
+                        None => format!("write {op}"),
+                    };
+                    self.push_tool("memory", &text);
+                } else {
+                    self.suppressed_memory_writes = self.suppressed_memory_writes.saturating_add(1);
+                    if self.suppressed_memory_writes >= MEMORY_WRITE_SUMMARY_THRESHOLD {
+                        self.flush_suppressed_memory_writes();
+                    }
+                }
+            }
+
+            RuntimeEvent::MemoryConflict {
+                existing_id,
+                replacement_id,
+            } => {
+                self.flush_suppressed_memory_writes();
+                let text = match replacement_id {
+                    Some(new_id) => format!("conflict resolved {existing_id} -> {new_id}"),
+                    None => format!("conflict on {existing_id}"),
+                };
+                self.push_tool("memory", &text);
+            }
+
+            RuntimeEvent::MemoryMigration { from, to, success } => {
+                if !success || from != to {
+                    self.flush_suppressed_memory_writes();
+                    let outcome = if *success { "succeeded" } else { "failed" };
+                    let text = format!("migration {from} -> {to} {outcome}");
+                    self.push_tool("memory", &text);
                 }
             }
 
@@ -250,6 +294,16 @@ impl CanvasBridge {
 
         let msg = CanvasMessage::tool_with_details(name, text, ts, tool_input, tool_result_text);
         self.session.push_message(&msg);
+    }
+
+    fn flush_suppressed_memory_writes(&mut self) {
+        if self.suppressed_memory_writes == 0 {
+            return;
+        }
+        let count = self.suppressed_memory_writes;
+        self.suppressed_memory_writes = 0;
+        let text = format!("maintenance writes ({count} ops, details suppressed)");
+        self.push_tool("memory", &text);
     }
 }
 
@@ -536,5 +590,71 @@ mod tests {
 
         assert_eq!(b.session().message_count(), 1); // Just the tool message
         assert_eq!(b.session().element_count(), 1); // Only the message element
+    }
+
+    #[test]
+    fn test_memory_write_events_are_collapsed() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+        for _ in 0..5 {
+            b.on_event(&RuntimeEvent::MemoryWrite {
+                op: "reflect".into(),
+                target_id: None,
+            });
+        }
+
+        assert_eq!(b.session().message_count(), 1);
+        let html = b.session().to_html();
+        assert!(html.contains("[memory]"));
+        assert!(html.contains("maintenance writes (5 ops, details suppressed)"));
+    }
+
+    #[test]
+    fn test_memory_migration_event_adds_canvas_message() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+        b.on_event(&RuntimeEvent::MemoryMigration {
+            from: 0,
+            to: 1,
+            success: false,
+        });
+
+        assert_eq!(b.session().message_count(), 1);
+        let html = b.session().to_html();
+        assert!(html.contains("[memory]"));
+        assert!(html.contains("migration"));
+        assert!(html.contains("failed"));
+    }
+
+    #[test]
+    fn test_memory_conflict_flushes_suppressed_writes() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+        b.on_event(&RuntimeEvent::MemoryWrite {
+            op: "reindex".into(),
+            target_id: None,
+        });
+        b.on_event(&RuntimeEvent::MemoryWrite {
+            op: "reflect".into(),
+            target_id: None,
+        });
+        b.on_event(&RuntimeEvent::MemoryConflict {
+            existing_id: "old".into(),
+            replacement_id: Some("new".into()),
+        });
+
+        assert_eq!(b.session().message_count(), 2);
+        let html = b.session().to_html();
+        assert!(html.contains("maintenance writes (2 ops, details suppressed)"));
+        assert!(html.contains("conflict resolved old"));
+        assert!(html.contains("new"));
+    }
+
+    #[test]
+    fn test_memory_migration_noop_success_is_suppressed() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+        b.on_event(&RuntimeEvent::MemoryMigration {
+            from: 1,
+            to: 1,
+            success: true,
+        });
+        assert_eq!(b.session().message_count(), 0);
     }
 }

@@ -46,6 +46,13 @@ Mic (16kHz) ──> AEC ──┬──> VAD ──> STT ──> Identity Gate �
 - **Self-Update**: Automatic update checks for both Fae and Pi from GitHub releases
 - **Task Scheduler**: Background periodic tasks (update checks, future user-defined tasks)
 
+## Memory
+
+Fae includes an automated memory system designed for long-running conversations.
+
+- Human-readable guide: [`docs/Memory.md`](docs/Memory.md)
+- Technical architecture plan: [`docs/memory-architecture-plan.md`](docs/memory-architecture-plan.md)
+
 ## Pi Integration
 
 Fae integrates with the [Pi coding agent](https://github.com/badlogic/pi-mono) to handle coding tasks, file editing, shell commands, and research — all triggered by voice.
@@ -170,6 +177,7 @@ model_id = "istupakov/parakeet-tdt-0.6b-v3-onnx"
 [llm]
 backend = "local"
 model_id = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+context_size_tokens = 32768   # Optional override; auto-tuned from RAM if omitted
 
 [tts]
 model_dtype = "q4f16"

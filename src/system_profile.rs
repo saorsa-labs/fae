@@ -54,7 +54,7 @@ fn run_cmd(args: &[&str]) -> Option<String> {
     }
 }
 
-fn detect_total_memory_bytes() -> Option<u64> {
+pub fn detect_total_memory_bytes() -> Option<u64> {
     // macOS: sysctl hw.memsize
     if cfg!(target_os = "macos") {
         let s = run_cmd(&["sysctl", "-n", "hw.memsize"])?;

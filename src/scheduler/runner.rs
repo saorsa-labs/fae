@@ -81,13 +81,55 @@ impl Scheduler {
             Schedule::Daily { hour: 9, min: 5 },
         );
 
-        self.tasks.push(fae_task);
-        self.tasks.push(pi_task);
+        self.add_task_if_missing(fae_task);
+        self.add_task_if_missing(pi_task);
+    }
+
+    /// Register built-in memory maintenance tasks.
+    ///
+    /// These tasks keep memory healthy without user interaction:
+    /// - schema migration checks
+    /// - reflection / deduplication
+    /// - reindex health pass
+    /// - retention policy cleanup
+    pub fn with_memory_maintenance(&mut self) {
+        let migrate_task = ScheduledTask::new(
+            "memory_migrate",
+            "Check memory schema migrations",
+            Schedule::Interval { secs: 3600 },
+        );
+        let reflect_task = ScheduledTask::new(
+            "memory_reflect",
+            "Consolidate memory duplicates",
+            Schedule::Interval { secs: 6 * 3600 },
+        );
+        let reindex_task = ScheduledTask::new(
+            "memory_reindex",
+            "Memory reindex health pass",
+            Schedule::Interval { secs: 3 * 3600 },
+        );
+        let gc_task = ScheduledTask::new(
+            "memory_gc",
+            "Memory retention cleanup",
+            Schedule::Daily { hour: 3, min: 30 },
+        );
+
+        self.add_task_if_missing(migrate_task);
+        self.add_task_if_missing(reflect_task);
+        self.add_task_if_missing(reindex_task);
+        self.add_task_if_missing(gc_task);
     }
 
     /// Add a custom task to the scheduler.
     pub fn add_task(&mut self, task: ScheduledTask) {
         self.tasks.push(task);
+    }
+
+    fn add_task_if_missing(&mut self, task: ScheduledTask) {
+        let exists = self.tasks.iter().any(|existing| existing.id == task.id);
+        if !exists {
+            self.tasks.push(task);
+        }
     }
 
     /// Returns a snapshot of the registered tasks.
@@ -273,6 +315,37 @@ mod tests {
         assert_eq!(scheduler.tasks().len(), 2);
         assert_eq!(scheduler.tasks()[0].id, "check_fae_update");
         assert_eq!(scheduler.tasks()[1].id, "check_pi_update");
+    }
+
+    #[test]
+    fn with_memory_maintenance_adds_four_tasks() {
+        let (mut scheduler, _rx) = make_scheduler();
+        scheduler.with_memory_maintenance();
+
+        let ids: Vec<&str> = scheduler.tasks().iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&"memory_migrate"));
+        assert!(ids.contains(&"memory_reflect"));
+        assert!(ids.contains(&"memory_reindex"));
+        assert!(ids.contains(&"memory_gc"));
+        assert_eq!(scheduler.tasks().len(), 4);
+    }
+
+    #[test]
+    fn with_memory_maintenance_is_idempotent() {
+        let (mut scheduler, _rx) = make_scheduler();
+        scheduler.with_memory_maintenance();
+        scheduler.with_memory_maintenance();
+
+        let ids: Vec<&str> = scheduler.tasks().iter().map(|t| t.id.as_str()).collect();
+        let migrate_count = ids.iter().filter(|id| **id == "memory_migrate").count();
+        let reflect_count = ids.iter().filter(|id| **id == "memory_reflect").count();
+        let reindex_count = ids.iter().filter(|id| **id == "memory_reindex").count();
+        let gc_count = ids.iter().filter(|id| **id == "memory_gc").count();
+        assert_eq!(migrate_count, 1);
+        assert_eq!(reflect_count, 1);
+        assert_eq!(reindex_count, 1);
+        assert_eq!(gc_count, 1);
+        assert_eq!(scheduler.tasks().len(), 4);
     }
 
     #[test]
@@ -595,5 +668,42 @@ mod tests {
 
         let result = rx.try_recv().unwrap();
         assert!(matches!(result, TaskResult::NeedsUserAction(_)));
+    }
+
+    #[test]
+    fn telemetry_result_sent_to_channel() {
+        use crate::runtime::RuntimeEvent;
+        use crate::scheduler::tasks::TaskTelemetry;
+
+        let (mut scheduler, mut rx) = make_scheduler();
+        scheduler.executor = Some(Box::new(|_| {
+            TaskResult::Telemetry(TaskTelemetry {
+                message: "memory maintenance".to_owned(),
+                event: RuntimeEvent::MemoryWrite {
+                    op: "reindex".to_owned(),
+                    target_id: None,
+                },
+            })
+        }));
+
+        scheduler.add_task(ScheduledTask::new(
+            "memory_reindex",
+            "Memory reindex",
+            Schedule::Interval { secs: 0 },
+        ));
+        scheduler.tick();
+
+        let result = rx.try_recv().unwrap();
+        match result {
+            TaskResult::Telemetry(payload) => {
+                assert_eq!(payload.message, "memory maintenance");
+                assert!(matches!(
+                    payload.event,
+                    RuntimeEvent::MemoryWrite { op, target_id }
+                    if op == "reindex" && target_id.is_none()
+                ));
+            }
+            other => panic!("expected telemetry result, got: {other:?}"),
+        }
     }
 }

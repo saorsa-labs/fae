@@ -36,4 +36,18 @@ pub enum RuntimeEvent {
     ///
     /// Intended for driving simple avatar animation (mouth open/close).
     AssistantAudioLevel { rms: f32 },
+    /// Memory recall summary for the current turn.
+    MemoryRecall { query: String, hits: usize },
+    /// Memory write/edit operation summary.
+    MemoryWrite {
+        op: String,
+        target_id: Option<String>,
+    },
+    /// Memory conflict/supersession summary.
+    MemoryConflict {
+        existing_id: String,
+        replacement_id: Option<String>,
+    },
+    /// Memory schema migration progress/event.
+    MemoryMigration { from: u32, to: u32, success: bool },
 }
