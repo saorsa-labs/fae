@@ -348,9 +348,19 @@ static TIER_TABLE: &[TierEntry] = &[
 // Pattern matching
 // ---------------------------------------------------------------------------
 
+/// Maximum model ID length accepted. Real model IDs are under 100 chars;
+/// anything longer is treated as unknown to avoid unnecessary allocation.
+const MAX_MODEL_ID_LEN: usize = 512;
+
 /// Normalise a model ID for comparison: lowercase and trimmed.
-fn normalize_model_id(id: &str) -> String {
-    id.trim().to_lowercase()
+///
+/// Returns `None` for unreasonably long inputs.
+fn normalize_model_id(id: &str) -> Option<String> {
+    let trimmed = id.trim();
+    if trimmed.len() > MAX_MODEL_ID_LEN {
+        return None;
+    }
+    Some(trimmed.to_lowercase())
 }
 
 /// Check whether `model_id` matches a glob-style `pattern`.
@@ -361,7 +371,9 @@ fn normalize_model_id(id: &str) -> String {
 /// - `"*suffix"` — ends-with
 /// - `"a*b*c"` — multiple wildcards (each `*` matches zero or more chars)
 fn matches_pattern(model_id: &str, pattern: &str) -> bool {
-    let model_id = normalize_model_id(model_id);
+    let Some(model_id) = normalize_model_id(model_id) else {
+        return false;
+    };
     let pattern = pattern.trim().to_lowercase();
 
     if !pattern.contains('*') {
@@ -420,7 +432,9 @@ fn matches_pattern(model_id: &str, pattern: &str) -> bool {
 /// ```
 #[must_use]
 pub fn tier_for_model(model_id: &str) -> ModelTier {
-    let normalised = normalize_model_id(model_id);
+    let Some(normalised) = normalize_model_id(model_id) else {
+        return ModelTier::Unknown;
+    };
 
     for entry in TIER_TABLE {
         if matches_pattern(&normalised, entry.pattern) {
@@ -454,7 +468,9 @@ pub fn tier_for_model(model_id: &str) -> ModelTier {
 #[must_use]
 pub fn tier_for_provider_model(provider: &str, model_id: &str) -> ModelTier {
     let norm_provider = provider.trim().to_lowercase();
-    let norm_model = normalize_model_id(model_id);
+    let Some(norm_model) = normalize_model_id(model_id) else {
+        return ModelTier::Unknown;
+    };
 
     for ov in PROVIDER_OVERRIDES {
         if norm_provider == ov.provider && matches_pattern(&norm_model, ov.pattern) {
@@ -665,5 +681,12 @@ mod tests {
         assert_eq!(models[2].0, "claude-haiku-3");
         assert_eq!(models[3].0, "fae-qwen3");
         assert_eq!(models[4].0, "unknown-model");
+    }
+
+    #[test]
+    fn test_very_long_input_returns_unknown() {
+        let long = "a".repeat(1000);
+        assert_eq!(tier_for_model(&long), ModelTier::Unknown);
+        assert_eq!(tier_for_provider_model("openai", &long), ModelTier::Unknown,);
     }
 }
