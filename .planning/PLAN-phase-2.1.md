@@ -1,111 +1,138 @@
-# Phase 2.1: MCP Tool Integration
+# Phase 2.1: Voice Command Detection
 
 ## Overview
-Wire canvas-mcp's MCP tool definitions into fae's agent backend so the LLM can
-push rich content (charts, images, text) to the canvas via `canvas_render`,
-report interactions via `canvas_interact`, and export the canvas via
-`canvas_export`. Tools operate on a shared `CanvasSession` via a thread-safe
-registry.
+Add pattern matching for model-switch phrases in transcriptions before LLM generation.
+Users can say "Fae, switch to Claude" or "use the local model" and Fae will detect
+these as voice commands rather than passing them to the LLM.
+
+## Integration Point
+Pipeline flow: `Transcription → IdentityGate → VoiceCommandFilter → LLM`
+
+The new `VoiceCommandFilter` stage sits between `run_identity_gate()` and `run_llm_stage()`.
+It inspects each `Transcription`, and if it matches a voice command pattern, it sends a
+`VoiceCommand` through a new channel instead of forwarding the transcription to the LLM.
+
+## Key Files
+- `src/voice_command.rs` (NEW) — types, parser, model name resolution
+- `src/runtime.rs` — new RuntimeEvent variants for voice commands
+- `src/pipeline/coordinator.rs` — wire in VoiceCommandFilter stage
+- `src/pi/engine.rs` — receive and handle voice commands (Phase 2.2)
+- `src/model_selection.rs` — ProviderModelRef (existing, referenced)
+- `src/model_tier.rs` — tier_for_model (existing, referenced)
 
 ---
 
-## Task 1: Add canvas-mcp dependency
+## Task 1: Define VoiceCommand types
+**~40 lines | src/voice_command.rs**
 
-Add `canvas-mcp = { path = "../saorsa-canvas/canvas-mcp" }` to fae's Cargo.toml
-and ensure it compiles.
+Create `src/voice_command.rs` with:
+- `VoiceCommand` enum: `SwitchModel { target: ModelTarget }`, `ListModels`, `CurrentModel`
+- `ModelTarget` enum: `ByName(String)`, `ByProvider(String)`, `Local`, `Best`
+- Module-level doc comments explaining purpose
+- Add `pub mod voice_command;` to `src/lib.rs`
 
-**Files**: `Cargo.toml`
+No parsing logic yet — just the types.
+
+## Task 2: Unit tests for command parsing (TDD)
+**~80 lines | src/voice_command.rs**
+
+Add `#[cfg(test)] mod tests` with test cases for the parser (to be implemented in Task 3):
+- "fae switch to claude" → SwitchModel(ByProvider("anthropic"))
+- "use the local model" → SwitchModel(Local)
+- "switch to gpt-4o" → SwitchModel(ByName("gpt-4o"))
+- "use the best model" → SwitchModel(Best)
+- "what model are you using" → CurrentModel
+- "list models" → ListModels
+- "hello how are you" → None (not a command)
+- "switch to the flagship model" → SwitchModel(Best)
+- Case insensitivity: "FAE SWITCH TO CLAUDE" → same result
+- Partial match: "could you switch to claude please" → SwitchModel
+
+Tests call `parse_voice_command(&str) -> Option<VoiceCommand>` which doesn't exist yet.
+Mark tests with `#[ignore]` so they compile but skip until Task 3.
+
+## Task 3: Implement parse_voice_command()
+**~80 lines | src/voice_command.rs**
+
+Implement `pub fn parse_voice_command(text: &str) -> Option<VoiceCommand>`:
+- Lowercase and trim input
+- Match patterns:
+  - "switch to {target}" / "use {target}" / "change to {target}"
+  - "what model" / "which model" / "current model" → CurrentModel
+  - "list models" / "show models" / "available models" → ListModels
+- Parse target:
+  - "local" / "local model" / "offline" → ModelTarget::Local
+  - "best" / "best model" / "flagship" → ModelTarget::Best
+  - "claude" / "anthropic" → ModelTarget::ByProvider("anthropic")
+  - "gpt" / "openai" → ModelTarget::ByProvider("openai")
+  - "gemini" / "google" → ModelTarget::ByProvider("google")
+  - Anything else → ModelTarget::ByName(target_string)
+- No regex — use simple string contains/starts_with patterns
+- Remove `#[ignore]` from Task 2 tests; all must pass
+
+## Task 4: Model name resolution
+**~60 lines | src/voice_command.rs**
+
+Implement `pub fn resolve_model_target(target: &ModelTarget, candidates: &[ProviderModelRef]) -> Option<usize>`:
+- `ModelTarget::Local` → find candidate where `provider == FAE_PROVIDER_KEY`
+- `ModelTarget::Best` → return index 0 (candidates are pre-sorted by tier)
+- `ModelTarget::ByProvider(p)` → find first candidate matching provider (case-insensitive)
+- `ModelTarget::ByName(n)` → find first candidate where model contains name (case-insensitive)
+- Returns `Option<usize>` — index into candidates array
+- Add tests for each target type with mock candidates
+
+## Task 5: RuntimeEvent variants for voice commands
+**~20 lines | src/runtime.rs**
+
+Add new variants to `RuntimeEvent`:
+- `VoiceCommandDetected { command: String }` — human-readable description of detected command
+- `ModelSwitchRequested { target: String }` — model switch was requested (before execution)
+
+Keep payloads as simple Strings (lightweight, no heavy types crossing channel).
+
+## Task 6: VoiceCommandFilter stage in pipeline
+**~70 lines | src/pipeline/coordinator.rs**
+
+Add `run_voice_command_filter()` async function:
+- Receives `mpsc::Receiver<Transcription>` from identity gate
+- Sends non-command transcriptions to `mpsc::Sender<Transcription>` (to LLM)
+- Sends detected commands to `mpsc::UnboundedSender<VoiceCommand>` (new channel)
+- Emits `RuntimeEvent::VoiceCommandDetected` via broadcast
+- Only inspects `is_final` transcriptions (ignore partials)
+
+Wire it into `PipelineCoordinator::run()`:
+- Create new channel pair for voice commands
+- Insert filter between identity gate output and LLM input
+- Pass voice_command_tx through to where PiLlm will consume it (Phase 2.2)
+
+## Task 7: Integration tests
+**~80 lines | src/voice_command.rs**
+
+Add integration-style tests that verify the full flow:
+- parse_voice_command() → resolve_model_target() with real candidates
+- Test that non-commands return None and don't affect candidate resolution
+- Test edge cases: empty string, very long string, unicode, numbers
+- Test that "fae" prefix is optional
+- Test multiple command synonyms resolve to same VoiceCommand variant
+- Verify ModelTarget::ByName partial matching works across the tier table
+
+## Task 8: Documentation and verification
+**~30 lines | src/voice_command.rs, src/lib.rs**
+
+- Add module-level doc comment with examples and supported command list
+- Add doc comments on all public items
+- Verify `just check` passes (zero warnings, zero errors)
+- Verify all tests pass
+- Update progress.md
 
 ---
 
-## Task 2: Create CanvasSessionRegistry
-
-Create `src/canvas/registry.rs` — a thread-safe session store so tools can look
-up the active session by ID. The GUI creates a session; tools reference it.
-
-**API**:
-- `CanvasSessionRegistry::new() -> Self`
-- `register(id, session: Arc<Mutex<CanvasSession>>) -> Option<...>`
-- `get(id) -> Option<Arc<Mutex<CanvasSession>>>`
-- `remove(id) -> Option<Arc<Mutex<CanvasSession>>>`
-- `sessions() -> Vec<String>` (list session IDs)
-
-**Files**: `src/canvas/registry.rs`, `src/canvas/mod.rs` (add `pub mod registry`)
-
----
-
-## Task 3: Implement CanvasRenderTool
-
-Create `src/canvas/tools/render.rs` implementing `saorsa_agent::Tool` for
-`canvas_render`. Deserializes `canvas_mcp::tools::RenderParams`, converts
-`RenderContent` to `canvas_core::Element`, pushes to session via registry.
-
-**Input JSON schema** matches `RenderParams` (session_id, content, position).
-**Returns** JSON string with element_id and success status.
-
-**Files**: `src/canvas/tools/mod.rs`, `src/canvas/tools/render.rs`
-
----
-
-## Task 4: Implement CanvasInteractTool
-
-Create `src/canvas/tools/interact.rs` implementing `saorsa_agent::Tool` for
-`canvas_interact`. Deserializes `canvas_mcp::tools::InteractParams`, processes
-interaction (hit-test, selection), returns AI-friendly JSON description.
-
-**Files**: `src/canvas/tools/interact.rs`
-
----
-
-## Task 5: Implement CanvasExportTool
-
-Create `src/canvas/tools/export.rs` implementing `saorsa_agent::Tool` for
-`canvas_export`. Deserializes `canvas_mcp::tools::ExportParams`. For now returns
-a placeholder indicating the format requested (actual rendering deferred to
-Phase 2.2 content renderers).
-
-**Files**: `src/canvas/tools/export.rs`
-
----
-
-## Task 6: Register canvas tools in agent
-
-In `src/agent/mod.rs`, when tool_mode is ReadOnly or higher, register the three
-canvas tools. They are non-destructive so no approval wrapper needed. Pass the
-session registry (Arc) so tools can access canvas sessions.
-
-- Add `canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>` parameter to
-  `SaorsaAgentLlm::new()`
-- Register tools when registry is Some and tool_mode != Off
-
-**Files**: `src/agent/mod.rs`
-
----
-
-## Task 7: Wire registry through pipeline to GUI
-
-- In `src/bin/gui.rs`: create `Arc<Mutex<CanvasSessionRegistry>>`, register the
-  bridge's session in it, pass to pipeline/agent
-- In `src/pipeline/coordinator.rs`: accept and forward registry to agent
-- In `src/startup.rs`: accept and forward registry to agent if present
-
-**Files**: `src/bin/gui.rs`, `src/pipeline/coordinator.rs`, `src/startup.rs`
-
----
-
-## Task 8: Tests
-
-- Registry: create/get/remove sessions, concurrent access
-- CanvasRenderTool: execute with valid/invalid JSON, render text/chart/image
-- CanvasInteractTool: execute touch/voice/select interactions
-- CanvasExportTool: execute with valid params, format serialization
-- Integration: tool execution updates session, session HTML reflects change
-
-**Files**: All `src/canvas/tools/*.rs`, `src/canvas/registry.rs`
-
----
-
-## Dependencies
-- `canvas-mcp` path dep (adds serde types and tool signatures)
-- `saorsa-agent` (already present — Tool trait, ToolRegistry)
-- `canvas-core` (already present — Scene, Element, ElementKind, Transform)
+## Acceptance Criteria
+- [ ] `parse_voice_command()` correctly detects switch/list/current commands
+- [ ] `resolve_model_target()` maps voice targets to candidate indices
+- [ ] VoiceCommandFilter stage wired into pipeline (receives transcriptions, emits commands)
+- [ ] RuntimeEvent variants emitted for detected commands
+- [ ] Non-command transcriptions pass through unchanged
+- [ ] Partial transcriptions are never treated as commands
+- [ ] `just check` passes with zero warnings
+- [ ] All new code has doc comments
