@@ -160,3 +160,4 @@ Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dm
 - [ ] Task 6: Wire model selection channel through coordinator
 - [ ] Task 7: Add configuration for selection timeout
 - [ ] Task 8: Integration tests and verification
+- [x] Task 2: Canvas event types for model selection (commit: 69fe1ad)
