@@ -1647,10 +1647,41 @@ async fn run_llm_stage(
         if let Some(rt) = &ctl.runtime_tx {
             let _ = rt.send(RuntimeEvent::AssistantGenerating { active: true });
         }
-        match engine
-            .generate_response(&user_text, &tx, &ctl.interrupt)
-            .await
-        {
+
+        // During generation, voice commands can interrupt and switch models.
+        let recv_voice_during_gen = async {
+            match voice_cmd_rx.as_mut() {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
+        let gen_result = tokio::select! {
+            result = engine.generate_response(&user_text, &tx, &ctl.interrupt) => result,
+            cmd = recv_voice_during_gen => {
+                // Voice command arrived mid-generation — interrupt.
+                ctl.interrupt.store(true, Ordering::Relaxed);
+                let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
+                info!("voice command interrupted active generation");
+
+                // Handle the voice command.
+                if let Some(cmd) = cmd {
+                    let response = handle_voice_command(&cmd, &mut engine);
+                    if !response.is_empty() {
+                        let _ = tx.send(SentenceChunk { text: response, is_final: true }).await;
+                    }
+                }
+
+                // Signal generation done — the interrupted generation result is discarded.
+                ctl.assistant_generating.store(false, Ordering::Relaxed);
+                if let Some(rt) = &ctl.runtime_tx {
+                    let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
+                }
+                continue;
+            }
+        };
+
+        match gen_result {
             Ok(interrupted) => {
                 if ctl.console_output {
                     println!();
