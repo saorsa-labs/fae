@@ -6,7 +6,7 @@
 //! For GUI consumers, use [`initialize_models_with_progress`] which accepts a
 //! [`ProgressCallback`] for structured progress events.
 
-use crate::config::{LlmBackend, SpeechConfig, TtsBackend};
+use crate::config::{AgentToolMode, LlmBackend, SpeechConfig, TtsBackend};
 use crate::error::Result;
 use crate::llm::LocalLlm;
 use crate::llm::server::LlmServer;
@@ -89,8 +89,27 @@ pub async fn initialize_models_with_progress(
     callback: Option<&ProgressCallback>,
 ) -> Result<InitializedModels> {
     let model_manager = ModelManager::new(&config.models)?;
-    // Agent backend uses in-process inference (local model) by default.
-    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Agent);
+    // Agent and Pi backends rely on a local model:
+    // - Agent: in-process inference
+    // - Pi: served via the local OpenAI-compatible HTTP server (`llm_server`)
+    let use_local_llm = matches!(
+        config.llm.backend,
+        LlmBackend::Local | LlmBackend::Agent | LlmBackend::Pi
+    );
+
+    if matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Api)
+        && !matches!(config.llm.tool_mode, AgentToolMode::Off)
+    {
+        tracing::warn!(
+            "tool_mode={:?} is ignored for {:?} backend; use llm.backend=pi or llm.backend=agent to enable tools",
+            config.llm.tool_mode,
+            config.llm.backend
+        );
+        println!(
+            "  Note: tool_mode is ignored for {:?} backend; use llm.backend=pi or llm.backend=agent for tool access.",
+            config.llm.backend
+        );
+    }
 
     // --- Phase 1: Download all model files ---
     println!("\nChecking models...");
@@ -131,8 +150,17 @@ pub async fn initialize_models_with_progress(
         None
     };
 
-    // --- Phase 3: Start LLM HTTP server (if enabled and model is loaded) ---
-    let llm_server = match (config.llm_server.enabled, &llm) {
+    // --- Phase 3: Start LLM HTTP server ---
+    // Pi backend requires the local OpenAI endpoint so it can default to
+    // Fae's local brain (`fae-local/fae-qwen3`) and keep local fallback available.
+    let should_start_llm_server =
+        config.llm_server.enabled || matches!(config.llm.backend, LlmBackend::Pi);
+    if matches!(config.llm.backend, LlmBackend::Pi) && !config.llm_server.enabled {
+        tracing::info!(
+            "llm_server.enabled=false ignored for Pi backend; starting local LLM server"
+        );
+    }
+    let llm_server = match (should_start_llm_server, &llm) {
         (true, Some(local_llm)) => match start_llm_server(local_llm, config).await {
             Ok(server) => Some(server),
             Err(e) => {

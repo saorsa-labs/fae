@@ -94,12 +94,15 @@ fn bridge_routes_assistant_chunks_and_tools() {
 
     // Tool call + result
     bridge.on_event(&RuntimeEvent::ToolCall {
+        id: "call-1".into(),
         name: "canvas_render".into(),
         input_json: r#"{"session_id":"flow"}"#.into(),
     });
     bridge.on_event(&RuntimeEvent::ToolResult {
+        id: "call-1".into(),
         name: "canvas_render".into(),
         success: true,
+        output_text: None,
     });
 
     // Assistant response

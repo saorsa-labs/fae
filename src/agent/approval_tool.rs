@@ -1,6 +1,6 @@
 //! Tool wrapper that gates execution behind an interactive approval.
 
-use crate::approval::ToolApprovalRequest;
+use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use saorsa_agent::Tool;
 use saorsa_agent::error::{Result as ToolResult, SaorsaAgentError};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,7 +53,7 @@ impl Tool for ApprovalTool {
             return self.inner.execute(input).await;
         };
 
-        let (respond_to, response_rx) = oneshot::channel::<bool>();
+        let (respond_to, response_rx) = oneshot::channel::<ToolApprovalResponse>();
         let id = Self::next_id();
         let name = self.inner.name().to_owned();
         let input_json = match serde_json::to_string(&input) {
@@ -69,8 +69,8 @@ impl Tool for ApprovalTool {
         }
 
         match tokio::time::timeout(self.timeout, response_rx).await {
-            Ok(Ok(true)) => self.inner.execute(input).await,
-            Ok(Ok(false)) => Err(SaorsaAgentError::Tool(
+            Ok(Ok(resp)) if resp.is_approved() => self.inner.execute(input).await,
+            Ok(Ok(_)) => Err(SaorsaAgentError::Tool(
                 "tool call denied by user".to_owned(),
             )),
             Ok(Err(_)) => Err(SaorsaAgentError::Tool(

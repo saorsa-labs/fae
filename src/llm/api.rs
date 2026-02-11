@@ -342,16 +342,29 @@ fn resolve_connection(config: &LlmConfig) -> Result<ResolvedConnection> {
             ))
         })?;
 
+        let api_url = provider.base_url.clone().ok_or_else(|| {
+            SpeechError::Config(format!(
+                "cloud provider '{cloud_name}' missing baseUrl in {}",
+                pi_path.display()
+            ))
+        })?;
+
         let model_id = config
             .cloud_model
             .clone()
-            .or_else(|| provider.models.first().map(|m| m.id.clone()))
+            .or_else(|| {
+                provider
+                    .models
+                    .as_ref()
+                    .and_then(|models| models.first())
+                    .map(|m| m.id.clone())
+            })
             .unwrap_or_else(|| config.api_model.clone());
 
         Ok(ResolvedConnection {
-            api_url: provider.base_url.clone(),
+            api_url,
             api_model: model_id,
-            api_key: provider.api_key.clone(),
+            api_key: provider.api_key.clone().unwrap_or_default(),
         })
     } else {
         Ok(ResolvedConnection {

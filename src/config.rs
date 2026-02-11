@@ -152,13 +152,15 @@ impl Default for SttConfig {
 #[serde(rename_all = "lowercase")]
 pub enum LlmBackend {
     /// Local inference via mistral.rs (GGUF models with Metal GPU support).
-    #[default]
     #[serde(alias = "candle")]
     Local,
     /// Remote inference via OpenAI-compatible API (Ollama, MLX, etc.).
     Api,
     /// Agent loop via `saorsa-agent` + `saorsa-ai` (in-process by default, tool-capable).
     Agent,
+    /// External Pi coding-agent in RPC mode (Fae acts as the UI/voice/canvas host).
+    #[default]
+    Pi,
 }
 
 /// Tool capability mode for the agent harness.
@@ -363,12 +365,11 @@ Personal context:\n\
             }
         } else {
             match self.backend {
-                LlmBackend::Local | LlmBackend::Agent => {
-                    format!("local/{}", self.model_id)
-                }
+                LlmBackend::Local | LlmBackend::Agent => format!("local/{}", self.model_id),
                 LlmBackend::Api => {
                     format!("{}/{}", self.api_url, self.api_model)
                 }
+                LlmBackend::Pi => "pi/fae-local/fae-qwen3".to_owned(),
             }
         }
     }
@@ -774,8 +775,8 @@ mod tests {
     }
 
     #[test]
-    fn llm_backend_default_is_local() {
-        assert_eq!(LlmBackend::default(), LlmBackend::Local);
+    fn llm_backend_default_is_pi() {
+        assert_eq!(LlmBackend::default(), LlmBackend::Pi);
     }
 
     #[test]

@@ -27,7 +27,7 @@ pub struct CanvasBridge {
     group_count: usize,
     /// Monotonic timestamp counter (ms) for message ordering.
     next_ts: u64,
-    /// Pending tool inputs keyed by tool name (captured on ToolCall,
+    /// Pending tool inputs keyed by tool call ID (captured on ToolCall,
     /// consumed on ToolResult).
     pending_tool_inputs: HashMap<String, String>,
 }
@@ -102,7 +102,11 @@ impl CanvasBridge {
                 }
             }
 
-            RuntimeEvent::ToolCall { name, input_json } => {
+            RuntimeEvent::ToolCall {
+                id,
+                name,
+                input_json,
+            } => {
                 // If this is a canvas_render call, parse the input and render
                 // the element directly into the bridge's session so it appears
                 // in the canvas window.
@@ -112,16 +116,22 @@ impl CanvasBridge {
 
                 // Store the input for attachment to the ToolResult message.
                 self.pending_tool_inputs
-                    .insert(name.clone(), input_json.clone());
+                    .insert(id.clone(), input_json.clone());
                 let text = format!("{name} called");
                 self.push_tool(name, &text);
             }
 
-            RuntimeEvent::ToolResult { name, success } => {
+            RuntimeEvent::ToolResult {
+                id,
+                name,
+                success,
+                output_text,
+            } => {
                 let status = if *success { "success" } else { "failed" };
                 let text = format!("{name} \u{2192} {status}");
-                let tool_input = self.pending_tool_inputs.remove(name.as_str());
-                self.push_tool_with_details(name, &text, tool_input, Some(status.to_owned()));
+                let tool_input = self.pending_tool_inputs.remove(id);
+                let details = output_text.clone().or_else(|| Some(status.to_owned()));
+                self.push_tool_with_details(name, &text, tool_input, details);
             }
 
             RuntimeEvent::Control(ControlEvent::UserSpeechStart { .. }) => {
@@ -310,12 +320,15 @@ mod tests {
     fn test_tool_call_and_result() {
         let mut b = CanvasBridge::new("t", 800.0, 600.0);
         b.on_event(&RuntimeEvent::ToolCall {
+            id: "call-1".into(),
             name: "search".into(),
             input_json: "{}".into(),
         });
         b.on_event(&RuntimeEvent::ToolResult {
+            id: "call-1".into(),
             name: "search".into(),
             success: true,
+            output_text: None,
         });
         assert_eq!(b.session().message_count(), 2);
 
@@ -328,8 +341,10 @@ mod tests {
     fn test_tool_result_failure() {
         let mut b = CanvasBridge::new("t", 800.0, 600.0);
         b.on_event(&RuntimeEvent::ToolResult {
+            id: "call-1".into(),
             name: "fetch".into(),
             success: false,
+            output_text: None,
         });
         let html = b.session().to_html();
         assert!(html.contains("fetch \u{2192} failed"));
@@ -409,12 +424,15 @@ mod tests {
 
         // Tool call
         b.on_event(&RuntimeEvent::ToolCall {
+            id: "call-1".into(),
             name: "weather".into(),
             input_json: "{\"city\":\"London\"}".into(),
         });
         b.on_event(&RuntimeEvent::ToolResult {
+            id: "call-1".into(),
             name: "weather".into(),
             success: true,
+            output_text: None,
         });
 
         // Assistant responds
@@ -464,6 +482,7 @@ mod tests {
         .to_string();
 
         b.on_event(&RuntimeEvent::ToolCall {
+            id: "call-1".into(),
             name: "canvas_render".into(),
             input_json,
         });
@@ -493,6 +512,7 @@ mod tests {
         .to_string();
 
         b.on_event(&RuntimeEvent::ToolCall {
+            id: "call-1".into(),
             name: "canvas_render".into(),
             input_json,
         });
@@ -509,6 +529,7 @@ mod tests {
 
         // A non-canvas tool call should NOT add an element.
         b.on_event(&RuntimeEvent::ToolCall {
+            id: "call-1".into(),
             name: "search".into(),
             input_json: "{}".into(),
         });

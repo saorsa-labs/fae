@@ -9,8 +9,9 @@ use fae::config::LlmServerConfig;
 use fae::llm::pi_config;
 use fae::llm::server::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
-    ModelListResponse,
+    ChatMessageContent, ModelListResponse,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
@@ -40,18 +41,25 @@ fn pi_config_merge_preserves_existing_providers() {
     config.providers.insert(
         "anthropic".to_owned(),
         pi_config::PiProvider {
-            base_url: "https://api.anthropic.com/v1".to_owned(),
-            api: "anthropic".to_owned(),
-            api_key: "sk-test".to_owned(),
-            models: vec![pi_config::PiModel {
+            base_url: Some("https://api.anthropic.com/v1".to_owned()),
+            api: Some("anthropic".to_owned()),
+            api_key: Some("sk-test".to_owned()),
+            models: Some(vec![pi_config::PiModel {
                 id: "claude-3".to_owned(),
-                name: "Claude 3".to_owned(),
-                reasoning: true,
-                input: vec!["text".to_owned()],
-                context_window: 200_000,
-                max_tokens: 4096,
-                cost: 0.003,
-            }],
+                name: Some("Claude 3".to_owned()),
+                api: None,
+                reasoning: Some(true),
+                input: Some(vec!["text".to_owned()]),
+                context_window: Some(200_000),
+                max_tokens: Some(4096),
+                cost: None,
+                headers: None,
+                compat: None,
+                extra: HashMap::new(),
+            }]),
+            headers: None,
+            auth_header: None,
+            extra: HashMap::new(),
         },
     );
 
@@ -69,12 +77,15 @@ fn pi_config_merge_preserves_existing_providers() {
     assert!(result.providers.contains_key("fae-local"));
     assert_eq!(
         result.providers["anthropic"].base_url,
-        "https://api.anthropic.com/v1"
+        Some("https://api.anthropic.com/v1".to_owned())
     );
-    assert_eq!(result.providers["anthropic"].api_key, "sk-test");
+    assert_eq!(
+        result.providers["anthropic"].api_key,
+        Some("sk-test".to_owned())
+    );
     assert_eq!(
         result.providers["fae-local"].base_url,
-        "http://127.0.0.1:12345/v1"
+        Some("http://127.0.0.1:12345/v1".to_owned())
     );
 
     cleanup(&path);
@@ -179,7 +190,10 @@ fn chat_completion_response_matches_openai_format() {
             index: 0,
             message: ChatMessage {
                 role: "assistant".to_owned(),
-                content: "Hello!".to_owned(),
+                content: Some(ChatMessageContent::Text("Hello!".to_owned())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
             },
             finish_reason: Some("stop".to_owned()),
         }],
@@ -206,6 +220,7 @@ fn chat_completion_chunk_matches_openai_format() {
             delta: fae::llm::server::Delta {
                 role: None,
                 content: Some("world".to_owned()),
+                tool_calls: None,
             },
             finish_reason: None,
         }],
@@ -246,35 +261,49 @@ fn pi_config_provider_lookup_helpers() {
     config.providers.insert(
         "openai".to_owned(),
         pi_config::PiProvider {
-            base_url: "https://api.openai.com/v1".to_owned(),
-            api: "openai".to_owned(),
-            api_key: "sk-openai".to_owned(),
-            models: vec![pi_config::PiModel {
+            base_url: Some("https://api.openai.com/v1".to_owned()),
+            api: Some("openai".to_owned()),
+            api_key: Some("sk-openai".to_owned()),
+            models: Some(vec![pi_config::PiModel {
                 id: "gpt-4o".to_owned(),
-                name: "GPT-4o".to_owned(),
-                reasoning: false,
-                input: vec!["text".to_owned()],
-                context_window: 128_000,
-                max_tokens: 4096,
-                cost: 0.005,
-            }],
+                name: Some("GPT-4o".to_owned()),
+                api: None,
+                reasoning: Some(false),
+                input: Some(vec!["text".to_owned()]),
+                context_window: Some(128_000),
+                max_tokens: Some(4096),
+                cost: None,
+                headers: None,
+                compat: None,
+                extra: HashMap::new(),
+            }]),
+            headers: None,
+            auth_header: None,
+            extra: HashMap::new(),
         },
     );
     config.providers.insert(
         "fae-local".to_owned(),
         pi_config::PiProvider {
-            base_url: "http://127.0.0.1:8080/v1".to_owned(),
-            api: "openai".to_owned(),
-            api_key: String::new(),
-            models: vec![pi_config::PiModel {
+            base_url: Some("http://127.0.0.1:8080/v1".to_owned()),
+            api: Some("openai".to_owned()),
+            api_key: Some(String::new()),
+            models: Some(vec![pi_config::PiModel {
                 id: "fae-qwen3".to_owned(),
-                name: "Fae Local".to_owned(),
-                reasoning: false,
-                input: vec!["text".to_owned()],
-                context_window: 32_768,
-                max_tokens: 2048,
-                cost: 0.0,
-            }],
+                name: Some("Fae Local".to_owned()),
+                api: None,
+                reasoning: Some(false),
+                input: Some(vec!["text".to_owned()]),
+                context_window: Some(32_768),
+                max_tokens: Some(2048),
+                cost: None,
+                headers: None,
+                compat: None,
+                extra: HashMap::new(),
+            }]),
+            headers: None,
+            auth_header: None,
+            extra: HashMap::new(),
         },
     );
 
@@ -285,7 +314,7 @@ fn pi_config_provider_lookup_helpers() {
     // Test find_model.
     let model = config.find_model("openai", "gpt-4o");
     assert!(model.is_some());
-    assert_eq!(model.unwrap().context_window, 128_000);
+    assert_eq!(model.unwrap().context_window, Some(128_000));
     assert!(config.find_model("openai", "nonexistent").is_none());
 
     // Test cloud_providers (excludes fae-local).
@@ -321,10 +350,10 @@ fn llm_config_cloud_provider_fields_default_none() {
 }
 
 #[test]
-fn llm_config_effective_provider_name_local() {
+fn llm_config_effective_provider_name_pi_default() {
     let config = fae::config::LlmConfig::default();
     let name = config.effective_provider_name();
-    assert!(name.starts_with("local/"));
+    assert_eq!(name, "pi/fae-local/fae-qwen3");
 }
 
 #[test]

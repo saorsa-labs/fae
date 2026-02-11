@@ -507,6 +507,7 @@ mod tests {
         // Force all tasks to be due.
         for task in &mut scheduler.tasks {
             task.last_run = None;
+            task.schedule = Schedule::Interval { secs: 0 };
         }
 
         scheduler.tick();

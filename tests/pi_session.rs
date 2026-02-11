@@ -5,7 +5,7 @@ use fae::pi::manager::{
     PiInstallState, PiManager, bundled_pi_path, parse_pi_version, platform_asset_name,
     version_is_newer,
 };
-use fae::pi::session::{PiEvent, PiRpcEvent, PiRpcRequest, PiSession, parse_event};
+use fae::pi::session::{PiAgentEvent, PiExtensionUiRequest, PiRpcRequest, PiSession};
 use fae::pi::tool::PiDelegateTool;
 use saorsa_agent::Tool;
 use std::path::{Path, PathBuf};
@@ -17,9 +17,7 @@ use std::sync::{Arc, Mutex};
 
 #[test]
 fn prompt_request_json_has_type_and_message() {
-    let req = PiRpcRequest::Prompt {
-        message: "add error handling".to_owned(),
-    };
+    let req = PiRpcRequest::prompt("add error handling");
     let json = serde_json::to_string(&req).unwrap();
     assert!(json.contains("\"type\":\"prompt\""));
     assert!(json.contains("\"message\":\"add error handling\""));
@@ -32,138 +30,74 @@ fn abort_request_json_has_type() {
 }
 
 #[test]
-fn get_state_request_json_has_type() {
-    let json = serde_json::to_string(&PiRpcRequest::GetState).unwrap();
-    assert!(json.contains("\"type\":\"get_state\""));
-}
-
-#[test]
 fn new_session_request_json_has_type() {
-    let json = serde_json::to_string(&PiRpcRequest::NewSession).unwrap();
+    let json = serde_json::to_string(&PiRpcRequest::new_session()).unwrap();
     assert!(json.contains("\"type\":\"new_session\""));
 }
 
 // ---------------------------------------------------------------------------
-// PiRpcEvent deserialization
+// PiAgentEvent deserialization
 // ---------------------------------------------------------------------------
 
 #[test]
 fn agent_start_event_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"agent_start"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::AgentStart));
+    let event: PiAgentEvent = serde_json::from_str(r#"{"type":"agent_start"}"#).unwrap();
+    assert!(matches!(event, PiAgentEvent::AgentStart));
 }
 
 #[test]
 fn agent_end_event_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"agent_end"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::AgentEnd));
-}
-
-#[test]
-fn message_update_with_text() {
-    let event: PiRpcEvent =
-        serde_json::from_str(r#"{"type":"message_update","text":"hello"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::MessageUpdate { text } if text == "hello"));
-}
-
-#[test]
-fn message_update_without_text_defaults_to_empty() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"message_update"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::MessageUpdate { text } if text.is_empty()));
+    let event: PiAgentEvent =
+        serde_json::from_str(r#"{"type":"agent_end","messages":[]}"#).unwrap();
+    assert!(matches!(event, PiAgentEvent::AgentEnd { .. }));
 }
 
 #[test]
 fn turn_start_event_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"turn_start"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::TurnStart));
+    let event: PiAgentEvent = serde_json::from_str(r#"{"type":"turn_start"}"#).unwrap();
+    assert!(matches!(event, PiAgentEvent::TurnStart));
 }
 
 #[test]
 fn turn_end_event_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"turn_end"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::TurnEnd));
+    let event: PiAgentEvent =
+        serde_json::from_str(r#"{"type":"turn_end","message":{},"toolResults":[]}"#).unwrap();
+    assert!(matches!(event, PiAgentEvent::TurnEnd { .. }));
 }
 
 #[test]
 fn message_start_event_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"message_start"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::MessageStart));
+    let event: PiAgentEvent =
+        serde_json::from_str(r#"{"type":"message_start","message":{}}"#).unwrap();
+    assert!(matches!(event, PiAgentEvent::MessageStart { .. }));
 }
 
 #[test]
 fn message_end_event_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"message_end"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::MessageEnd));
+    let event: PiAgentEvent =
+        serde_json::from_str(r#"{"type":"message_end","message":{}}"#).unwrap();
+    assert!(matches!(event, PiAgentEvent::MessageEnd { .. }));
 }
 
 #[test]
 fn tool_execution_start_with_name() {
-    let event: PiRpcEvent =
-        serde_json::from_str(r#"{"type":"tool_execution_start","name":"bash"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::ToolExecutionStart { name } if name == "bash"));
+    let event: PiAgentEvent = serde_json::from_str(
+        r#"{"type":"tool_execution_start","toolCallId":"call_1","toolName":"bash","args":{"command":"ls"}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        event,
+        PiAgentEvent::ToolExecutionStart { tool_name, .. } if tool_name == "bash"
+    ));
 }
 
 #[test]
-fn tool_execution_update_with_text() {
-    let event: PiRpcEvent =
-        serde_json::from_str(r#"{"type":"tool_execution_update","text":"output"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::ToolExecutionUpdate { text } if text == "output"));
-}
-
-#[test]
-fn tool_execution_end_with_success() {
-    let event: PiRpcEvent =
-        serde_json::from_str(r#"{"type":"tool_execution_end","name":"edit","success":true}"#)
-            .unwrap();
-    assert!(
-        matches!(event, PiRpcEvent::ToolExecutionEnd { name, success } if name == "edit" && success)
-    );
-}
-
-#[test]
-fn auto_compaction_start_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"auto_compaction_start"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::AutoCompactionStart));
-}
-
-#[test]
-fn auto_compaction_end_from_json() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"auto_compaction_end"}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::AutoCompactionEnd));
-}
-
-#[test]
-fn response_event_success() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"response","success":true}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::Response { success } if success));
-}
-
-#[test]
-fn response_event_failure() {
-    let event: PiRpcEvent = serde_json::from_str(r#"{"type":"response","success":false}"#).unwrap();
-    assert!(matches!(event, PiRpcEvent::Response { success } if !success));
-}
-
-// ---------------------------------------------------------------------------
-// parse_event helper
-// ---------------------------------------------------------------------------
-
-#[test]
-fn parse_event_known_type_returns_rpc() {
-    let event = parse_event(r#"{"type":"agent_start"}"#);
-    assert!(matches!(event, PiEvent::Rpc(PiRpcEvent::AgentStart)));
-}
-
-#[test]
-fn parse_event_unknown_type_returns_unknown() {
-    let event = parse_event(r#"{"type":"future_event","data":42}"#);
-    assert!(matches!(event, PiEvent::Unknown(_)));
-}
-
-#[test]
-fn parse_event_invalid_json_returns_unknown() {
-    let event = parse_event("not json");
-    assert!(matches!(event, PiEvent::Unknown(_)));
+fn extension_ui_confirm_parses() {
+    let req: PiExtensionUiRequest = serde_json::from_str(
+        r#"{"type":"extension_ui_request","id":"uuid-1","method":"confirm","title":"OK?","message":"Proceed?"}"#,
+    )
+    .unwrap();
+    assert!(matches!(req, PiExtensionUiRequest::Confirm { .. }));
 }
 
 // ---------------------------------------------------------------------------

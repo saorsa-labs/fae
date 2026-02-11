@@ -15,7 +15,10 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use futures_util::stream::Stream;
-use mistralrs::{Model, RequestBuilder, Response, TextMessageRole, TextMessages};
+use mistralrs::{
+    CalledFunction, Model, RequestBuilder, Response, TextMessageRole, Tool, ToolCallResponse,
+    ToolCallType, ToolChoice,
+};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,6 +51,74 @@ pub struct ChatCompletionRequest {
     /// Maximum number of tokens to generate.
     #[serde(default)]
     pub max_tokens: Option<usize>,
+    /// Alternative max tokens field used by some OpenAI-compatible clients.
+    #[serde(default)]
+    pub max_completion_tokens: Option<usize>,
+    /// Tool definitions (OpenAI function-calling).
+    #[serde(default)]
+    pub tools: Option<Vec<Tool>>,
+    /// Tool choice policy (OpenAI function-calling).
+    ///
+    /// This is intentionally parsed as raw JSON for compatibility. Fae currently
+    /// only maps `"none"` and `"auto"` into `mistralrs::ToolChoice`.
+    #[serde(default)]
+    pub tool_choice: Option<serde_json::Value>,
+}
+
+/// OpenAI-compatible tool call type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiToolCallType {
+    Function,
+}
+
+/// OpenAI-compatible tool call function payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAiToolCallFunction {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// OpenAI-compatible tool call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAiToolCall {
+    /// Tool call index (present in streaming deltas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    pub id: String,
+    #[serde(rename = "type")]
+    pub tp: OpenAiToolCallType,
+    pub function: OpenAiToolCallFunction,
+}
+
+/// Message content for OpenAI-compatible chat messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChatMessageContent {
+    Text(String),
+    Parts(Vec<serde_json::Value>),
+}
+
+impl ChatMessageContent {
+    fn as_text(&self) -> String {
+        match self {
+            Self::Text(s) => s.clone(),
+            Self::Parts(parts) => {
+                let mut out = String::new();
+                for part in parts {
+                    let Some(tp) = part.get("type").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    if tp != "text" {
+                        continue;
+                    }
+                    let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    out.push_str(text);
+                }
+                out
+            }
+        }
+    }
 }
 
 /// A single message in a chat conversation.
@@ -56,7 +127,19 @@ pub struct ChatMessage {
     /// The role of the message author (`system`, `user`, `assistant`).
     pub role: String,
     /// The content of the message.
-    pub content: String,
+    ///
+    /// For assistant tool-call messages this may be `null`.
+    #[serde(default)]
+    pub content: Option<ChatMessageContent>,
+    /// Tool calls attached to an assistant message.
+    #[serde(default)]
+    pub tool_calls: Option<Vec<OpenAiToolCall>>,
+    /// Tool call ID (for tool result messages).
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    /// Optional name (used by some OpenAI-compatible endpoints for tool messages).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +224,9 @@ pub struct Delta {
     /// The incremental text content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Tool call deltas (OpenAI function-calling).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<OpenAiToolCall>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -311,26 +397,116 @@ fn unix_timestamp() -> u64 {
 }
 
 /// Convert our [`ChatMessage`] list into a mistralrs [`RequestBuilder`].
-fn build_request(
-    messages: &[ChatMessage],
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    max_tokens: Option<usize>,
-) -> RequestBuilder {
-    let mut text_messages = TextMessages::new().enable_thinking(false);
-    for msg in messages {
+fn build_request(request: &ChatCompletionRequest) -> crate::error::Result<RequestBuilder> {
+    let mut rb = RequestBuilder::new();
+
+    for msg in &request.messages {
         let role = match msg.role.as_str() {
-            "system" => TextMessageRole::System,
+            // Some clients may use `developer` role (treated like system).
+            "system" | "developer" => TextMessageRole::System,
             "assistant" => TextMessageRole::Assistant,
+            "tool" => TextMessageRole::Tool,
             _ => TextMessageRole::User,
         };
-        text_messages = text_messages.add_message(role, &msg.content);
+
+        let text = msg
+            .content
+            .as_ref()
+            .map(ChatMessageContent::as_text)
+            .unwrap_or_default();
+
+        if role == TextMessageRole::Tool {
+            let Some(tool_call_id) = msg.tool_call_id.as_deref() else {
+                return Err(crate::error::SpeechError::Server(
+                    "tool message missing tool_call_id".to_owned(),
+                ));
+            };
+            rb = rb.add_tool_message(text, tool_call_id);
+            continue;
+        }
+
+        if role == TextMessageRole::Assistant {
+            if let Some(tool_calls) = msg.tool_calls.as_ref() {
+                let tool_calls = openai_tool_calls_to_mistral(tool_calls)?;
+                rb = rb.add_message_with_tool_call(role.clone(), text, tool_calls);
+                continue;
+            }
+
+            // Avoid sending empty assistant messages without tool calls; many
+            // OpenAI-compatible endpoints reject them.
+            if text.trim().is_empty() {
+                continue;
+            }
+        }
+
+        rb = rb.add_message(role, text);
     }
 
-    RequestBuilder::from(text_messages)
-        .set_sampler_temperature(temperature.unwrap_or(DEFAULT_TEMPERATURE))
-        .set_sampler_topp(top_p.unwrap_or(DEFAULT_TOP_P))
-        .set_sampler_max_len(max_tokens.unwrap_or(DEFAULT_MAX_TOKENS))
+    let max_tokens = request
+        .max_tokens
+        .or(request.max_completion_tokens)
+        .unwrap_or(DEFAULT_MAX_TOKENS);
+
+    rb = rb
+        .set_sampler_temperature(request.temperature.unwrap_or(DEFAULT_TEMPERATURE))
+        .set_sampler_topp(request.top_p.unwrap_or(DEFAULT_TOP_P))
+        .set_sampler_max_len(max_tokens);
+
+    if let Some(tools) = request.tools.clone() {
+        rb = rb.set_tools(tools);
+    }
+
+    if let Some(choice) = request.tool_choice.as_ref().and_then(map_tool_choice) {
+        rb = rb.set_tool_choice(choice);
+    }
+
+    Ok(rb)
+}
+
+fn map_tool_choice(value: &serde_json::Value) -> Option<ToolChoice> {
+    let s = value.as_str()?;
+    match s {
+        "none" => Some(ToolChoice::None),
+        "auto" => Some(ToolChoice::Auto),
+        _ => None,
+    }
+}
+
+fn openai_tool_calls_to_mistral(
+    tool_calls: &[OpenAiToolCall],
+) -> crate::error::Result<Vec<ToolCallResponse>> {
+    let mut out = Vec::with_capacity(tool_calls.len());
+    for (i, tool_call) in tool_calls.iter().enumerate() {
+        match tool_call.tp {
+            OpenAiToolCallType::Function => {
+                out.push(ToolCallResponse {
+                    index: tool_call.index.unwrap_or(i),
+                    id: tool_call.id.clone(),
+                    tp: ToolCallType::Function,
+                    function: CalledFunction {
+                        name: tool_call.function.name.clone(),
+                        arguments: tool_call.function.arguments.clone(),
+                    },
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn mistral_tool_calls_to_openai(tool_calls: Vec<ToolCallResponse>) -> Vec<OpenAiToolCall> {
+    tool_calls
+        .into_iter()
+        .map(|tool_call| OpenAiToolCall {
+            index: Some(tool_call.index),
+            id: tool_call.id,
+            tp: OpenAiToolCallType::Function,
+            function: OpenAiToolCallFunction {
+                name: tool_call.function.name,
+                arguments: tool_call.function.arguments,
+            },
+        })
+        .collect()
 }
 
 /// Strip `<think>...</think>` blocks from generated text.
@@ -383,12 +559,19 @@ async fn handle_non_streaming(
     state: AppState,
     request: ChatCompletionRequest,
 ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
-    let req = build_request(
-        &request.messages,
-        request.temperature,
-        request.top_p,
-        request.max_tokens,
-    );
+    let req = match build_request(&request) {
+        Ok(r) => r,
+        Err(e) => {
+            let err = ErrorResponse {
+                error: ErrorBody {
+                    message: format!("invalid request: {e}"),
+                    error_type: "invalid_request_error".to_owned(),
+                },
+            };
+            let json = serde_json::to_value(err).unwrap_or_default();
+            return (axum::http::StatusCode::BAD_REQUEST, Json(json));
+        }
+    };
 
     let result = state.model.send_chat_request(req).await;
 
@@ -407,18 +590,16 @@ async fn handle_non_streaming(
     };
 
     // Extract content from the mistralrs response.
-    let content = response
-        .choices
-        .first()
-        .and_then(|c| c.message.content.as_deref())
-        .unwrap_or("");
-
-    let content = strip_think_blocks(content);
-    let finish_reason = response
-        .choices
-        .first()
-        .map(|c| c.finish_reason.clone())
-        .unwrap_or_else(|| "stop".to_owned());
+    let (content, tool_calls, finish_reason) = match response.choices.first() {
+        Some(choice) => {
+            let content = choice.message.content.as_deref().unwrap_or("");
+            let content = strip_think_blocks(content);
+            let tool_calls = choice.message.tool_calls.clone().filter(|v| !v.is_empty());
+            let tool_calls = tool_calls.map(mistral_tool_calls_to_openai);
+            (content, tool_calls, choice.finish_reason.clone())
+        }
+        None => (String::new(), None, "stop".to_owned()),
+    };
 
     let resp = ChatCompletionResponse {
         id: completion_id(),
@@ -429,7 +610,14 @@ async fn handle_non_streaming(
             index: 0,
             message: ChatMessage {
                 role: "assistant".to_owned(),
-                content,
+                content: if content.trim().is_empty() {
+                    None
+                } else {
+                    Some(ChatMessageContent::Text(content))
+                },
+                tool_calls,
+                tool_call_id: None,
+                name: None,
             },
             finish_reason: Some(finish_reason),
         }],
@@ -446,8 +634,11 @@ async fn handle_non_streaming(
 
 /// Internal message type for the streaming channel.
 enum StreamMsg {
-    /// A token chunk from the model.
-    Token(String),
+    /// A delta chunk from the model (text and/or tool calls).
+    Delta {
+        content: Option<String>,
+        tool_calls: Option<Vec<OpenAiToolCall>>,
+    },
     /// Streaming is done (finish_reason).
     Done(String),
     /// An error occurred.
@@ -466,12 +657,18 @@ async fn handle_streaming(
     Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>,
     (axum::http::StatusCode, Json<ErrorResponse>),
 > {
-    let req = build_request(
-        &request.messages,
-        request.temperature,
-        request.top_p,
-        request.max_tokens,
-    );
+    let req = match build_request(&request) {
+        Ok(r) => r,
+        Err(e) => {
+            let err = ErrorResponse {
+                error: ErrorBody {
+                    message: format!("invalid request: {e}"),
+                    error_type: "invalid_request_error".to_owned(),
+                },
+            };
+            return Err((axum::http::StatusCode::BAD_REQUEST, Json(err)));
+        }
+    };
 
     let model = Arc::clone(&state.model);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamMsg>(64);
@@ -491,26 +688,41 @@ async fn handle_streaming(
         while let Some(response) = streamer.next().await {
             match response {
                 Response::Chunk(chunk) => {
-                    if let Some(choice) = chunk.choices.first()
-                        && let Some(ref content) = choice.delta.content
-                    {
-                        if content.is_empty() {
-                            continue;
-                        }
-                        if content.contains("<think>") {
+                    let Some(choice) = chunk.choices.first() else {
+                        continue;
+                    };
+
+                    let tool_calls = choice.delta.tool_calls.clone().filter(|v| !v.is_empty());
+                    let tool_calls = tool_calls.map(mistral_tool_calls_to_openai);
+
+                    let mut content = choice.delta.content.clone();
+                    if let Some(ref c) = content {
+                        if c.is_empty() {
+                            content = None;
+                        } else if c.contains("<think>") {
                             in_think_block = true;
-                            continue;
-                        }
-                        if content.contains("</think>") {
+                            content = None;
+                        } else if c.contains("</think>") {
                             in_think_block = false;
-                            continue;
+                            content = None;
+                        } else if in_think_block {
+                            content = None;
                         }
-                        if in_think_block {
-                            continue;
-                        }
-                        if tx.send(StreamMsg::Token(content.clone())).await.is_err() {
-                            break;
-                        }
+                    }
+
+                    if content.is_none() && tool_calls.is_none() {
+                        continue;
+                    }
+
+                    if tx
+                        .send(StreamMsg::Delta {
+                            content,
+                            tool_calls,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
                     }
                 }
                 Response::Done(_) => {
@@ -550,6 +762,7 @@ async fn handle_streaming(
                 delta: Delta {
                     role: Some("assistant".to_owned()),
                     content: None,
+                    tool_calls: None,
                 },
                 finish_reason: None,
             }],
@@ -561,7 +774,7 @@ async fn handle_streaming(
         // Receive tokens from the background task
         while let Some(msg) = rx.recv().await {
             match msg {
-                StreamMsg::Token(content) => {
+                StreamMsg::Delta { content, tool_calls } => {
                     let sse_chunk = ChatCompletionChunk {
                         id: id.clone(),
                         object: "chat.completion.chunk".to_owned(),
@@ -571,7 +784,8 @@ async fn handle_streaming(
                             index: 0,
                             delta: Delta {
                                 role: None,
-                                content: Some(content),
+                                content,
+                                tool_calls,
                             },
                             finish_reason: None,
                         }],
@@ -591,6 +805,7 @@ async fn handle_streaming(
                             delta: Delta {
                                 role: None,
                                 content: None,
+                                tool_calls: None,
                             },
                             finish_reason: Some(reason),
                         }],
@@ -630,17 +845,26 @@ mod tests {
             messages: vec![
                 ChatMessage {
                     role: "system".to_owned(),
-                    content: "You are helpful.".to_owned(),
+                    content: Some(ChatMessageContent::Text("You are helpful.".to_owned())),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
                 },
                 ChatMessage {
                     role: "user".to_owned(),
-                    content: "Hello".to_owned(),
+                    content: Some(ChatMessageContent::Text("Hello".to_owned())),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
                 },
             ],
             stream: Some(false),
             temperature: Some(0.7),
             top_p: Some(0.9),
             max_tokens: Some(200),
+            max_completion_tokens: None,
+            tools: None,
+            tool_choice: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: ChatCompletionRequest = serde_json::from_str(&json).unwrap();
@@ -672,7 +896,10 @@ mod tests {
                 index: 0,
                 message: ChatMessage {
                     role: "assistant".to_owned(),
-                    content: "Hello!".to_owned(),
+                    content: Some(ChatMessageContent::Text("Hello!".to_owned())),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
                 },
                 finish_reason: Some("stop".to_owned()),
             }],
@@ -686,7 +913,15 @@ mod tests {
         let parsed: ChatCompletionResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, "chatcmpl-abc123");
         assert_eq!(parsed.choices.len(), 1);
-        assert_eq!(parsed.choices[0].message.content, "Hello!");
+        assert_eq!(
+            parsed.choices[0]
+                .message
+                .content
+                .as_ref()
+                .map(ChatMessageContent::as_text)
+                .as_deref(),
+            Some("Hello!")
+        );
         assert_eq!(parsed.usage.total_tokens, 15);
     }
 
@@ -702,6 +937,7 @@ mod tests {
                 delta: Delta {
                     role: None,
                     content: Some("Hello".to_owned()),
+                    tool_calls: None,
                 },
                 finish_reason: None,
             }],
@@ -718,6 +954,7 @@ mod tests {
         let delta = Delta {
             role: None,
             content: Some("token".to_owned()),
+            tool_calls: None,
         };
         let json = serde_json::to_string(&delta).unwrap();
         assert!(!json.contains("role"));
@@ -835,18 +1072,38 @@ mod tests {
         let messages = vec![
             ChatMessage {
                 role: "system".to_owned(),
-                content: "You are helpful.".to_owned(),
+                content: Some(ChatMessageContent::Text("You are helpful.".to_owned())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
             },
             ChatMessage {
                 role: "user".to_owned(),
-                content: "Hello".to_owned(),
+                content: Some(ChatMessageContent::Text("Hello".to_owned())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
             },
             ChatMessage {
                 role: "assistant".to_owned(),
-                content: "Hi there!".to_owned(),
+                content: Some(ChatMessageContent::Text("Hi there!".to_owned())),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
             },
         ];
         // Just verify it doesn't panic — the RequestBuilder is opaque.
-        let _req = build_request(&messages, Some(0.5), Some(0.8), Some(100));
+        let req = ChatCompletionRequest {
+            model: "fae-qwen3".to_owned(),
+            messages,
+            stream: Some(false),
+            temperature: Some(0.5),
+            top_p: Some(0.8),
+            max_tokens: Some(100),
+            max_completion_tokens: None,
+            tools: None,
+            tool_choice: None,
+        };
+        let _req = build_request(&req).unwrap();
     }
 }

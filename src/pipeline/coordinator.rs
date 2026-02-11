@@ -1294,6 +1294,7 @@ enum LlmEngine {
     Local(Box<crate::llm::LocalLlm>),
     Api(Box<crate::llm::ApiLlm>),
     Agent(Box<crate::agent::SaorsaAgentLlm>),
+    Pi(Box<crate::pi::engine::PiLlm>),
 }
 
 struct LlmStageControl {
@@ -1320,6 +1321,7 @@ impl LlmEngine {
             Self::Local(llm) => llm.generate_response(user_input, tx, interrupt).await,
             Self::Api(llm) => llm.generate_response(user_input, tx, interrupt).await,
             Self::Agent(llm) => llm.generate_response(user_input, tx, interrupt).await,
+            Self::Pi(llm) => llm.generate_response(user_input, tx, interrupt).await,
         }
     }
 
@@ -1330,6 +1332,7 @@ impl LlmEngine {
             Self::Local(llm) => llm.truncate_history(keep_count),
             Self::Api(llm) => llm.truncate_history(keep_count),
             Self::Agent(llm) => llm.truncate_history(keep_count),
+            Self::Pi(llm) => llm.truncate_history(keep_count),
         }
     }
 }
@@ -1345,6 +1348,7 @@ async fn run_llm_stage(
     use crate::agent::SaorsaAgentLlm;
     use crate::config::LlmBackend;
     use crate::llm::{ApiLlm, LocalLlm};
+    use crate::pi::engine::PiLlm;
 
     let mut engine = match config.llm.backend {
         LlmBackend::Local => {
@@ -1381,6 +1385,29 @@ async fn run_llm_stage(
                 Ok(l) => LlmEngine::Agent(Box::new(l)),
                 Err(e) => {
                     error!("failed to init agent LLM: {e}");
+                    return;
+                }
+            }
+        }
+        LlmBackend::Pi => {
+            let llm_cfg = config.llm.clone();
+            let pi_cfg = config.pi.clone();
+            let runtime_tx = ctl.runtime_tx.clone();
+            let tool_approval_tx = ctl.tool_approval_tx.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                PiLlm::new(llm_cfg, pi_cfg, runtime_tx, tool_approval_tx)
+            })
+            .await
+            .map_err(|e| crate::error::SpeechError::Pi(format!("Pi init task failed: {e}")));
+
+            match res {
+                Ok(Ok(pi)) => LlmEngine::Pi(Box::new(pi)),
+                Ok(Err(e)) => {
+                    error!("failed to init Pi backend: {e}");
+                    return;
+                }
+                Err(e) => {
+                    error!("failed to init Pi backend: {e}");
                     return;
                 }
             }
@@ -2645,13 +2672,21 @@ fn try_render_canvas_json(
     // Emit ToolCall/ToolResult so the GUI opens the canvas window.
     if let Some(rt) = runtime_tx {
         let input_json = serde_json::to_string(&params).unwrap_or_default();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let id = format!("canvas_render:{ts}");
         let _ = rt.send(RuntimeEvent::ToolCall {
+            id: id.clone(),
             name: "canvas_render".to_owned(),
             input_json,
         });
         let _ = rt.send(RuntimeEvent::ToolResult {
+            id,
             name: "canvas_render".to_owned(),
             success: true,
+            output_text: None,
         });
     }
 

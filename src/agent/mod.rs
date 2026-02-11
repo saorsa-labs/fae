@@ -64,23 +64,34 @@ impl SaorsaAgentLlm {
                     pi_path.display()
                 ))
             })?;
+            let base_url = provider_info.base_url.clone().ok_or_else(|| {
+                SpeechError::Config(format!(
+                    "cloud provider '{cloud_name}' missing baseUrl in {}",
+                    pi_path.display()
+                ))
+            })?;
+            let api_key = provider_info.api_key.clone().unwrap_or_default();
             let model_id = config
                 .cloud_model
                 .clone()
-                .or_else(|| provider_info.models.first().map(|m| m.id.clone()))
+                .or_else(|| {
+                    provider_info
+                        .models
+                        .as_ref()
+                        .and_then(|models| models.first())
+                        .map(|m| m.id.clone())
+                })
                 .unwrap_or_else(|| config.api_model.clone());
 
             tracing::info!(
                 "agent using cloud provider: {} (model={}, url={})",
                 cloud_name,
                 model_id,
-                provider_info.base_url
+                base_url
             );
 
             Box::new(http_provider::HttpStreamingProvider::new(
-                provider_info.base_url.clone(),
-                provider_info.api_key.clone(),
-                model_id,
+                base_url, api_key, model_id,
             ))
         } else {
             // Local: use in-process mistralrs inference, with cloud fallback.
@@ -276,16 +287,30 @@ impl SaorsaAgentLlm {
                                 sentence_buffer = sentence_buffer[pos + 1..].to_owned();
                             }
                         }
-                        AgentEvent::ToolCall { name, input, .. } => {
+                        AgentEvent::ToolCall { id, name, input } => {
                             if let Some(rt) = &self.runtime_tx {
                                 let input_json =
                                     serde_json::to_string(&input).unwrap_or_else(|_| "{}".into());
-                                let _ = rt.send(RuntimeEvent::ToolCall { name, input_json });
+                                let _ = rt.send(RuntimeEvent::ToolCall {
+                                    id,
+                                    name,
+                                    input_json,
+                                });
                             }
                         }
-                        AgentEvent::ToolResult { name, success, .. } => {
+                        AgentEvent::ToolResult {
+                            id,
+                            name,
+                            output,
+                            success,
+                        } => {
                             if let Some(rt) = &self.runtime_tx {
-                                let _ = rt.send(RuntimeEvent::ToolResult { name, success });
+                                let _ = rt.send(RuntimeEvent::ToolResult {
+                                    id,
+                                    name,
+                                    success,
+                                    output_text: Some(output),
+                                });
                             }
                         }
                         AgentEvent::Error { message } => {
@@ -353,11 +378,17 @@ fn try_cloud_fallback(config: &LlmConfig) -> Option<Box<dyn StreamingProvider>> 
     let pi_path = crate::llm::pi_config::default_pi_models_path()?;
     let pi_config = crate::llm::pi_config::read_pi_config(&pi_path).ok()?;
     let cloud = pi_config.cloud_providers();
-    let (name, provider) = cloud.first()?;
+    let (name, provider) = cloud
+        .iter()
+        .find(|(_, provider)| provider.base_url.is_some())
+        .copied()?;
+    let base_url = provider.base_url.clone()?;
+    let api_key = provider.api_key.clone().unwrap_or_default();
 
     let model_id = provider
         .models
-        .first()
+        .as_ref()
+        .and_then(|models| models.first())
         .map(|m| m.id.clone())
         .unwrap_or_else(|| config.api_model.clone());
 
@@ -365,12 +396,10 @@ fn try_cloud_fallback(config: &LlmConfig) -> Option<Box<dyn StreamingProvider>> 
         "falling back to cloud provider: {} (model={}, url={})",
         name,
         model_id,
-        provider.base_url
+        base_url
     );
 
     Some(Box::new(http_provider::HttpStreamingProvider::new(
-        provider.base_url.clone(),
-        provider.api_key.clone(),
-        model_id,
+        base_url, api_key, model_id,
     )))
 }

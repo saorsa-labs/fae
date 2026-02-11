@@ -415,6 +415,220 @@ fn build_canvas_messages_html(bridge: &fae::canvas::bridge::CanvasBridge) -> Str
     html
 }
 
+/// Parsed approval prompt payload for display/logging.
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ApprovalUiKind {
+    Confirm,
+    Select,
+    Input,
+    Editor,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone)]
+struct ApprovalPreview {
+    title: String,
+    message: String,
+    destructive_delete: bool,
+    kind: ApprovalUiKind,
+    options: Vec<String>,
+    placeholder: Option<String>,
+    initial_value: String,
+}
+
+#[cfg(feature = "gui")]
+fn now_ts_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "gui")]
+fn looks_like_delete_request(title: &str, message: &str) -> bool {
+    let haystack = format!("{title}\n{message}").to_lowercase();
+    [
+        "allow destructive command",
+        "[delete risk]",
+        " rm ",
+        "\nrm ",
+        "rm -",
+        "rm\t",
+        " unlink ",
+        " rmdir ",
+        " del ",
+        " erase ",
+        " -delete",
+        " trash ",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
+#[cfg(feature = "gui")]
+fn truncate_canvas_value(text: &str, max_chars: usize) -> String {
+    let mut out: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        out.push_str(" ...");
+    }
+    out
+}
+
+#[cfg(feature = "gui")]
+fn parse_approval_preview(req: &fae::ToolApprovalRequest) -> ApprovalPreview {
+    let mut title = req.name.clone();
+    let mut message = req.input_json.clone();
+    let mut kind = match req.name.as_str() {
+        "pi.select" => ApprovalUiKind::Select,
+        "pi.input" => ApprovalUiKind::Input,
+        "pi.editor" => ApprovalUiKind::Editor,
+        _ => ApprovalUiKind::Confirm,
+    };
+    let mut options = Vec::<String>::new();
+    let mut placeholder = None::<String>;
+    let mut initial_value = String::new();
+
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&req.input_json) {
+        if let Some(k) = json.get("kind").and_then(|v| v.as_str()) {
+            kind = match k {
+                "select" => ApprovalUiKind::Select,
+                "input" => ApprovalUiKind::Input,
+                "editor" => ApprovalUiKind::Editor,
+                _ => ApprovalUiKind::Confirm,
+            };
+        }
+        if let Some(t) = json.get("title").and_then(|v| v.as_str()) {
+            title = t.to_owned();
+        }
+        if let Some(m) = json.get("message").and_then(|v| v.as_str()) {
+            message = m.to_owned();
+        }
+        if let Some(opts) = json.get("options").and_then(|v| v.as_array()) {
+            options = opts
+                .iter()
+                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                .collect();
+        }
+        placeholder = json
+            .get("placeholder")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        if let Some(v) = json.get("prefill").and_then(|v| v.as_str()) {
+            initial_value = v.to_owned();
+        } else if let Some(v) = json.get("value").and_then(|v| v.as_str()) {
+            initial_value = v.to_owned();
+        }
+    }
+    if matches!(kind, ApprovalUiKind::Select)
+        && initial_value.is_empty()
+        && let Some(first) = options.first()
+    {
+        initial_value = first.clone();
+    }
+
+    let destructive_delete = looks_like_delete_request(&title, &message);
+    ApprovalPreview {
+        title,
+        message,
+        destructive_delete,
+        kind,
+        options,
+        placeholder,
+        initial_value,
+    }
+}
+
+#[cfg(feature = "gui")]
+fn push_approval_request_to_canvas(
+    bridge: &mut fae::canvas::bridge::CanvasBridge,
+    req: &fae::ToolApprovalRequest,
+) {
+    let preview = parse_approval_preview(req);
+    let headline = match preview.kind {
+        ApprovalUiKind::Confirm => {
+            if preview.destructive_delete {
+                "Approval needed: destructive file action requested"
+            } else {
+                "Approval needed: elevated tool action requested"
+            }
+        }
+        ApprovalUiKind::Select => "Input needed: option selection requested",
+        ApprovalUiKind::Input => "Input needed: text response requested",
+        ApprovalUiKind::Editor => "Input needed: editor response requested",
+    };
+    let detail = format!("{}\n\n{}", preview.title, preview.message);
+    let msg = fae::canvas::types::CanvasMessage::tool_with_details(
+        "approval",
+        headline,
+        now_ts_millis(),
+        Some(detail),
+        None,
+    );
+    bridge.session_mut().push_message(&msg);
+}
+
+#[cfg(feature = "gui")]
+fn push_approval_decision_to_canvas(
+    bridge: &mut fae::canvas::bridge::CanvasBridge,
+    preview: &ApprovalPreview,
+    approved: bool,
+) {
+    let text = if approved {
+        if preview.destructive_delete {
+            "Destructive request approved"
+        } else {
+            "Tool escalation approved"
+        }
+    } else if preview.destructive_delete {
+        "Destructive request denied"
+    } else {
+        "Tool escalation denied"
+    };
+    let msg = fae::canvas::types::CanvasMessage::tool_with_details(
+        "approval",
+        text,
+        now_ts_millis(),
+        Some(preview.title.clone()),
+        Some(preview.message.clone()),
+    );
+    bridge.session_mut().push_message(&msg);
+}
+
+#[cfg(feature = "gui")]
+fn push_dialog_response_to_canvas(
+    bridge: &mut fae::canvas::bridge::CanvasBridge,
+    preview: &ApprovalPreview,
+    submitted: bool,
+    value: Option<String>,
+) {
+    let text = if submitted {
+        match preview.kind {
+            ApprovalUiKind::Select => "Option selected",
+            ApprovalUiKind::Input => "Input submitted",
+            ApprovalUiKind::Editor => "Editor response submitted",
+            ApprovalUiKind::Confirm => "Response submitted",
+        }
+    } else {
+        match preview.kind {
+            ApprovalUiKind::Select => "Option selection cancelled",
+            ApprovalUiKind::Input => "Input cancelled",
+            ApprovalUiKind::Editor => "Editor response cancelled",
+            ApprovalUiKind::Confirm => "Response cancelled",
+        }
+    };
+
+    let output = value.map(|v| truncate_canvas_value(&v, 500));
+    let msg = fae::canvas::types::CanvasMessage::tool_with_details(
+        "approval",
+        text,
+        now_ts_millis(),
+        Some(preview.title.clone()),
+        output,
+    );
+    bridge.session_mut().push_message(&msg);
+}
+
 #[cfg(feature = "gui")]
 fn embedded_fae_jpg_data_uri() -> String {
     use base64::Engine as _;
@@ -576,11 +790,14 @@ fn ui_bus() -> tokio::sync::broadcast::Sender<UiBusEvent> {
 #[cfg(feature = "gui")]
 fn read_config_or_default() -> fae::SpeechConfig {
     let path = fae::SpeechConfig::default_config_path();
-    if path.exists() {
+    let mut cfg = if path.exists() {
         fae::SpeechConfig::from_file(&path).unwrap_or_default()
     } else {
         fae::SpeechConfig::default()
-    }
+    };
+    // Fae runs with Pi as the primary backend.
+    cfg.llm.backend = fae::config::LlmBackend::Pi;
+    cfg
 }
 
 #[cfg(feature = "gui")]
@@ -595,6 +812,94 @@ struct ModelDetails {
     gguf_files: Vec<String>,
     // filename -> size
     gguf_sizes: Vec<(String, Option<u64>)>,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Default)]
+struct PiModelInventory {
+    providers: Vec<String>,
+    models_by_provider: std::collections::HashMap<String, Vec<String>>,
+    models_path: Option<std::path::PathBuf>,
+    load_error: Option<String>,
+}
+
+#[cfg(feature = "gui")]
+fn load_pi_model_inventory() -> PiModelInventory {
+    use fae::llm::pi_config::{FAE_MODEL_ID, FAE_PROVIDER_KEY};
+
+    let mut providers = vec![FAE_PROVIDER_KEY.to_owned()];
+    let mut models_by_provider = std::collections::HashMap::new();
+    models_by_provider.insert(FAE_PROVIDER_KEY.to_owned(), vec![FAE_MODEL_ID.to_owned()]);
+
+    let mut models_path = None::<std::path::PathBuf>;
+    let mut load_error = None::<String>;
+
+    if let Some(path) = fae::llm::pi_config::default_pi_models_path() {
+        models_path = Some(path.clone());
+        match fae::llm::pi_config::read_pi_config(&path) {
+            Ok(cfg) => {
+                for provider in cfg.provider_names() {
+                    if provider != FAE_PROVIDER_KEY {
+                        providers.push(provider.clone());
+                    }
+                    let mut models = cfg.model_ids_for_provider(&provider);
+                    if provider == FAE_PROVIDER_KEY && !models.iter().any(|m| m == FAE_MODEL_ID) {
+                        models.insert(0, FAE_MODEL_ID.to_owned());
+                    }
+                    if models.is_empty() {
+                        models_by_provider.entry(provider).or_insert_with(Vec::new);
+                    } else {
+                        models_by_provider.insert(provider, models);
+                    }
+                }
+            }
+            Err(e) => {
+                load_error = Some(format!("Failed reading Pi models.json: {e}"));
+            }
+        }
+    }
+
+    providers.sort();
+    if let Some(pos) = providers.iter().position(|p| p == FAE_PROVIDER_KEY) {
+        providers.remove(pos);
+    }
+    providers.insert(0, FAE_PROVIDER_KEY.to_owned());
+    providers.dedup();
+
+    PiModelInventory {
+        providers,
+        models_by_provider,
+        models_path,
+        load_error,
+    }
+}
+
+#[cfg(feature = "gui")]
+fn selected_pi_provider(cfg: &fae::SpeechConfig) -> String {
+    cfg.llm
+        .cloud_provider
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| fae::llm::pi_config::FAE_PROVIDER_KEY.to_owned())
+}
+
+#[cfg(feature = "gui")]
+fn selected_pi_model(cfg: &fae::SpeechConfig, inventory: &PiModelInventory) -> String {
+    let provider = selected_pi_provider(cfg);
+    if provider == fae::llm::pi_config::FAE_PROVIDER_KEY {
+        return fae::llm::pi_config::FAE_MODEL_ID.to_owned();
+    }
+    if let Some(model) = cfg.llm.cloud_model.clone().filter(|s| !s.trim().is_empty()) {
+        return model;
+    }
+    if let Some(first) = inventory
+        .models_by_provider
+        .get(&provider)
+        .and_then(|models| models.first())
+    {
+        return first.clone();
+    }
+    String::new()
 }
 
 #[cfg(feature = "gui")]
@@ -651,6 +956,7 @@ fn app() -> Element {
     let mut pending_approval = use_signal(|| None::<fae::ToolApprovalRequest>);
     let mut approval_queue =
         use_signal(std::collections::VecDeque::<fae::ToolApprovalRequest>::new);
+    let mut approval_input_value = use_signal(String::new);
     let mut config_state = use_signal(read_config_or_default);
     let mut config_save_status = use_signal(String::new);
 
@@ -685,6 +991,7 @@ fn app() -> Element {
     let mut canvas_bridge =
         use_signal(|| fae::canvas::bridge::CanvasBridge::new("gui", 800.0, 600.0));
     let mut canvas_visible = use_signal(|| false);
+    let mut canvas_revision = use_signal(|| 0u64);
     let mut gate_cmd_tx =
         use_signal(|| None::<tokio::sync::mpsc::UnboundedSender<fae::GateCommand>>);
     let mut gate_active_arc = use_signal(|| None::<std::sync::Arc<std::sync::atomic::AtomicBool>>);
@@ -698,11 +1005,14 @@ fn app() -> Element {
     let mut update_banner_dismissed = use_signal(|| false);
     let mut update_check_status = use_signal(String::new);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
+    let mut pi_inventory = use_signal(load_pi_model_inventory);
+    let mut pi_inventory_status = use_signal(String::new);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
     use_hook(move || {
         let mut config_state = config_state;
+        let mut pi_inventory = pi_inventory;
         spawn(async move {
             let mut rx = ui_bus().subscribe();
             loop {
@@ -711,6 +1021,7 @@ fn app() -> Element {
                         let res = tokio::task::spawn_blocking(read_config_or_default).await;
                         if let Ok(cfg) = res {
                             config_state.set(cfg);
+                            pi_inventory.set(load_pi_model_inventory());
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -893,6 +1204,9 @@ fn app() -> Element {
                                         assistant_buf.set(String::new());
                                         llm_backend.set(Some(config.llm.backend));
                                         tool_mode.set(Some(config.llm.tool_mode));
+                                        if matches!(config.llm.backend, fae::config::LlmBackend::Pi) {
+                                            canvas_visible.set(true);
+                                        }
 
                                         let (runtime_tx, _) =
                                             tokio::sync::broadcast::channel::<fae::RuntimeEvent>(256);
@@ -950,6 +1264,7 @@ fn app() -> Element {
                                                     forward_handle.abort();
                                                     pending_approval.set(None);
                                                     approval_queue.set(std::collections::VecDeque::new());
+                                                    approval_input_value.set(String::new());
                                                     match res {
                                                         Ok(Ok(())) => status.set(AppStatus::Idle),
                                                         Ok(Err(e)) => status.set(AppStatus::Error(e.to_string())),
@@ -959,6 +1274,15 @@ fn app() -> Element {
                                                 }
                                                 Some(req) = approval_rx.recv() => {
                                                     if pending_approval.read().is_none() {
+                                                        push_approval_request_to_canvas(&mut canvas_bridge.write(), &req);
+                                                        let preview = parse_approval_preview(&req);
+                                                        approval_input_value.set(preview.initial_value.clone());
+                                                        let next_rev = {
+                                                            let current = *canvas_revision.read();
+                                                            current.saturating_add(1)
+                                                        };
+                                                        canvas_revision.set(next_rev);
+                                                        canvas_visible.set(true);
                                                         pending_approval.set(Some(req));
                                                     } else {
                                                         approval_queue.write().push_back(req);
@@ -967,6 +1291,13 @@ fn app() -> Element {
                                                 Some(ev) = rrx.recv() => {
                                                     // Route event through canvas bridge
                                                     canvas_bridge.write().on_event(&ev);
+                                                    if !matches!(ev, fae::RuntimeEvent::AssistantAudioLevel { .. }) {
+                                                        let next_rev = {
+                                                            let current = *canvas_revision.read();
+                                                            current.saturating_add(1)
+                                                        };
+                                                        canvas_revision.set(next_rev);
+                                                    }
 
                                                     match &ev {
                                                         fae::RuntimeEvent::Control(ctrl) => match ctrl {
@@ -1012,6 +1343,11 @@ fn app() -> Element {
                                                         fae::RuntimeEvent::ToolCall { name, .. } => {
                                                             // Auto-open canvas panel when Fae uses a canvas tool.
                                                             if name.starts_with("canvas_") && name != "canvas_clear" {
+                                                                canvas_visible.set(true);
+                                                            }
+                                                            // In Pi mode, keep canvas visible so users can see
+                                                            // live tool activity and approvals.
+                                                            if matches!(*llm_backend.read(), Some(fae::config::LlmBackend::Pi)) {
                                                                 canvas_visible.set(true);
                                                             }
                                                             // Auto-close canvas panel when Fae clears the canvas.
@@ -1102,10 +1438,19 @@ fn app() -> Element {
     let settings_enabled = matches!(current_status, AppStatus::Idle | AppStatus::Error(_));
     let cfg_backend = config_state.read().llm.backend;
     let cfg_tool_mode = config_state.read().llm.tool_mode;
+    let pi_provider_selected = selected_pi_provider(&config_state.read());
+    let pi_model_selected = selected_pi_model(&config_state.read(), &pi_inventory.read());
+    let pi_models_for_selected_provider = pi_inventory
+        .read()
+        .models_by_provider
+        .get(&pi_provider_selected)
+        .cloned()
+        .unwrap_or_default();
     let backend_value = match cfg_backend {
         fae::config::LlmBackend::Local => "local",
         fae::config::LlmBackend::Api => "api",
         fae::config::LlmBackend::Agent => "agent",
+        fae::config::LlmBackend::Pi => "pi",
     };
     let tool_mode_value = match cfg_tool_mode {
         fae::config::AgentToolMode::Off => "off",
@@ -1113,8 +1458,11 @@ fn app() -> Element {
         fae::config::AgentToolMode::ReadWrite => "read_write",
         fae::config::AgentToolMode::Full => "full",
     };
-    let tool_mode_select_enabled =
-        settings_enabled && matches!(cfg_backend, fae::config::LlmBackend::Agent);
+    let tool_mode_select_enabled = settings_enabled
+        && matches!(
+            cfg_backend,
+            fae::config::LlmBackend::Agent | fae::config::LlmBackend::Pi
+        );
     let config_path = fae::SpeechConfig::default_config_path();
     let current_voice = config_state.read().tts.voice.clone();
     let is_builtin_voice = !current_voice.ends_with(".bin") || current_voice.is_empty();
@@ -1141,6 +1489,16 @@ fn app() -> Element {
             fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent => {
                 format!("{} / {}", cfg.llm.model_id, cfg.llm.gguf_file)
             }
+            fae::config::LlmBackend::Pi => {
+                let provider = selected_pi_provider(&cfg);
+                let model = selected_pi_model(&cfg, &pi_inventory.read());
+                let model = if model.is_empty() {
+                    "<set model in Settings>".to_owned()
+                } else {
+                    model
+                };
+                format!("Pi: {provider}/{model}")
+            }
         };
         let tts = format!("Kokoro-82M ({}, {})", cfg.tts.voice, cfg.tts.model_variant);
         (stt, llm, tts)
@@ -1151,8 +1509,12 @@ fn app() -> Element {
     let risky_tools_enabled = matches!(
         (current_backend, current_tool_mode),
         (
-            Some(fae::config::LlmBackend::Agent),
-            Some(fae::config::AgentToolMode::ReadWrite | fae::config::AgentToolMode::Full)
+            Some(fae::config::LlmBackend::Agent | fae::config::LlmBackend::Pi),
+            Some(
+                fae::config::AgentToolMode::ReadOnly
+                    | fae::config::AgentToolMode::ReadWrite
+                    | fae::config::AgentToolMode::Full
+            )
         )
     );
 
@@ -1195,6 +1557,19 @@ fn app() -> Element {
                     &cfg.llm.tokenizer_id
                 }
             ),
+            fae::config::LlmBackend::Pi => {
+                let provider = selected_pi_provider(&cfg);
+                let model = selected_pi_model(&cfg, &pi_inventory.read());
+                let model = if model.is_empty() {
+                    "<set model in Settings>".to_owned()
+                } else {
+                    model
+                };
+                format!(
+                    "Intelligence model (Pi)\nProvider: {}\nModel: {}\nTools: {:?}\n",
+                    provider, model, cfg.llm.tool_mode
+                )
+            }
         }
     };
     let tts_tooltip = {
@@ -1289,6 +1664,30 @@ fn app() -> Element {
             }
         });
     }
+
+    // Keep canvas pinned to the newest content unless the user scrolls up.
+    use_effect(move || {
+        let _rev = *canvas_revision.read();
+        if !*canvas_visible.read() {
+            return;
+        }
+        let _ = dioxus::document::eval(
+            "(function(){\
+                const pane = document.getElementById('fae-canvas-pane');\
+                if (!pane) return;\
+                const dist = pane.scrollHeight - pane.scrollTop - pane.clientHeight;\
+                const stick = pane.dataset.stickBottom;\
+                const shouldStick = !stick || stick === 'true' || dist < 180;\
+                if (!shouldStick) return;\
+                if (typeof pane.scrollTo === 'function') {\
+                    pane.scrollTo({ top: pane.scrollHeight, behavior: 'smooth' });\
+                } else {\
+                    pane.scrollTop = pane.scrollHeight;\
+                }\
+                pane.dataset.stickBottom = 'true';\
+            })();",
+        );
+    });
 
     rsx! {
         // Global styles
@@ -1603,8 +2002,19 @@ fn app() -> Element {
                         }
                         div {
                             class: "canvas-pane",
+                            id: "fae-canvas-pane",
                             role: "log",
                             aria_label: "Canvas content",
+                            onscroll: move |_| {
+                                let _ = dioxus::document::eval(
+                                    "(function(){\
+                                        const pane = document.getElementById('fae-canvas-pane');\
+                                        if (!pane) return;\
+                                        const dist = pane.scrollHeight - pane.scrollTop - pane.clientHeight;\
+                                        pane.dataset.stickBottom = dist < 180 ? 'true' : 'false';\
+                                    })();"
+                                );
+                            },
                             dangerous_inner_html: "{build_canvas_messages_html(&canvas_bridge.read())}",
                             if *assistant_generating.read() {
                                 div {
@@ -1617,17 +2027,17 @@ fn app() -> Element {
                                     span { class: "thinking-dot" }
                                 }
                             }
-                        }
-                        {
-                            let tools_html = canvas_bridge.read().session().tool_elements_html();
-                            if !tools_html.is_empty() {
-                                rsx! {
-                                    div { class: "canvas-tools-section",
-                                        dangerous_inner_html: "{tools_html}",
+                            {
+                                let tools_html = canvas_bridge.read().session().tool_elements_html();
+                                if !tools_html.is_empty() {
+                                    rsx! {
+                                        div { class: "canvas-tools-section",
+                                            dangerous_inner_html: "{tools_html}",
+                                        }
                                     }
+                                } else {
+                                    rsx! {}
                                 }
-                            } else {
-                                rsx! {}
                             }
                         }
                     }
@@ -1679,23 +2089,12 @@ fn app() -> Element {
                                 label { class: "settings-label", "Backend" }
                                 select {
                                     class: "settings-select",
-                                    disabled: !settings_enabled,
+                                    disabled: true,
                                     value: "{backend_value}",
-                                    onchange: move |evt| {
-                                        let v = evt.value();
-                                        let backend = match v.as_str() {
-                                            "local" => fae::config::LlmBackend::Local,
-                                            "api" => fae::config::LlmBackend::Api,
-                                            "agent" => fae::config::LlmBackend::Agent,
-                                            _ => fae::config::LlmBackend::Local,
-                                        };
-                                        config_state.write().llm.backend = backend;
-                                    },
-                                    option { value: "local", "Local" }
-                                    option { value: "api", "API" }
-                                    option { value: "agent", "Agent (saorsa)" }
+                                    option { value: "pi", "Pi (RPC)" }
                                 }
                             }
+                            p { class: "note", "Backend is fixed to Pi for tool-capable voice operation." }
                             div { class: "settings-row",
                                 label { class: "settings-label", "Tool mode" }
                                 select {
@@ -1714,9 +2113,104 @@ fn app() -> Element {
                                         config_state.write().llm.tool_mode = mode;
                                     },
                                     option { value: "off", "Off" }
-                                    option { value: "read_only", "Read-only" }
+                                    option { value: "read_only", "Read-only (+ask for escalation)" }
                                     option { value: "read_write", "Read/write (approval)" }
                                     option { value: "full", "Full (approval)" }
+                                }
+                            }
+                            if matches!(cfg_backend, fae::config::LlmBackend::Pi) {
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Primary provider" }
+                                    select {
+                                        class: "settings-select",
+                                        disabled: !settings_enabled,
+                                        value: "{pi_provider_selected}",
+                                        onchange: move |evt| {
+                                            let selected = evt.value();
+                                            if selected == fae::llm::pi_config::FAE_PROVIDER_KEY {
+                                                let mut cfg = config_state.write();
+                                                cfg.llm.cloud_provider = None;
+                                                cfg.llm.cloud_model = None;
+                                            } else {
+                                                let mut cfg = config_state.write();
+                                                cfg.llm.cloud_provider = Some(selected.clone());
+                                                let fallback_model = pi_inventory
+                                                    .read()
+                                                    .models_by_provider
+                                                    .get(&selected)
+                                                    .and_then(|models| models.first())
+                                                    .cloned();
+                                                cfg.llm.cloud_model = fallback_model;
+                                            }
+                                        },
+                                        for provider in &pi_inventory.read().providers {
+                                            option { value: "{provider}", "{provider}" }
+                                        }
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Primary model" }
+                                    if pi_provider_selected == fae::llm::pi_config::FAE_PROVIDER_KEY {
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "text",
+                                            disabled: true,
+                                            value: "{fae::llm::pi_config::FAE_MODEL_ID}",
+                                        }
+                                    } else if !pi_models_for_selected_provider.is_empty() {
+                                        select {
+                                            class: "settings-select",
+                                            disabled: !settings_enabled,
+                                            value: "{pi_model_selected}",
+                                            onchange: move |evt| {
+                                                config_state.write().llm.cloud_model = Some(evt.value());
+                                            },
+                                            for model in &pi_models_for_selected_provider {
+                                                option { value: "{model}", "{model}" }
+                                            }
+                                        }
+                                    } else {
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "text",
+                                            disabled: !settings_enabled,
+                                            value: "{config_state.read().llm.cloud_model.clone().unwrap_or_default()}",
+                                            placeholder: "Enter model id (e.g. claude-sonnet-4.5)",
+                                            oninput: move |evt| {
+                                                let val = evt.value();
+                                                config_state.write().llm.cloud_model = if val.trim().is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(val)
+                                                };
+                                            },
+                                        }
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    button {
+                                        class: "settings-save",
+                                        disabled: !settings_enabled,
+                                        onclick: move |_| {
+                                            pi_inventory.set(load_pi_model_inventory());
+                                            pi_inventory_status.set("Refreshed Pi model inventory.".to_owned());
+                                        },
+                                        "Refresh Pi models"
+                                    }
+                                    p { class: "settings-value",
+                                        "{pi_inventory_status.read()}"
+                                    }
+                                }
+                                if let Some(path) = pi_inventory.read().models_path.as_ref() {
+                                    p { class: "note",
+                                        "Pi models source: {path.display()}"
+                                    }
+                                }
+                                if let Some(err) = pi_inventory.read().load_error.as_ref() {
+                                    p { class: "note", "{err}" }
+                                }
+                                p { class: "note",
+                                    "Local brain stays available as {fae::llm::pi_config::FAE_PROVIDER_KEY}/{fae::llm::pi_config::FAE_MODEL_ID}."
                                 }
                             }
                             div { class: "settings-row",
@@ -2564,46 +3058,197 @@ fn app() -> Element {
 
         {
             match pending_approval.read().as_ref() {
-                Some(req) => rsx!(div {
-                    class: "modal-overlay",
-                    div {
-                        class: "modal",
-                        h2 { class: "modal-title", "Approve Tool?" }
-                        p { class: "modal-subtitle", "The assistant requested:" }
-                        p { class: "modal-tool", "{req.name}" }
-                        pre { class: "modal-json", "{req.input_json}" }
-                        div { class: "modal-actions",
-                            button {
-                                class: "modal-btn modal-approve",
-                                onclick: move |_| {
-                                    if let Some(req) = pending_approval.write().take() {
-                                        let _ = req.respond(true);
-                                    }
-                                    if pending_approval.read().is_none()
-                                        && let Some(next) = approval_queue.write().pop_front()
-                                    {
-                                        pending_approval.set(Some(next));
-                                    }
-                                },
-                                "Approve"
-                            }
-                            button {
-                                class: "modal-btn modal-deny",
-                                onclick: move |_| {
-                                    if let Some(req) = pending_approval.write().take() {
-                                        let _ = req.respond(false);
-                                    }
-                                    if pending_approval.read().is_none()
-                                        && let Some(next) = approval_queue.write().pop_front()
-                                    {
-                                        pending_approval.set(Some(next));
-                                    }
-                                },
-                                "Deny"
+                Some(req) => {
+                    let preview = parse_approval_preview(req);
+                    let title = match preview.kind {
+                        ApprovalUiKind::Confirm => {
+                            if preview.destructive_delete {
+                                "Approve Destructive Action?"
+                            } else {
+                                "Approve Tool Action?"
                             }
                         }
-                    }
-                }),
+                        ApprovalUiKind::Select => "Selection Required",
+                        ApprovalUiKind::Input => "Input Required",
+                        ApprovalUiKind::Editor => "Editor Response Required",
+                    };
+                    let action_label = if matches!(preview.kind, ApprovalUiKind::Confirm) {
+                        "Approve"
+                    } else {
+                        "Submit"
+                    };
+                    let deny_label = if matches!(preview.kind, ApprovalUiKind::Confirm) {
+                        "Deny"
+                    } else {
+                        "Cancel"
+                    };
+                    rsx!(div {
+                        class: "modal-overlay",
+                        div {
+                            class: "modal",
+                            h2 { class: "modal-title", "{title}" }
+                            p { class: "modal-subtitle", "The assistant requested:" }
+                            p { class: "modal-tool", "{preview.title}" }
+                            pre { class: "modal-json", "{preview.message}" }
+                            {
+                                if matches!(preview.kind, ApprovalUiKind::Select) {
+                                    if preview.options.is_empty() {
+                                        rsx! {
+                                            p { class: "note", "No options were provided. You can cancel this request." }
+                                        }
+                                    } else {
+                                        rsx! {
+                                            label { class: "settings-label", "Choose an option" }
+                                            select {
+                                                class: "modal-input modal-select",
+                                                value: "{approval_input_value.read().clone()}",
+                                                onchange: move |evt| {
+                                                    approval_input_value.set(evt.value());
+                                                },
+                                                for opt in &preview.options {
+                                                    option { value: "{opt}", "{opt}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if matches!(preview.kind, ApprovalUiKind::Input) {
+                                    rsx! {
+                                        label { class: "settings-label", "Enter response" }
+                                        input {
+                                            class: "modal-input",
+                                            r#type: "text",
+                                            value: "{approval_input_value.read().clone()}",
+                                            placeholder: "{preview.placeholder.clone().unwrap_or_else(|| \"Type a response\".to_owned())}",
+                                            oninput: move |evt| {
+                                                approval_input_value.set(evt.value());
+                                            },
+                                        }
+                                    }
+                                } else if matches!(preview.kind, ApprovalUiKind::Editor) {
+                                    rsx! {
+                                        label { class: "settings-label", "Edit response" }
+                                        textarea {
+                                            class: "modal-input modal-editor",
+                                            rows: "10",
+                                            value: "{approval_input_value.read().clone()}",
+                                            oninput: move |evt| {
+                                                approval_input_value.set(evt.value());
+                                            },
+                                        }
+                                    }
+                                } else {
+                                    rsx! {}
+                                }
+                            }
+                            div { class: "modal-actions",
+                                button {
+                                    class: "modal-btn modal-approve",
+                                    onclick: move |_| {
+                                        if let Some(req) = pending_approval.write().take() {
+                                            let preview = parse_approval_preview(&req);
+                                            match preview.kind {
+                                                ApprovalUiKind::Confirm => {
+                                                    let _ = req.respond(true);
+                                                    push_approval_decision_to_canvas(
+                                                        &mut canvas_bridge.write(),
+                                                        &preview,
+                                                        true,
+                                                    );
+                                                }
+                                                ApprovalUiKind::Select | ApprovalUiKind::Input | ApprovalUiKind::Editor => {
+                                                    let mut value = approval_input_value.read().clone();
+                                                    if matches!(preview.kind, ApprovalUiKind::Select) && value.trim().is_empty()
+                                                        && let Some(first) = preview.options.first()
+                                                    {
+                                                        value = first.clone();
+                                                    }
+                                                    let _ = req.respond_value(value.clone());
+                                                    push_dialog_response_to_canvas(
+                                                        &mut canvas_bridge.write(),
+                                                        &preview,
+                                                        true,
+                                                        Some(value),
+                                                    );
+                                                }
+                                            }
+                                            let next_rev = {
+                                                let current = *canvas_revision.read();
+                                                current.saturating_add(1)
+                                            };
+                                            canvas_revision.set(next_rev);
+                                        }
+                                        if pending_approval.read().is_none()
+                                            && let Some(next) = approval_queue.write().pop_front()
+                                        {
+                                            push_approval_request_to_canvas(&mut canvas_bridge.write(), &next);
+                                            let preview = parse_approval_preview(&next);
+                                            approval_input_value.set(preview.initial_value.clone());
+                                            let next_rev = {
+                                                let current = *canvas_revision.read();
+                                                current.saturating_add(1)
+                                            };
+                                            canvas_revision.set(next_rev);
+                                            canvas_visible.set(true);
+                                            pending_approval.set(Some(next));
+                                        } else if pending_approval.read().is_none() {
+                                            approval_input_value.set(String::new());
+                                        }
+                                    },
+                                    "{action_label}"
+                                }
+                                button {
+                                    class: "modal-btn modal-deny",
+                                    onclick: move |_| {
+                                        if let Some(req) = pending_approval.write().take() {
+                                            let preview = parse_approval_preview(&req);
+                                            match preview.kind {
+                                                ApprovalUiKind::Confirm => {
+                                                    let _ = req.respond(false);
+                                                    push_approval_decision_to_canvas(
+                                                        &mut canvas_bridge.write(),
+                                                        &preview,
+                                                        false,
+                                                    );
+                                                }
+                                                ApprovalUiKind::Select | ApprovalUiKind::Input | ApprovalUiKind::Editor => {
+                                                    let _ = req.cancel();
+                                                    push_dialog_response_to_canvas(
+                                                        &mut canvas_bridge.write(),
+                                                        &preview,
+                                                        false,
+                                                        None,
+                                                    );
+                                                }
+                                            }
+                                            let next_rev = {
+                                                let current = *canvas_revision.read();
+                                                current.saturating_add(1)
+                                            };
+                                            canvas_revision.set(next_rev);
+                                        }
+                                        if pending_approval.read().is_none()
+                                            && let Some(next) = approval_queue.write().pop_front()
+                                        {
+                                            push_approval_request_to_canvas(&mut canvas_bridge.write(), &next);
+                                            let preview = parse_approval_preview(&next);
+                                            approval_input_value.set(preview.initial_value.clone());
+                                            let next_rev = {
+                                                let current = *canvas_revision.read();
+                                                current.saturating_add(1)
+                                            };
+                                            canvas_revision.set(next_rev);
+                                            canvas_visible.set(true);
+                                            pending_approval.set(Some(next));
+                                        } else if pending_approval.read().is_none() {
+                                            approval_input_value.set(String::new());
+                                        }
+                                    },
+                                    "{deny_label}"
+                                }
+                            }
+                        }
+                    })
+                }
                 None => rsx!(),
             }
         }
@@ -2634,7 +3279,9 @@ fn models_window() -> Element {
     let cfg_backend = config_state.read().llm.backend;
     let can_pick_local_models = matches!(
         cfg_backend,
-        fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent
+        fae::config::LlmBackend::Local
+            | fae::config::LlmBackend::Agent
+            | fae::config::LlmBackend::Pi
     );
 
     let config_path = fae::SpeechConfig::default_config_path();
@@ -2857,7 +3504,7 @@ fn models_window() -> Element {
 
                 if !can_pick_local_models {
                     p { class: "note",
-                        "Model picker is for Local/Agent backends. Switch backends in Settings in the main window."
+                        "Model picker is for Local/Agent/Pi backends. Switch backends in Settings in the main window."
                     }
                 }
 
@@ -4015,6 +4662,30 @@ const GLOBAL_CSS: &str = r#"
         white-space: pre-wrap;
     }
 
+    .modal-input {
+        width: 100%;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        color: var(--text-primary);
+        font-size: 0.82rem;
+        padding: 0.5rem 0.6rem;
+        margin-bottom: 0.8rem;
+        outline: none;
+        font-family: inherit;
+    }
+    .modal-input:focus {
+        border-color: var(--accent);
+    }
+    .modal-select {
+        cursor: pointer;
+    }
+    .modal-editor {
+        min-height: 180px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
     .modal-actions {
         display: flex;
         gap: 0.5rem;
@@ -4105,6 +4776,7 @@ const GLOBAL_CSS: &str = r#"
         flex: 1;
         min-height: 0;
         overflow-y: auto;
+        scroll-behavior: smooth;
         background: var(--bg-secondary);
         border: 1px solid var(--border-subtle);
         border-radius: var(--radius-md);
@@ -4360,7 +5032,7 @@ const GLOBAL_CSS: &str = r#"
     }
     .canvas-tools-section {
         border-top: 1px solid var(--border-subtle);
-        margin-top: 0.5rem;
+        margin-top: 0.8rem;
         padding-top: 0.5rem;
     }
     mark {

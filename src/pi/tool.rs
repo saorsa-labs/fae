@@ -3,7 +3,7 @@
 //! Registers as `pi_delegate` in the agent tool registry, allowing Fae's
 //! LLM to invoke Pi for coding, file editing, and research tasks.
 
-use crate::pi::session::{PiEvent, PiRpcEvent, PiSession};
+use crate::pi::session::{PiAgentEvent, PiOutput, PiSession};
 use saorsa_agent::Tool;
 use saorsa_agent::error::{Result as ToolResult, SaorsaAgentError};
 use std::sync::{Arc, Mutex};
@@ -91,6 +91,7 @@ impl Tool for PiDelegateTool {
 
             // Collect response text until AgentEnd, with timeout.
             let mut text = String::new();
+            let mut delta_buffer = String::new();
             let deadline = Instant::now() + PI_TASK_TIMEOUT;
 
             loop {
@@ -113,15 +114,68 @@ impl Tool for PiDelegateTool {
                     }
                 };
 
-                match &event {
-                    PiEvent::Rpc(PiRpcEvent::MessageUpdate { text: delta }) => {
-                        text.push_str(delta);
+                match event {
+                    PiOutput::Event(PiAgentEvent::MessageStart { message }) => {
+                        if message.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+                            delta_buffer.clear();
+                        }
                     }
-                    PiEvent::Rpc(PiRpcEvent::AgentEnd) => break,
-                    PiEvent::ProcessExited => {
+                    PiOutput::Event(PiAgentEvent::MessageUpdate {
+                        message,
+                        assistant_message_event,
+                    }) => {
+                        if message.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                            continue;
+                        }
+                        // Extract monotonic text chunks from the event stream.
+                        let evt_type = assistant_message_event
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if evt_type != "text_delta"
+                            && evt_type != "text_start"
+                            && evt_type != "text_end"
+                        {
+                            continue;
+                        }
+
+                        let delta = assistant_message_event
+                            .get("delta")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let content = assistant_message_event
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        let mut chunk = String::new();
+                        if !delta.is_empty() {
+                            chunk.push_str(delta);
+                        } else if !content.is_empty() {
+                            // Some providers resend full content on `text_end`.
+                            if let Some(stripped) = content.strip_prefix(&delta_buffer) {
+                                chunk.push_str(stripped);
+                            } else if delta_buffer.starts_with(content) {
+                                // Late/duplicate end event.
+                            } else if !delta_buffer.contains(content) {
+                                chunk.push_str(content);
+                            }
+                        }
+
+                        if !chunk.is_empty() {
+                            delta_buffer.push_str(&chunk);
+                            text.push_str(&chunk);
+                        }
+                    }
+                    PiOutput::Event(PiAgentEvent::AgentEnd { .. }) => break,
+                    PiOutput::ProcessExited => {
                         return Err(SaorsaAgentError::Tool(
                             "Pi process exited during task".to_owned(),
                         ));
+                    }
+                    PiOutput::ExtensionUiRequest(req) => {
+                        // Delegate tool has no interactive UI; fail safe by cancelling.
+                        let _ = guard.send_ui_cancel(req.id());
                     }
                     _ => {}
                 }
