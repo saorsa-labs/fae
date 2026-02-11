@@ -483,6 +483,31 @@ impl PiLlm {
         Ok(switch_acknowledgment(&target_name))
     }
 
+    /// Revert to a fallback model after a voice-initiated switch fails.
+    ///
+    /// Uses [`pick_failover_candidate`] to find an alternative, switches to it,
+    /// and returns a TTS-ready message. If no fallback is available, returns an
+    /// error message.
+    pub fn revert_to_fallback(&mut self, failed_name: &str, err_msg: &str) -> String {
+        let tried = std::collections::HashSet::from([self.active_model_idx]);
+        if let Some(fallback_idx) = self.pick_failover_candidate(&tried, err_msg) {
+            let fallback_name = self.model_candidates[fallback_idx].display();
+
+            if let Some(tx) = &self.runtime_tx {
+                let _ = tx.send(RuntimeEvent::ModelSwitchRequested {
+                    target: fallback_name.clone(),
+                });
+            }
+
+            self.switch_to_candidate(fallback_idx);
+            self.emit_model_selected(&fallback_name);
+
+            format!("Couldn't reach {failed_name}, falling back to {fallback_name}.")
+        } else {
+            format!("Couldn't reach {failed_name} and no fallback is available.")
+        }
+    }
+
     fn active_model(&self) -> &ProviderModelRef {
         // `active_model_idx` is always sourced from `model_candidates`.
         &self.model_candidates[self.active_model_idx]
@@ -1872,6 +1897,38 @@ mod tests {
 
         let result = pi.switch_model_by_voice(&ModelTarget::Best);
         assert!(result.is_ok());
+        assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[test]
+    fn revert_to_fallback_switches_to_another_candidate() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut rx) = test_pi_no_rx(candidates);
+        // Simulate being on candidate 0 (anthropic) which "failed".
+        let msg = pi.revert_to_fallback("anthropic/claude-opus-4", "connection timed out");
+        assert!(msg.contains("falling back to"), "got: {msg}");
+        assert!(msg.contains("openai/gpt-4o"), "got: {msg}");
+        assert_eq!(pi.active_model_idx, 1);
+
+        // Should have emitted events.
+        assert!(rx.try_recv().is_ok()); // ModelSwitchRequested
+        assert!(rx.try_recv().is_ok()); // ModelSelected
+    }
+
+    #[test]
+    fn revert_to_fallback_no_alternative() {
+        let candidates = vec![ProviderModelRef::new(
+            "anthropic".into(),
+            "claude-opus-4".into(),
+            10,
+        )];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+        let msg = pi.revert_to_fallback("anthropic/claude-opus-4", "connection timed out");
+        assert!(msg.contains("no fallback"), "got: {msg}");
+        // Index unchanged.
         assert_eq!(pi.active_model_idx, 0);
     }
 }
