@@ -14,25 +14,25 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 7,
-    "current_task": 7
+    "completed_tasks": 8,
+    "current_task": 8
   },
   "task": {
-    "current": 7,
+    "current": 8,
     "total": 8,
-    "name": "Add configuration for selection timeout"
+    "name": "Integration tests and verification"
   },
   "review": {
     "status": "passed",
-    "iteration": 1,
+    "iteration": 3,
     "last_verdict": "PASS",
     "findings_count": {
       "critical": 0,
       "important": 0,
-      "minor": 0
+      "minor": 2
     }
   },
-  "status": "executing",
-  "last_action": "tasks_3_7_review_passed",
-  "last_updated": "2026-02-11T15:15:00Z"
+  "status": "complete",
+  "last_action": "task_8_review_complete_with_fixes",
+  "last_updated": "2026-02-11T16:15:00Z"
 }
