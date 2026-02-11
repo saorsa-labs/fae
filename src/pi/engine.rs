@@ -6,7 +6,7 @@ use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use crate::config::{AgentToolMode, LlmConfig, PiConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::pi_config::{FAE_MODEL_ID, FAE_PROVIDER_KEY};
-use crate::model_tier::{ModelTier, tier_for_provider_model};
+use crate::model_selection::ProviderModelRef;
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
 
@@ -39,32 +39,7 @@ You are operating under Fae's approval policy.
 - Then request escalation via the required tool call and wait for approval.
 - Never perform destructive operations unless approval is granted.";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProviderModelRef {
-    provider: String,
-    model: String,
-    /// Capability tier (auto-computed from model ID).
-    tier: ModelTier,
-    /// User-defined priority within the same tier (higher = preferred).
-    priority: i32,
-}
-
-impl ProviderModelRef {
-    /// Build a reference, auto-computing the tier from model + provider IDs.
-    fn new(provider: String, model: String, priority: i32) -> Self {
-        let tier = tier_for_provider_model(&provider, &model);
-        Self {
-            provider,
-            model,
-            tier,
-            priority,
-        }
-    }
-
-    fn display(&self) -> String {
-        format!("{}/{}", self.provider, self.model)
-    }
-}
+// ProviderModelRef moved to crate::model_selection
 
 /// Pi-driven backend that streams assistant text to the TTS/canvas pipeline.
 pub struct PiLlm {
@@ -1124,6 +1099,7 @@ fn write_atomic(path: &Path, content: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_tier::ModelTier;
 
     #[test]
     fn tool_allowlists_match_expected_modes() {
