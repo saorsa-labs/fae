@@ -14,13 +14,13 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 5,
-    "current_task": 6
+    "completed_tasks": 6,
+    "current_task": 7
   },
   "task": {
-    "current": 6,
+    "current": 7,
     "total": 8,
-    "name": "VoiceCommandFilter stage in pipeline"
+    "name": "Integration tests"
   },
   "review": {
     "status": "passed",
@@ -33,6 +33,6 @@
     }
   },
   "status": "executing",
-  "last_action": "task_5_complete",
-  "last_updated": "2026-02-11T17:55:00Z"
+  "last_action": "task_6_complete",
+  "last_updated": "2026-02-11T18:00:00Z"
 }

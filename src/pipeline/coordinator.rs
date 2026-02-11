@@ -60,6 +60,11 @@ pub struct PipelineCoordinator {
     console_output: bool,
     /// Receiver for model selection responses from the GUI.
     model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+    /// Sender for voice commands detected by the pipeline filter.
+    ///
+    /// Created during `run()` and passed to the LLM stage (Phase 2.2)
+    /// where `PiLlm` will consume commands to switch models at runtime.
+    voice_command_tx: Option<mpsc::UnboundedSender<crate::voice_command::VoiceCommand>>,
 }
 
 impl PipelineCoordinator {
@@ -79,6 +84,7 @@ impl PipelineCoordinator {
             llm_server: None,
             console_output: true,
             model_selection_rx: None,
+            voice_command_tx: None,
         }
     }
 
@@ -100,6 +106,7 @@ impl PipelineCoordinator {
             llm_server: None,
             console_output: true,
             model_selection_rx: None,
+            voice_command_tx: None,
         }
     }
 
@@ -426,6 +433,29 @@ impl PipelineCoordinator {
                     (ident_rx, None)
                 };
 
+                // Voice command filter: intercepts model-switch phrases
+                // before they reach the LLM. Non-command transcriptions pass through.
+                let (voice_cmd_tx, _voice_cmd_rx) =
+                    mpsc::unbounded_channel::<crate::voice_command::VoiceCommand>();
+                self.voice_command_tx = Some(voice_cmd_tx.clone());
+                let (filtered_tx, filtered_rx) =
+                    mpsc::channel::<Transcription>(TRANSCRIPTION_CHANNEL_SIZE);
+                let vcf_handle = {
+                    let runtime_tx = runtime_tx.clone();
+                    let cancel = cancel.clone();
+                    tokio::spawn(async move {
+                        run_voice_command_filter(
+                            llm_rx,
+                            filtered_tx,
+                            voice_cmd_tx,
+                            runtime_tx,
+                            cancel,
+                        )
+                        .await;
+                    })
+                };
+                let llm_rx = filtered_rx;
+
                 // Forward LLM sentences to both TTS and runtime event stream.
                 // Also intercepts JSON canvas output from local models.
                 let sentence_forward_handle = {
@@ -586,6 +616,7 @@ impl PipelineCoordinator {
                         stt_handle,
                         identity_handle,
                         gate,
+                        vcf_handle,
                         llm_handle,
                         sentence_forward_handle,
                         tts_handle,
@@ -597,6 +628,7 @@ impl PipelineCoordinator {
                         vad_handle,
                         stt_handle,
                         identity_handle,
+                        vcf_handle,
                         llm_handle,
                         sentence_forward_handle,
                         tts_handle,
@@ -1039,6 +1071,49 @@ async fn run_identity_gate(
                 // TODO: Speaker detection disabled — respond to all speech.
                 // Re-enable voiceprint gating once embeddings are more stable.
 
+                if tx.send(t).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Filter transcriptions for voice commands before they reach the LLM.
+///
+/// Final transcriptions are checked against `parse_voice_command()`. If a command
+/// is detected, it is sent to `cmd_tx` and a `VoiceCommandDetected` runtime event
+/// is emitted. Non-command (and partial) transcriptions pass through to `tx`.
+async fn run_voice_command_filter(
+    mut rx: mpsc::Receiver<Transcription>,
+    tx: mpsc::Sender<Transcription>,
+    cmd_tx: mpsc::UnboundedSender<crate::voice_command::VoiceCommand>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    cancel: CancellationToken,
+) {
+    use crate::voice_command::parse_voice_command;
+
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => break,
+            msg = rx.recv() => {
+                let Some(t) = msg else { break };
+
+                // Only inspect final transcriptions for commands.
+                if t.is_final
+                    && let Some(cmd) = parse_voice_command(&t.text)
+                {
+                    let description = format!("{cmd:?}");
+                    if let Some(ref tx) = runtime_tx {
+                        let _ = tx.send(RuntimeEvent::VoiceCommandDetected {
+                            command: description,
+                        });
+                    }
+                    let _ = cmd_tx.send(cmd);
+                    continue; // Do not forward to LLM.
+                }
+
+                // Not a command — pass through.
                 if tx.send(t).await.is_err() {
                     break;
                 }
