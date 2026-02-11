@@ -33,6 +33,8 @@ pub mod huggingface;
 pub mod llm;
 pub mod memory;
 pub mod model_picker;
+pub mod model_selection;
+pub mod model_tier;
 pub mod models;
 pub mod personality;
 pub mod pi;
@@ -48,6 +50,7 @@ pub mod tts;
 pub mod update;
 pub mod vad;
 pub mod voice_clone;
+pub mod voice_command;
 pub mod voiceprint;
 pub mod wakeword;
 

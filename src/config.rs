@@ -239,6 +239,13 @@ pub struct LlmConfig {
     /// When set, overrides `api_model` for the cloud provider.
     #[serde(default)]
     pub cloud_model: Option<String>,
+    /// Timeout in seconds for the interactive model selection prompt.
+    ///
+    /// When multiple top-tier models are available and the user is prompted to
+    /// choose, this controls how long to wait before auto-selecting the first
+    /// candidate. Defaults to 30 seconds.
+    #[serde(default = "default_model_selection_timeout_secs")]
+    pub model_selection_timeout_secs: u32,
 }
 
 impl Default for LlmConfig {
@@ -266,6 +273,7 @@ impl Default for LlmConfig {
             system_prompt: String::new(),
             cloud_provider: None,
             cloud_model: None,
+            model_selection_timeout_secs: default_model_selection_timeout_secs(),
         }
     }
 }
@@ -288,6 +296,10 @@ pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize
         Some(_) => 65_536,
         None => 32_768,
     }
+}
+
+fn default_model_selection_timeout_secs() -> u32 {
+    30
 }
 
 impl LlmConfig {
@@ -874,5 +886,28 @@ mod tests {
         assert_eq!(recommended_context_size_tokens(Some(32 * GIB)), 32_768);
         assert_eq!(recommended_context_size_tokens(Some(64 * GIB)), 65_536);
         assert_eq!(recommended_context_size_tokens(None), 32_768);
+    }
+
+    #[test]
+    fn llm_config_model_selection_timeout_default() {
+        let config = LlmConfig::default();
+        assert_eq!(config.model_selection_timeout_secs, 30);
+    }
+
+    #[test]
+    fn llm_config_model_selection_timeout_deserialize() {
+        let toml_str = r#"
+[llm]
+model_selection_timeout_secs = 60
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.llm.model_selection_timeout_secs, 60);
+    }
+
+    #[test]
+    fn llm_config_model_selection_timeout_missing_uses_default() {
+        let toml_str = "[llm]";
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.llm.model_selection_timeout_secs, 30);
     }
 }

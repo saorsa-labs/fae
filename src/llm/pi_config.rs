@@ -111,6 +111,16 @@ pub struct PiModel {
     #[serde(default)]
     pub compat: Option<serde_json::Value>,
 
+    /// User-defined selection priority within the same capability tier.
+    ///
+    /// Higher values are preferred. When two models share a [`ModelTier`],
+    /// the one with the higher priority is tried first.  Defaults to `0`
+    /// when absent from `models.json`.
+    ///
+    /// [`ModelTier`]: crate::model_tier::ModelTier
+    #[serde(default)]
+    pub priority: Option<i32>,
+
     /// Preserve unknown model keys on round-trip.
     #[serde(default, flatten)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -223,6 +233,7 @@ pub fn write_fae_local_provider(path: &Path, port: u16) -> Result<()> {
                 // Fae's server accepts `max_tokens`.
                 "maxTokensField": "max_tokens"
             })),
+            priority: None,
             extra: HashMap::new(),
         }]),
         headers: None,
@@ -367,6 +378,7 @@ mod tests {
                     cost: None,
                     headers: None,
                     compat: None,
+                    priority: None,
                     extra: HashMap::new(),
                 }]),
                 headers: None,
@@ -421,6 +433,7 @@ mod tests {
                         cost: None,
                         headers: None,
                         compat: None,
+                        priority: None,
                         extra: HashMap::new(),
                     },
                     PiModel {
@@ -434,6 +447,7 @@ mod tests {
                         cost: None,
                         headers: None,
                         compat: None,
+                        priority: None,
                         extra: HashMap::new(),
                     },
                 ]),
@@ -454,6 +468,7 @@ mod tests {
                     cost: None,
                     headers: None,
                     compat: None,
+                    priority: None,
                     extra: HashMap::new(),
                 }]),
                 ..PiProvider::default()

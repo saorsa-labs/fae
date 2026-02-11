@@ -50,4 +50,39 @@ pub enum RuntimeEvent {
     },
     /// Memory schema migration progress/event.
     MemoryMigration { from: u32, to: u32, success: bool },
+    /// Model selection prompt for GUI (when multiple top-tier models available).
+    ///
+    /// The GUI should display a picker UI with the candidate models and
+    /// allow the user to select one. If no selection is made within the
+    /// timeout period, the first candidate will be auto-selected.
+    ModelSelectionPrompt {
+        /// List of "provider/model" strings to display in picker.
+        candidates: Vec<String>,
+        /// Timeout in seconds before auto-selecting first candidate.
+        timeout_secs: u32,
+    },
+    /// Model selection confirmed (either by user or auto-selected).
+    ///
+    /// Emitted after model selection completes, for UI feedback.
+    ModelSelected {
+        /// Selected model in "provider/model" format.
+        provider_model: String,
+    },
+    /// A voice command was detected in a transcription.
+    ///
+    /// Emitted when the voice command filter intercepts a command phrase
+    /// (e.g. "switch to Claude") before it reaches the LLM.
+    VoiceCommandDetected {
+        /// Human-readable description of the detected command.
+        command: String,
+    },
+    /// A model switch was requested via voice command.
+    ///
+    /// Emitted after a `SwitchModel` voice command is parsed and before
+    /// the actual switch is executed. The GUI can use this to show a
+    /// transitional state.
+    ModelSwitchRequested {
+        /// Target model description (e.g. "anthropic" or "local").
+        target: String,
+    },
 }

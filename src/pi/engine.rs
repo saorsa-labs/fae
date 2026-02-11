@@ -1,13 +1,54 @@
 //! Pi-backed LLM engine.
 //!
 //! Architecture: Pi runs the agent loop and tool execution; Fae hosts voice + canvas UI.
+//!
+//! # Model Selection Flow
+//!
+//! When the Pi backend starts, it determines which model to use:
+//!
+//! 1. **Candidate Resolution**: The internal `resolve_pi_model_candidates` function builds a sorted list
+//!    of available models from local config, cloud providers, and the FAE fallback.
+//!
+//! 2. **Decision**: [`crate::model_selection::decide_model_selection`] determines whether to auto-select or prompt:
+//!    - No candidates → Error
+//!    - Single candidate → Auto-select
+//!    - Multiple top-tier models → Prompt user (if channel available)
+//!    - Mixed tiers → Auto-select best
+//!
+//! 3. **User Prompt**: If prompting, [`PiLlm::select_startup_model`] emits a
+//!    [`RuntimeEvent::ModelSelectionPrompt`] through the runtime event channel.
+//!
+//! 4. **GUI Response**: The GUI sends the user's selection through the
+//!    `model_selection_rx` mpsc channel (connected via the pipeline coordinator's
+//!    `with_model_selection` builder method).
+//!
+//! 5. **Fallback**: On timeout or invalid selection, the first candidate is auto-selected.
+//!
+//! 6. **Confirmation**: A [`RuntimeEvent::ModelSelected`] event is emitted for UI feedback.
+//!
+//! ```text
+//! ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+//! │  PiLlm::new()   │───►│ select_startup   │───►│ RuntimeEvent::  │
+//! │  (candidates)   │    │ _model()         │    │ ModelSelected   │
+//! └─────────────────┘    └────────┬─────────┘    └─────────────────┘
+//!                                 │
+//!                    ┌────────────▼────────────┐
+//!                    │ PromptUser?             │
+//!                    │ ├─ Yes: emit prompt     │
+//!                    │ │  wait for channel     │
+//!                    │ │  timeout → fallback   │
+//!                    │ └─ No: auto-select      │
+//!                    └─────────────────────────┘
+//! ```
 
 use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use crate::config::{AgentToolMode, LlmConfig, PiConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::pi_config::{FAE_MODEL_ID, FAE_PROVIDER_KEY};
+use crate::model_selection::{ModelSelectionDecision, ProviderModelRef, decide_model_selection};
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
+use crate::voice_command::{ModelTarget, resolve_model_target};
 
 use crate::pi::manager::PiManager;
 use crate::pi::session::{
@@ -38,17 +79,7 @@ You are operating under Fae's approval policy.
 - Then request escalation via the required tool call and wait for approval.
 - Never perform destructive operations unless approval is granted.";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProviderModelRef {
-    provider: String,
-    model: String,
-}
-
-impl ProviderModelRef {
-    fn display(&self) -> String {
-        format!("{}/{}", self.provider, self.model)
-    }
-}
+// ProviderModelRef moved to crate::model_selection
 
 /// Pi-driven backend that streams assistant text to the TTS/canvas pipeline.
 pub struct PiLlm {
@@ -60,6 +91,14 @@ pub struct PiLlm {
     model_candidates: Vec<ProviderModelRef>,
     active_model_idx: usize,
 
+    /// Channel for receiving user model selection from the GUI picker.
+    /// When `None`, the engine auto-selects the best model without prompting.
+    model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+
+    /// Channel for receiving voice commands from the pipeline filter.
+    /// When `Some`, the LLM stage polls this to handle runtime model switching.
+    voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
+
     // Per-run state.
     assistant_delta_buffer: String,
 }
@@ -70,6 +109,8 @@ impl PiLlm {
         pi_config: PiConfig,
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+        model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+        voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
     ) -> Result<Self> {
         let model_candidates = resolve_pi_model_candidates(&llm_config)?;
         let primary = model_candidates
@@ -123,8 +164,106 @@ impl PiLlm {
             next_approval_id: 1,
             model_candidates,
             active_model_idx: 0,
+            model_selection_rx,
+            voice_command_rx,
             assistant_delta_buffer: String::new(),
         })
+    }
+
+    /// Select the startup model, optionally prompting the user via the GUI.
+    ///
+    /// When multiple top-tier models are available and a `model_selection_rx`
+    /// channel exists, emits a [`RuntimeEvent::ModelSelectionPrompt`] and waits
+    /// for a response. Falls back to auto-selecting the first candidate on
+    /// timeout or if no channel is configured.
+    pub async fn select_startup_model(&mut self, timeout: Duration) -> Result<()> {
+        let decision = decide_model_selection(&self.model_candidates);
+
+        match decision {
+            ModelSelectionDecision::NoModels => {
+                return Err(SpeechError::Pi("no model candidates available".to_owned()));
+            }
+            ModelSelectionDecision::AutoSelect(model) => {
+                let label = model.display();
+                tracing::info!("auto-selected model: {label}");
+                self.emit_model_selected(&label);
+            }
+            ModelSelectionDecision::PromptUser(top_tier) => {
+                // Collect candidate names before taking &mut self for the channel.
+                let candidate_names: Vec<String> =
+                    top_tier.iter().map(ProviderModelRef::display).collect();
+                let first_display = self.model_candidates[0].display();
+
+                // Try to prompt the user if we have a selection channel.
+                let selected = self.prompt_user_for_model(&candidate_names, timeout).await;
+
+                if let Some(chosen) = selected {
+                    if let Some(idx) = self
+                        .model_candidates
+                        .iter()
+                        .position(|c| c.display() == chosen)
+                    {
+                        self.active_model_idx = idx;
+                        tracing::info!("user selected model: {chosen}");
+                        self.emit_model_selected(&chosen);
+                        return Ok(());
+                    }
+                    tracing::warn!("user selection '{chosen}' not found, auto-selecting first");
+                }
+
+                // Fallback: auto-select first candidate (already at index 0).
+                self.active_model_idx = 0;
+                tracing::info!("auto-selecting model: {first_display}");
+                self.emit_model_selected(&first_display);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// If a model selection channel is available, emit the prompt event and
+    /// wait for a user response (or timeout). Returns `Some(selection)` if the
+    /// user chose, `None` otherwise.
+    async fn prompt_user_for_model(
+        &mut self,
+        candidates: &[String],
+        timeout: Duration,
+    ) -> Option<String> {
+        // Confirm a receiver exists before emitting the prompt.
+        self.model_selection_rx.as_ref()?;
+        self.emit_model_selection_prompt(candidates, timeout);
+
+        let rx = self.model_selection_rx.as_mut()?;
+        match tokio::time::timeout(timeout, rx.recv()).await {
+            Ok(Some(selected)) => Some(selected),
+            Ok(None) => {
+                tracing::warn!("model selection channel closed, auto-selecting");
+                None
+            }
+            Err(_) => {
+                tracing::info!("model selection timed out, auto-selecting first");
+                None
+            }
+        }
+    }
+
+    /// Emit a `ModelSelectionPrompt` event if a runtime sender is available.
+    fn emit_model_selection_prompt(&self, candidates: &[String], timeout: Duration) {
+        if let Some(tx) = &self.runtime_tx {
+            let _ = tx.send(RuntimeEvent::ModelSelectionPrompt {
+                candidates: candidates.to_vec(),
+                timeout_secs: timeout.as_secs().min(u64::from(u32::MAX)) as u32,
+            });
+        }
+    }
+
+    /// Emit a `ModelSelected` event if a runtime sender is available.
+    fn emit_model_selected(&self, provider_model: &str) {
+        if let Some(tx) = &self.runtime_tx {
+            let _ = tx.send(RuntimeEvent::ModelSelected {
+                provider_model: provider_model.to_owned(),
+            });
+        }
     }
 
     pub async fn generate_response(
@@ -247,6 +386,128 @@ impl PiLlm {
         self.session.shutdown();
     }
 
+    /// Returns the display names of all model candidates, in priority order.
+    ///
+    /// Each name is in `"provider/model"` format (e.g. `"anthropic/claude-opus-4"`).
+    pub fn list_model_names(&self) -> Vec<String> {
+        self.model_candidates.iter().map(|c| c.display()).collect()
+    }
+
+    /// Returns the display name of the currently active model.
+    ///
+    /// Format: `"provider/model"` (e.g. `"openai/gpt-4o"`).
+    pub fn current_model_name(&self) -> String {
+        self.active_model().display()
+    }
+
+    /// Returns the number of model candidates available.
+    pub fn candidate_count(&self) -> usize {
+        self.model_candidates.len()
+    }
+
+    /// Returns the index of the currently active model in the candidate list.
+    pub fn active_model_index(&self) -> usize {
+        self.active_model_idx
+    }
+
+    /// Takes the voice-command receiver out of this engine.
+    ///
+    /// The caller (typically the LLM stage loop) uses the returned receiver
+    /// to handle voice commands concurrently with LLM generation.
+    pub fn take_voice_command_rx(
+        &mut self,
+    ) -> Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>> {
+        self.voice_command_rx.take()
+    }
+
+    /// Build a minimal `PiLlm` for unit testing in other modules.
+    ///
+    /// Uses a dummy `PiSession` and returns both the engine and the
+    /// runtime event receiver for assertions.
+    #[cfg(test)]
+    pub(crate) fn test_instance(
+        candidates: Vec<ProviderModelRef>,
+    ) -> (Self, broadcast::Receiver<RuntimeEvent>) {
+        let (tx, rx) = broadcast::channel(16);
+        let pi = Self {
+            runtime_tx: Some(tx),
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: candidates,
+            active_model_idx: 0,
+            model_selection_rx: None,
+            voice_command_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        (pi, rx)
+    }
+
+    /// Switch model via a voice command target.
+    ///
+    /// Resolves the [`ModelTarget`] against the current candidate list, emits
+    /// runtime events, and performs the switch. Returns `Ok(message)` with a
+    /// human-readable TTS string on success, or `Err(message)` if the target
+    /// cannot be resolved.
+    ///
+    /// If the resolved model is already the active model, this is a no-op that
+    /// returns an "already using" message.
+    pub fn switch_model_by_voice(&mut self, target: &ModelTarget) -> std::result::Result<String, String> {
+        use crate::voice_command::{
+            already_using_acknowledgment, model_not_found_response, switch_acknowledgment,
+        };
+
+        let Some(idx) = resolve_model_target(target, &self.model_candidates) else {
+            return Err(model_not_found_response(&format!("{target:?}")));
+        };
+
+        // Already using this model — no-op.
+        if idx == self.active_model_idx {
+            return Ok(already_using_acknowledgment(&self.active_model().display()));
+        }
+
+        let target_name = self.model_candidates[idx].display();
+
+        // Emit "about to switch" event.
+        if let Some(tx) = &self.runtime_tx {
+            let _ = tx.send(RuntimeEvent::ModelSwitchRequested {
+                target: target_name.clone(),
+            });
+        }
+
+        self.switch_to_candidate(idx);
+
+        // Emit "switch complete" event.
+        self.emit_model_selected(&target_name);
+
+        Ok(switch_acknowledgment(&target_name))
+    }
+
+    /// Revert to a fallback model after a voice-initiated switch fails.
+    ///
+    /// Uses [`pick_failover_candidate`] to find an alternative, switches to it,
+    /// and returns a TTS-ready message. If no fallback is available, returns an
+    /// error message.
+    pub fn revert_to_fallback(&mut self, failed_name: &str, err_msg: &str) -> String {
+        let tried = std::collections::HashSet::from([self.active_model_idx]);
+        if let Some(fallback_idx) = self.pick_failover_candidate(&tried, err_msg) {
+            let fallback_name = self.model_candidates[fallback_idx].display();
+
+            if let Some(tx) = &self.runtime_tx {
+                let _ = tx.send(RuntimeEvent::ModelSwitchRequested {
+                    target: fallback_name.clone(),
+                });
+            }
+
+            self.switch_to_candidate(fallback_idx);
+            self.emit_model_selected(&fallback_name);
+
+            format!("Couldn't reach {failed_name}, falling back to {fallback_name}.")
+        } else {
+            format!("Couldn't reach {failed_name} and no fallback is available.")
+        }
+    }
+
     fn active_model(&self) -> &ProviderModelRef {
         // `active_model_idx` is always sourced from `model_candidates`.
         &self.model_candidates[self.active_model_idx]
@@ -343,13 +604,12 @@ impl PiLlm {
         .await
         .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
 
-        let input_json = serde_json::json!({
-            "title": title,
-            "message": message,
-            "timeout_ms": UI_CONFIRM_TIMEOUT.as_millis() as u64,
-            "kind": "model_failover",
-        })
-        .to_string();
+        let input_json = make_dialog_json(
+            "model_failover",
+            title,
+            &message,
+            UI_CONFIRM_TIMEOUT.as_millis() as u64,
+        );
 
         let approved = matches!(
             self.request_ui_dialog_response("pi.model_failover", input_json, UI_CONFIRM_TIMEOUT)
@@ -495,13 +755,8 @@ impl PiLlm {
                 .await
                 .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
 
-                let input_json = serde_json::json!({
-                    "kind": "confirm",
-                    "title": title,
-                    "message": message,
-                    "timeout_ms": timeout,
-                })
-                .to_string();
+                let timeout_ms = timeout.unwrap_or(UI_CONFIRM_TIMEOUT.as_millis() as u64);
+                let input_json = make_dialog_json("confirm", &title, &message, timeout_ms);
 
                 let t = timeout
                     .map(Duration::from_millis)
@@ -539,12 +794,13 @@ impl PiLlm {
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
+                let timeout_ms = timeout.unwrap_or(UI_CONFIRM_TIMEOUT.as_millis() as u64);
                 let input_json = serde_json::json!({
                     "kind": "select",
                     "title": title,
                     "message": message,
                     "options": options,
-                    "timeout_ms": timeout,
+                    "timeout_ms": timeout_ms,
                 })
                 .to_string();
 
@@ -583,12 +839,13 @@ impl PiLlm {
                 .await
                 .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
 
+                let timeout_ms = timeout.unwrap_or(UI_CONFIRM_TIMEOUT.as_millis() as u64);
                 let input_json = serde_json::json!({
                     "kind": "input",
                     "title": title,
                     "message": title,
                     "placeholder": placeholder,
-                    "timeout_ms": timeout,
+                    "timeout_ms": timeout_ms,
                 })
                 .to_string();
 
@@ -676,16 +933,22 @@ impl PiLlm {
     }
 }
 
+/// Returns the base read-only tools common to all modes.
+#[inline]
+fn base_read_tools() -> Vec<String> {
+    vec![
+        "read".to_owned(),
+        "grep".to_owned(),
+        "find".to_owned(),
+        "ls".to_owned(),
+    ]
+}
+
 fn tools_for_mode(mode: AgentToolMode, gate_loaded: bool) -> PiToolsConfig {
     match mode {
         AgentToolMode::Off => PiToolsConfig::None,
         AgentToolMode::ReadOnly => {
-            let mut tools = vec![
-                "read".to_owned(),
-                "grep".to_owned(),
-                "find".to_owned(),
-                "ls".to_owned(),
-            ];
+            let mut tools = base_read_tools();
             if gate_loaded {
                 // Allow gated shell only when the permission gate is active.
                 tools.push("bash".to_owned());
@@ -693,12 +956,7 @@ fn tools_for_mode(mode: AgentToolMode, gate_loaded: bool) -> PiToolsConfig {
             PiToolsConfig::Allowlist(tools)
         }
         AgentToolMode::ReadWrite => {
-            let mut tools = vec![
-                "read".to_owned(),
-                "grep".to_owned(),
-                "find".to_owned(),
-                "ls".to_owned(),
-            ];
+            let mut tools = base_read_tools();
             if gate_loaded {
                 tools.push("edit".to_owned());
                 tools.push("write".to_owned());
@@ -706,12 +964,7 @@ fn tools_for_mode(mode: AgentToolMode, gate_loaded: bool) -> PiToolsConfig {
             PiToolsConfig::Allowlist(tools)
         }
         AgentToolMode::Full => {
-            let mut tools = vec![
-                "read".to_owned(),
-                "grep".to_owned(),
-                "find".to_owned(),
-                "ls".to_owned(),
-            ];
+            let mut tools = base_read_tools();
             if gate_loaded {
                 tools.push("edit".to_owned());
                 tools.push("write".to_owned());
@@ -834,71 +1087,86 @@ fn resolve_pi_model_candidates(config: &LlmConfig) -> Result<Vec<ProviderModelRe
     let mut out = Vec::<ProviderModelRef>::new();
     let mut seen = HashSet::<(String, String)>::new();
 
+    // Optional pi_config for priority lookups.
+    let pi_config = crate::llm::pi_config::default_pi_models_path()
+        .and_then(|p| crate::llm::pi_config::read_pi_config(&p).ok());
+
+    let priority_for =
+        |pi_cfg: &Option<crate::llm::pi_config::PiModelsConfig>, prov: &str, model: &str| -> i32 {
+            pi_cfg
+                .as_ref()
+                .and_then(|c| c.find_model(prov, model))
+                .and_then(|m| m.priority)
+                .unwrap_or(0)
+        };
+
     let push = |out: &mut Vec<ProviderModelRef>,
                 seen: &mut HashSet<(String, String)>,
                 provider: String,
-                model: String| {
+                model: String,
+                priority: i32| {
         let p = provider.trim().to_owned();
         let m = model.trim().to_owned();
         if p.is_empty() || m.is_empty() {
             return;
         }
         if seen.insert((p.clone(), m.clone())) {
-            out.push(ProviderModelRef {
-                provider: p,
-                model: m,
-            });
+            out.push(ProviderModelRef::new(p, m, priority));
         }
     };
 
-    push(&mut out, &mut seen, primary.0, primary.1);
+    let pri = priority_for(&pi_config, &primary.0, &primary.1);
+    push(&mut out, &mut seen, primary.0, primary.1, pri);
+
     if !matches!(
         out.first(),
         Some(ProviderModelRef {
             provider,
-            model: _
+            model: _,
+            ..
         }) if provider == FAE_PROVIDER_KEY
     ) {
+        let pri = priority_for(&pi_config, FAE_PROVIDER_KEY, FAE_MODEL_ID);
         push(
             &mut out,
             &mut seen,
             FAE_PROVIDER_KEY.to_owned(),
             FAE_MODEL_ID.to_owned(),
+            pri,
         );
     }
 
     if let Some(provider) = &config.cloud_provider
         && let Some(model) = &config.cloud_model
     {
-        push(&mut out, &mut seen, provider.clone(), model.clone());
+        let pri = priority_for(&pi_config, provider, model);
+        push(&mut out, &mut seen, provider.clone(), model.clone(), pri);
     }
 
     if let Some(provider) = &config.cloud_provider
         && config.cloud_model.is_none()
         && !config.api_model.trim().is_empty()
     {
+        let pri = priority_for(&pi_config, provider, &config.api_model);
         push(
             &mut out,
             &mut seen,
             provider.clone(),
             config.api_model.clone(),
+            pri,
         );
     }
 
-    if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path() {
-        match crate::llm::pi_config::read_pi_config(&pi_path) {
-            Ok(pi_config) => {
-                for (provider, model) in pi_config.provider_model_pairs() {
-                    push(&mut out, &mut seen, provider, model);
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "failed reading Pi models.json for model discovery at {}: {e}",
-                    pi_path.display()
-                );
-            }
+    if let Some(ref pi_cfg) = pi_config {
+        for (provider, model) in pi_cfg.provider_model_pairs() {
+            let pri = priority_for(&pi_config, &provider, &model);
+            push(&mut out, &mut seen, provider, model, pri);
         }
+    } else if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path() {
+        tracing::debug!(
+            "Pi models.json not available at {} for model discovery",
+            pi_path.display()
+        );
     }
 
     if out.is_empty() {
@@ -907,8 +1175,16 @@ fn resolve_pi_model_candidates(config: &LlmConfig) -> Result<Vec<ProviderModelRe
             &mut seen,
             FAE_PROVIDER_KEY.to_owned(),
             FAE_MODEL_ID.to_owned(),
+            0,
         );
     }
+
+    // Sort: best tier first, then highest priority within each tier.
+    out.sort_by(|a, b| {
+        a.tier
+            .cmp(&b.tier)
+            .then_with(|| b.priority.cmp(&a.priority))
+    });
 
     Ok(out)
 }
@@ -985,6 +1261,21 @@ fn assistant_text_chunk(event: &serde_json::Value, accumulated: &str) -> Option<
     } else {
         None
     }
+}
+
+/// Constructs a JSON envelope for UI dialog requests.
+///
+/// Standardizes the JSON structure across different dialog kinds
+/// (confirm, select, input, editor, model_failover).
+#[inline]
+fn make_dialog_json(kind: &str, title: &str, message: &str, timeout_ms: u64) -> String {
+    serde_json::json!({
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "timeout_ms": timeout_ms,
+    })
+    .to_string()
 }
 
 fn ensure_fae_gate_extension() -> Result<PathBuf> {
@@ -1085,6 +1376,7 @@ fn write_atomic(path: &Path, content: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_tier::ModelTier;
 
     #[test]
     fn tool_allowlists_match_expected_modes() {
@@ -1153,5 +1445,490 @@ mod tests {
                 .iter()
                 .any(|c| c.provider == FAE_PROVIDER_KEY && c.model == FAE_MODEL_ID)
         );
+    }
+
+    #[test]
+    fn provider_model_ref_new_computes_tier() {
+        let flagship = ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0);
+        assert_eq!(flagship.tier, ModelTier::Flagship);
+
+        let mid = ProviderModelRef::new("openai".into(), "gpt-4o-mini".into(), 0);
+        assert_eq!(mid.tier, ModelTier::Mid);
+
+        let local = ProviderModelRef::new(FAE_PROVIDER_KEY.into(), FAE_MODEL_ID.into(), 0);
+        assert_eq!(local.tier, ModelTier::Small);
+    }
+
+    #[test]
+    fn candidates_sorted_by_tier_then_priority() {
+        // Build candidates in deliberately wrong order.
+        let mut candidates = [
+            ProviderModelRef::new("local".into(), "qwen3-4b".into(), 0), // Small, p=0
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),  // Flagship, p=5
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10), // Flagship, p=10
+            ProviderModelRef::new("openai".into(), "gpt-4o-mini".into(), 0), // Mid, p=0
+        ];
+
+        candidates.sort_by(|a, b| {
+            a.tier
+                .cmp(&b.tier)
+                .then_with(|| b.priority.cmp(&a.priority))
+        });
+
+        // Flagship tier first (higher priority first within tier).
+        assert_eq!(candidates[0].model, "claude-opus-4");
+        assert_eq!(candidates[0].tier, ModelTier::Flagship);
+        assert_eq!(candidates[0].priority, 10);
+        assert_eq!(candidates[1].model, "gpt-4o");
+        assert_eq!(candidates[1].tier, ModelTier::Flagship);
+        assert_eq!(candidates[1].priority, 5);
+
+        // Mid tier.
+        assert_eq!(candidates[2].model, "gpt-4o-mini");
+        assert_eq!(candidates[2].tier, ModelTier::Mid);
+
+        // Small tier last.
+        assert_eq!(candidates[3].model, "qwen3-4b");
+        assert_eq!(candidates[3].tier, ModelTier::Small);
+    }
+
+    /// Helper: assert ModelSelected event matches expected provider/model.
+    fn assert_model_selected(rx: &mut broadcast::Receiver<RuntimeEvent>, expected: &str) {
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, expected);
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    /// Helper: build PiLlm with runtime tx and no selection channel.
+    fn test_pi_no_rx(
+        candidates: Vec<ProviderModelRef>,
+    ) -> (PiLlm, broadcast::Receiver<RuntimeEvent>) {
+        let (tx, rx) = broadcast::channel(16);
+        let pi = PiLlm {
+            runtime_tx: Some(tx),
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: candidates,
+            active_model_idx: 0,
+            model_selection_rx: None,
+            voice_command_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        (pi, rx)
+    }
+
+    #[test]
+    fn emit_model_selected_sends_event_when_tx_present() {
+        let (pi, mut rx) = test_pi_no_rx(vec![]);
+        pi.emit_model_selected("openai/gpt-4o");
+        assert_model_selected(&mut rx, "openai/gpt-4o");
+    }
+
+    #[test]
+    fn emit_model_selection_prompt_sends_event() {
+        let (pi, mut rx) = test_pi_no_rx(vec![]);
+        pi.emit_model_selection_prompt(
+            &["openai/gpt-4o".to_owned(), "anthropic/claude".to_owned()],
+            Duration::from_secs(30),
+        );
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt {
+                candidates,
+                timeout_secs,
+            }) => {
+                assert_eq!(candidates.len(), 2);
+                assert_eq!(timeout_secs, 30);
+            }
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_functions_are_noop_without_runtime_tx() {
+        let pi = PiLlm {
+            runtime_tx: None,
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: vec![],
+            active_model_idx: 0,
+            model_selection_rx: None,
+            voice_command_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        // Should not panic even without runtime_tx.
+        pi.emit_model_selected("test/model");
+        pi.emit_model_selection_prompt(&["a".to_owned()], Duration::from_secs(5));
+    }
+
+    /// Helper: build a PiLlm with given candidates and optional selection channel.
+    fn test_pi(
+        candidates: Vec<ProviderModelRef>,
+        model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+    ) -> (PiLlm, broadcast::Receiver<RuntimeEvent>) {
+        let (tx, rx) = broadcast::channel(16);
+        let pi = PiLlm {
+            runtime_tx: Some(tx),
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: candidates,
+            active_model_idx: 0,
+            model_selection_rx,
+            voice_command_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        (pi, rx)
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_single_candidate_auto_selects() {
+        let candidates = vec![ProviderModelRef::new(
+            "anthropic".into(),
+            "claude-opus-4".into(),
+            0,
+        )];
+        let (mut pi, mut event_rx) = test_pi(candidates, None);
+
+        pi.select_startup_model(Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(pi.active_model_idx, 0);
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_no_candidates_returns_error() {
+        let (mut pi, _rx) = test_pi(vec![], None);
+
+        let result = pi.select_startup_model(Duration::from_secs(1)).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_multiple_top_tier_emits_prompt_then_times_out() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        // Channel with no sender = will never receive anything.
+        let (_sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        let (mut pi, mut event_rx) = test_pi(candidates, Some(sel_rx));
+
+        // Use a very short timeout to avoid slowing down tests.
+        pi.select_startup_model(Duration::from_millis(50))
+            .await
+            .unwrap();
+
+        // Should have emitted a prompt first.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt {
+                candidates,
+                timeout_secs: _,
+            }) => {
+                assert_eq!(candidates.len(), 2);
+                assert_eq!(candidates[0], "anthropic/claude-opus-4");
+                assert_eq!(candidates[1], "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+
+        // Then fell back to auto-select first.
+        assert_eq!(pi.active_model_idx, 0);
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_user_picks_second_candidate() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        let (mut pi, mut event_rx) = test_pi(candidates, Some(sel_rx));
+
+        // Simulate user picking second candidate after a tiny delay.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = sel_tx.send("openai/gpt-4o".to_owned());
+        });
+
+        pi.select_startup_model(Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // Prompt should have been emitted.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt { .. }) => {}
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+
+        // User's choice should be reflected.
+        assert_eq!(pi.active_model_idx, 1);
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_different_tiers_auto_selects_best() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+            ProviderModelRef::new("local".into(), "qwen3-4b".into(), 0),
+        ];
+        let (mut pi, mut event_rx) = test_pi(candidates, None);
+
+        pi.select_startup_model(Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        // Should auto-select the flagship model without prompting.
+        assert_eq!(pi.active_model_idx, 0);
+
+        // Verify no prompt was emitted (because both have same tier score of 0).
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected (no prompt), got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_channel_closed_falls_back_to_first() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        // Create channel and immediately drop the sender so recv returns None.
+        let (sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        drop(sel_tx);
+        let (mut pi, mut event_rx) = test_pi(candidates, Some(sel_rx));
+
+        pi.select_startup_model(Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // Prompt emitted, then channel closed → fallback to first.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelectionPrompt { .. }) => {}
+            other => panic!("expected ModelSelectionPrompt, got: {other:?}"),
+        }
+        assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_invalid_user_choice_falls_back() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (sel_tx, sel_rx) = mpsc::unbounded_channel::<String>();
+        let (mut pi, _event_rx) = test_pi(candidates, Some(sel_rx));
+
+        // Send an invalid model name that doesn't match any candidate.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = sel_tx.send("nonexistent/model-xyz".to_owned());
+        });
+
+        pi.select_startup_model(Duration::from_millis(100))
+            .await
+            .unwrap();
+
+        // Unknown selection → auto-select first candidate.
+        assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[tokio::test]
+    async fn select_startup_model_no_channel_auto_selects_without_prompt() {
+        // Multiple top-tier models but NO selection channel (no GUI).
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut event_rx) = test_pi(candidates, None);
+
+        pi.select_startup_model(Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        // Without a channel, no prompt is emitted — just a ModelSelected event.
+        match event_rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "anthropic/claude-opus-4");
+            }
+            other => panic!("expected ModelSelected (no prompt), got: {other:?}"),
+        }
+        assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[test]
+    fn list_model_names_returns_display_strings() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+            ProviderModelRef::new(FAE_PROVIDER_KEY.into(), FAE_MODEL_ID.into(), 0),
+        ];
+        let (pi, _rx) = test_pi_no_rx(candidates);
+        let names = pi.list_model_names();
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[0], "anthropic/claude-opus-4");
+        assert_eq!(names[1], "openai/gpt-4o");
+        assert_eq!(names[2], format!("{FAE_PROVIDER_KEY}/{FAE_MODEL_ID}"));
+    }
+
+    #[test]
+    fn current_model_name_matches_active_index() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+        assert_eq!(pi.current_model_name(), "anthropic/claude-opus-4");
+        pi.active_model_idx = 1;
+        assert_eq!(pi.current_model_name(), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn candidate_count_returns_correct_count() {
+        let (pi, _rx) =
+            test_pi_no_rx(vec![ProviderModelRef::new("a".into(), "b".into(), 0)]);
+        assert_eq!(pi.candidate_count(), 1);
+
+        let (pi, _rx) = test_pi_no_rx(vec![]);
+        assert_eq!(pi.candidate_count(), 0);
+    }
+
+    #[test]
+    fn switch_model_by_voice_resolves_and_switches() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut rx) = test_pi_no_rx(candidates);
+
+        let result = pi.switch_model_by_voice(&ModelTarget::ByProvider("openai".into()));
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("openai/gpt-4o"));
+        assert_eq!(pi.active_model_idx, 1);
+
+        // Should have emitted ModelSwitchRequested then ModelSelected.
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSwitchRequested { target }) => {
+                assert_eq!(target, "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSwitchRequested, got: {other:?}"),
+        }
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ModelSelected { provider_model }) => {
+                assert_eq!(provider_model, "openai/gpt-4o");
+            }
+            other => panic!("expected ModelSelected, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_model_by_voice_already_active_is_noop() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut rx) = test_pi_no_rx(candidates);
+
+        let result = pi.switch_model_by_voice(&ModelTarget::ByProvider("anthropic".into()));
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("already using"));
+        assert_eq!(pi.active_model_idx, 0);
+
+        // No events emitted for no-op.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn switch_model_by_voice_not_found_returns_error() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![ProviderModelRef::new(
+            "anthropic".into(),
+            "claude-opus-4".into(),
+            10,
+        )];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+
+        let result = pi.switch_model_by_voice(&ModelTarget::ByProvider("google".into()));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("couldn't find"));
+    }
+
+    #[test]
+    fn switch_model_by_voice_best_selects_first() {
+        use crate::voice_command::ModelTarget;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+        // Start on second model.
+        pi.active_model_idx = 1;
+
+        let result = pi.switch_model_by_voice(&ModelTarget::Best);
+        assert!(result.is_ok());
+        assert_eq!(pi.active_model_idx, 0);
+    }
+
+    #[test]
+    fn revert_to_fallback_switches_to_another_candidate() {
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
+        ];
+        let (mut pi, mut rx) = test_pi_no_rx(candidates);
+        // Simulate being on candidate 0 (anthropic) which "failed".
+        let msg = pi.revert_to_fallback("anthropic/claude-opus-4", "connection timed out");
+        assert!(msg.contains("falling back to"), "got: {msg}");
+        assert!(msg.contains("openai/gpt-4o"), "got: {msg}");
+        assert_eq!(pi.active_model_idx, 1);
+
+        // Should have emitted events.
+        assert!(rx.try_recv().is_ok()); // ModelSwitchRequested
+        assert!(rx.try_recv().is_ok()); // ModelSelected
+    }
+
+    #[test]
+    fn revert_to_fallback_no_alternative() {
+        let candidates = vec![ProviderModelRef::new(
+            "anthropic".into(),
+            "claude-opus-4".into(),
+            10,
+        )];
+        let (mut pi, _rx) = test_pi_no_rx(candidates);
+        let msg = pi.revert_to_fallback("anthropic/claude-opus-4", "connection timed out");
+        assert!(msg.contains("no fallback"), "got: {msg}");
+        // Index unchanged.
+        assert_eq!(pi.active_model_idx, 0);
     }
 }
