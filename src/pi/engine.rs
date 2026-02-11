@@ -95,6 +95,10 @@ pub struct PiLlm {
     /// When `None`, the engine auto-selects the best model without prompting.
     model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
 
+    /// Channel for receiving voice commands from the pipeline filter.
+    /// When `Some`, the LLM stage polls this to handle runtime model switching.
+    voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
+
     // Per-run state.
     assistant_delta_buffer: String,
 }
@@ -106,6 +110,7 @@ impl PiLlm {
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
         model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+        voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
     ) -> Result<Self> {
         let model_candidates = resolve_pi_model_candidates(&llm_config)?;
         let primary = model_candidates
@@ -160,6 +165,7 @@ impl PiLlm {
             model_candidates,
             active_model_idx: 0,
             model_selection_rx,
+            voice_command_rx,
             assistant_delta_buffer: String::new(),
         })
     }
@@ -397,6 +403,16 @@ impl PiLlm {
     /// Returns the number of model candidates available.
     pub fn candidate_count(&self) -> usize {
         self.model_candidates.len()
+    }
+
+    /// Takes the voice-command receiver out of this engine.
+    ///
+    /// The caller (typically the LLM stage loop) uses the returned receiver
+    /// to handle voice commands concurrently with LLM generation.
+    pub fn take_voice_command_rx(
+        &mut self,
+    ) -> Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>> {
+        self.voice_command_rx.take()
     }
 
     /// Switch model via a voice command target.
@@ -1446,6 +1462,7 @@ mod tests {
             model_candidates: candidates,
             active_model_idx: 0,
             model_selection_rx: None,
+            voice_command_rx: None,
             assistant_delta_buffer: String::new(),
         };
         (pi, rx)
@@ -1487,6 +1504,7 @@ mod tests {
             model_candidates: vec![],
             active_model_idx: 0,
             model_selection_rx: None,
+            voice_command_rx: None,
             assistant_delta_buffer: String::new(),
         };
         // Should not panic even without runtime_tx.
@@ -1508,6 +1526,7 @@ mod tests {
             model_candidates: candidates,
             active_model_idx: 0,
             model_selection_rx,
+            voice_command_rx: None,
             assistant_delta_buffer: String::new(),
         };
         (pi, rx)

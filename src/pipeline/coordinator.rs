@@ -435,7 +435,7 @@ impl PipelineCoordinator {
 
                 // Voice command filter: intercepts model-switch phrases
                 // before they reach the LLM. Non-command transcriptions pass through.
-                let (voice_cmd_tx, _voice_cmd_rx) =
+                let (voice_cmd_tx, voice_cmd_rx) =
                     mpsc::unbounded_channel::<crate::voice_command::VoiceCommand>();
                 self.voice_command_tx = Some(voice_cmd_tx.clone());
                 let (filtered_tx, filtered_rx) =
@@ -496,6 +496,7 @@ impl PipelineCoordinator {
                             console_output,
                             cancel,
                             model_selection_rx,
+                            voice_command_rx: Some(voice_cmd_rx),
                         };
                         run_llm_stage(
                             config,
@@ -1400,6 +1401,7 @@ struct LlmStageControl {
     console_output: bool,
     cancel: CancellationToken,
     model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
+    voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
 }
 
 impl LlmEngine {
@@ -1488,9 +1490,10 @@ async fn run_llm_stage(
             let runtime_tx = ctl.runtime_tx.clone();
             let tool_approval_tx = ctl.tool_approval_tx.clone();
             let model_sel_rx = ctl.model_selection_rx.take();
+            let voice_cmd_rx = ctl.voice_command_rx.take();
             let timeout_secs = config.llm.model_selection_timeout_secs;
             let res = tokio::task::spawn_blocking(move || {
-                PiLlm::new(llm_cfg, pi_cfg, runtime_tx, tool_approval_tx, model_sel_rx)
+                PiLlm::new(llm_cfg, pi_cfg, runtime_tx, tool_approval_tx, model_sel_rx, voice_cmd_rx)
             })
             .await
             .map_err(|e| crate::error::SpeechError::Pi(format!("Pi init task failed: {e}")));
