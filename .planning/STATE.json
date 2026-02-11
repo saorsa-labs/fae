@@ -1,141 +1,34 @@
 {
-  "version": 2,
-  "project": "fae-pi-integration",
+  "version": 1,
+  "project": "model-selection",
   "active": true,
   "milestone": {
-    "number": 5,
-    "name": "Pi Integration, Self-Update & Autonomy"
+    "number": 1,
+    "name": "Intelligent Model Selection Core"
   },
   "phase": {
-    "number": "5.7",
-    "name": "Integration Hardening & Pi Bundling",
-    "plan": "PLAN-phase-5.7.md",
+    "number": "1.2",
+    "name": "Priority-Aware Candidate Resolution",
+    "plan": "PLAN-phase-1.2.md",
     "status": "complete"
   },
   "progress": {
-    "total_tasks": 8,
-    "completed_tasks": 8,
-    "current_task": 8
+    "total_tasks": 6,
+    "completed_tasks": 6,
+    "current_task": 6
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-02-10T22:00:00Z",
-  "worktree": "~/Desktop/Devel/projects/fae-worktree-pi",
-  "milestones_completed": [
-    {
-      "number": 1,
-      "name": "Canvas Core Integration & Dioxus Pane",
-      "completed": "2026-02-09"
-    },
-    {
-      "number": 2,
-      "name": "Rich Content & MCP Tools",
-      "completed": "2026-02-09"
-    },
-    {
-      "number": 3,
-      "name": "Remote Canvas Server (Phase 3.1 WebSocket Client)",
-      "completed": "2026-02-10"
-    },
-    {
-      "number": 5,
-      "name": "Pi Integration, Self-Update & Autonomy",
-      "completed": "2026-02-10"
-    }
-  ],
-  "milestones_pending": [
-    {
-      "number": 3,
-      "name": "Remote Canvas Server (Phase 3.2 Server-Side Rendering)",
-      "status": "paused"
-    },
-    {
-      "number": 4,
-      "name": "Publishing & Polish",
-      "status": "not_started"
-    },
-    {
-      "number": 5,
-      "name": "Pi Integration, Self-Update & Autonomy",
-      "status": "complete",
-      "phases": [
-        "5.1",
-        "5.2",
-        "5.3",
-        "5.4",
-        "5.5",
-        "5.6",
-        "5.7"
-      ]
-    }
-  ],
-  "phase_order": [
-    {
-      "id": "5.1",
-      "name": "Local LLM HTTP Server",
-      "deps": [],
-      "status": "complete"
-    },
-    {
-      "id": "5.2",
-      "name": "Drop saorsa-ai / API Unification",
-      "deps": [
-        "5.1"
-      ],
-      "status": "complete"
-    },
-    {
-      "id": "5.3",
-      "name": "Pi Manager — Detection & Installation",
-      "deps": [],
-      "status": "complete"
-    },
-    {
-      "id": "5.4",
-      "name": "Pi RPC Session & Coding Skill",
-      "deps": [
-        "5.3"
-      ],
-      "status": "complete"
-    },
-    {
-      "id": "5.5",
-      "name": "Self-Update System",
-      "deps": [
-        "5.3"
-      ],
-      "status": "complete"
-    },
-    {
-      "id": "5.6",
-      "name": "Scheduler",
-      "deps": [
-        "5.5"
-      ],
-      "status": "complete"
-    },
-    {
-      "id": "5.7",
-      "name": "Integration Hardening & Pi Bundling",
-      "deps": [
-        "5.1",
-        "5.2",
-        "5.3",
-        "5.4",
-        "5.5",
-        "5.6"
-      ],
-      "status": "complete"
-    }
-  ],
-  "notes": "MILESTONE 5 COMPLETE. All 7 phases (5.1-5.7) done. 46 tasks across Pi integration, self-update, scheduler, and integration hardening. Full platform installers deferred to Milestone 4.",
+  "task": {
+    "current": 6,
+    "total": 6,
+    "name": "Integration tests and documentation"
+  },
   "review": {
     "status": "passed",
     "iteration": 1,
-    "last_verdict": null,
-    "findings_count": {
-      "critical": 0,
-      "important": 0,
-      "minor": 5
-    }
-  }
+    "last_verdict": "PASS",
+    "findings_count": { "critical": 0, "important": 0, "minor": 2 }
+  },
+  "status": "task_complete",
+  "last_action": "review_passed",
+  "last_updated": "2026-02-11T12:45:00Z"
 }

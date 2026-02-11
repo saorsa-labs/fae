@@ -6,6 +6,7 @@ use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use crate::config::{AgentToolMode, LlmConfig, PiConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::pi_config::{FAE_MODEL_ID, FAE_PROVIDER_KEY};
+use crate::model_tier::{ModelTier, tier_for_provider_model};
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
 
@@ -42,9 +43,24 @@ You are operating under Fae's approval policy.
 struct ProviderModelRef {
     provider: String,
     model: String,
+    /// Capability tier (auto-computed from model ID).
+    tier: ModelTier,
+    /// User-defined priority within the same tier (higher = preferred).
+    priority: i32,
 }
 
 impl ProviderModelRef {
+    /// Build a reference, auto-computing the tier from model + provider IDs.
+    fn new(provider: String, model: String, priority: i32) -> Self {
+        let tier = tier_for_provider_model(&provider, &model);
+        Self {
+            provider,
+            model,
+            tier,
+            priority,
+        }
+    }
+
     fn display(&self) -> String {
         format!("{}/{}", self.provider, self.model)
     }
@@ -834,71 +850,86 @@ fn resolve_pi_model_candidates(config: &LlmConfig) -> Result<Vec<ProviderModelRe
     let mut out = Vec::<ProviderModelRef>::new();
     let mut seen = HashSet::<(String, String)>::new();
 
+    // Optional pi_config for priority lookups.
+    let pi_config = crate::llm::pi_config::default_pi_models_path()
+        .and_then(|p| crate::llm::pi_config::read_pi_config(&p).ok());
+
+    let priority_for =
+        |pi_cfg: &Option<crate::llm::pi_config::PiModelsConfig>, prov: &str, model: &str| -> i32 {
+            pi_cfg
+                .as_ref()
+                .and_then(|c| c.find_model(prov, model))
+                .and_then(|m| m.priority)
+                .unwrap_or(0)
+        };
+
     let push = |out: &mut Vec<ProviderModelRef>,
                 seen: &mut HashSet<(String, String)>,
                 provider: String,
-                model: String| {
+                model: String,
+                priority: i32| {
         let p = provider.trim().to_owned();
         let m = model.trim().to_owned();
         if p.is_empty() || m.is_empty() {
             return;
         }
         if seen.insert((p.clone(), m.clone())) {
-            out.push(ProviderModelRef {
-                provider: p,
-                model: m,
-            });
+            out.push(ProviderModelRef::new(p, m, priority));
         }
     };
 
-    push(&mut out, &mut seen, primary.0, primary.1);
+    let pri = priority_for(&pi_config, &primary.0, &primary.1);
+    push(&mut out, &mut seen, primary.0, primary.1, pri);
+
     if !matches!(
         out.first(),
         Some(ProviderModelRef {
             provider,
-            model: _
+            model: _,
+            ..
         }) if provider == FAE_PROVIDER_KEY
     ) {
+        let pri = priority_for(&pi_config, FAE_PROVIDER_KEY, FAE_MODEL_ID);
         push(
             &mut out,
             &mut seen,
             FAE_PROVIDER_KEY.to_owned(),
             FAE_MODEL_ID.to_owned(),
+            pri,
         );
     }
 
     if let Some(provider) = &config.cloud_provider
         && let Some(model) = &config.cloud_model
     {
-        push(&mut out, &mut seen, provider.clone(), model.clone());
+        let pri = priority_for(&pi_config, provider, model);
+        push(&mut out, &mut seen, provider.clone(), model.clone(), pri);
     }
 
     if let Some(provider) = &config.cloud_provider
         && config.cloud_model.is_none()
         && !config.api_model.trim().is_empty()
     {
+        let pri = priority_for(&pi_config, provider, &config.api_model);
         push(
             &mut out,
             &mut seen,
             provider.clone(),
             config.api_model.clone(),
+            pri,
         );
     }
 
-    if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path() {
-        match crate::llm::pi_config::read_pi_config(&pi_path) {
-            Ok(pi_config) => {
-                for (provider, model) in pi_config.provider_model_pairs() {
-                    push(&mut out, &mut seen, provider, model);
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "failed reading Pi models.json for model discovery at {}: {e}",
-                    pi_path.display()
-                );
-            }
+    if let Some(ref pi_cfg) = pi_config {
+        for (provider, model) in pi_cfg.provider_model_pairs() {
+            let pri = priority_for(&pi_config, &provider, &model);
+            push(&mut out, &mut seen, provider, model, pri);
         }
+    } else if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path() {
+        tracing::debug!(
+            "Pi models.json not available at {} for model discovery",
+            pi_path.display()
+        );
     }
 
     if out.is_empty() {
@@ -907,8 +938,16 @@ fn resolve_pi_model_candidates(config: &LlmConfig) -> Result<Vec<ProviderModelRe
             &mut seen,
             FAE_PROVIDER_KEY.to_owned(),
             FAE_MODEL_ID.to_owned(),
+            0,
         );
     }
+
+    // Sort: best tier first, then highest priority within each tier.
+    out.sort_by(|a, b| {
+        a.tier
+            .cmp(&b.tier)
+            .then_with(|| b.priority.cmp(&a.priority))
+    });
 
     Ok(out)
 }
@@ -1153,5 +1192,50 @@ mod tests {
                 .iter()
                 .any(|c| c.provider == FAE_PROVIDER_KEY && c.model == FAE_MODEL_ID)
         );
+    }
+
+    #[test]
+    fn provider_model_ref_new_computes_tier() {
+        let flagship = ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0);
+        assert_eq!(flagship.tier, ModelTier::Flagship);
+
+        let mid = ProviderModelRef::new("openai".into(), "gpt-4o-mini".into(), 0);
+        assert_eq!(mid.tier, ModelTier::Mid);
+
+        let local = ProviderModelRef::new(FAE_PROVIDER_KEY.into(), FAE_MODEL_ID.into(), 0);
+        assert_eq!(local.tier, ModelTier::Small);
+    }
+
+    #[test]
+    fn candidates_sorted_by_tier_then_priority() {
+        // Build candidates in deliberately wrong order.
+        let mut candidates = [
+            ProviderModelRef::new("local".into(), "qwen3-4b".into(), 0), // Small, p=0
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),  // Flagship, p=5
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10), // Flagship, p=10
+            ProviderModelRef::new("openai".into(), "gpt-4o-mini".into(), 0), // Mid, p=0
+        ];
+
+        candidates.sort_by(|a, b| {
+            a.tier
+                .cmp(&b.tier)
+                .then_with(|| b.priority.cmp(&a.priority))
+        });
+
+        // Flagship tier first (higher priority first within tier).
+        assert_eq!(candidates[0].model, "claude-opus-4");
+        assert_eq!(candidates[0].tier, ModelTier::Flagship);
+        assert_eq!(candidates[0].priority, 10);
+        assert_eq!(candidates[1].model, "gpt-4o");
+        assert_eq!(candidates[1].tier, ModelTier::Flagship);
+        assert_eq!(candidates[1].priority, 5);
+
+        // Mid tier.
+        assert_eq!(candidates[2].model, "gpt-4o-mini");
+        assert_eq!(candidates[2].tier, ModelTier::Mid);
+
+        // Small tier last.
+        assert_eq!(candidates[3].model, "qwen3-4b");
+        assert_eq!(candidates[3].tier, ModelTier::Small);
     }
 }
