@@ -140,3 +140,23 @@ Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dm
 **Recommended path:** Defer installer creation to Milestone 4 "Publishing & Polish", complete Phase 5.7 with integration tests and documentation only.
 
 **Status:** Awaiting architectural decision
+
+---
+
+## Milestone 1: Intelligent Model Selection Core — IN PROGRESS
+
+### Phase 1.1: Model Tier Registry
+- [x] All tasks complete (commits: f683658, 5572983)
+
+### Phase 1.2: Priority-Aware Candidate Resolution  
+- [x] All tasks complete (commit: fa9c2a3)
+
+### Phase 1.3: Startup Model Selection — IN PROGRESS
+- [x] Task 1: Add model selection types and logic (commit: 02f5af3)
+- [ ] Task 2: Canvas event types for model selection
+- [ ] Task 3: Model picker response channel
+- [ ] Task 4: Implement model selection flow in PiLlm
+- [ ] Task 5: GUI model picker component
+- [ ] Task 6: Wire model selection channel through coordinator
+- [ ] Task 7: Add configuration for selection timeout
+- [ ] Task 8: Integration tests and verification
