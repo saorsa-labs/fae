@@ -170,3 +170,13 @@ Phase 5.7 tasks 1-3 require creating full platform installer infrastructure (.dm
 - [x] Task 6: VoiceCommandFilter pipeline stage (commit: 7cfaab6)
 - [x] Task 7: Integration tests (commit: c93be85)
 - [x] Task 8: Documentation and verification
+
+### Phase 2.2: Live Model Switching — COMPLETE
+- [x] Task 1: Add public model query methods to PiLlm (commit: b9806ee)
+- [x] Task 2: Add switch_model_by_voice() to PiLlm (commit: c2b4fe3)
+- [x] Task 3: Wire voice_cmd_rx into PiLlm constructor (commit: 9a372ab)
+- [x] Task 4: Handle voice commands in LLM stage loop (commit: f2ca026)
+- [x] Task 5: TTS acknowledgment helpers (commit: d4c1e01)
+- [x] Task 6: Edge case — switch during active generation (commit: f0f1547)
+- [x] Task 7: Edge case — unavailable model and fallback (commit: 63f549f)
+- [x] Task 8: Integration tests and verification
