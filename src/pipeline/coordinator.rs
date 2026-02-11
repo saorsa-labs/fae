@@ -1738,6 +1738,7 @@ fn handle_voice_command(
         VoiceCommand::CurrentModel => {
             crate::voice_command::current_model_response(&pi.current_model_name())
         }
+        VoiceCommand::Help => crate::voice_command::help_response(),
     }
 }
 
@@ -3618,5 +3619,20 @@ mod tests {
         };
         let response = handle_voice_command(&cmd, &mut engine);
         assert!(response.contains("couldn't find"), "got: {response}");
+    }
+
+    #[test]
+    fn voice_cmd_help() {
+        use crate::model_selection::ProviderModelRef;
+        use crate::voice_command::VoiceCommand;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+        ];
+        let mut engine = pi_engine(candidates);
+        let response = handle_voice_command(&VoiceCommand::Help, &mut engine);
+        assert!(response.contains("You can say"), "got: {response}");
+        assert!(response.contains("switch to"), "got: {response}");
+        assert!(response.contains("list models"), "got: {response}");
     }
 }

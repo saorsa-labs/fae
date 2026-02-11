@@ -26,6 +26,8 @@ pub enum VoiceCommand {
     ListModels,
     /// Query which model is currently active.
     CurrentModel,
+    /// Request help with model switching commands.
+    Help,
 }
 
 /// Target specification for a model switch command.
@@ -69,6 +71,21 @@ pub fn parse_voice_command(text: &str) -> Option<VoiceCommand> {
 
     // Strip optional "fae" / "fae," / "hey fae" prefix.
     let stripped = strip_wake_prefix(&text);
+
+    // --- Help ---
+    if matches_any(
+        stripped,
+        &[
+            "help",
+            "help me",
+            "what can i say",
+            "what can you do",
+            "model commands",
+            "model help",
+        ],
+    ) {
+        return Some(VoiceCommand::Help);
+    }
 
     // --- List models ---
     if matches_any(
@@ -273,6 +290,11 @@ pub fn current_model_response(model_name: &str) -> String {
     format!("I'm currently using {model_name}.")
 }
 
+/// Help response listing available model switching commands.
+pub fn help_response() -> String {
+    "You can say: switch to Claude, use the local model, list models, or what model are you using.".to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +452,43 @@ mod tests {
         assert_eq!(
             parse_voice_command("fae, list models"),
             Some(VoiceCommand::ListModels)
+        );
+    }
+
+    #[test]
+    fn help_command() {
+        assert_eq!(parse_voice_command("help"), Some(VoiceCommand::Help));
+    }
+
+    #[test]
+    fn help_me() {
+        assert_eq!(
+            parse_voice_command("help me"),
+            Some(VoiceCommand::Help)
+        );
+    }
+
+    #[test]
+    fn what_can_i_say() {
+        assert_eq!(
+            parse_voice_command("what can i say"),
+            Some(VoiceCommand::Help)
+        );
+    }
+
+    #[test]
+    fn model_commands() {
+        assert_eq!(
+            parse_voice_command("model commands"),
+            Some(VoiceCommand::Help)
+        );
+    }
+
+    #[test]
+    fn fae_help() {
+        assert_eq!(
+            parse_voice_command("fae, help"),
+            Some(VoiceCommand::Help)
         );
     }
 
@@ -705,6 +764,15 @@ mod tests {
             current_model_response("local/qwen3-4b"),
             "I'm currently using local/qwen3-4b."
         );
+    }
+
+    #[test]
+    fn help_response_lists_commands() {
+        let response = help_response();
+        assert!(response.contains("switch to"));
+        assert!(response.contains("local model"));
+        assert!(response.contains("list models"));
+        assert!(response.contains("what model"));
     }
 
     // -----------------------------------------------------------------------
