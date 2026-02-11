@@ -415,6 +415,29 @@ impl PiLlm {
         self.voice_command_rx.take()
     }
 
+    /// Build a minimal `PiLlm` for unit testing in other modules.
+    ///
+    /// Uses a dummy `PiSession` and returns both the engine and the
+    /// runtime event receiver for assertions.
+    #[cfg(test)]
+    pub(crate) fn test_instance(
+        candidates: Vec<ProviderModelRef>,
+    ) -> (Self, broadcast::Receiver<RuntimeEvent>) {
+        let (tx, rx) = broadcast::channel(16);
+        let pi = Self {
+            runtime_tx: Some(tx),
+            tool_approval_tx: None,
+            session: PiSession::new("/fake".into(), "p".into(), "m".into()),
+            next_approval_id: 1,
+            model_candidates: candidates,
+            active_model_idx: 0,
+            model_selection_rx: None,
+            voice_command_rx: None,
+            assistant_delta_buffer: String::new(),
+        };
+        (pi, rx)
+    }
+
     /// Switch model via a voice command target.
     ///
     /// Resolves the [`ModelTarget`] against the current candidate list, emits

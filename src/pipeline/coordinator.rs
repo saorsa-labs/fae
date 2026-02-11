@@ -1521,6 +1521,12 @@ async fn run_llm_stage(
 
     let name = "Fae".to_owned();
 
+    // Extract the voice command receiver from the Pi engine (if present).
+    let mut voice_cmd_rx = match &mut engine {
+        LlmEngine::Pi(pi) => pi.take_voice_command_rx(),
+        _ => None,
+    };
+
     let cancel = ctl.cancel;
     loop {
         // Optionally receive from the text injection channel. When no channel
@@ -1532,15 +1538,25 @@ async fn run_llm_stage(
             }
         };
 
+        // Optionally receive voice commands (only when Pi backend active).
+        let recv_voice_cmd = async {
+            match voice_cmd_rx.as_mut() {
+                Some(rx) => rx.recv().await,
+                None => std::future::pending().await,
+            }
+        };
+
         enum Input {
             Transcription(Option<Transcription>),
             TextInjection(Option<TextInjection>),
+            VoiceCommand(Option<crate::voice_command::VoiceCommand>),
         }
 
         let input = tokio::select! {
             () = cancel.cancelled() => break,
             t = rx.recv() => Input::Transcription(t),
             inj = recv_injection => Input::TextInjection(inj),
+            cmd = recv_voice_cmd => Input::VoiceCommand(cmd),
         };
 
         let user_text = match input {
@@ -1601,6 +1617,23 @@ async fn run_llm_stage(
                 }
                 injection.text
             }
+            Input::VoiceCommand(Some(cmd)) => {
+                let response = handle_voice_command(&cmd, &mut engine);
+                if !response.is_empty() {
+                    let _ = tx
+                        .send(SentenceChunk {
+                            text: response,
+                            is_final: true,
+                        })
+                        .await;
+                }
+                continue;
+            }
+            Input::VoiceCommand(None) => {
+                // Voice command channel closed; continue without voice commands.
+                voice_cmd_rx = None;
+                continue;
+            }
             Input::Transcription(None) => break,
             Input::TextInjection(None) => {
                 // Text injection channel closed (GUI dropped sender).
@@ -1640,6 +1673,44 @@ async fn run_llm_stage(
                     let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
                 }
             }
+        }
+    }
+}
+
+/// Handle a voice command by dispatching to the appropriate engine method.
+///
+/// Returns a human-readable response string for TTS. Only the Pi backend
+/// supports model switching; other backends return an informational message.
+fn handle_voice_command(
+    cmd: &crate::voice_command::VoiceCommand,
+    engine: &mut LlmEngine,
+) -> String {
+    use crate::voice_command::VoiceCommand;
+
+    let pi = match engine {
+        LlmEngine::Pi(pi) => pi,
+        _ => {
+            return "Voice model switching is only available with the Pi backend.".to_owned();
+        }
+    };
+
+    match cmd {
+        VoiceCommand::SwitchModel { target } => match pi.switch_model_by_voice(target) {
+            Ok(msg) => msg,
+            Err(msg) => msg,
+        },
+        VoiceCommand::ListModels => {
+            let names = pi.list_model_names();
+            if names.is_empty() {
+                return "I don't have any models configured.".to_owned();
+            }
+            let current = pi.current_model_name();
+            let list = names.join(", ");
+            format!("I have access to {list}. Currently using {current}.")
+        }
+        VoiceCommand::CurrentModel => {
+            let current = pi.current_model_name();
+            format!("I'm currently using {current}.")
         }
     }
 }
@@ -3449,5 +3520,77 @@ mod tests {
         assert!(!is_filler_word("david"));
         assert!(!is_filler_word("sarah"));
         assert!(!is_filler_word("alex"));
+    }
+
+    // ── handle_voice_command ─────────────────────────────────────────
+
+    /// Build a minimal Pi-backed `LlmEngine` for voice command tests.
+    fn pi_engine(
+        candidates: Vec<crate::model_selection::ProviderModelRef>,
+    ) -> LlmEngine {
+        let (pi, _rx) = crate::pi::engine::PiLlm::test_instance(candidates);
+        LlmEngine::Pi(Box::new(pi))
+    }
+
+    #[test]
+    fn voice_cmd_switch_model_success() {
+        use crate::model_selection::ProviderModelRef;
+        use crate::voice_command::{ModelTarget, VoiceCommand};
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 0),
+        ];
+        let mut engine = pi_engine(candidates);
+        let cmd = VoiceCommand::SwitchModel {
+            target: ModelTarget::ByName("gpt-4o".into()),
+        };
+        let response = handle_voice_command(&cmd, &mut engine);
+        assert!(response.contains("gpt-4o"), "got: {response}");
+    }
+
+    #[test]
+    fn voice_cmd_list_models() {
+        use crate::model_selection::ProviderModelRef;
+        use crate::voice_command::VoiceCommand;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 0),
+        ];
+        let mut engine = pi_engine(candidates);
+        let response = handle_voice_command(&VoiceCommand::ListModels, &mut engine);
+        assert!(response.contains("anthropic/claude-opus-4"), "got: {response}");
+        assert!(response.contains("openai/gpt-4o"), "got: {response}");
+        assert!(response.contains("Currently using"), "got: {response}");
+    }
+
+    #[test]
+    fn voice_cmd_current_model() {
+        use crate::model_selection::ProviderModelRef;
+        use crate::voice_command::VoiceCommand;
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+        ];
+        let mut engine = pi_engine(candidates);
+        let response = handle_voice_command(&VoiceCommand::CurrentModel, &mut engine);
+        assert!(response.contains("anthropic/claude-opus-4"), "got: {response}");
+    }
+
+    #[test]
+    fn voice_cmd_not_found() {
+        use crate::model_selection::ProviderModelRef;
+        use crate::voice_command::{ModelTarget, VoiceCommand};
+
+        let candidates = vec![
+            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
+        ];
+        let mut engine = pi_engine(candidates);
+        let cmd = VoiceCommand::SwitchModel {
+            target: ModelTarget::ByName("nonexistent".into()),
+        };
+        let response = handle_voice_command(&cmd, &mut engine);
+        assert!(response.contains("couldn't find"), "got: {response}");
     }
 }
