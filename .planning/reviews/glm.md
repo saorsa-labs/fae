@@ -1,1 +1,0 @@
-EXTERNAL_REVIEW_SKIPPED: Quick review mode
