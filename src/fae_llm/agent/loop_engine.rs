@@ -14,6 +14,7 @@ use super::executor::ToolExecutor;
 use super::types::{AgentConfig, AgentLoopResult, ExecutedToolCall, StopReason, TurnResult};
 use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::events::FinishReason;
+use crate::fae_llm::observability::metrics::{MetricsCollector, NoopMetrics};
 use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::provider::{ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::message::{AssistantToolCall, Message};
@@ -40,6 +41,7 @@ pub struct AgentLoop {
     tool_executor: ToolExecutor,
     tool_definitions: Vec<ToolDefinition>,
     cancel: CancellationToken,
+    metrics: Arc<dyn MetricsCollector>,
 }
 
 impl AgentLoop {
@@ -54,6 +56,23 @@ impl AgentLoop {
         config: AgentConfig,
         provider: Arc<dyn ProviderAdapter>,
         registry: Arc<ToolRegistry>,
+    ) -> Self {
+        Self::with_metrics(config, provider, registry, Arc::new(NoopMetrics))
+    }
+
+    /// Create a new agent loop with a custom metrics collector.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` — Loop configuration (limits, timeouts, system prompt)
+    /// * `provider` — The LLM provider adapter
+    /// * `registry` — The tool registry (tools available to the model)
+    /// * `metrics` — Metrics collector for observability
+    pub fn with_metrics(
+        config: AgentConfig,
+        provider: Arc<dyn ProviderAdapter>,
+        registry: Arc<ToolRegistry>,
+        metrics: Arc<dyn MetricsCollector>,
     ) -> Self {
         // Build tool definitions from registry for the provider
         let tool_definitions: Vec<ToolDefinition> = registry
@@ -75,6 +94,7 @@ impl AgentLoop {
             tool_executor,
             tool_definitions,
             cancel: CancellationToken::new(),
+            metrics,
         }
     }
 
@@ -159,9 +179,11 @@ impl AgentLoop {
         let total_usage = TokenUsage::default();
         let request_timeout = tokio::time::Duration::from_secs(self.config.request_timeout_secs);
         let options = RequestOptions::new().with_stream(true);
+        let loop_start = std::time::Instant::now();
 
         for _turn_idx in 0..self.config.max_turns {
             let turn_number = _turn_idx + 1;
+            let turn_start = std::time::Instant::now();
 
             let turn_span = tracing::info_span!(
                 SPAN_AGENT_TURN,
@@ -311,6 +333,12 @@ impl AgentLoop {
                     let acc_call = &accumulated.tool_calls[i];
                     match result {
                         Ok(exec) => {
+                            // Record metrics for tool execution
+                            self.metrics
+                                .record_tool_latency_ms(&exec.function_name, exec.duration_ms);
+                            self.metrics
+                                .count_tool_result(&exec.function_name, exec.result.success);
+
                             assistant_tool_calls.push(AssistantToolCall {
                                 call_id: exec.call_id.clone(),
                                 function_name: exec.function_name.clone(),
@@ -334,6 +362,8 @@ impl AgentLoop {
                             // Tool failed — include error as tool result
                             let call_id = acc_call.call_id.clone();
                             let error_msg = format!("Error: {e}");
+                            self.metrics
+                                .count_tool_result(&acc_call.function_name, false);
 
                             assistant_tool_calls.push(AssistantToolCall {
                                 call_id: call_id.clone(),
@@ -370,6 +400,10 @@ impl AgentLoop {
                     ),
                 );
 
+                let turn_duration_ms = turn_start.elapsed().as_millis() as u64;
+                self.metrics
+                    .record_turn_latency_ms(turn_number as u32, turn_duration_ms);
+
                 turns.push(TurnResult {
                     text: accumulated.text,
                     thinking: accumulated.thinking,
@@ -383,6 +417,10 @@ impl AgentLoop {
             }
 
             // No tool calls — the model is done
+            let turn_duration_ms = turn_start.elapsed().as_millis() as u64;
+            self.metrics
+                .record_turn_latency_ms(turn_number as u32, turn_duration_ms);
+
             turns.push(TurnResult {
                 text: accumulated.text,
                 thinking: accumulated.thinking,
@@ -390,6 +428,12 @@ impl AgentLoop {
                 finish_reason: accumulated.finish_reason,
                 usage: None,
             });
+
+            let total_latency_ms = loop_start.elapsed().as_millis() as u64;
+            let provider_name = self.provider.name();
+            // Model name not directly accessible from provider trait - use "unknown" for now
+            self.metrics
+                .record_request_latency_ms(provider_name, "unknown", total_latency_ms);
 
             return Ok(AgentLoopResult {
                 final_text: last_text(&turns),
@@ -400,6 +444,12 @@ impl AgentLoop {
         }
 
         // Max turns reached
+        let total_latency_ms = loop_start.elapsed().as_millis() as u64;
+        let provider_name = self.provider.name();
+        // Model name not directly accessible from provider trait - use "unknown" for now
+        self.metrics
+            .record_request_latency_ms(provider_name, "unknown", total_latency_ms);
+
         Ok(AgentLoopResult {
             final_text: last_text(&turns),
             turns,
