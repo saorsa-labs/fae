@@ -7,9 +7,9 @@
     "name": "Provider Implementation"
   },
   "phase": {
-    "number": "2.2",
-    "name": "Compatibility Profile Engine",
-    "plan": "PLAN-phase-2.2.md"
+    "number": "2.3",
+    "name": "Local Probe Service",
+    "plan": "PLAN-phase-2.3.md"
   },
   "progress": {
     "total_tasks": 8,
@@ -22,5 +22,5 @@
     "iteration": 0,
     "last_verdict": null
   },
-  "last_updated": "2026-02-12T19:00:00Z"
+  "last_updated": "2026-02-12T20:30:00Z"
 }

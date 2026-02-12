@@ -44,6 +44,9 @@ pub use error::FaeLlmError;
 pub use events::{FinishReason, LlmEvent};
 pub use metadata::{RequestMeta, ResponseMeta};
 pub use provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
+pub use providers::local_probe::{
+    LocalModel, LocalProbeService, ProbeConfig, ProbeResult, ProbeStatus,
+};
 pub use providers::message::{AssistantToolCall, Message, MessageContent, Role};
 pub use providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
 pub use providers::profile::{CompatibilityProfile, ProfileRegistry, resolve_profile};
@@ -819,5 +822,164 @@ mod integration_tests {
                 finish_reason: FinishReason::Stop
             }
         )));
+    }
+
+    // ── Local Probe Integration Tests ─────────────────────────
+
+    /// ProbeConfig default values are sensible.
+    #[test]
+    fn probe_integration_config_defaults() {
+        let config = ProbeConfig::default();
+        assert_eq!(config.endpoint_url, "http://localhost:11434");
+        assert_eq!(config.timeout_secs, 5);
+        assert_eq!(config.retry_count, 2);
+        assert_eq!(config.retry_delay_ms, 500);
+    }
+
+    /// All ProbeStatus variants can be constructed.
+    #[test]
+    fn probe_integration_status_construction() {
+        let available = ProbeStatus::Available {
+            models: vec![LocalModel::new("llama3:8b")],
+            endpoint_url: "http://localhost:11434".to_string(),
+            latency_ms: 10,
+        };
+        assert!(available.is_available());
+
+        let not_running = ProbeStatus::NotRunning;
+        assert!(!not_running.is_available());
+
+        let timeout = ProbeStatus::Timeout;
+        assert!(!timeout.is_available());
+
+        let unhealthy = ProbeStatus::Unhealthy {
+            status_code: 503,
+            message: "overloaded".to_string(),
+        };
+        assert!(!unhealthy.is_available());
+
+        let incompat = ProbeStatus::IncompatibleResponse {
+            detail: "HTML".to_string(),
+        };
+        assert!(!incompat.is_available());
+    }
+
+    /// ProbeStatus JSON serialization round-trip for all variants.
+    #[test]
+    fn probe_integration_status_serde() {
+        let statuses: Vec<ProbeStatus> = vec![
+            ProbeStatus::Available {
+                models: vec![
+                    LocalModel::new("a"),
+                    LocalModel::new("b").with_name("Model B"),
+                ],
+                endpoint_url: "http://localhost:8080".to_string(),
+                latency_ms: 42,
+            },
+            ProbeStatus::NotRunning,
+            ProbeStatus::Timeout,
+            ProbeStatus::Unhealthy {
+                status_code: 500,
+                message: "error".to_string(),
+            },
+            ProbeStatus::IncompatibleResponse {
+                detail: "bad format".to_string(),
+            },
+        ];
+
+        for status in &statuses {
+            let json = serde_json::to_string(status).unwrap_or_default();
+            assert!(!json.is_empty());
+            let parsed: Result<ProbeStatus, _> = serde_json::from_str(&json);
+            assert!(parsed.is_ok(), "failed to parse: {json}");
+        }
+    }
+
+    /// ProbeStatus convenience methods work correctly.
+    #[test]
+    fn probe_integration_convenience_methods() {
+        let available = ProbeStatus::Available {
+            models: vec![LocalModel::new("llama3"), LocalModel::new("mistral")],
+            endpoint_url: "http://localhost:11434".to_string(),
+            latency_ms: 5,
+        };
+        assert!(available.is_available());
+        assert_eq!(available.models().len(), 2);
+        assert_eq!(
+            available.endpoint_url(),
+            Some("http://localhost:11434" as &str)
+        );
+
+        let not_running = ProbeStatus::NotRunning;
+        assert!(!not_running.is_available());
+        assert!(not_running.models().is_empty());
+        assert!(not_running.endpoint_url().is_none());
+    }
+
+    /// Probing an unreachable port returns NotRunning or Timeout.
+    #[tokio::test]
+    async fn probe_integration_unreachable_endpoint() {
+        let config = ProbeConfig::new("http://127.0.0.1:19998")
+            .with_timeout_secs(1)
+            .with_retry_count(0);
+        let service = LocalProbeService::new(config);
+        let result = service.probe().await;
+        assert!(result.is_ok());
+        let status = result.unwrap_or(ProbeStatus::IncompatibleResponse {
+            detail: "bad".into(),
+        });
+        assert!(
+            matches!(status, ProbeStatus::NotRunning | ProbeStatus::Timeout),
+            "expected NotRunning or Timeout, got: {status}"
+        );
+    }
+
+    /// Display output is human-readable for all variants.
+    #[test]
+    fn probe_integration_display_output() {
+        let statuses: Vec<ProbeStatus> = vec![
+            ProbeStatus::Available {
+                models: vec![LocalModel::new("x")],
+                endpoint_url: "http://localhost:11434".to_string(),
+                latency_ms: 10,
+            },
+            ProbeStatus::NotRunning,
+            ProbeStatus::Timeout,
+            ProbeStatus::Unhealthy {
+                status_code: 404,
+                message: "not found".to_string(),
+            },
+            ProbeStatus::IncompatibleResponse {
+                detail: "HTML page".to_string(),
+            },
+        ];
+
+        for status in &statuses {
+            let display = status.to_string();
+            assert!(!display.is_empty());
+            // Verify display contains meaningful content
+            assert!(display.len() > 5);
+        }
+    }
+
+    /// All probe-related types are Send + Sync.
+    #[test]
+    fn probe_integration_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ProbeStatus>();
+        assert_send_sync::<ProbeConfig>();
+        assert_send_sync::<LocalModel>();
+        assert_send_sync::<LocalProbeService>();
+        assert_send_sync::<providers::local_probe::ProbeError>();
+    }
+
+    /// LocalModel display name fallback behavior.
+    #[test]
+    fn probe_integration_local_model_display() {
+        let with_name = LocalModel::new("llama3:8b").with_name("Llama 3 8B");
+        assert_eq!(with_name.to_string(), "Llama 3 8B");
+
+        let without_name = LocalModel::new("qwen2:7b");
+        assert_eq!(without_name.to_string(), "qwen2:7b");
     }
 }

@@ -1,76 +1,82 @@
-# Phase 2.3: Integration & Polish
+# Phase 2.3: Local Probe Service
 
 ## Goal
-Complete the Runtime Voice Switching feature with GUI integration, help/query commands, and comprehensive documentation. Make the model switching experience seamless and user-friendly.
+Implement a service that probes local LLM endpoints (Ollama, llama.cpp, vLLM, etc.) to determine if they are running, healthy, and what models are available. This is a read-only diagnostic service -- it does NOT start or manage model processes (that is deferred to a future RuntimeManager).
 
-## Approach
-Build on the complete voice command detection (Phase 2.1) and live switching (Phase 2.2) to add visual feedback in the GUI, handle query commands (list/current), and provide full documentation and testing.
+## Files
+- `src/fae_llm/providers/local_probe.rs` — Core probe service implementation
+- `src/fae_llm/providers/mod.rs` — Wire in local_probe module
+- `src/fae_llm/mod.rs` — Re-export probe types
 
 ## Tasks
 
-### Task 1: GUI active model indicator
-**Files:** `src/bin/gui.rs`
-- Add `active_model: Option<String>` to `AppState`
-- Display active model name in status bar or header when known
-- Update on startup after model selection completes
-- Update when model switch events occur
-- Style: subtle indicator, e.g., "🤖 Claude Opus 4" or "Model: gpt-4o"
-- Tests: GUI state updates when model changes
+### Task 1: Define ProbeStatus and ProbeError types
+Create `src/fae_llm/providers/local_probe.rs` with:
+- `ProbeStatus` enum: `Available { models, endpoint_url, latency_ms }`, `NotRunning`, `Timeout`, `Unhealthy { status_code, message }`, `IncompatibleResponse { detail }`
+- `ProbeError` enum with typed failure modes (not just strings)
+- `ProbeResult` type alias = `Result<ProbeStatus, ProbeError>`
+- `LocalModel` struct with `id: String` and `name: Option<String>`
+- All types: Debug, Clone, Serialize, Deserialize
+- Unit tests for type construction, equality, serde round-trip
 
-### Task 2: Wire ListModels command to Pi query
-**Files:** `src/pipeline/coordinator.rs`, `src/pi/engine.rs`
-- When VoiceCommand::ListModels detected, call `pi.list_model_names()`
-- Build spoken response using `list_models_response()`
-- Send to TTS for voice output (bypass LLM generation)
-- Update GUI to show brief "listing models" status
-- Tests: ListModels command produces correct spoken output
+### Task 2: Define ProbeConfig and LocalProbeService struct
+Add to `local_probe.rs`:
+- `ProbeConfig` struct: `endpoint_url: String`, `timeout_secs: u64` (default 5), `retry_count: u32` (default 2), `retry_delay_ms: u64` (default 500)
+- `ProbeConfig::default()` targeting `http://localhost:11434` (Ollama default)
+- `LocalProbeService` struct holding `config: ProbeConfig` and `client: reqwest::Client`
+- `LocalProbeService::new(config)` constructor
+- `LocalProbeService::with_defaults()` convenience constructor
+- Unit tests for config defaults, construction
 
-### Task 3: Wire CurrentModel command to Pi query
-**Files:** `src/pipeline/coordinator.rs`, `src/pi/engine.rs`
-- When VoiceCommand::CurrentModel detected, call `pi.current_model_name()`
-- Build spoken response using `current_model_response()`
-- Send to TTS for voice output
-- Tests: CurrentModel query returns active model name
+### Task 3: Implement health check probe
+Add to `LocalProbeService`:
+- `async fn check_health(&self) -> ProbeResult` — GET `{base_url}/` or `{base_url}/health`
+- Maps HTTP status codes to ProbeStatus variants
+- Connection refused → `NotRunning`
+- Timeout → `Timeout`
+- HTTP 200 → healthy (proceed to model discovery)
+- HTTP 4xx/5xx → `Unhealthy { status_code, message }`
+- Non-JSON/unexpected response → `IncompatibleResponse`
+- Unit tests with expected mappings (no real HTTP needed for type logic)
 
-### Task 4: Help command for model switching
-**Files:** `src/voice_command.rs`, `src/pipeline/coordinator.rs`
-- Add VoiceCommand::Help variant
-- Recognize "help", "what can I say", "model commands"
-- Return spoken help text listing all model switch patterns
-- Example: "You can say: switch to Claude, use the local model, list models, or what model are you using."
-- Tests: Help command returns correct text
+### Task 4: Implement model discovery
+Add to `LocalProbeService`:
+- `async fn discover_models(&self) -> ProbeResult` — GET `{base_url}/v1/models` or `{base_url}/api/tags`
+- Parse JSON response into `Vec<LocalModel>`
+- Return `Available { models, endpoint_url, latency_ms }`
+- Handle non-JSON responses gracefully → `IncompatibleResponse`
+- Handle empty model lists → `Available` with empty vec (not an error)
+- Unit tests for JSON parsing logic (separate from HTTP)
 
-### Task 5: Error handling and edge cases
-**Files:** `src/pipeline/coordinator.rs`, `src/pi/engine.rs`
-- Handle model switch during active generation gracefully
-- Validate model switch didn't break Pi session continuity
-- Handle unavailable model requests with fallback message
-- Timeout handling for slow model switches
-- Tests: Edge cases return appropriate error messages
+### Task 5: Implement bounded backoff retry
+Add to `LocalProbeService`:
+- `async fn probe_with_retry(&self) -> ProbeResult` — Orchestrates health check + model discovery with retry
+- Bounded exponential backoff: `retry_delay_ms * 2^attempt`, capped at `timeout_secs`
+- Only retry on `NotRunning` and `Timeout` (not `Unhealthy` or `IncompatibleResponse`)
+- After all retries exhausted, return last error status
+- Unit tests for retry logic (mock-friendly structure)
 
-### Task 6: Integration tests — end-to-end flow
-**Files:** `tests/model_switching_integration.rs` (new)
-- Full flow: startup → auto-select → voice command → switch → query
-- Test: "switch to Claude" changes active model and GUI state
-- Test: "list models" produces correct spoken output
-- Test: "what model" returns current model
-- Test: switch to unavailable model handles gracefully
-- All tests use mock Pi/TTS to avoid real API calls
+### Task 6: Implement full probe entry point and display
+Add to `LocalProbeService`:
+- `async fn probe(&self) -> ProbeResult` — The main entry point that calls `probe_with_retry()`
+- `Display` impl for `ProbeStatus` (human-readable diagnostic output)
+- `ProbeStatus::is_available()` convenience method
+- `ProbeStatus::models()` convenience method (returns `&[LocalModel]` or empty slice)
+- `ProbeStatus::endpoint_url()` convenience method
+- Unit tests for display output, convenience methods
 
-### Task 7: Documentation — user guide
-**Files:** `docs/model-switching.md` (new), `README.md`
-- Document all supported voice commands with examples
-- Explain tier-based auto-selection behavior
-- Document priority field override in models.json
-- Document fallback to local model
-- Add troubleshooting section (model not found, switch failed)
-- Update main README with "Runtime Model Switching" section
+### Task 7: Wire into module tree
+- Add `pub mod local_probe;` to `providers/mod.rs`
+- Update providers/mod.rs doc comment
+- Add re-exports to `fae_llm/mod.rs`: `LocalProbeService`, `ProbeConfig`, `ProbeStatus`, `ProbeResult`, `LocalModel`
+- Ensure `cargo check` and `cargo clippy` pass
 
-### Task 8: Documentation — developer guide
-**Files:** `docs/architecture/model-selection.md` (new)
-- Document three-layer selection architecture (tier → priority → picker)
-- Document voice command pipeline flow
-- Document PiLlm model switching internals
-- Document how to add new model tier mappings
-- Document testing approach for voice commands
-- Add architecture diagram if helpful
+### Task 8: Integration tests
+Add integration tests to `fae_llm/mod.rs`:
+- `probe_config_defaults()` — verify default endpoint, timeout, retry settings
+- `probe_status_construction()` — all variants constructible
+- `probe_status_serde_round_trip()` — JSON serialization for all variants
+- `probe_status_convenience_methods()` — is_available, models, endpoint_url
+- `probe_not_running_no_server()` — probe against unreachable port returns NotRunning/Timeout
+- `probe_display_output()` — Display impl produces readable output
+- Verify all types are Send + Sync

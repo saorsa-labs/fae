@@ -336,3 +336,28 @@ All 4 phases delivered:
 1.2: Create fae_llm Crate Structure (8 tasks)
 1.3: Config Schema & Persistence (8 tasks)
 1.4: Tool Registry & Implementations (8 tasks)
+
+## FAE LLM Module — Milestone 2: Provider Implementation
+
+### Phase 2.1: OpenAI Adapter — COMPLETE
+- [x] Task 1: ProviderAdapter trait and message types (commit: f698458)
+- [x] Task 2: SSE line parser (commit: 948752f)
+- [x] Tasks 3-7: OpenAI adapter with Completions + Responses API (commit: 40deacb)
+- [x] Task 8: Integration tests and verification (commit: 653dbab)
+
+**Phase 2.1 COMPLETE** — OpenAI adapter with Completions + Responses API
+
+### Phase 2.2: Compatibility Profile Engine — COMPLETE
+- [x] Tasks 1-3: Profile engine types, built-ins, and resolution (commit: 8f19e0a)
+- [x] Tasks 4-6: Profile-based request/response normalization and adapter integration (commit: c3063f4)
+- [x] Task 7: Profile serialization and config integration (commit: 6fa1508)
+- [x] Task 8: Integration tests and verification (commit: 4978e23)
+
+**Phase 2.2 COMPLETE** — Compatibility Profile Engine
+- 7 built-in profiles: OpenAI default, z.ai, DeepSeek, MiniMax, Ollama, llama.cpp, vLLM
+- Profile flags: max_tokens_field, reasoning_mode, tool_call_format, stop_sequence_field
+- Request/response normalization via apply_profile_to_request() and normalize_finish_reason()
+- ProfileRegistry for custom runtime overrides
+- TOML serialization in ProviderConfig
+
+### Phase 2.3: Local Probe Service — IN PROGRESS
