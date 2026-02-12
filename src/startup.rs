@@ -119,10 +119,18 @@ pub async fn initialize_models_with_progress(
         model_manager.download_with_progress(&config.stt.model_id, filename, callback)?;
     }
 
-    // LLM: mistralrs handles its own HF downloads, so we skip manual download
-    // for the local backend. Only STT needs explicit pre-download.
+    // LLM GGUF: Pre-download so mistralrs finds it in the shared hf-hub cache.
+    // This gives us progress visibility instead of a frozen "Loading..." screen.
+    if use_local_llm {
+        model_manager.download_with_progress(
+            &config.llm.model_id,
+            &config.llm.gguf_file,
+            callback,
+        )?;
+    }
 
-    // TTS: Chatterbox models are downloaded by the engine via hf-hub on load.
+    // TTS: Kokoro assets are downloaded by the engine via hf-hub on load.
+    // (Pre-download with progress is added in Task 5.)
 
     // --- Phase 2: Load models ---
     println!("\nLoading models...");
