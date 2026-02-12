@@ -55,6 +55,18 @@ mod gui {
             bytes_downloaded: u64,
             /// Total bytes for current file (if known).
             total_bytes: Option<u64>,
+            /// Number of files completely downloaded.
+            files_complete: usize,
+            /// Total number of files to download.
+            files_total: usize,
+            /// Aggregate bytes downloaded across all files.
+            aggregate_bytes: u64,
+            /// Total bytes to download across all files.
+            aggregate_total: u64,
+            /// Current download speed in bytes per second.
+            speed_bps: f64,
+            /// Estimated time remaining in seconds.
+            eta_secs: Option<f64>,
         },
         /// Loading models into memory.
         Loading {
@@ -72,8 +84,21 @@ mod gui {
         pub fn display_text(&self) -> String {
             match self {
                 Self::Idle => "Ready".into(),
-                Self::Downloading { current_file, .. } => {
-                    format!("Downloading {current_file}...")
+                Self::Downloading {
+                    current_file,
+                    files_complete,
+                    files_total,
+                    ..
+                } => {
+                    if *files_total > 0 {
+                        format!(
+                            "Downloading file {}/{} — {current_file}",
+                            files_complete + 1,
+                            files_total
+                        )
+                    } else {
+                        format!("Downloading {current_file}...")
+                    }
                 }
                 Self::Loading { model_name } => format!("Loading {model_name}..."),
                 Self::Running => "Listening...".into(),
@@ -113,6 +138,12 @@ mod gui {
                 current_file: filename,
                 bytes_downloaded: 0,
                 total_bytes,
+                files_complete: 0,
+                files_total: 0,
+                aggregate_bytes: 0,
+                aggregate_total: 0,
+                speed_bps: 0.0,
+                eta_secs: None,
             }),
             ProgressEvent::DownloadProgress {
                 filename,
@@ -123,6 +154,12 @@ mod gui {
                 current_file: filename,
                 bytes_downloaded,
                 total_bytes,
+                files_complete: 0,
+                files_total: 0,
+                aggregate_bytes: 0,
+                aggregate_total: 0,
+                speed_bps: 0.0,
+                eta_secs: None,
             }),
             ProgressEvent::DownloadComplete { .. } | ProgressEvent::Cached { .. } => {
                 // Progress continues to next file or load phase — no state change
@@ -135,8 +172,9 @@ mod gui {
             }
             ProgressEvent::Error { message } => Some(AppStatus::Error(message)),
             // Plan and aggregate events are handled by Phase 1.2 GUI overhaul
-            ProgressEvent::DownloadPlanReady { .. }
-            | ProgressEvent::AggregateProgress { .. } => None,
+            ProgressEvent::DownloadPlanReady { .. } | ProgressEvent::AggregateProgress { .. } => {
+                None
+            }
         }
     }
 
@@ -242,8 +280,30 @@ mod gui {
                 current_file: "model.onnx".into(),
                 bytes_downloaded: 500,
                 total_bytes: Some(1000),
+                files_complete: 0,
+                files_total: 0,
+                aggregate_bytes: 0,
+                aggregate_total: 0,
+                speed_bps: 0.0,
+                eta_secs: None,
             };
             assert_eq!(s.display_text(), "Downloading model.onnx...");
+        }
+
+        #[test]
+        fn downloading_display_text_with_aggregate() {
+            let s = AppStatus::Downloading {
+                current_file: "model.onnx".into(),
+                bytes_downloaded: 500,
+                total_bytes: Some(1000),
+                files_complete: 1,
+                files_total: 3,
+                aggregate_bytes: 1_000_000,
+                aggregate_total: 4_800_000,
+                speed_bps: 10_000_000.0,
+                eta_secs: Some(380.0),
+            };
+            assert_eq!(s.display_text(), "Downloading file 2/3 — model.onnx");
         }
 
         #[test]
@@ -290,6 +350,12 @@ mod gui {
                     current_file: "x".into(),
                     bytes_downloaded: 0,
                     total_bytes: None,
+                    files_complete: 0,
+                    files_total: 0,
+                    aggregate_bytes: 0,
+                    aggregate_total: 0,
+                    speed_bps: 0.0,
+                    eta_secs: None,
                 }
                 .buttons_enabled()
             );
@@ -311,6 +377,7 @@ mod gui {
                     current_file,
                     bytes_downloaded,
                     total_bytes,
+                    ..
                 } => {
                     assert_eq!(current_file, "weights.bin");
                     assert_eq!(bytes_downloaded, 0);
@@ -1468,6 +1535,12 @@ fn app() -> Element {
                     current_file: "Checking models...".into(),
                     bytes_downloaded: 0,
                     total_bytes: None,
+                    files_complete: 0,
+                    files_total: 0,
+                    aggregate_bytes: 0,
+                    aggregate_total: 0,
+                    speed_bps: 0.0,
+                    eta_secs: None,
                 });
                 stt_stage.set(StagePhase::Loading);
                 llm_stage.set(StagePhase::Pending);
@@ -1863,15 +1936,23 @@ fn app() -> Element {
         )
     );
 
-    // Progress bar fraction (0.0 to 1.0)
+    // Progress bar fraction (0.0 to 1.0) — prefer aggregate, fall back to per-file
     let progress_fraction = if let AppStatus::Downloading {
         bytes_downloaded,
-        total_bytes: Some(total),
+        total_bytes,
+        aggregate_bytes,
+        aggregate_total,
         ..
     } = &current_status
     {
-        if *total > 0 {
-            *bytes_downloaded as f64 / *total as f64
+        if *aggregate_total > 0 {
+            *aggregate_bytes as f64 / *aggregate_total as f64
+        } else if let Some(total) = total_bytes {
+            if *total > 0 {
+                *bytes_downloaded as f64 / *total as f64
+            } else {
+                0.0
+            }
         } else {
             0.0
         }
