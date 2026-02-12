@@ -63,6 +63,9 @@ const STT_FILES: &[&str] = &[
     "vocab.txt",
 ];
 
+/// LLM tokenizer files to pre-download (from the tokenizer repo).
+const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"];
+
 /// Download all model files with progress bars, then eagerly load each model.
 ///
 /// Prints user-friendly progress to stdout. This is designed for CLI use.
@@ -119,14 +122,26 @@ pub async fn initialize_models_with_progress(
         model_manager.download_with_progress(&config.stt.model_id, filename, callback)?;
     }
 
-    // LLM GGUF: Pre-download so mistralrs finds it in the shared hf-hub cache.
-    // This gives us progress visibility instead of a frozen "Loading..." screen.
+    // LLM: Pre-download GGUF and tokenizer so mistralrs finds them in the
+    // shared hf-hub cache. This gives us progress visibility instead of a
+    // frozen "Loading..." screen.
     if use_local_llm {
         model_manager.download_with_progress(
             &config.llm.model_id,
             &config.llm.gguf_file,
             callback,
         )?;
+
+        // Tokenizer files (from separate repo if configured)
+        if !config.llm.tokenizer_id.is_empty() {
+            for filename in LLM_TOKENIZER_FILES {
+                model_manager.download_with_progress(
+                    &config.llm.tokenizer_id,
+                    filename,
+                    callback,
+                )?;
+            }
+        }
     }
 
     // TTS: Kokoro assets are downloaded by the engine via hf-hub on load.
