@@ -6,7 +6,10 @@
 //! # Submodules
 //!
 //! - [`types`] — Core types: [`Session`], [`SessionMeta`], [`SessionResumeError`]
+//! - [`store`] — Storage trait and in-memory implementation
 
+pub mod store;
 pub mod types;
 
+pub use store::{MemorySessionStore, SessionStore};
 pub use types::{Session, SessionId, SessionMeta, SessionResumeError, CURRENT_SCHEMA_VERSION};
