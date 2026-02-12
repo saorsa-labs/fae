@@ -447,6 +447,21 @@ All 3 phases delivered:
 3.1: Agent Loop Engine (8 tasks)
 3.2: Session Persistence & Replay (8 tasks)
 3.3: Multi-Provider Hardening (8 tasks)
+
+## FAE LLM Module — Milestone 4: Observability & Release
+
+### Phase 4.1: Tracing, Metrics & Redaction — COMPLETE
+- [x] Task 1: Tracing span constants and hierarchy (commit: f16b267)
+- [x] Task 2: Metrics trait and types (commit: a77ace5)
+- [x] Task 3: Secret redaction types and patterns (commit: 4348caa)
 - [x] Task 4: Integrate tracing spans into provider adapters (commits: ced8467, dd85dfc)
 - [x] Task 5: Integrate tracing spans into agent loop and tools (commit: 505a5ac)
 - [x] Task 6: Add metrics collection hooks (commit: d8f3202)
+- [x] Task 7: Add secret redaction to event logging (commit: 07c3905)
+- [x] Task 8: Integration tests and documentation (commit: 59ad9e2)
+
+**Phase 4.1 COMPLETE** — Tracing, Metrics & Redaction
+- Structured tracing with hierarchical spans (request → turn → tool)
+- MetricsCollector trait with NoopMetrics default, integrated into AgentLoop
+- RedactedString wrapper and secret redaction for API keys, auth headers
+- 1,474 tests passing, zero warnings
