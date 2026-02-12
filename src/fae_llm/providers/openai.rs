@@ -42,6 +42,9 @@ use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::events::{FinishReason, LlmEvent};
 use crate::fae_llm::provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::message::{Message, MessageContent, Role};
+use crate::fae_llm::providers::profile::{
+    CompatibilityProfile, apply_profile_to_request, normalize_finish_reason, resolve_profile,
+};
 use crate::fae_llm::providers::sse::SseLineParser;
 use crate::fae_llm::types::{ModelRef, RequestOptions};
 
@@ -71,6 +74,8 @@ pub struct OpenAiConfig {
     pub model: String,
     /// Which API mode to use.
     pub api_mode: OpenAiApiMode,
+    /// Optional compatibility profile for provider-specific quirks.
+    pub profile: Option<CompatibilityProfile>,
 }
 
 impl OpenAiConfig {
@@ -82,6 +87,33 @@ impl OpenAiConfig {
             org_id: None,
             model: model.into(),
             api_mode: OpenAiApiMode::default(),
+            profile: None,
+        }
+    }
+
+    /// Create a config for a named provider, auto-resolving the compatibility profile.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fae::fae_llm::providers::openai::OpenAiConfig;
+    ///
+    /// let config = OpenAiConfig::for_provider("deepseek", "sk-...", "deepseek-chat")
+    ///     .with_base_url("https://api.deepseek.com");
+    /// assert!(config.profile.is_some());
+    /// ```
+    pub fn for_provider(
+        provider: &str,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            api_key: api_key.into(),
+            base_url: "https://api.openai.com".into(),
+            org_id: None,
+            model: model.into(),
+            api_mode: OpenAiApiMode::default(),
+            profile: Some(resolve_profile(provider)),
         }
     }
 
@@ -100,6 +132,12 @@ impl OpenAiConfig {
     /// Set the API mode.
     pub fn with_api_mode(mut self, mode: OpenAiApiMode) -> Self {
         self.api_mode = mode;
+        self
+    }
+
+    /// Set a compatibility profile.
+    pub fn with_profile(mut self, profile: CompatibilityProfile) -> Self {
+        self.profile = Some(profile);
         self
     }
 }
@@ -293,9 +331,18 @@ fn tools_to_openai(tools: &[ToolDefinition]) -> serde_json::Value {
 
 // ── Response Parsing (Completions) ────────────────────────────
 
-/// Map OpenAI finish reason string to our FinishReason enum.
-fn map_finish_reason(reason: &str) -> FinishReason {
-    match reason {
+/// Map a finish reason string to our [`FinishReason`] enum.
+///
+/// When a profile is provided, uses profile-aware normalization
+/// to handle provider-specific finish reason strings.
+fn map_finish_reason(reason: &str, profile: Option<&CompatibilityProfile>) -> FinishReason {
+    let normalized = if let Some(p) = profile {
+        normalize_finish_reason(reason, p)
+    } else {
+        reason
+    };
+
+    match normalized {
         "stop" => FinishReason::Stop,
         "length" => FinishReason::Length,
         "tool_calls" => FinishReason::ToolCalls,
@@ -416,7 +463,12 @@ impl ToolCallAccumulator {
 ///
 /// Returns a list of [`LlmEvent`]s extracted from the chunk.
 /// The `accumulator` tracks in-flight tool calls across chunks.
-pub fn parse_completions_chunk(data: &str, accumulator: &mut ToolCallAccumulator) -> Vec<LlmEvent> {
+/// An optional `profile` enables provider-specific finish reason normalization.
+pub fn parse_completions_chunk(
+    data: &str,
+    accumulator: &mut ToolCallAccumulator,
+    profile: Option<&CompatibilityProfile>,
+) -> Vec<LlmEvent> {
     let parsed: serde_json::Value = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
@@ -461,12 +513,13 @@ pub fn parse_completions_chunk(data: &str, accumulator: &mut ToolCallAccumulator
 
             // Finish reason
             if let Some(finish_reason) = choice.get("finish_reason").and_then(|f| f.as_str()) {
+                let mapped = map_finish_reason(finish_reason, profile);
                 // End any active tool calls first
-                if finish_reason == "tool_calls" {
+                if mapped == FinishReason::ToolCalls {
                     events.extend(accumulator.finish_all());
                 }
                 events.push(LlmEvent::StreamEnd {
-                    finish_reason: map_finish_reason(finish_reason),
+                    finish_reason: mapped,
                 });
             }
         }
@@ -480,10 +533,12 @@ pub fn parse_completions_chunk(data: &str, accumulator: &mut ToolCallAccumulator
 /// Parse an SSE event from the Responses API.
 ///
 /// The Responses API uses typed `event:` fields instead of just `data:`.
+/// An optional `profile` enables provider-specific finish reason normalization.
 pub fn parse_responses_event(
     event_type: &str,
     data: &str,
     accumulator: &mut ToolCallAccumulator,
+    _profile: Option<&CompatibilityProfile>,
 ) -> Vec<LlmEvent> {
     let parsed: serde_json::Value = match serde_json::from_str(data) {
         Ok(v) => v,
@@ -606,15 +661,24 @@ impl OpenAiAdapter {
     }
 
     /// Build the HTTP request for the configured API mode.
+    ///
+    /// If a compatibility profile is set, applies profile-based
+    /// normalization to the request body after construction.
     fn build_request(
         &self,
         messages: &[Message],
         options: &RequestOptions,
         tools: &[ToolDefinition],
     ) -> (String, serde_json::Value) {
-        match self.config.api_mode {
+        let (url, mut body) = match self.config.api_mode {
             OpenAiApiMode::Completions => {
-                let url = format!("{}/v1/chat/completions", self.config.base_url);
+                let path = self
+                    .config
+                    .profile
+                    .as_ref()
+                    .and_then(|p| p.api_path_override.as_deref())
+                    .unwrap_or("/v1/chat/completions");
+                let url = format!("{}{}", self.config.base_url, path);
                 let body = build_completions_request(&self.config.model, messages, options, tools);
                 (url, body)
             }
@@ -623,7 +687,14 @@ impl OpenAiAdapter {
                 let body = build_responses_request(&self.config.model, messages, options, tools);
                 (url, body)
             }
+        };
+
+        // Apply profile-based normalization
+        if let Some(profile) = &self.config.profile {
+            apply_profile_to_request(&mut body, profile);
         }
+
+        (url, body)
     }
 
     /// Map an HTTP error status to the appropriate FaeLlmError.
@@ -653,7 +724,11 @@ fn extract_error_message(body: &str) -> String {
 #[async_trait]
 impl ProviderAdapter for OpenAiAdapter {
     fn name(&self) -> &str {
-        "openai"
+        self.config
+            .profile
+            .as_ref()
+            .map(|p| p.name())
+            .unwrap_or("openai")
     }
 
     async fn send(
@@ -665,6 +740,7 @@ impl ProviderAdapter for OpenAiAdapter {
         let (url, body) = self.build_request(messages, options, tools);
         let model = self.config.model.clone();
         let api_mode = self.config.api_mode;
+        let profile = self.config.profile.clone();
 
         let mut request = self
             .client
@@ -698,7 +774,7 @@ impl ProviderAdapter for OpenAiAdapter {
 
         let byte_stream = response.bytes_stream();
 
-        let event_stream = create_event_stream(byte_stream, request_id, model, api_mode);
+        let event_stream = create_event_stream(byte_stream, request_id, model, api_mode, profile);
 
         Ok(Box::pin(event_stream))
     }
@@ -710,6 +786,7 @@ fn create_event_stream(
     request_id: String,
     model: String,
     api_mode: OpenAiApiMode,
+    profile: Option<CompatibilityProfile>,
 ) -> impl Stream<Item = LlmEvent> + Send {
     futures_util::stream::unfold(
         StreamState {
@@ -719,6 +796,7 @@ fn create_event_stream(
             request_id,
             model,
             api_mode,
+            profile,
             started: false,
             event_buffer: Vec::new(),
         },
@@ -749,15 +827,18 @@ fn create_event_stream(
                             }
 
                             let llm_events = match state.api_mode {
-                                OpenAiApiMode::Completions => {
-                                    parse_completions_chunk(&sse_event.data, &mut state.accumulator)
-                                }
+                                OpenAiApiMode::Completions => parse_completions_chunk(
+                                    &sse_event.data,
+                                    &mut state.accumulator,
+                                    state.profile.as_ref(),
+                                ),
                                 OpenAiApiMode::Responses => {
                                     let event_type = sse_event.event_type.as_deref().unwrap_or("");
                                     parse_responses_event(
                                         event_type,
                                         &sse_event.data,
                                         &mut state.accumulator,
+                                        state.profile.as_ref(),
                                     )
                                 }
                             };
@@ -780,15 +861,18 @@ fn create_event_stream(
                             && !sse_event.is_done()
                         {
                             let llm_events = match state.api_mode {
-                                OpenAiApiMode::Completions => {
-                                    parse_completions_chunk(&sse_event.data, &mut state.accumulator)
-                                }
+                                OpenAiApiMode::Completions => parse_completions_chunk(
+                                    &sse_event.data,
+                                    &mut state.accumulator,
+                                    state.profile.as_ref(),
+                                ),
                                 OpenAiApiMode::Responses => {
                                     let event_type = sse_event.event_type.as_deref().unwrap_or("");
                                     parse_responses_event(
                                         event_type,
                                         &sse_event.data,
                                         &mut state.accumulator,
+                                        state.profile.as_ref(),
                                     )
                                 }
                             };
@@ -813,6 +897,7 @@ struct StreamState {
     request_id: String,
     model: String,
     api_mode: OpenAiApiMode,
+    profile: Option<CompatibilityProfile>,
     started: bool,
     event_buffer: Vec<LlmEvent>,
 }
@@ -832,6 +917,7 @@ mod tests {
         assert_eq!(config.base_url, "https://api.openai.com");
         assert!(config.org_id.is_none());
         assert_eq!(config.api_mode, OpenAiApiMode::Completions);
+        assert!(config.profile.is_none());
     }
 
     #[test]
@@ -987,14 +1073,17 @@ mod tests {
 
     #[test]
     fn finish_reason_mapping() {
-        assert_eq!(map_finish_reason("stop"), FinishReason::Stop);
-        assert_eq!(map_finish_reason("length"), FinishReason::Length);
-        assert_eq!(map_finish_reason("tool_calls"), FinishReason::ToolCalls);
+        assert_eq!(map_finish_reason("stop", None), FinishReason::Stop);
+        assert_eq!(map_finish_reason("length", None), FinishReason::Length);
         assert_eq!(
-            map_finish_reason("content_filter"),
+            map_finish_reason("tool_calls", None),
+            FinishReason::ToolCalls
+        );
+        assert_eq!(
+            map_finish_reason("content_filter", None),
             FinishReason::ContentFilter
         );
-        assert_eq!(map_finish_reason("unknown"), FinishReason::Other);
+        assert_eq!(map_finish_reason("unknown", None), FinishReason::Other);
     }
 
     // ── Tool Call Accumulator ─────────────────────────────────
@@ -1077,7 +1166,7 @@ mod tests {
     fn parse_text_delta() {
         let data = r#"{"choices":[{"delta":{"content":"Hello"},"index":0}]}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_completions_chunk(data, &mut acc);
+        let events = parse_completions_chunk(data, &mut acc, None);
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], LlmEvent::TextDelta { text } if text == "Hello"));
     }
@@ -1086,7 +1175,7 @@ mod tests {
     fn parse_empty_content_skipped() {
         let data = r#"{"choices":[{"delta":{"content":""},"index":0}]}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_completions_chunk(data, &mut acc);
+        let events = parse_completions_chunk(data, &mut acc, None);
         assert!(events.is_empty());
     }
 
@@ -1094,7 +1183,7 @@ mod tests {
     fn parse_finish_reason_stop() {
         let data = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_completions_chunk(data, &mut acc);
+        let events = parse_completions_chunk(data, &mut acc, None);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
@@ -1111,7 +1200,7 @@ mod tests {
         // First start a tool call
         acc.process_chunk(0, Some("call_1"), Some("read"), None);
 
-        let events = parse_completions_chunk(data, &mut acc);
+        let events = parse_completions_chunk(data, &mut acc, None);
         // Should have ToolCallEnd + StreamEnd
         assert_eq!(events.len(), 2);
         assert!(matches!(&events[0], LlmEvent::ToolCallEnd { .. }));
@@ -1127,7 +1216,7 @@ mod tests {
     fn parse_tool_call_start() {
         let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"bash","arguments":""}}]},"index":0}]}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_completions_chunk(data, &mut acc);
+        let events = parse_completions_chunk(data, &mut acc, None);
         assert_eq!(events.len(), 1);
         assert!(
             matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
@@ -1140,11 +1229,11 @@ mod tests {
         // First start the call
         let start_data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"bash","arguments":""}}]},"index":0}]}"#;
         let mut acc = ToolCallAccumulator::new();
-        let _ = parse_completions_chunk(start_data, &mut acc);
+        let _ = parse_completions_chunk(start_data, &mut acc, None);
 
         // Then stream args
         let args_data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":"}}]},"index":0}]}"#;
-        let events = parse_completions_chunk(args_data, &mut acc);
+        let events = parse_completions_chunk(args_data, &mut acc, None);
         assert_eq!(events.len(), 1);
         assert!(
             matches!(&events[0], LlmEvent::ToolCallArgsDelta { call_id, args_fragment }
@@ -1155,7 +1244,7 @@ mod tests {
     #[test]
     fn parse_invalid_json_returns_empty() {
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_completions_chunk("not json", &mut acc);
+        let events = parse_completions_chunk("not json", &mut acc, None);
         assert!(events.is_empty());
     }
 
@@ -1163,7 +1252,7 @@ mod tests {
     fn parse_empty_choices() {
         let data = r#"{"choices":[]}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_completions_chunk(data, &mut acc);
+        let events = parse_completions_chunk(data, &mut acc, None);
         assert!(events.is_empty());
     }
 
@@ -1173,7 +1262,7 @@ mod tests {
     fn responses_text_delta() {
         let data = r#"{"delta":"Hello"}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event("response.output_text.delta", data, &mut acc);
+        let events = parse_responses_event("response.output_text.delta", data, &mut acc, None);
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], LlmEvent::TextDelta { text } if text == "Hello"));
     }
@@ -1182,7 +1271,7 @@ mod tests {
     fn responses_completed() {
         let data = r#"{"response":{"status":"completed"}}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event("response.completed", data, &mut acc);
+        let events = parse_responses_event("response.completed", data, &mut acc, None);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
@@ -1196,7 +1285,7 @@ mod tests {
     fn responses_function_call_added() {
         let data = r#"{"item":{"type":"function_call","call_id":"fc_1","name":"read"}}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event("response.output_item.added", data, &mut acc);
+        let events = parse_responses_event("response.output_item.added", data, &mut acc, None);
         assert_eq!(events.len(), 1);
         assert!(
             matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
@@ -1208,8 +1297,12 @@ mod tests {
     fn responses_function_args_delta() {
         let data = r#"{"item_id":"fc_1","delta":"{\"path\":","output_index":0}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events =
-            parse_responses_event("response.function_call_arguments.delta", data, &mut acc);
+        let events = parse_responses_event(
+            "response.function_call_arguments.delta",
+            data,
+            &mut acc,
+            None,
+        );
         // Should emit ToolCallStart (first encounter via accumulator) + ToolCallArgsDelta
         assert_eq!(events.len(), 2);
     }
@@ -1218,7 +1311,12 @@ mod tests {
     fn responses_function_args_done() {
         let data = r#"{"item_id":"fc_1"}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event("response.function_call_arguments.done", data, &mut acc);
+        let events = parse_responses_event(
+            "response.function_call_arguments.done",
+            data,
+            &mut acc,
+            None,
+        );
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], LlmEvent::ToolCallEnd { call_id } if call_id == "fc_1"));
     }
@@ -1227,14 +1325,15 @@ mod tests {
     fn responses_unknown_event_ignored() {
         let data = r#"{"foo":"bar"}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event("response.unknown_event", data, &mut acc);
+        let events = parse_responses_event("response.unknown_event", data, &mut acc, None);
         assert!(events.is_empty());
     }
 
     #[test]
     fn responses_invalid_json_returns_empty() {
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event("response.output_text.delta", "not json", &mut acc);
+        let events =
+            parse_responses_event("response.output_text.delta", "not json", &mut acc, None);
         assert!(events.is_empty());
     }
 
@@ -1311,7 +1410,7 @@ mod tests {
             if sse.is_done() {
                 continue;
             }
-            let events = parse_completions_chunk(&sse.data, &mut acc);
+            let events = parse_completions_chunk(&sse.data, &mut acc, None);
             all_events.extend(events);
         }
 
@@ -1353,7 +1452,7 @@ mod tests {
             if sse.is_done() {
                 continue;
             }
-            let events = parse_completions_chunk(&sse.data, &mut acc);
+            let events = parse_completions_chunk(&sse.data, &mut acc, None);
             all_events.extend(events);
         }
 
@@ -1428,5 +1527,166 @@ mod tests {
                 Err(_) => unreachable!("deserialization succeeded"),
             }
         }
+    }
+
+    // ── Profile Integration ──────────────────────────────────
+
+    #[test]
+    fn config_for_provider_auto_resolves_profile() {
+        let config = OpenAiConfig::for_provider("deepseek", "sk-test", "deepseek-chat");
+        assert!(config.profile.is_some());
+        if let Some(ref p) = config.profile {
+            assert_eq!(p.name(), "deepseek");
+        }
+    }
+
+    #[test]
+    fn config_with_profile_builder() {
+        use crate::fae_llm::providers::profile::CompatibilityProfile;
+
+        let profile = CompatibilityProfile::zai();
+        let config = OpenAiConfig::new("sk-test", "model").with_profile(profile);
+        assert!(config.profile.is_some());
+        if let Some(ref p) = config.profile {
+            assert_eq!(p.name(), "zai");
+        }
+    }
+
+    #[test]
+    fn adapter_name_uses_profile() {
+        // Without profile: name is "openai"
+        let config = OpenAiConfig::new("key", "model");
+        let adapter = OpenAiAdapter::new(config);
+        assert_eq!(adapter.name(), "openai");
+
+        // With profile: name comes from profile
+        let config = OpenAiConfig::for_provider("deepseek", "key", "deepseek-chat");
+        let adapter = OpenAiAdapter::new(config);
+        assert_eq!(adapter.name(), "deepseek");
+    }
+
+    #[test]
+    fn build_request_applies_profile_zai() {
+        let config =
+            OpenAiConfig::for_provider("zai", "key", "model").with_base_url("https://api.zai.com");
+        let adapter = OpenAiAdapter::new(config);
+        let opts = RequestOptions::new()
+            .with_max_tokens(4096)
+            .with_stream(true);
+        let (_, body) = adapter.build_request(&[Message::user("Hi")], &opts, &[]);
+
+        // zai profile: max_tokens renamed to max_completion_tokens
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 4096);
+        // zai profile: stream_options removed
+        assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn build_request_applies_profile_deepseek() {
+        let config = OpenAiConfig::for_provider("deepseek", "key", "deepseek-chat")
+            .with_base_url("https://api.deepseek.com");
+        let adapter = OpenAiAdapter::new(config);
+        let opts = RequestOptions::new()
+            .with_max_tokens(2048)
+            .with_stream(true);
+        let (_, body) = adapter.build_request(&[Message::user("Hi")], &opts, &[]);
+
+        // deepseek: max_tokens kept (not renamed)
+        assert_eq!(body["max_tokens"], 2048);
+        assert!(body.get("max_completion_tokens").is_none());
+        // deepseek: stream_options removed
+        assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn build_request_no_profile_keeps_defaults() {
+        let config = OpenAiConfig::new("key", "gpt-4o");
+        let adapter = OpenAiAdapter::new(config);
+        let opts = RequestOptions::new()
+            .with_max_tokens(4096)
+            .with_stream(true);
+        let (_, body) = adapter.build_request(&[Message::user("Hi")], &opts, &[]);
+
+        // No profile: original request unchanged
+        assert_eq!(body["max_tokens"], 4096);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn build_request_uses_api_path_override() {
+        use crate::fae_llm::providers::profile::CompatibilityProfile;
+
+        let profile = CompatibilityProfile::new("custom").with_api_path("/api/chat");
+        let config = OpenAiConfig::new("key", "model")
+            .with_base_url("https://custom.api.com")
+            .with_profile(profile);
+        let adapter = OpenAiAdapter::new(config);
+        let (url, _) = adapter.build_request(&[], &RequestOptions::new(), &[]);
+
+        assert_eq!(url, "https://custom.api.com/api/chat");
+    }
+
+    #[test]
+    fn parse_completions_with_deepseek_profile_normalizes_thinking_done() {
+        use crate::fae_llm::providers::profile::CompatibilityProfile;
+
+        let profile = CompatibilityProfile::deepseek();
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"thinking_done","index":0}]}"#;
+        let mut acc = ToolCallAccumulator::new();
+        let events = parse_completions_chunk(data, &mut acc, Some(&profile));
+
+        // "thinking_done" should be normalized to "stop" by the DeepSeek profile
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_completions_without_profile_unknown_reason_is_other() {
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"thinking_done","index":0}]}"#;
+        let mut acc = ToolCallAccumulator::new();
+        let events = parse_completions_chunk(data, &mut acc, None);
+
+        // Without profile, "thinking_done" is unknown -> Other
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Other
+            }
+        ));
+    }
+
+    #[test]
+    fn map_finish_reason_with_profile() {
+        use crate::fae_llm::providers::profile::CompatibilityProfile;
+
+        let deepseek = CompatibilityProfile::deepseek();
+        assert_eq!(
+            map_finish_reason("thinking_done", Some(&deepseek)),
+            FinishReason::Stop
+        );
+        assert_eq!(
+            map_finish_reason("end_turn", Some(&deepseek)),
+            FinishReason::Stop
+        );
+        assert_eq!(
+            map_finish_reason("function_call", Some(&deepseek)),
+            FinishReason::ToolCalls
+        );
+    }
+
+    #[test]
+    fn map_finish_reason_without_profile() {
+        assert_eq!(map_finish_reason("stop", None), FinishReason::Stop);
+        assert_eq!(
+            map_finish_reason("thinking_done", None),
+            FinishReason::Other
+        );
     }
 }

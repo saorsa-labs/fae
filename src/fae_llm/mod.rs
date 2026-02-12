@@ -332,7 +332,7 @@ mod integration_tests {
             if sse.is_done() {
                 continue;
             }
-            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc, None));
         }
 
         // Collect text
@@ -376,7 +376,7 @@ mod integration_tests {
             if sse.is_done() {
                 continue;
             }
-            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc, None));
         }
 
         // Verify tool call sequence: Start, ArgsDelta, ArgsDelta, End, StreamEnd
@@ -433,7 +433,7 @@ mod integration_tests {
             if sse.is_done() {
                 continue;
             }
-            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc, None));
         }
 
         let starts: Vec<_> = all_events
@@ -467,7 +467,7 @@ mod integration_tests {
 
         for sse in &sse_events {
             let event_type = sse.event_type.as_deref().unwrap_or("");
-            all_events.extend(parse_responses_event(event_type, &sse.data, &mut acc));
+            all_events.extend(parse_responses_event(event_type, &sse.data, &mut acc, None));
         }
 
         let text: String = all_events
@@ -506,12 +506,12 @@ mod integration_tests {
 
         for sse in parser.push(chunk1) {
             if !sse.is_done() {
-                all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+                all_events.extend(parse_completions_chunk(&sse.data, &mut acc, None));
             }
         }
         for sse in parser.push(chunk2) {
             if !sse.is_done() {
-                all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+                all_events.extend(parse_completions_chunk(&sse.data, &mut acc, None));
             }
         }
 
@@ -547,7 +547,7 @@ mod integration_tests {
             if sse.is_done() {
                 continue;
             }
-            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc, None));
         }
 
         // No events emitted from malformed data, no panics
