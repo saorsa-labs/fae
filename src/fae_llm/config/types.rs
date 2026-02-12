@@ -3,6 +3,7 @@
 //! Defines the TOML configuration structure including providers, models,
 //! tools, defaults, and runtime settings.
 
+use crate::fae_llm::providers::profile::CompatibilityProfile;
 pub use crate::fae_llm::types::EndpointType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -49,6 +50,14 @@ pub struct ProviderConfig {
     /// List of model IDs available from this provider
     #[serde(default)]
     pub models: Vec<String>,
+
+    /// Optional compatibility profile for provider-specific API quirks.
+    ///
+    /// When set, the profile flags are used to normalize requests and
+    /// responses for this provider. When absent, the profile is auto-resolved
+    /// from the provider name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<CompatibilityProfile>,
 }
 
 /// Configuration for a single model.
@@ -244,9 +253,11 @@ mod tests {
                 var: "OPENAI_API_KEY".to_string(),
             },
             models: vec!["gpt-4o".to_string()],
+            profile: None,
         };
         assert_eq!(provider.endpoint_type, EndpointType::OpenAI);
         assert_eq!(provider.models.len(), 1);
+        assert!(provider.profile.is_none());
     }
 
     #[test]
@@ -432,6 +443,60 @@ mod tests {
     // ── Config TOML round-trip ──────────────────────────────────
 
     #[test]
+    fn provider_config_with_profile_round_trip() {
+        use crate::fae_llm::providers::profile::{CompatibilityProfile, MaxTokensField};
+
+        let provider = ProviderConfig {
+            endpoint_type: EndpointType::OpenAI,
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            api_key: SecretRef::Env {
+                var: "DEEPSEEK_API_KEY".to_string(),
+            },
+            models: vec!["deepseek-chat".to_string()],
+            profile: Some(CompatibilityProfile::deepseek()),
+        };
+
+        let toml_str = toml::to_string(&provider).unwrap_or_default();
+        assert!(toml_str.contains("deepseek"));
+
+        let parsed: Result<ProviderConfig, _> = toml::from_str(&toml_str);
+        assert!(parsed.is_ok());
+        match parsed {
+            Ok(p) => {
+                assert!(p.profile.is_some());
+                if let Some(ref profile) = p.profile {
+                    assert_eq!(profile.name(), "deepseek");
+                    assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);
+                }
+            }
+            Err(_) => unreachable!("deserialization succeeded"),
+        }
+    }
+
+    #[test]
+    fn provider_config_without_profile_deserializes() {
+        let toml_str = r#"
+            endpoint_type = "openai"
+            base_url = "https://api.openai.com/v1"
+            models = ["gpt-4o"]
+
+            [api_key]
+            type = "env"
+            var = "OPENAI_API_KEY"
+        "#;
+
+        let parsed: Result<ProviderConfig, _> = toml::from_str(toml_str);
+        assert!(parsed.is_ok());
+        match parsed {
+            Ok(p) => {
+                assert!(p.profile.is_none());
+                assert_eq!(p.endpoint_type, EndpointType::OpenAI);
+            }
+            Err(_) => unreachable!("deserialization succeeded"),
+        }
+    }
+
+    #[test]
     fn fae_llm_config_serde_round_trip() {
         let mut config = FaeLlmConfig::default();
         config.providers.insert(
@@ -443,6 +508,7 @@ mod tests {
                     var: "OPENAI_API_KEY".to_string(),
                 },
                 models: vec!["gpt-4o".to_string()],
+                profile: None,
             },
         );
 

@@ -446,6 +446,7 @@ mod tests {
                 base_url: "http://localhost".to_string(),
                 api_key: super::super::types::SecretRef::None,
                 models: Vec::new(),
+                profile: None,
             },
         );
         // No default_provider or default_model set — should be OK

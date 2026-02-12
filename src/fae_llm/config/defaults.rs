@@ -33,6 +33,7 @@ pub fn default_config() -> FaeLlmConfig {
                 var: "OPENAI_API_KEY".to_string(),
             },
             models: vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()],
+            profile: None,
         },
     );
 
@@ -49,6 +50,7 @@ pub fn default_config() -> FaeLlmConfig {
                 "claude-sonnet-4-5-20250929".to_string(),
                 "claude-haiku-4-5-20251001".to_string(),
             ],
+            profile: None,
         },
     );
 
@@ -60,6 +62,7 @@ pub fn default_config() -> FaeLlmConfig {
             base_url: "http://localhost:8080".to_string(),
             api_key: SecretRef::None,
             models: Vec::new(),
+            profile: None,
         },
     );
 
