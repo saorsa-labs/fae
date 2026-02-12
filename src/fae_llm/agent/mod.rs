@@ -26,5 +26,6 @@
 //! ```
 
 pub mod accumulator;
+pub mod executor;
 pub mod types;
 pub mod validation;
