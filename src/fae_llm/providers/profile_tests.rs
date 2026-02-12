@@ -4,8 +4,8 @@
 //! transforms requests and responses according to provider-specific quirks.
 
 use super::profile::{
-    resolve_profile, CompatibilityProfile, MaxTokensField, ReasoningMode,
-    StopSequenceField, ToolCallFormat,
+    CompatibilityProfile, MaxTokensField, ReasoningMode, StopSequenceField, ToolCallFormat,
+    resolve_profile,
 };
 
 // ── Profile Construction Tests ────────────────────────────────────
@@ -177,10 +177,7 @@ fn test_custom_profile_with_builder() {
     assert!(!profile.supports_streaming);
     assert!(!profile.supports_stream_usage);
     assert!(!profile.needs_stream_options);
-    assert_eq!(
-        profile.api_path_override,
-        Some("/api/custom".to_string())
-    );
+    assert_eq!(profile.api_path_override, Some("/api/custom".to_string()));
 }
 
 // ── Max Tokens Field Tests ────────────────────────────────────────
@@ -381,12 +378,8 @@ fn test_api_path_override_defaults() {
 
 #[test]
 fn test_api_path_override_custom() {
-    let profile =
-        CompatibilityProfile::new("custom").with_api_path("/api/custom");
-    assert_eq!(
-        profile.api_path_override,
-        Some("/api/custom".to_string())
-    );
+    let profile = CompatibilityProfile::new("custom").with_api_path("/api/custom");
+    assert_eq!(profile.api_path_override, Some("/api/custom".to_string()));
 }
 
 // ── Enum Serialization Tests ──────────────────────────────────────
@@ -405,16 +398,14 @@ fn test_max_tokens_field_serde() {
     });
     assert_eq!(json2, "\"max_completion_tokens\"");
 
-    let deserialized1: MaxTokensField =
-        serde_json::from_str(&json1).unwrap_or_else(|e| {
-            panic!("Deserialization failed: {e}");
-        });
+    let deserialized1: MaxTokensField = serde_json::from_str(&json1).unwrap_or_else(|e| {
+        panic!("Deserialization failed: {e}");
+    });
     assert_eq!(deserialized1, MaxTokensField::MaxTokens);
 
-    let deserialized2: MaxTokensField =
-        serde_json::from_str(&json2).unwrap_or_else(|e| {
-            panic!("Deserialization failed: {e}");
-        });
+    let deserialized2: MaxTokensField = serde_json::from_str(&json2).unwrap_or_else(|e| {
+        panic!("Deserialization failed: {e}");
+    });
     assert_eq!(deserialized2, MaxTokensField::MaxCompletionTokens);
 }
 
@@ -503,10 +494,7 @@ fn test_profile_feature_matrix() {
         match name {
             "openai" => {
                 assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);
-                assert_eq!(
-                    profile.reasoning_mode,
-                    ReasoningMode::OpenAiO1Style
-                );
+                assert_eq!(profile.reasoning_mode, ReasoningMode::OpenAiO1Style);
                 assert!(profile.needs_stream_options);
                 assert_eq!(profile.tool_call_format, ToolCallFormat::Standard);
             }
@@ -521,10 +509,7 @@ fn test_profile_feature_matrix() {
             }
             "deepseek" => {
                 assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);
-                assert_eq!(
-                    profile.reasoning_mode,
-                    ReasoningMode::DeepSeekThinking
-                );
+                assert_eq!(profile.reasoning_mode, ReasoningMode::DeepSeekThinking);
                 assert!(!profile.needs_stream_options);
                 assert!(!profile.supports_stream_usage);
                 assert_eq!(profile.tool_call_format, ToolCallFormat::Standard);
@@ -533,10 +518,7 @@ fn test_profile_feature_matrix() {
                 assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);
                 assert_eq!(profile.reasoning_mode, ReasoningMode::None);
                 assert!(!profile.needs_stream_options);
-                assert_eq!(
-                    profile.tool_call_format,
-                    ToolCallFormat::NoStreaming
-                );
+                assert_eq!(profile.tool_call_format, ToolCallFormat::NoStreaming);
             }
             "ollama" => {
                 assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);

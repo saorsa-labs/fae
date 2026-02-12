@@ -44,6 +44,8 @@ pub mod validation;
 
 #[cfg(test)]
 mod e2e_workflow_tests;
+#[cfg(test)]
+mod failure_tests;
 
 // Re-export key types for convenience
 pub use accumulator::{AccumulatedToolCall, AccumulatedTurn, StreamAccumulator};

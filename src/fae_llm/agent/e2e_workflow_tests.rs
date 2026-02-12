@@ -14,7 +14,7 @@ fn test_simple_workflow_pattern() {
     // The agent receives a prompt and returns a direct answer without tools.
 
     let config = AgentConfig::default();
-    assert_eq!(config.max_turns, 15);
+    assert_eq!(config.max_turns, 25);
 
     // This pattern is the simplest: single turn, no tool calls
 }
@@ -25,7 +25,10 @@ fn test_tool_call_workflow_pattern() {
     // The agent requests a tool, executes it, and continues to provide an answer.
 
     let config = AgentConfig::default();
-    assert!(config.max_turns > 1, "Need at least 2 turns for tool workflow");
+    assert!(
+        config.max_turns > 1,
+        "Need at least 2 turns for tool workflow"
+    );
 
     // Turn 1: Model requests tool call (e.g., read a file)
     // Turn 2: Model provides final answer using tool result
@@ -118,7 +121,12 @@ fn test_tool_schema_validation_pattern() {
     });
 
     assert!(read_args.get("path").is_some());
-    assert!(read_args.get("path").unwrap_or_else(|| panic!("path required")).is_string());
+    assert!(
+        read_args
+            .get("path")
+            .unwrap_or_else(|| panic!("path required"))
+            .is_string()
+    );
 }
 
 // ── Retry Policy Tests ────────────────────────────────────────────
@@ -138,7 +146,7 @@ fn test_retry_policy_defaults() {
     let policy = RetryPolicy::default();
 
     assert_eq!(policy.max_attempts, 3);
-    assert_eq!(policy.base_delay_ms, 500);
+    assert_eq!(policy.base_delay_ms, 1000);
 }
 
 #[test]
@@ -215,8 +223,8 @@ fn test_tool_mode_full() {
 fn test_agent_config_defaults() {
     let config = AgentConfig::default();
 
-    assert_eq!(config.max_turns, 15);
-    assert_eq!(config.max_tool_calls_per_turn, 5);
+    assert_eq!(config.max_turns, 25);
+    assert_eq!(config.max_tool_calls_per_turn, 10);
     assert!(config.request_timeout_secs > 0);
     assert!(config.tool_timeout_secs > 0);
 }

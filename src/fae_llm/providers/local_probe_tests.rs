@@ -43,9 +43,7 @@ async fn test_health_check_500_error() {
 
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(
-            ResponseTemplate::new(500).set_body_string("Internal Server Error"),
-        )
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
         .mount(&server)
         .await;
 
@@ -125,15 +123,12 @@ async fn test_discover_models_openai_format() {
 
     Mock::given(method("GET"))
         .and(path("/v1/models"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({
-                    "data": [
-                        {"id": "gpt-4", "object": "model"},
-                        {"id": "gpt-3.5-turbo", "object": "model"}
-                    ]
-                })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [
+                {"id": "gpt-4", "object": "model"},
+                {"id": "gpt-3.5-turbo", "object": "model"}
+            ]
+        })))
         .mount(&server)
         .await;
 
@@ -169,14 +164,12 @@ async fn test_discover_models_ollama_format() {
 
     Mock::given(method("GET"))
         .and(path("/api/tags"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "models": [
-                    {"name": "llama3:8b"},
-                    {"name": "mistral:7b"}
-                ]
-            })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "models": [
+                {"name": "llama3:8b"},
+                {"name": "mistral:7b"}
+            ]
+        })))
         .mount(&server)
         .await;
 
@@ -270,9 +263,7 @@ async fn test_probe_retry_stops_on_unhealthy() {
 
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(
-            ResponseTemplate::new(503).set_body_string("Service Unavailable"),
-        )
+        .respond_with(ResponseTemplate::new(503).set_body_string("Service Unavailable"))
         .expect(1) // Should only be called once, not retried
         .mount(&server)
         .await;
@@ -325,8 +316,7 @@ async fn test_concurrent_probes_do_not_interfere() {
     for result in results {
         let probe_result = result.unwrap_or_else(|e| panic!("Task panicked: {e}"));
         assert!(probe_result.is_ok());
-        let status =
-            probe_result.unwrap_or_else(|e| panic!("Expected Ok, got Err: {e}"));
+        let status = probe_result.unwrap_or_else(|e| panic!("Expected Ok, got Err: {e}"));
         assert!(
             matches!(status, ProbeStatus::Available { .. }),
             "Expected Available, got: {status:?}"
@@ -396,8 +386,7 @@ async fn test_probe_with_invalid_json_in_models_endpoint() {
     Mock::given(method("GET"))
         .and(path("/v1/models"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"data": "not an array"})),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": "not an array"})),
         )
         .mount(&server)
         .await;
