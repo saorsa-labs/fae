@@ -25,6 +25,7 @@
 //! All errors carry a stable code (e.g. `CONFIG_INVALID`, `AUTH_FAILED`)
 //! that is safe to match on programmatically.
 
+pub mod agent;
 pub mod config;
 pub mod error;
 pub mod events;
@@ -35,6 +36,7 @@ pub mod tools;
 pub mod types;
 pub mod usage;
 
+pub use agent::types::{AgentConfig, AgentLoopResult, ExecutedToolCall, StopReason, TurnResult};
 pub use config::{
     ConfigEditor, ConfigService, DefaultsConfig, FaeLlmConfig, ModelConfig, ModelTier, ModelUpdate,
     ProviderConfig, ProviderUpdate, RuntimeConfig, SecretRef, ToolConfig, ToolMode, backup_config,
