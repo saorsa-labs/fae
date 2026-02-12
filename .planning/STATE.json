@@ -4,24 +4,31 @@
   "active": true,
   "milestone": {
     "number": 3,
-    "name": "Agent Loop & Sessions"
+    "name": "Agent Loop & Sessions",
+    "status": "complete"
   },
   "phase": {
     "number": "3.3",
     "name": "Multi-Provider Hardening",
-    "plan": "PLAN-phase-3.3.md"
+    "plan": "PLAN-phase-3.3.md",
+    "status": "complete"
   },
   "progress": {
     "total_tasks": 8,
     "completed_tasks": 8,
     "current_task": 8
   },
-  "status": "task_complete",
+  "status": "milestone_complete",
   "review": {
-    "status": "pending",
-    "iteration": 1,
-    "last_verdict": "PASS"
+    "status": "passed",
+    "iteration": 2,
+    "last_verdict": "PASS",
+    "findings_count": {
+      "critical": 0,
+      "important": 0,
+      "minor": 0
+    }
   },
-  "last_updated": 1770917340.739238,
-  "last_action": "task_8_complete"
+  "last_updated": 1770917646.342865,
+  "last_action": "milestone_3_complete"
 }

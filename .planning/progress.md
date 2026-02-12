@@ -423,8 +423,27 @@ All 4 phases delivered:
 - Created: session/types.rs, session/store.rs, session/fs_store.rs, session/validation.rs, session/context.rs, session/mod.rs
 - Key types: Session, SessionStore trait, FsSessionStore (atomic writes), ConversationContext
 - 1,353 tests passing (+94 new), zero warnings
-- [x] Task 1: Provider switch validation for resumed sessions (commit: 6d729bf)
-- [x] Task 2: Request retry policy (commit: 92c09e2)
-- [x] Task 3: Circuit breaker pattern (commit: 0a2cebf)
-- [x] Task 4: Tool mode switching (commit: 33fb7dd)
+
+### Phase 3.3: Multi-Provider Hardening — COMPLETE
+- [x] Task 1: Provider switch validation (commit: 6d729bf)
+- [x] Task 2: Request retry policy implementation (commit: 92c09e2)
+- [x] Task 3: Circuit breaker for provider failures (commit: 0a2cebf)
+- [x] Task 4: Tool mode switching enforcement (commit: 33fb7dd)
 - [x] Task 5: Error recovery with partial results (commit: fd57404)
+- [x] Task 6: E2E tests for OpenAI provider (commit: 950977f)
+- [x] Task 7: E2E tests for Anthropic provider (commit: d7186b0)
+- [x] Task 8: Cross-provider compatibility tests (commit: 07f95fb)
+
+**Phase 3.3 COMPLETE** — Multi-Provider Hardening
+- RetryPolicy with exponential backoff + jitter, is_retryable() on FaeLlmError
+- CircuitBreaker state machine (Closed/Open/HalfOpen) with consecutive failure tracking
+- Tool mode enforcement (read_only vs full) in agent loop
+- Partial result recovery on stream interruption
+- 27 E2E integration tests (OpenAI, Anthropic, cross-provider)
+- 1,438 tests passing, zero warnings
+
+**MILESTONE 3 COMPLETE** — Agent Loop & Sessions
+All 3 phases delivered:
+3.1: Agent Loop Engine (8 tasks)
+3.2: Session Persistence & Replay (8 tasks)
+3.3: Multi-Provider Hardening (8 tasks)
