@@ -503,4 +503,25 @@ Phase 4.2 delivered comprehensive integration test coverage for fae_llm module i
 - Tool mode gating security tests
 - Complete test documentation
 
-### Phase 4.3: App Integration & Release — STARTING...
+### Phase 4.3: App Integration & Release — COMPLETE
+- [x] Task 1: App config integration tests (10 tests)
+- [x] Task 2: TOML round-trip preservation tests (10 tests)
+- [x] Task 3: Operator documentation (OPERATOR_GUIDE.md)
+- [x] Task 4: Developer documentation (DEVELOPER_GUIDE.md, ARCHITECTURE.md)
+- [x] Task 5: Module public API audit (100% coverage)
+- [x] Task 6: Release candidate validation (all gates passed)
+- [x] Task 7: Final integration smoke test (1 test)
+- [x] Task 8: Release readiness checklist
+
+**Phase 4.3 COMPLETE**
+**Milestone 4 COMPLETE** — Observability & Release
+**fae_llm Module Project COMPLETE** — All 4 milestones delivered!
+
+All deliverables:
+✓ PI dependency removed (Milestone 1)
+✓ Multi-provider support: OpenAI, Anthropic, z.ai, MiniMax, DeepSeek, local (Milestone 2)
+✓ Agent loop with tool calling, session persistence (Milestone 3)
+✓ Tracing, metrics, secret redaction, full test coverage (Milestone 4)
+✓ Complete documentation: operator + developer + architecture
+✓ 1647 tests passing, zero warnings
+✓ Production-ready module

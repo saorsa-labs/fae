@@ -13,10 +13,10 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 6,
-    "current_task": 7
+    "completed_tasks": 8,
+    "current_task": null
   },
-  "status": "executing",
+  "status": "milestone_complete",
   "review": {
     "status": "pending",
     "iteration": 0,
