@@ -36,7 +36,11 @@ pub mod tools;
 pub mod types;
 pub mod usage;
 
-pub use agent::types::{AgentConfig, AgentLoopResult, ExecutedToolCall, StopReason, TurnResult};
+pub use agent::{
+    AccumulatedToolCall, AccumulatedTurn, AgentConfig, AgentLoop, AgentLoopResult,
+    ExecutedToolCall, StopReason, StreamAccumulator, ToolExecutor, TurnResult,
+    build_messages_from_result, validate_tool_args,
+};
 pub use config::{
     ConfigEditor, ConfigService, DefaultsConfig, FaeLlmConfig, ModelConfig, ModelTier, ModelUpdate,
     ProviderConfig, ProviderUpdate, RuntimeConfig, SecretRef, ToolConfig, ToolMode, backup_config,
