@@ -14,6 +14,7 @@ use super::executor::ToolExecutor;
 use super::types::{AgentConfig, AgentLoopResult, ExecutedToolCall, StopReason, TurnResult};
 use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::events::FinishReason;
+use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::provider::{ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::message::{AssistantToolCall, Message};
 use crate::fae_llm::tools::registry::ToolRegistry;
@@ -160,8 +161,24 @@ impl AgentLoop {
         let options = RequestOptions::new().with_stream(true);
 
         for _turn_idx in 0..self.config.max_turns {
+            let turn_number = _turn_idx + 1;
+
+            let turn_span = tracing::info_span!(
+                SPAN_AGENT_TURN,
+                { FIELD_TURN_NUMBER } = turn_number,
+                { FIELD_MAX_TURNS } = self.config.max_turns,
+            );
+            let _turn_enter = turn_span.enter();
+
+            tracing::debug!(
+                turn_number = turn_number,
+                max_turns = self.config.max_turns,
+                "Starting agent turn"
+            );
+
             // Check cancellation
             if self.cancel.is_cancelled() {
+                tracing::info!("Agent loop cancelled");
                 return Ok(AgentLoopResult {
                     final_text: last_text(&turns),
                     turns,

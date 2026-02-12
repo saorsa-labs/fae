@@ -447,3 +447,4 @@ All 3 phases delivered:
 3.1: Agent Loop Engine (8 tasks)
 3.2: Session Persistence & Replay (8 tasks)
 3.3: Multi-Provider Hardening (8 tasks)
+- [x] Task 4: Integrate tracing spans into provider adapters (commits: ced8467, dd85dfc)

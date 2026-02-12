@@ -11,7 +11,9 @@ use tokio_util::sync::CancellationToken;
 use super::accumulator::AccumulatedToolCall;
 use super::types::ExecutedToolCall;
 use super::validation::validate_tool_args;
+use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
+use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::tools::registry::ToolRegistry;
 
 /// Executes tool calls with timeout and cancellation support.
@@ -57,8 +59,23 @@ impl ToolExecutor {
         call: &AccumulatedToolCall,
         cancel: &CancellationToken,
     ) -> Result<ExecutedToolCall, FaeLlmError> {
+        let mode = match self.registry.mode() {
+            ToolMode::ReadOnly => "read_only",
+            ToolMode::Full => "full",
+        };
+
+        let tool_span = tracing::info_span!(
+            SPAN_TOOL_EXECUTE,
+            { FIELD_TOOL_NAME } = %call.function_name,
+            { FIELD_TOOL_MODE } = mode,
+        );
+        let _tool_enter = tool_span.enter();
+
+        tracing::debug!(tool_name = %call.function_name, mode = mode, "Executing tool");
+
         // Check cancellation before starting
         if cancel.is_cancelled() {
+            tracing::warn!(tool_name = %call.function_name, "Tool execution cancelled before start");
             return Err(FaeLlmError::ToolError(format!(
                 "tool '{}': cancelled before execution",
                 call.function_name
@@ -68,11 +85,13 @@ impl ToolExecutor {
         // Look up tool
         let tool = self.registry.get(&call.function_name).ok_or_else(|| {
             if self.registry.is_blocked_by_mode(&call.function_name) {
+                tracing::error!(tool_name = %call.function_name, "Tool blocked by mode");
                 FaeLlmError::ToolError(format!(
                     "tool '{}': blocked by current mode (read-only mode does not allow mutation tools)",
                     call.function_name
                 ))
             } else {
+                tracing::error!(tool_name = %call.function_name, "Tool not found in registry");
                 FaeLlmError::ToolError(format!(
                     "tool '{}': not found in registry",
                     call.function_name
@@ -81,7 +100,9 @@ impl ToolExecutor {
         })?;
 
         // Validate arguments against schema
+        tracing::debug!(tool_name = %call.function_name, "Validating tool arguments");
         let args = validate_tool_args(&call.function_name, &call.arguments_json, &tool.schema())?;
+        tracing::debug!(tool_name = %call.function_name, "Arguments validated successfully");
 
         // Execute with timeout
         let start = Instant::now();
@@ -92,6 +113,7 @@ impl ToolExecutor {
 
         let result = tokio::select! {
             _ = cancel.cancelled() => {
+                tracing::warn!(tool_name = %call.function_name, "Tool execution cancelled during execution");
                 return Err(FaeLlmError::ToolError(format!(
                     "tool '{}': cancelled during execution",
                     call.function_name
@@ -103,15 +125,18 @@ impl ToolExecutor {
                 match result {
                     Ok(Ok(Ok(tool_result))) => tool_result,
                     Ok(Ok(Err(e))) => {
+                        tracing::error!(tool_name = %call.function_name, error = %e, "Tool execution failed");
                         return Err(e);
                     }
                     Ok(Err(join_err)) => {
+                        tracing::error!(tool_name = %call.function_name, error = %join_err, "Tool execution panicked");
                         return Err(FaeLlmError::ToolError(format!(
                             "tool '{}': execution panicked: {join_err}",
                             call.function_name
                         )));
                     }
                     Err(_elapsed) => {
+                        tracing::error!(tool_name = %call.function_name, timeout_secs = self.tool_timeout_secs, "Tool execution timed out");
                         return Err(FaeLlmError::TimeoutError(format!(
                             "tool '{}': execution timed out after {}s",
                             call.function_name,
@@ -123,6 +148,8 @@ impl ToolExecutor {
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        tracing::info!(tool_name = %call.function_name, duration_ms = duration_ms, "Tool execution completed successfully");
 
         Ok(ExecutedToolCall {
             call_id: call.call_id.clone(),
