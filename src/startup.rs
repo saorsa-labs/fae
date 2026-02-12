@@ -7,13 +7,14 @@
 //! [`ProgressCallback`] for structured progress events.
 
 use crate::config::{AgentToolMode, LlmBackend, MemoryConfig, SpeechConfig, TtsBackend};
-use crate::error::Result;
+use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
 use crate::llm::server::LlmServer;
 use crate::models::ModelManager;
 use crate::progress::{DownloadFile, DownloadPlan, ProgressCallback, ProgressEvent};
 use crate::stt::ParakeetStt;
 use crate::tts::KokoroTts;
+use std::path::Path;
 use std::time::Instant;
 use tracing::info;
 
@@ -190,8 +191,21 @@ pub async fn initialize_models_with_progress(
         );
     }
 
-    // --- Phase 0: Build download plan ---
+    // --- Phase 0: Build download plan and check disk space ---
     let plan = build_download_plan(config);
+
+    // Verify we have enough disk space before starting downloads.
+    if plan.needs_download() {
+        let space = check_disk_space(plan.download_bytes())?;
+        if !space.has_enough_space() {
+            return Err(SpeechError::Model(format!(
+                "Not enough disk space. Need {:.1} GB, have {:.1} GB free.",
+                space.required_bytes as f64 / 1_000_000_000.0,
+                space.free_bytes as f64 / 1_000_000_000.0,
+            )));
+        }
+    }
+
     if let Some(cb) = callback {
         cb(ProgressEvent::DownloadPlanReady { plan: plan.clone() });
     }
@@ -449,6 +463,84 @@ fn load_tts_from_paths(
     })
 }
 
+// ── Disk space check ────────────────────────────────────────────────────────
+
+/// Extra headroom required beyond the download size (500 MB).
+const DISK_SPACE_HEADROOM: u64 = 500 * 1024 * 1024;
+
+/// Result of a disk space check.
+pub struct DiskSpaceCheck {
+    /// Free space available on the filesystem in bytes.
+    pub free_bytes: u64,
+    /// Required space for pending downloads in bytes.
+    pub required_bytes: u64,
+}
+
+impl DiskSpaceCheck {
+    /// Returns `true` if there is enough free space (with 500 MB headroom).
+    pub fn has_enough_space(&self) -> bool {
+        self.free_bytes >= self.required_bytes.saturating_add(DISK_SPACE_HEADROOM)
+    }
+}
+
+/// Query available disk space at `path` using platform-specific APIs.
+///
+/// On Unix, uses `statvfs` to get the free blocks available to unprivileged
+/// users. On non-Unix platforms, returns `u64::MAX` (effectively skipping
+/// the check).
+///
+/// # Errors
+///
+/// Returns an error if the filesystem stats cannot be retrieved.
+#[cfg(unix)]
+pub fn available_disk_space(path: &Path) -> Result<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| SpeechError::Model(format!("invalid path for statvfs: {e}")))?;
+
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+
+    if ret != 0 {
+        return Err(SpeechError::Model(format!(
+            "failed to check disk space at {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // f_bavail = blocks available to unprivileged users.
+    // f_frsize = fundamental file system block size.
+    Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
+}
+
+/// Fallback for non-Unix platforms — returns `u64::MAX` (skip the check).
+#[cfg(not(unix))]
+pub fn available_disk_space(_path: &Path) -> Result<u64> {
+    Ok(u64::MAX)
+}
+
+/// Check that enough disk space is available for pending model downloads.
+///
+/// Uses the hf-hub default cache directory to determine the target filesystem.
+/// Ensures `required_bytes` plus 500 MB headroom are available.
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created or the
+/// filesystem stats cannot be retrieved.
+pub fn check_disk_space(required_bytes: u64) -> Result<DiskSpaceCheck> {
+    let cache_dir = hf_hub::Cache::default().path().to_path_buf();
+    std::fs::create_dir_all(&cache_dir)?;
+    let free_bytes = available_disk_space(&cache_dir)?;
+    Ok(DiskSpaceCheck {
+        free_bytes,
+        required_bytes,
+    })
+}
+
 /// Run a background update check for Fae.
 ///
 /// Respects the user's auto-update preference and only checks if the last
@@ -555,4 +647,73 @@ pub fn start_scheduler_with_memory(
     );
     let handle = scheduler.run();
     (handle, rx)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn disk_space_check_has_enough_space() {
+        let check = DiskSpaceCheck {
+            free_bytes: 10_000_000_000,
+            required_bytes: 5_000_000_000,
+        };
+        assert!(check.has_enough_space());
+    }
+
+    #[test]
+    fn disk_space_check_not_enough_space() {
+        let check = DiskSpaceCheck {
+            free_bytes: 1_000_000_000,
+            required_bytes: 5_000_000_000,
+        };
+        assert!(!check.has_enough_space());
+    }
+
+    #[test]
+    fn disk_space_check_headroom_required() {
+        // Exactly the required bytes but no headroom (500 MB) — should fail.
+        let check = DiskSpaceCheck {
+            free_bytes: 5_000_000_000,
+            required_bytes: 5_000_000_000,
+        };
+        assert!(!check.has_enough_space());
+    }
+
+    #[test]
+    fn disk_space_check_just_enough_with_headroom() {
+        let check = DiskSpaceCheck {
+            free_bytes: 5_000_000_000 + DISK_SPACE_HEADROOM,
+            required_bytes: 5_000_000_000,
+        };
+        assert!(check.has_enough_space());
+    }
+
+    #[test]
+    fn available_disk_space_works_on_temp_dir() {
+        let dir = std::env::temp_dir();
+        let result = available_disk_space(&dir);
+        assert!(result.is_ok());
+        let bytes = result.unwrap_or(0);
+        // Should be non-zero on any real system
+        assert!(bytes > 0);
+    }
+
+    #[test]
+    fn check_disk_space_returns_result() {
+        let result = check_disk_space(1000);
+        assert!(result.is_ok());
+        let check = result.unwrap();
+        assert!(check.free_bytes > 0);
+        assert_eq!(check.required_bytes, 1000);
+    }
+
+    #[test]
+    fn available_disk_space_fails_on_nonexistent_path() {
+        let result = available_disk_space(Path::new("/nonexistent/path/that/does/not/exist"));
+        assert!(result.is_err());
+    }
 }
