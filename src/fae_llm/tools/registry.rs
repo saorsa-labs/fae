@@ -87,6 +87,19 @@ impl ToolRegistry {
     pub fn mode(&self) -> ToolMode {
         self.mode
     }
+
+    /// Check if a tool exists in the registry (regardless of mode).
+    pub fn exists(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
+    /// Check if a tool is registered but blocked by the current mode.
+    pub fn is_blocked_by_mode(&self, name: &str) -> bool {
+        self.tools
+            .get(name)
+            .map(|t| !t.allowed_in_mode(self.mode))
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +259,49 @@ mod tests {
         assert!(reg.list_available().is_empty());
         assert!(reg.schemas_for_api().is_empty());
         assert!(reg.get("anything").is_none());
+    }
+
+    #[test]
+    fn exists_returns_true_for_registered_tool() {
+        let reg = make_registry(ToolMode::ReadOnly);
+        assert!(reg.exists("read"));
+        assert!(reg.exists("bash"));
+        assert!(reg.exists("edit"));
+        assert!(reg.exists("write"));
+    }
+
+    #[test]
+    fn exists_returns_false_for_unregistered_tool() {
+        let reg = make_registry(ToolMode::Full);
+        assert!(!reg.exists("nonexistent"));
+    }
+
+    #[test]
+    fn is_blocked_by_mode_returns_true_for_mutation_tools_in_read_only() {
+        let reg = make_registry(ToolMode::ReadOnly);
+        assert!(reg.is_blocked_by_mode("bash"));
+        assert!(reg.is_blocked_by_mode("edit"));
+        assert!(reg.is_blocked_by_mode("write"));
+    }
+
+    #[test]
+    fn is_blocked_by_mode_returns_false_for_read_tool_in_read_only() {
+        let reg = make_registry(ToolMode::ReadOnly);
+        assert!(!reg.is_blocked_by_mode("read"));
+    }
+
+    #[test]
+    fn is_blocked_by_mode_returns_false_for_all_tools_in_full_mode() {
+        let reg = make_registry(ToolMode::Full);
+        assert!(!reg.is_blocked_by_mode("read"));
+        assert!(!reg.is_blocked_by_mode("bash"));
+        assert!(!reg.is_blocked_by_mode("edit"));
+        assert!(!reg.is_blocked_by_mode("write"));
+    }
+
+    #[test]
+    fn is_blocked_by_mode_returns_false_for_nonexistent_tool() {
+        let reg = make_registry(ToolMode::ReadOnly);
+        assert!(!reg.is_blocked_by_mode("nonexistent"));
     }
 }

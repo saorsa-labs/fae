@@ -67,10 +67,17 @@ impl ToolExecutor {
 
         // Look up tool
         let tool = self.registry.get(&call.function_name).ok_or_else(|| {
-            FaeLlmError::ToolError(format!(
-                "tool '{}': not found in registry",
-                call.function_name
-            ))
+            if self.registry.is_blocked_by_mode(&call.function_name) {
+                FaeLlmError::ToolError(format!(
+                    "tool '{}': blocked by current mode (read-only mode does not allow mutation tools)",
+                    call.function_name
+                ))
+            } else {
+                FaeLlmError::ToolError(format!(
+                    "tool '{}': not found in registry",
+                    call.function_name
+                ))
+            }
         })?;
 
         // Validate arguments against schema
@@ -439,5 +446,63 @@ mod tests {
 
         let results = executor.execute_tools(&[], &cancel).await;
         assert!(results.is_empty());
+    }
+
+    // ── Tool Mode Enforcement Tests ──────────────────────────
+
+    #[tokio::test]
+    async fn execute_tool_blocked_by_read_only_mode() {
+        use crate::fae_llm::tools::bash::BashTool;
+        let mut reg = ToolRegistry::new(ToolMode::ReadOnly);
+        reg.register(Arc::new(BashTool::new()));
+        let registry = Arc::new(reg);
+        let executor = ToolExecutor::new(registry, 30);
+        let cancel = CancellationToken::new();
+
+        let call = make_call("bash", r#"{"command": "echo test"}"#);
+        let result = executor.execute_tool(&call, &cancel).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(FaeLlmError::ToolError(msg)) => {
+                assert!(msg.contains("blocked by current mode"));
+                assert!(msg.contains("read-only"));
+            }
+            _ => unreachable!("expected ToolError with mode block message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_tool_allowed_in_full_mode() {
+        use crate::fae_llm::tools::bash::BashTool;
+        let mut reg = ToolRegistry::new(ToolMode::Full);
+        reg.register(Arc::new(BashTool::new()));
+        let registry = Arc::new(reg);
+        let executor = ToolExecutor::new(registry, 30);
+        let cancel = CancellationToken::new();
+
+        let call = make_call("bash", r#"{"command": "echo test"}"#);
+        let result = executor.execute_tool(&call, &cancel).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn execute_tool_read_allowed_in_read_only() {
+        use crate::fae_llm::tools::read::ReadTool;
+        let mut reg = ToolRegistry::new(ToolMode::ReadOnly);
+        reg.register(Arc::new(ReadTool::new()));
+        let registry = Arc::new(reg);
+        let executor = ToolExecutor::new(registry, 30);
+        let cancel = CancellationToken::new();
+
+        let call = make_call("read", r#"{"file_path": "/tmp/test.txt"}"#);
+        let result = executor.execute_tool(&call, &cancel).await;
+
+        // Will fail with file not found, but that's OK - we're testing mode enforcement
+        // If it was blocked by mode, we'd get a different error
+        if let Err(FaeLlmError::ToolError(msg)) = result {
+            assert!(!msg.contains("blocked by current mode"));
+        }
     }
 }

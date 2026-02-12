@@ -424,3 +424,5 @@ All 4 phases delivered:
 - Key types: Session, SessionStore trait, FsSessionStore (atomic writes), ConversationContext
 - 1,353 tests passing (+94 new), zero warnings
 - [x] Task 1: Provider switch validation for resumed sessions (commit: 6d729bf)
+- [x] Task 2: Request retry policy (commit: 92c09e2)
+- [x] Task 3: Circuit breaker pattern (commit: 0a2cebf)
