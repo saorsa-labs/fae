@@ -36,6 +36,9 @@ pub mod metrics;
 pub mod redact;
 pub mod spans;
 
+#[cfg(test)]
+mod tests;
+
 // Re-export span helpers for convenience
 pub use spans::{
     FIELD_ENDPOINT_TYPE, FIELD_ERROR_TYPE, FIELD_MAX_TURNS, FIELD_MODEL, FIELD_OPERATION,
