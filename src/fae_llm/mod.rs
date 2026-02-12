@@ -667,4 +667,157 @@ mod integration_tests {
             assert_eq!(msgs[4]["role"], "assistant");
         }
     }
+
+    // ── Profile Integration Tests ─────────────────────────────
+
+    /// Build a request for z.ai and verify field names match expectations.
+    #[test]
+    fn profile_integration_zai_request() {
+        use providers::openai::build_completions_request;
+        use providers::profile::apply_profile_to_request;
+
+        let profile = CompatibilityProfile::zai();
+        let opts = RequestOptions::new()
+            .with_max_tokens(4096)
+            .with_stream(true)
+            .with_temperature(0.5);
+        let messages = vec![Message::user("Hello")];
+        let mut body = build_completions_request("zai-model", &messages, &opts, &[]);
+        apply_profile_to_request(&mut body, &profile);
+
+        // z.ai: max_tokens -> max_completion_tokens
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 4096);
+        // z.ai: no stream_options
+        assert!(body.get("stream_options").is_none());
+        // Temperature preserved
+        assert_eq!(body["temperature"], 0.5);
+    }
+
+    /// Build a request for DeepSeek and verify field names.
+    #[test]
+    fn profile_integration_deepseek_request() {
+        use providers::openai::build_completions_request;
+        use providers::profile::apply_profile_to_request;
+
+        let profile = CompatibilityProfile::deepseek();
+        let opts = RequestOptions::new()
+            .with_max_tokens(2048)
+            .with_stream(true);
+        let mut body =
+            build_completions_request("deepseek-chat", &[Message::user("Hi")], &opts, &[]);
+        apply_profile_to_request(&mut body, &profile);
+
+        // DeepSeek: keeps max_tokens
+        assert_eq!(body["max_tokens"], 2048);
+        assert!(body.get("max_completion_tokens").is_none());
+        // DeepSeek: no stream_options
+        assert!(body.get("stream_options").is_none());
+    }
+
+    /// Build a request for MiniMax and verify tool format.
+    #[test]
+    fn profile_integration_minimax_request() {
+        use providers::openai::build_completions_request;
+        use providers::profile::apply_profile_to_request;
+
+        let profile = CompatibilityProfile::minimax();
+        let tools = vec![ToolDefinition::new(
+            "read",
+            "Read a file",
+            serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        )];
+        let opts = RequestOptions::new().with_max_tokens(1024);
+        let mut body =
+            build_completions_request("minimax-01", &[Message::user("Hi")], &opts, &tools);
+        apply_profile_to_request(&mut body, &profile);
+
+        // MiniMax: keeps max_tokens
+        assert_eq!(body["max_tokens"], 1024);
+        // Tools are present
+        assert!(body["tools"].is_array());
+    }
+
+    /// Build a request for Ollama (local) and verify defaults.
+    #[test]
+    fn profile_integration_ollama_request() {
+        use providers::openai::build_completions_request;
+        use providers::profile::apply_profile_to_request;
+
+        let profile = CompatibilityProfile::ollama();
+        let opts = RequestOptions::new().with_max_tokens(512).with_stream(true);
+        let mut body = build_completions_request("llama3", &[Message::user("Hi")], &opts, &[]);
+        apply_profile_to_request(&mut body, &profile);
+
+        // Ollama: keeps max_tokens
+        assert_eq!(body["max_tokens"], 512);
+        // Ollama: no stream_options
+        assert!(body.get("stream_options").is_none());
+    }
+
+    /// Custom profile overrides a built-in profile.
+    #[test]
+    fn profile_integration_custom_override() {
+        use providers::profile::ProfileRegistry;
+
+        let mut registry = ProfileRegistry::new();
+        let custom = CompatibilityProfile::new("my-deepseek").with_system_message_support(false);
+        registry.register("deepseek", custom);
+
+        let profile = registry.resolve("deepseek");
+        assert_eq!(profile.name(), "my-deepseek");
+        assert!(!profile.supports_system_message);
+    }
+
+    /// Unknown providers fall back to OpenAI defaults end-to-end.
+    #[test]
+    fn profile_integration_unknown_provider_fallback() {
+        let profile = resolve_profile("some-random-llm");
+        assert_eq!(profile.name(), "openai");
+        assert!(profile.needs_stream_options);
+    }
+
+    /// DeepSeek profile normalizes "thinking_done" finish reason in a full stream.
+    #[test]
+    fn profile_integration_deepseek_thinking_stream() {
+        use providers::openai::{ToolCallAccumulator, parse_completions_chunk};
+        use providers::sse::parse_sse_text;
+
+        let profile = CompatibilityProfile::deepseek();
+        let sse_data = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Result\"},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"thinking_done\",\"index\":0}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let sse_events = parse_sse_text(sse_data);
+        let mut acc = ToolCallAccumulator::new();
+        let mut all_events = Vec::new();
+
+        for sse in &sse_events {
+            if sse.is_done() {
+                continue;
+            }
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc, Some(&profile)));
+        }
+
+        // Text was captured
+        let text: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Result");
+
+        // "thinking_done" was normalized to Stop
+        let last = all_events.last();
+        assert!(last.is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
+        )));
+    }
 }
