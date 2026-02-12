@@ -20,7 +20,7 @@ use std::fmt;
 ///
 /// # Security Guarantee
 ///
-/// The wrapped value is **never** exposed through [`Display`] or [`Debug`]. The only
+/// The wrapped value is **never** exposed through `Display` or `Debug`. The only
 /// way to access the inner value is through explicit methods like [`as_str`](RedactedString::as_str).
 ///
 /// # Example
