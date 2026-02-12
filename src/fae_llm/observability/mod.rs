@@ -25,13 +25,14 @@
 ///
 /// # Metrics
 ///
-/// Implement the [`MetricsCollector`] trait to collect performance and usage metrics.
+/// Implement the [`MetricsCollector`](metrics::MetricsCollector) trait to collect performance and usage metrics.
 /// A no-op default implementation is provided.
 ///
 /// # Secret Redaction
 ///
 /// Use [`RedactedString`] to prevent accidental leakage of API keys, tokens, and other
 /// sensitive data in logs and error messages.
+pub mod metrics;
 pub mod spans;
 
 // Re-export span helpers for convenience
@@ -41,3 +42,6 @@ pub use spans::{
     FIELD_TURN_NUMBER, SPAN_AGENT_TURN, SPAN_PROVIDER_REQUEST, SPAN_SESSION_OPERATION,
     SPAN_TOOL_EXECUTE,
 };
+
+// Re-export metrics types for convenience
+pub use metrics::{MetricsCollector, NoopMetrics, duration_to_ms};
