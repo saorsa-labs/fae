@@ -140,6 +140,7 @@ mistralrs = { version = "0.7", features = ["metal"] }
 [dev-dependencies]
 # Mock HTTP server for API integration tests
 axum = "0.8"
+wiremock = "0.6"
 # Temp directories for config persistence tests
 tempfile = "3"
 
