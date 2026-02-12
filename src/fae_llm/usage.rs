@@ -50,7 +50,9 @@ impl TokenUsage {
 
     /// Total tokens consumed (prompt + completion + reasoning).
     pub fn total(&self) -> u64 {
-        self.prompt_tokens + self.completion_tokens + self.reasoning_tokens.unwrap_or(0)
+        self.prompt_tokens
+            .saturating_add(self.completion_tokens)
+            .saturating_add(self.reasoning_tokens.unwrap_or(0))
     }
 
     /// Accumulate token counts from another usage record.
@@ -58,10 +60,12 @@ impl TokenUsage {
     /// Adds all token counts. If either record has reasoning tokens,
     /// they are summed; if only one has them, that value is used.
     pub fn add(&mut self, other: &TokenUsage) {
-        self.prompt_tokens += other.prompt_tokens;
-        self.completion_tokens += other.completion_tokens;
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
         self.reasoning_tokens = match (self.reasoning_tokens, other.reasoning_tokens) {
-            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), Some(b)) => Some(a.saturating_add(b)),
             (Some(a), None) => Some(a),
             (None, Some(b)) => Some(b),
             (None, None) => None,
@@ -118,9 +122,12 @@ impl CostEstimate {
     /// Reasoning tokens are charged at the output rate since they
     /// consume output capacity.
     pub fn calculate(usage: &TokenUsage, pricing: &TokenPricing) -> Self {
-        let input_cost = (usage.prompt_tokens as f64 / 1_000_000.0) * pricing.input_per_1m;
-        let output_tokens = usage.completion_tokens + usage.reasoning_tokens.unwrap_or(0);
-        let output_cost = (output_tokens as f64 / 1_000_000.0) * pricing.output_per_1m;
+        // Multiply before dividing to preserve floating-point precision
+        let input_cost = (usage.prompt_tokens as f64 * pricing.input_per_1m) / 1_000_000.0;
+        let output_tokens = usage
+            .completion_tokens
+            .saturating_add(usage.reasoning_tokens.unwrap_or(0));
+        let output_cost = (output_tokens as f64 * pricing.output_per_1m) / 1_000_000.0;
 
         Self {
             usd: input_cost + output_cost,

@@ -44,7 +44,8 @@ impl RequestMeta {
 
     /// Milliseconds elapsed since this request was created.
     pub fn elapsed_ms(&self) -> u64 {
-        self.created_at.elapsed().as_millis() as u64
+        // Safe cast: clamp to u64::MAX for extremely long durations
+        self.created_at.elapsed().as_millis().min(u64::MAX as u128) as u64
     }
 }
 
@@ -147,10 +148,10 @@ mod tests {
 
         let json = serde_json::to_string(&original);
         assert!(json.is_ok());
-        let parsed: std::result::Result<ResponseMeta, _> =
-            serde_json::from_str(&json.unwrap_or_default());
+        let json_str = json.expect("serde_json::to_string succeeded");
+        let parsed: std::result::Result<ResponseMeta, _> = serde_json::from_str(&json_str);
         assert!(parsed.is_ok());
-        let parsed = parsed.unwrap_or_else(|_| ResponseMeta::new("", "", FinishReason::Other, 0));
+        let parsed = parsed.expect("serde_json::from_str succeeded");
         assert_eq!(parsed.request_id, "req-001");
         assert_eq!(parsed.model_id, "claude-opus-4");
         assert_eq!(parsed.finish_reason, FinishReason::ToolCalls);
@@ -163,10 +164,10 @@ mod tests {
         let original = ResponseMeta::new("req-002", "llama3:8b", FinishReason::Length, 5000);
         let json = serde_json::to_string(&original);
         assert!(json.is_ok());
-        let parsed: std::result::Result<ResponseMeta, _> =
-            serde_json::from_str(&json.unwrap_or_default());
+        let json_str = json.expect("serde_json::to_string succeeded");
+        let parsed: std::result::Result<ResponseMeta, _> = serde_json::from_str(&json_str);
         assert!(parsed.is_ok());
-        let parsed = parsed.unwrap_or_else(|_| ResponseMeta::new("", "", FinishReason::Other, 0));
+        let parsed = parsed.expect("serde_json::from_str succeeded");
         assert!(parsed.usage.is_none());
     }
 
