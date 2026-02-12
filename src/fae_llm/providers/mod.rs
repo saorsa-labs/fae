@@ -21,3 +21,5 @@ pub mod sse;
 
 #[cfg(test)]
 mod local_probe_tests;
+#[cfg(test)]
+mod profile_tests;

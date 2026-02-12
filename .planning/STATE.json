@@ -13,14 +13,19 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 2,
-    "current_task": 3
+    "completed_tasks": 3,
+    "current_task": 4
   },
-  "status": "executing",
+  "status": "task_complete",
   "review": {
     "status": "pending",
     "iteration": 1,
-    "last_verdict": "PASS"
+    "last_verdict": "PASS",
+    "findings_count": {
+      "critical": 0,
+      "important": 0,
+      "minor": 1
+    }
   },
-  "last_updated": 1770923921.993925
+  "last_updated": 1770925777.951019
 }
