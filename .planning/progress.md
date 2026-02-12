@@ -469,3 +469,4 @@ Task 1 starting...
 - [x] Task 1: OpenAI provider contract tests (commit: 01796c1)
 - [x] Task 2: Anthropic provider contract tests (commit: 44688f2)
 - [x] Task 3: Local endpoint probing tests (commit: 881c9f5)
+- [x] Task 4: Compatibility profile tests (commit: e7c0619)
