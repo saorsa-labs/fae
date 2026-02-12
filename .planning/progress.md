@@ -360,4 +360,34 @@ All 4 phases delivered:
 - ProfileRegistry for custom runtime overrides
 - TOML serialization in ProviderConfig
 
-### Phase 2.3: Local Probe Service — IN PROGRESS
+### Phase 2.3: Local Probe Service — COMPLETE
+- [x] Tasks 1-8: Local probe service (commit: dfb5ce9)
+
+**Phase 2.3 COMPLETE** — Local Probe Service
+- ProbeStatus: Available, NotRunning, Timeout, Unhealthy, IncompatibleResponse
+- ProbeConfig with builder pattern (endpoint_url, timeout, retry_count, retry_delay)
+- Health check + model discovery (OpenAI /v1/models + Ollama /api/tags fallback)
+- Bounded exponential backoff retry on transient failures
+- Display impl for human-readable diagnostic output
+- 1090 tests passing, zero clippy warnings
+
+### Phase 2.4: Anthropic Adapter — COMPLETE
+- [x] Tasks 1-8: Anthropic Messages API adapter (commit: 50a467c)
+
+**Phase 2.4 COMPLETE** — Anthropic Messages API Adapter
+- AnthropicConfig with builder pattern (api_key, model, api_version, max_tokens)
+- build_messages_request() — system extraction, tool definitions, streaming
+- convert_messages() — system→top-level, tool results→user messages, assistant tool calls
+- AnthropicBlockTracker for tracking active content block types during SSE streaming
+- parse_anthropic_event() — handles all content block types (text, thinking, tool_use)
+- map_stop_reason() — end_turn→Stop, max_tokens→Length, tool_use→ToolCalls
+- map_http_error() — 401/403→Auth, 429→RateLimit, 400→Request, 529/500+→Provider
+- AnthropicAdapter implementing ProviderAdapter with SSE streaming
+- 40+ unit tests, 12 integration tests, 1142 total tests passing
+
+**MILESTONE 2 COMPLETE** — Provider Implementation
+All 4 phases delivered:
+2.1: OpenAI Adapter (8 tasks)
+2.2: Compatibility Profile Engine (8 tasks)
+2.3: Local Probe Service (8 tasks)
+2.4: Anthropic Adapter (8 tasks)
