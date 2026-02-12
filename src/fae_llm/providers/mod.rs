@@ -7,8 +7,10 @@
 //! # Available providers
 //!
 //! - [`message`] — Shared message types for all providers
-//! - `openai` — OpenAI Chat Completions and Responses API (Phase 2.1)
+//! - [`openai`] — OpenAI Chat Completions and Responses API
+//! - [`profile`] — Compatibility profiles for OpenAI-compatible providers
 
 pub mod message;
 pub mod openai;
+pub mod profile;
 pub mod sse;

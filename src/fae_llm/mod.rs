@@ -46,6 +46,7 @@ pub use metadata::{RequestMeta, ResponseMeta};
 pub use provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
 pub use providers::message::{AssistantToolCall, Message, MessageContent, Role};
 pub use providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
+pub use providers::profile::{CompatibilityProfile, ProfileRegistry, resolve_profile};
 pub use tools::{BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool};
 pub use types::{EndpointType, ModelRef, ReasoningLevel, RequestOptions};
 pub use usage::{CostEstimate, TokenPricing, TokenUsage};
