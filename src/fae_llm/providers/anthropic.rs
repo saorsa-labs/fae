@@ -23,6 +23,7 @@ use futures_util::StreamExt;
 
 use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::events::{FinishReason, LlmEvent};
+use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::message::{Message, MessageContent, Role};
 use crate::fae_llm::providers::sse::SseLineParser;
@@ -260,6 +261,7 @@ pub fn parse_anthropic_event(
                 .pointer("/message/model")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
+            tracing::debug!(model = model_id, "Stream started");
             let msg_id = json
                 .pointer("/message/id")
                 .and_then(|v| v.as_str())
@@ -481,6 +483,16 @@ impl ProviderAdapter for AnthropicAdapter {
         options: &RequestOptions,
         tools: &[ToolDefinition],
     ) -> Result<LlmEventStream, FaeLlmError> {
+        let span = tracing::info_span!(
+            SPAN_PROVIDER_REQUEST,
+            { FIELD_PROVIDER } = "anthropic",
+            { FIELD_MODEL } = %self.config.model,
+            { FIELD_ENDPOINT_TYPE } = "messages",
+        );
+        let _enter = span.enter();
+
+        tracing::debug!("Building Anthropic request");
+
         let streaming_options = if options.stream {
             options.clone()
         } else {
@@ -490,6 +502,8 @@ impl ProviderAdapter for AnthropicAdapter {
         };
 
         let body = build_messages_request(&self.config.model, messages, &streaming_options, tools);
+
+        tracing::debug!("Sending request to Anthropic");
 
         let response = self
             .client
@@ -501,7 +515,10 @@ impl ProviderAdapter for AnthropicAdapter {
             .json(&body)
             .send()
             .await
-            .map_err(|e| FaeLlmError::RequestError(format!("connection error: {e}")))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "Anthropic request failed");
+                FaeLlmError::RequestError(format!("connection error: {e}"))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -509,8 +526,11 @@ impl ProviderAdapter for AnthropicAdapter {
                 .text()
                 .await
                 .unwrap_or_else(|_| "failed to read body".into());
+            tracing::error!(status = %status, body = %body, "Anthropic request returned error");
             return Err(map_http_error(status, &body));
         }
+
+        tracing::info!("Anthropic stream starting");
 
         let byte_stream = response.bytes_stream();
 
@@ -547,6 +567,7 @@ impl ProviderAdapter for AnthropicAdapter {
                             // Try to drain again at top of loop
                         }
                         Some(Err(e)) => {
+                            tracing::error!(error = %e, "Anthropic stream error");
                             return Some((
                                 LlmEvent::StreamError {
                                     error: format!("stream read error: {e}"),

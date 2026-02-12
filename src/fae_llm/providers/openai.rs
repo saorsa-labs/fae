@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::events::{FinishReason, LlmEvent};
+use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::message::{Message, MessageContent, Role};
 use crate::fae_llm::providers::profile::{
@@ -737,6 +738,21 @@ impl ProviderAdapter for OpenAiAdapter {
         options: &RequestOptions,
         tools: &[ToolDefinition],
     ) -> Result<LlmEventStream, FaeLlmError> {
+        let endpoint_type = match self.config.api_mode {
+            OpenAiApiMode::Completions => "completions",
+            OpenAiApiMode::Responses => "responses",
+        };
+
+        let span = tracing::info_span!(
+            SPAN_PROVIDER_REQUEST,
+            { FIELD_PROVIDER } = "openai",
+            { FIELD_MODEL } = %self.config.model,
+            { FIELD_ENDPOINT_TYPE } = endpoint_type,
+        );
+        let _enter = span.enter();
+
+        tracing::debug!("Building OpenAI request");
+
         let (url, body) = self.build_request(messages, options, tools);
         let model = self.config.model.clone();
         let api_mode = self.config.api_mode;
@@ -752,15 +768,17 @@ impl ProviderAdapter for OpenAiAdapter {
             request = request.header("OpenAI-Organization", org_id);
         }
 
-        let response = request
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| FaeLlmError::RequestError(format!("OpenAI request failed: {e}")))?;
+        tracing::debug!("Sending request to OpenAI");
+
+        let response = request.json(&body).send().await.map_err(|e| {
+            tracing::error!(error = %e, "OpenAI request failed");
+            FaeLlmError::RequestError(format!("OpenAI request failed: {e}"))
+        })?;
 
         let status = response.status();
         if !status.is_success() {
             let body_text = response.text().await.unwrap_or_default();
+            tracing::error!(status = %status, body = %body_text, "OpenAI request returned error");
             return Err(Self::map_http_error(status, &body_text));
         }
 
@@ -771,6 +789,8 @@ impl ProviderAdapter for OpenAiAdapter {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("openai-req")
             .to_string();
+
+        tracing::info!(request_id = %request_id, "OpenAI stream starting");
 
         let byte_stream = response.bytes_stream();
 
@@ -810,6 +830,7 @@ fn create_event_stream(
                 // Emit StreamStart once
                 if !state.started {
                     state.started = true;
+                    tracing::debug!(request_id = %state.request_id, "Stream started");
                     let start = LlmEvent::StreamStart {
                         request_id: state.request_id.clone(),
                         model: ModelRef::new(&state.model),
@@ -850,6 +871,7 @@ fn create_event_stream(
                         }
                     }
                     Some(Err(e)) => {
+                        tracing::error!(request_id = %state.request_id, error = %e, "Stream error");
                         let err = LlmEvent::StreamError {
                             error: format!("Stream read error: {e}"),
                         };
