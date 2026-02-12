@@ -14,6 +14,8 @@
 //! - [`config`] — Configuration schema and persistence
 //! - [`provider`] — Provider adapter trait
 //! - [`providers`] — Provider implementations (OpenAI, etc.)
+//! - [`agent`] — Agent loop engine with tool calling
+//! - [`session`] — Session persistence, validation, and conversation context
 //!
 //! # Event Model
 //!
@@ -60,6 +62,10 @@ pub use providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
 pub use providers::profile::{CompatibilityProfile, ProfileRegistry, resolve_profile};
 pub use tools::{BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool};
 pub use types::{EndpointType, ModelRef, ReasoningLevel, RequestOptions};
+pub use session::{
+    ConversationContext, FsSessionStore, MemorySessionStore, Session, SessionId, SessionMeta,
+    SessionResumeError, SessionStore, validate_message_sequence, validate_session,
+};
 pub use usage::{CostEstimate, TokenPricing, TokenUsage};
 
 #[cfg(test)]
