@@ -402,7 +402,7 @@ impl AgentLoop {
 
                 let turn_duration_ms = turn_start.elapsed().as_millis() as u64;
                 self.metrics
-                    .record_turn_latency_ms(turn_number as u32, turn_duration_ms);
+                    .record_turn_latency_ms(turn_number, turn_duration_ms);
 
                 turns.push(TurnResult {
                     text: accumulated.text,
@@ -419,7 +419,7 @@ impl AgentLoop {
             // No tool calls — the model is done
             let turn_duration_ms = turn_start.elapsed().as_millis() as u64;
             self.metrics
-                .record_turn_latency_ms(turn_number as u32, turn_duration_ms);
+                .record_turn_latency_ms(turn_number, turn_duration_ms);
 
             turns.push(TurnResult {
                 text: accumulated.text,
