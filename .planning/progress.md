@@ -426,3 +426,4 @@ All 4 phases delivered:
 - [x] Task 1: Provider switch validation for resumed sessions (commit: 6d729bf)
 - [x] Task 2: Request retry policy (commit: 92c09e2)
 - [x] Task 3: Circuit breaker pattern (commit: 0a2cebf)
+- [x] Task 4: Tool mode switching (commit: 33fb7dd)

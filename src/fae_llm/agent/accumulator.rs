@@ -57,6 +57,11 @@ pub struct AccumulatedTurn {
     pub finish_reason: FinishReason,
     /// Error message if the stream encountered an error.
     pub error: Option<String>,
+    /// Whether this turn represents a partial result (stream was interrupted).
+    ///
+    /// When true, the accumulated data may be incomplete but is preserved
+    /// for recovery or continuation.
+    pub partial: bool,
 }
 
 /// In-progress tool call being accumulated from streaming deltas.
@@ -189,12 +194,15 @@ impl StreamAccumulator {
                 .unwrap_or(usize::MAX)
         });
 
+        let partial = self.error.is_some();
+
         AccumulatedTurn {
             text: self.text,
             thinking: self.thinking,
             tool_calls: self.completed_tool_calls,
             finish_reason: self.finish_reason.unwrap_or(FinishReason::Other),
             error: self.error,
+            partial,
         }
     }
 }
@@ -513,6 +521,7 @@ mod tests {
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Stop,
             error: None,
+            partial: false,
         };
         let cloned = turn.clone();
         assert_eq!(cloned.text, "test");
@@ -533,6 +542,7 @@ mod tests {
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Stop,
             error: None,
+            partial: false,
         };
         let debug = format!("{turn:?}");
         assert!(debug.contains("AccumulatedTurn"));
@@ -553,5 +563,117 @@ mod tests {
         assert_send_sync::<AccumulatedToolCall>();
         assert_send_sync::<AccumulatedTurn>();
         assert_send_sync::<StreamAccumulator>();
+    }
+
+    // ── Partial Result Recovery Tests ────────────────────────
+
+    #[test]
+    fn partial_flag_false_when_no_error() {
+        let mut acc = StreamAccumulator::new();
+        acc.push(LlmEvent::TextDelta {
+            text: "hello".into(),
+        });
+        acc.push(LlmEvent::StreamEnd {
+            finish_reason: FinishReason::Stop,
+        });
+        let turn = acc.finish();
+        assert!(!turn.partial);
+        assert_eq!(turn.text, "hello");
+    }
+
+    #[test]
+    fn partial_flag_true_when_error_present() {
+        let mut acc = StreamAccumulator::new();
+        acc.push(LlmEvent::TextDelta {
+            text: "partial output".into(),
+        });
+        acc.push(LlmEvent::StreamError {
+            error: "connection lost".into(),
+        });
+        let turn = acc.finish();
+        assert!(turn.partial);
+        assert_eq!(turn.text, "partial output");
+        assert_eq!(turn.error, Some("connection lost".into()));
+    }
+
+    #[test]
+    fn partial_result_preserves_accumulated_text() {
+        let mut acc = StreamAccumulator::new();
+        acc.push(LlmEvent::TextDelta {
+            text: "The ".into(),
+        });
+        acc.push(LlmEvent::TextDelta {
+            text: "quick ".into(),
+        });
+        acc.push(LlmEvent::TextDelta {
+            text: "brown ".into(),
+        });
+        acc.push(LlmEvent::StreamError {
+            error: "stream interrupted".into(),
+        });
+        let turn = acc.finish();
+        assert!(turn.partial);
+        assert_eq!(turn.text, "The quick brown ");
+    }
+
+    #[test]
+    fn partial_result_preserves_tool_calls() {
+        let mut acc = StreamAccumulator::new();
+        acc.push(LlmEvent::ToolCallStart {
+            call_id: "call_1".into(),
+            function_name: "read".into(),
+        });
+        acc.push(LlmEvent::ToolCallArgsDelta {
+            call_id: "call_1".into(),
+            args_fragment: r#"{"file_path": "test.txt"}"#.into(),
+        });
+        acc.push(LlmEvent::StreamError {
+            error: "network error".into(),
+        });
+        let turn = acc.finish();
+        assert!(turn.partial);
+        assert_eq!(turn.tool_calls.len(), 1);
+        assert_eq!(turn.tool_calls[0].function_name, "read");
+        assert_eq!(
+            turn.tool_calls[0].arguments_json,
+            r#"{"file_path": "test.txt"}"#
+        );
+    }
+
+    #[test]
+    fn partial_result_with_thinking() {
+        let mut acc = StreamAccumulator::new();
+        acc.push(LlmEvent::ThinkingDelta {
+            text: "Let me analyze this...".into(),
+        });
+        acc.push(LlmEvent::TextDelta {
+            text: "Based on".into(),
+        });
+        acc.push(LlmEvent::StreamError {
+            error: "timeout".into(),
+        });
+        let turn = acc.finish();
+        assert!(turn.partial);
+        assert_eq!(turn.thinking, "Let me analyze this...");
+        assert_eq!(turn.text, "Based on");
+    }
+
+    #[test]
+    fn partial_result_can_resume_from() {
+        // Simulate first stream that fails mid-way
+        let mut acc1 = StreamAccumulator::new();
+        acc1.push(LlmEvent::TextDelta {
+            text: "The answer is ".into(),
+        });
+        acc1.push(LlmEvent::StreamError {
+            error: "connection lost".into(),
+        });
+        let partial_turn = acc1.finish();
+        assert!(partial_turn.partial);
+
+        // In a real scenario, you'd resume with the partial text as context
+        // Here we just verify the partial data is preserved
+        assert_eq!(partial_turn.text, "The answer is ");
+        assert!(partial_turn.error.is_some());
     }
 }
