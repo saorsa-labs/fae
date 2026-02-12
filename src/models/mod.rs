@@ -265,8 +265,100 @@ impl ModelManager {
         Ok(dest)
     }
 
+    /// Check whether a file is already cached locally for a HuggingFace repo.
+    ///
+    /// Returns `true` if the file exists in the local hf-hub cache,
+    /// meaning no download is needed.
+    pub fn is_file_cached(repo_id: &str, filename: &str) -> bool {
+        hf_hub::Cache::default()
+            .model(repo_id.to_owned())
+            .get(filename)
+            .is_some()
+    }
+
+    /// Query file sizes from HuggingFace Hub via HTTP HEAD requests.
+    ///
+    /// Returns a list of `(filename, size_bytes)` pairs. If a HEAD request
+    /// fails for any file, its size is `None` (graceful degradation).
+    ///
+    /// This is used to build the download plan before starting downloads,
+    /// so the UI can show total download size.
+    pub fn query_file_sizes(repo_id: &str, filenames: &[&str]) -> Vec<(String, Option<u64>)> {
+        filenames
+            .iter()
+            .map(|f| {
+                let size = query_single_file_size(repo_id, f);
+                ((*f).to_owned(), size)
+            })
+            .collect()
+    }
+
     /// Get the cache directory path.
     pub fn cache_dir(&self) -> &PathBuf {
         &self.cache_dir
+    }
+}
+
+/// Query the size of a single file from HuggingFace Hub using a HEAD request.
+///
+/// Returns `None` if the request fails or the server doesn't provide
+/// `content-length`. This avoids downloading the file just to check its size.
+fn query_single_file_size(repo_id: &str, filename: &str) -> Option<u64> {
+    // HF Hub file URL pattern: https://huggingface.co/{repo_id}/resolve/main/{filename}
+    let url = format!("https://huggingface.co/{repo_id}/resolve/main/{filename}");
+
+    // Use a HEAD request to get content-length without downloading
+    let resp = match ureq::head(&url).call() {
+        Ok(r) => r,
+        Err(_) => return None,
+    };
+
+    resp.header("content-length")
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn is_file_cached_returns_false_for_nonexistent() {
+        // A repo/file that definitely doesn't exist in cache
+        assert!(!ModelManager::is_file_cached(
+            "nonexistent-org/nonexistent-model-xyz",
+            "nonexistent-file.onnx"
+        ));
+    }
+
+    #[test]
+    fn is_file_cached_checks_hf_cache() {
+        // This tests the cache lookup mechanism itself.
+        // We can't easily test a positive case without actually downloading,
+        // but we verify the function doesn't panic and returns a bool.
+        let result = ModelManager::is_file_cached("some-org/some-model", "some-file.bin");
+        assert!(!result); // Not cached since we never downloaded it
+    }
+
+    #[test]
+    fn query_file_sizes_returns_vec_for_all_files() {
+        // Even for nonexistent repos, we should get a result per file (with None sizes)
+        let results = ModelManager::query_file_sizes(
+            "nonexistent-org/nonexistent-model-xyz",
+            &["file1.onnx", "file2.json"],
+        );
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "file1.onnx");
+        assert_eq!(results[1].0, "file2.json");
+        // Sizes should be None since the repo doesn't exist
+        assert!(results[0].1.is_none());
+        assert!(results[1].1.is_none());
+    }
+
+    #[test]
+    fn query_file_sizes_empty_list() {
+        let results = ModelManager::query_file_sizes("any/repo", &[]);
+        assert!(results.is_empty());
     }
 }
