@@ -44,6 +44,7 @@ pub use error::FaeLlmError;
 pub use events::{FinishReason, LlmEvent};
 pub use metadata::{RequestMeta, ResponseMeta};
 pub use provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
+pub use providers::anthropic::{AnthropicAdapter, AnthropicConfig};
 pub use providers::local_probe::{
     LocalModel, LocalProbeService, ProbeConfig, ProbeResult, ProbeStatus,
 };
@@ -981,5 +982,557 @@ mod integration_tests {
 
         let without_name = LocalModel::new("qwen2:7b");
         assert_eq!(without_name.to_string(), "qwen2:7b");
+    }
+
+    // ── Anthropic Integration Tests ──────────────────────────
+
+    /// Full Anthropic SSE text stream: parse SSE events → LlmEvent sequence.
+    #[test]
+    fn anthropic_integration_text_stream() {
+        use providers::anthropic::{AnthropicBlockTracker, parse_anthropic_event};
+
+        let sse_sequence = [
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_01","model":"claude-sonnet-4-5","role":"assistant"}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world!"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}"#,
+            ),
+        ];
+
+        let mut tracker = AnthropicBlockTracker::new();
+        let mut all_events = Vec::new();
+        for (event_type, data) in &sse_sequence {
+            all_events.extend(parse_anthropic_event(event_type, data, &mut tracker));
+        }
+
+        // Stream structure: StreamStart, TextDelta, TextDelta, StreamEnd
+        assert!(matches!(all_events[0], LlmEvent::StreamStart { .. }));
+
+        let text: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Hello world!");
+
+        assert!(all_events.last().is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
+        )));
+    }
+
+    /// Anthropic thinking + text stream with interleaved blocks.
+    #[test]
+    fn anthropic_integration_thinking_stream() {
+        use providers::anthropic::{AnthropicBlockTracker, parse_anthropic_event};
+
+        let sse_sequence = [
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_02","model":"claude-opus-4","role":"assistant"}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason..."}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" step by step."}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"The answer is 42."}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":1}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":30}}"#,
+            ),
+        ];
+
+        let mut tracker = AnthropicBlockTracker::new();
+        let mut all_events = Vec::new();
+        for (event_type, data) in &sse_sequence {
+            all_events.extend(parse_anthropic_event(event_type, data, &mut tracker));
+        }
+
+        // Verify thinking lifecycle
+        assert!(matches!(all_events[1], LlmEvent::ThinkingStart));
+        let thinking: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::ThinkingDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thinking, "Let me reason... step by step.");
+        assert!(
+            all_events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::ThinkingEnd))
+        );
+
+        // Verify text after thinking
+        let text: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "The answer is 42.");
+    }
+
+    /// Anthropic tool_use stream: parse tool call with streamed JSON input.
+    #[test]
+    fn anthropic_integration_tool_call_stream() {
+        use providers::anthropic::{AnthropicBlockTracker, parse_anthropic_event};
+
+        let sse_sequence = [
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_03","model":"claude-sonnet-4-5","role":"assistant"}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I'll read the file."}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01","name":"read"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"src/main.rs\"}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":1}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":25}}"#,
+            ),
+        ];
+
+        let mut tracker = AnthropicBlockTracker::new();
+        let mut all_events = Vec::new();
+        for (event_type, data) in &sse_sequence {
+            all_events.extend(parse_anthropic_event(event_type, data, &mut tracker));
+        }
+
+        // Verify tool call lifecycle
+        let starts: Vec<_> = all_events
+            .iter()
+            .filter(|e| matches!(e, LlmEvent::ToolCallStart { .. }))
+            .collect();
+        assert_eq!(starts.len(), 1);
+        assert!(
+            matches!(&starts[0], LlmEvent::ToolCallStart { call_id, function_name }
+                if call_id == "toolu_01" && function_name == "read"
+            )
+        );
+
+        // Verify tool args accumulated
+        let args: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::ToolCallArgsDelta { args_fragment, .. } => Some(args_fragment.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(args, r#"{"path":"src/main.rs"}"#);
+
+        // Verify tool call end
+        assert!(all_events.iter().any(|e| matches!(
+            e,
+            LlmEvent::ToolCallEnd { call_id } if call_id == "toolu_01"
+        )));
+
+        // Finish reason is ToolCalls
+        assert!(all_events.last().is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::ToolCalls
+            }
+        )));
+    }
+
+    /// Multi-block Anthropic stream: thinking + text + tool_use.
+    #[test]
+    fn anthropic_integration_multi_block_stream() {
+        use providers::anthropic::{AnthropicBlockTracker, parse_anthropic_event};
+
+        let sse_sequence = [
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_04","model":"claude-opus-4","role":"assistant"}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Planning..."}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Let me check."}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":1}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_02","name":"bash"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\"ls\"}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":2}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":40}}"#,
+            ),
+        ];
+
+        let mut tracker = AnthropicBlockTracker::new();
+        let mut all_events = Vec::new();
+        for (event_type, data) in &sse_sequence {
+            all_events.extend(parse_anthropic_event(event_type, data, &mut tracker));
+        }
+
+        // All three block types represented
+        assert!(
+            all_events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::ThinkingStart))
+        );
+        assert!(
+            all_events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::ThinkingEnd))
+        );
+        assert!(
+            all_events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::TextDelta { .. }))
+        );
+        assert!(
+            all_events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::ToolCallStart { .. }))
+        );
+        assert!(
+            all_events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::ToolCallEnd { .. }))
+        );
+
+        // Event count: StreamStart + ThinkingStart + ThinkingDelta + ThinkingEnd +
+        //              TextDelta + ToolCallStart + ToolCallArgsDelta + ToolCallEnd + StreamEnd
+        assert_eq!(all_events.len(), 9);
+    }
+
+    /// All Anthropic stop reason mappings produce correct FinishReason.
+    #[test]
+    fn anthropic_integration_stop_reasons() {
+        use providers::anthropic::map_stop_reason;
+
+        assert_eq!(map_stop_reason("end_turn"), FinishReason::Stop);
+        assert_eq!(map_stop_reason("max_tokens"), FinishReason::Length);
+        assert_eq!(map_stop_reason("tool_use"), FinishReason::ToolCalls);
+        assert_eq!(map_stop_reason("stop_sequence"), FinishReason::Stop);
+        assert_eq!(map_stop_reason("unknown_reason"), FinishReason::Other);
+        assert_eq!(map_stop_reason(""), FinishReason::Other);
+    }
+
+    /// HTTP error classification covers all key Anthropic status codes.
+    #[test]
+    fn anthropic_integration_error_mapping() {
+        use providers::anthropic::map_http_error;
+
+        // Auth errors
+        let err = map_http_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"type":"error","error":{"type":"authentication_error","message":"Invalid key"}}"#,
+        );
+        assert_eq!(err.code(), "AUTH_FAILED");
+
+        let err = map_http_error(
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"type":"error","error":{"type":"permission_error","message":"No access"}}"#,
+        );
+        assert_eq!(err.code(), "AUTH_FAILED");
+
+        // Rate limit
+        let err = map_http_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"Too many"}}"#,
+        );
+        assert_eq!(err.code(), "REQUEST_FAILED");
+
+        // Bad request
+        let err = map_http_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Bad input"}}"#,
+        );
+        assert_eq!(err.code(), "REQUEST_FAILED");
+
+        // Server error
+        let err = map_http_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"type":"error","error":{"type":"api_error","message":"Internal"}}"#,
+        );
+        assert_eq!(err.code(), "PROVIDER_ERROR");
+
+        // Overloaded (529)
+        let status =
+            reqwest::StatusCode::from_u16(529).unwrap_or(reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        let err = map_http_error(
+            status,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        );
+        assert_eq!(err.code(), "PROVIDER_ERROR");
+    }
+
+    /// Anthropic request JSON structure follows the Messages API format.
+    #[test]
+    fn anthropic_integration_request_format() {
+        use providers::anthropic::build_messages_request;
+
+        let messages = vec![
+            Message::system("You are helpful."),
+            Message::user("Hello"),
+            Message::assistant("Hi!"),
+            Message::user("How are you?"),
+        ];
+        let opts = RequestOptions::new()
+            .with_max_tokens(2048)
+            .with_temperature(0.7)
+            .with_stream(true);
+        let tools = vec![ToolDefinition::new(
+            "read",
+            "Read a file",
+            serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        )];
+        let body = build_messages_request("claude-sonnet-4-5", &messages, &opts, &tools);
+
+        // Model and max_tokens
+        assert_eq!(body["model"], "claude-sonnet-4-5");
+        assert_eq!(body["max_tokens"], 2048);
+        assert!(body["stream"].as_bool().unwrap_or(false));
+        assert_eq!(body["temperature"], 0.7);
+
+        // System extracted to top-level
+        assert_eq!(body["system"], "You are helpful.");
+
+        // Messages array: user, assistant, user (no system)
+        let msgs = body["messages"].as_array();
+        assert!(msgs.is_some_and(|m| m.len() == 3));
+        if let Some(msgs) = msgs {
+            assert_eq!(msgs[0]["role"], "user");
+            assert_eq!(msgs[1]["role"], "assistant");
+            assert_eq!(msgs[2]["role"], "user");
+        }
+
+        // Tools present
+        assert!(body["tools"].is_array());
+        assert!(body["tools"].as_array().is_some_and(|t| t.len() == 1));
+        assert_eq!(body["tools"][0]["name"], "read");
+        assert!(body["tools"][0].get("input_schema").is_some());
+    }
+
+    /// Anthropic message conversion handles tool results and system messages.
+    #[test]
+    fn anthropic_integration_message_conversion() {
+        use providers::anthropic::convert_messages;
+
+        let messages = vec![
+            Message::system("Be concise."),
+            Message::user("Read file"),
+            Message::assistant_with_tool_calls(
+                Some("Sure.".into()),
+                vec![AssistantToolCall {
+                    call_id: "call_1".into(),
+                    function_name: "read".into(),
+                    arguments: r#"{"path":"test.rs"}"#.into(),
+                }],
+            ),
+            Message::tool_result("call_1", "fn main() {}"),
+            Message::assistant("Here's the result."),
+        ];
+
+        let (system, converted) = convert_messages(&messages);
+
+        // System extracted
+        assert_eq!(system, Some("Be concise.".to_string()));
+
+        // 4 messages: user, assistant (text+tool_use), user (tool_result), assistant (text)
+        assert_eq!(converted.len(), 4);
+
+        // User message
+        assert_eq!(converted[0]["role"], "user");
+        assert_eq!(converted[0]["content"][0]["text"], "Read file");
+
+        // Assistant with tool call
+        assert_eq!(converted[1]["role"], "assistant");
+        let content = converted[1]["content"].as_array();
+        assert!(content.is_some_and(|c| c.len() == 2));
+        if let Some(content) = content {
+            assert_eq!(content[0]["type"], "text");
+            assert_eq!(content[0]["text"], "Sure.");
+            assert_eq!(content[1]["type"], "tool_use");
+            assert_eq!(content[1]["id"], "call_1");
+            assert_eq!(content[1]["name"], "read");
+        }
+
+        // Tool result as user message
+        assert_eq!(converted[2]["role"], "user");
+        assert_eq!(converted[2]["content"][0]["type"], "tool_result");
+        assert_eq!(converted[2]["content"][0]["tool_use_id"], "call_1");
+
+        // Final assistant text
+        assert_eq!(converted[3]["role"], "assistant");
+        assert_eq!(converted[3]["content"][0]["type"], "text");
+    }
+
+    /// Anthropic adapter provides the correct name and config access.
+    #[test]
+    fn anthropic_integration_adapter_basics() {
+        let config = AnthropicConfig::new("sk-test", "claude-sonnet-4-5");
+        let adapter = AnthropicAdapter::new(config);
+        assert_eq!(adapter.name(), "anthropic");
+        assert_eq!(adapter.config().model, "claude-sonnet-4-5");
+        assert_eq!(adapter.config().api_version, "2023-06-01");
+    }
+
+    /// Anthropic types are Send + Sync.
+    #[test]
+    fn anthropic_integration_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AnthropicConfig>();
+        assert_send_sync::<AnthropicAdapter>();
+        assert_send_sync::<providers::anthropic::AnthropicBlockTracker>();
+    }
+
+    /// Malformed SSE data does not panic in the Anthropic parser.
+    #[test]
+    fn anthropic_integration_malformed_graceful() {
+        use providers::anthropic::{AnthropicBlockTracker, parse_anthropic_event};
+
+        let mut tracker = AnthropicBlockTracker::new();
+
+        // Invalid JSON
+        let events = parse_anthropic_event("message_start", "not json", &mut tracker);
+        assert!(events.is_empty());
+
+        // Wrong structure
+        let events =
+            parse_anthropic_event("content_block_delta", r#"{"wrong":"data"}"#, &mut tracker);
+        assert!(events.is_empty());
+
+        // Empty data
+        let events = parse_anthropic_event("message_start", "", &mut tracker);
+        assert!(events.is_empty());
+
+        // Unknown event type
+        let events = parse_anthropic_event("ping", r#"{}"#, &mut tracker);
+        assert!(events.is_empty());
+    }
+
+    /// Empty text deltas are filtered out.
+    #[test]
+    fn anthropic_integration_empty_delta_filtered() {
+        use providers::anthropic::{AnthropicBlockTracker, parse_anthropic_event};
+
+        let mut tracker = AnthropicBlockTracker::new();
+
+        // Start a text block
+        let _ = parse_anthropic_event(
+            "content_block_start",
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            &mut tracker,
+        );
+
+        // Empty text delta
+        let events = parse_anthropic_event(
+            "content_block_delta",
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}"#,
+            &mut tracker,
+        );
+        assert!(events.is_empty());
+
+        // Non-empty text delta
+        let events = parse_anthropic_event(
+            "content_block_delta",
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#,
+            &mut tracker,
+        );
+        assert_eq!(events.len(), 1);
     }
 }

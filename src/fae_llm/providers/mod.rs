@@ -8,9 +8,11 @@
 //!
 //! - [`message`] — Shared message types for all providers
 //! - [`openai`] — OpenAI Chat Completions and Responses API
+//! - [`anthropic`] — Anthropic Messages API
 //! - [`profile`] — Compatibility profiles for OpenAI-compatible providers
 //! - [`local_probe`] — Health-check and model discovery for local endpoints
 
+pub mod anthropic;
 pub mod local_probe;
 pub mod message;
 pub mod openai;
