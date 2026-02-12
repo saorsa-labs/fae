@@ -79,9 +79,8 @@ impl FsSessionStore {
     /// Writes to a temp file, fsyncs, then renames for crash safety.
     fn write_session_atomic(&self, session: &Session) -> Result<(), FaeLlmError> {
         let path = self.session_path(&session.meta.id);
-        let json = serde_json::to_string_pretty(session).map_err(|e| {
-            FaeLlmError::SessionError(format!("failed to serialize session: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(session)
+            .map_err(|e| FaeLlmError::SessionError(format!("failed to serialize session: {e}")))?;
 
         // Write to temp file in the same directory (for atomic rename)
         let tmp_path = self.data_dir.join(format!(".{}.tmp", session.meta.id));
@@ -217,8 +216,10 @@ mod tests {
     use crate::fae_llm::session::types::CURRENT_SCHEMA_VERSION;
 
     fn temp_store() -> (tempfile::TempDir, FsSessionStore) {
-        let dir = tempfile::tempdir().unwrap_or_else(|_| unreachable!("tempdir creation succeeded"));
-        let store = FsSessionStore::new(dir.path()).unwrap_or_else(|_| unreachable!("store creation succeeded"));
+        let dir =
+            tempfile::tempdir().unwrap_or_else(|_| unreachable!("tempdir creation succeeded"));
+        let store = FsSessionStore::new(dir.path())
+            .unwrap_or_else(|_| unreachable!("store creation succeeded"));
         (dir, store)
     }
 
@@ -370,7 +371,8 @@ mod tests {
         let (dir, store) = temp_store();
         // Write garbage to a session file
         let bad_path = dir.path().join("bad_session.json");
-        std::fs::write(&bad_path, "not valid json {{{").unwrap_or_else(|_| unreachable!("write succeeded"));
+        std::fs::write(&bad_path, "not valid json {{{")
+            .unwrap_or_else(|_| unreachable!("write succeeded"));
 
         let result = store.load("bad_session").await;
         assert!(result.is_err());
@@ -460,14 +462,16 @@ mod tests {
     #[test]
     fn fs_store_data_dir_accessor() {
         let dir = tempfile::tempdir().unwrap_or_else(|_| unreachable!("tempdir succeeded"));
-        let store = FsSessionStore::new(dir.path()).unwrap_or_else(|_| unreachable!("store succeeded"));
+        let store =
+            FsSessionStore::new(dir.path()).unwrap_or_else(|_| unreachable!("store succeeded"));
         assert_eq!(store.data_dir(), dir.path());
     }
 
     #[test]
     fn fs_store_debug() {
         let dir = tempfile::tempdir().unwrap_or_else(|_| unreachable!("tempdir succeeded"));
-        let store = FsSessionStore::new(dir.path()).unwrap_or_else(|_| unreachable!("store succeeded"));
+        let store =
+            FsSessionStore::new(dir.path()).unwrap_or_else(|_| unreachable!("store succeeded"));
         let debug = format!("{store:?}");
         assert!(debug.contains("FsSessionStore"));
     }
@@ -475,7 +479,8 @@ mod tests {
     #[test]
     fn fs_store_clone() {
         let dir = tempfile::tempdir().unwrap_or_else(|_| unreachable!("tempdir succeeded"));
-        let store = FsSessionStore::new(dir.path()).unwrap_or_else(|_| unreachable!("store succeeded"));
+        let store =
+            FsSessionStore::new(dir.path()).unwrap_or_else(|_| unreachable!("store succeeded"));
         let cloned = store.clone();
         assert_eq!(store.data_dir(), cloned.data_dir());
     }

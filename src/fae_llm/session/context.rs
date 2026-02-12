@@ -134,11 +134,12 @@ impl ConversationContext {
             Arc::clone(&self.provider),
             Arc::clone(&self.registry),
         );
-        let result = agent.run_with_messages(self.session.messages.clone()).await?;
+        let result = agent
+            .run_with_messages(self.session.messages.clone())
+            .await?;
 
         // 3. Append response messages from the result
-        let response_messages =
-            build_messages_from_result(&result, None);
+        let response_messages = build_messages_from_result(&result, None);
 
         // Only add assistant/tool messages (skip system messages from rebuild)
         for msg in response_messages {
@@ -316,13 +317,8 @@ mod tests {
             Arc::new(MockProvider::new(vec![MockProvider::text("hi")]));
         let config = AgentConfig::new();
 
-        let ctx = ConversationContext::new(
-            Arc::clone(&store),
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let ctx =
+            ConversationContext::new(Arc::clone(&store), config, provider, empty_registry()).await;
         assert!(ctx.is_ok());
         let ctx = match ctx {
             Ok(c) => c,
@@ -341,13 +337,8 @@ mod tests {
             Arc::new(MockProvider::new(vec![MockProvider::text("hi")]));
         let config = AgentConfig::new().with_system_prompt("Be helpful.");
 
-        let ctx = ConversationContext::new(
-            Arc::clone(&store),
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let ctx =
+            ConversationContext::new(Arc::clone(&store), config, provider, empty_registry()).await;
         assert!(ctx.is_ok());
         let ctx = match ctx {
             Ok(c) => c,
@@ -366,13 +357,8 @@ mod tests {
             Arc::new(MockProvider::new(vec![MockProvider::text("Hello!")]));
         let config = AgentConfig::new();
 
-        let ctx = ConversationContext::new(
-            Arc::clone(&store),
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let ctx =
+            ConversationContext::new(Arc::clone(&store), config, provider, empty_registry()).await;
         assert!(ctx.is_ok());
         let mut ctx = match ctx {
             Ok(c) => c,
@@ -394,13 +380,8 @@ mod tests {
             Arc::new(MockProvider::new(vec![MockProvider::text("Saved!")]));
         let config = AgentConfig::new();
 
-        let ctx = ConversationContext::new(
-            Arc::clone(&store),
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let ctx =
+            ConversationContext::new(Arc::clone(&store), config, provider, empty_registry()).await;
         assert!(ctx.is_ok());
         let mut ctx = match ctx {
             Ok(c) => c,
@@ -485,14 +466,8 @@ mod tests {
             Arc::new(MockProvider::new(vec![MockProvider::text("hi")]));
         let config = AgentConfig::new();
 
-        let resumed = ConversationContext::resume(
-            &id,
-            store,
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let resumed =
+            ConversationContext::resume(&id, store, config, provider, empty_registry()).await;
 
         // Should fail — empty session is invalid
         assert!(resumed.is_err());
@@ -510,14 +485,9 @@ mod tests {
             Arc::new(MockProvider::new(vec![MockProvider::text("hi")]));
         let config = AgentConfig::new();
 
-        let resumed = ConversationContext::resume(
-            "nonexistent",
-            store,
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let resumed =
+            ConversationContext::resume("nonexistent", store, config, provider, empty_registry())
+                .await;
 
         assert!(resumed.is_err());
         let err = match resumed {
@@ -537,13 +507,8 @@ mod tests {
         ]));
         let config = AgentConfig::new();
 
-        let ctx = ConversationContext::new(
-            Arc::clone(&store),
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let ctx =
+            ConversationContext::new(Arc::clone(&store), config, provider, empty_registry()).await;
         assert!(ctx.is_ok());
         let mut ctx = match ctx {
             Ok(c) => c,
@@ -589,13 +554,8 @@ mod tests {
         ]));
         let config = AgentConfig::new();
 
-        let ctx = ConversationContext::new(
-            Arc::clone(&store),
-            config,
-            provider,
-            mock_registry(),
-        )
-        .await;
+        let ctx =
+            ConversationContext::new(Arc::clone(&store), config, provider, mock_registry()).await;
         assert!(ctx.is_ok());
         let mut ctx = match ctx {
             Ok(c) => c,

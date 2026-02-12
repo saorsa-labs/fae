@@ -110,11 +110,7 @@ fn rand_suffix() -> u32 {
 impl SessionStore for MemorySessionStore {
     async fn create(&self, system_prompt: Option<&str>) -> Result<SessionId, FaeLlmError> {
         let id = generate_session_id();
-        let session = Session::new(
-            id.clone(),
-            system_prompt.map(String::from),
-            None,
-        );
+        let session = Session::new(id.clone(), system_prompt.map(String::from), None);
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), session);
         Ok(id)
@@ -154,8 +150,8 @@ impl SessionStore for MemorySessionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::CURRENT_SCHEMA_VERSION;
+    use super::*;
 
     #[tokio::test]
     async fn memory_store_create_returns_id() {
