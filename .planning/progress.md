@@ -278,3 +278,37 @@ All 3 phases delivered:
 - Removed: SpeechError::Pi, SpeechError::Server, LlmServerConfig, model_selection_rx
 - 540 unit tests + 19 integration tests + 8 doc tests passing
 - Zero clippy warnings, zero compilation warnings
+
+### Phase 1.2: Create fae_llm Crate Structure — COMPLETE
+- [x] Task 1: Module structure + FaeLlmError with stable codes (7 variants)
+- [x] Task 2: EndpointType (OpenAI/Anthropic/Local/Custom) + ModelRef
+- [x] Task 3: RequestOptions + ReasoningLevel (builder pattern)
+- [x] Task 4: LlmEvent normalized streaming events (10 variants)
+- [x] Task 5: Tool call events (ToolCallStart/ArgsDelta/End)
+- [x] Task 6: TokenUsage, TokenPricing, CostEstimate
+- [x] Task 7: RequestMeta, ResponseMeta
+- [x] Task 8: Integration tests + module documentation
+- (commit: db71d60)
+
+**Phase 1.2 COMPLETE** — fae_llm module foundation
+- Created: error.rs, types.rs, events.rs, usage.rs, metadata.rs, mod.rs
+- 85 tests (80 unit + 5 integration), all passing
+- 15-agent review: PASS (all grades A- or higher)
+- Zero clippy warnings, zero compilation warnings, full doc coverage
+
+### Phase 1.3: Config Schema & Persistence — COMPLETE
+- [x] Task 1: Config schema types (types.rs)
+- [x] Task 2: SecretRef resolution (types.rs)
+- [x] Task 3: Atomic config persistence (persist.rs)
+- [x] Task 4: Round-trip TOML editing (editor.rs)
+- [x] Task 5: ConfigService with validation (service.rs)
+- [x] Task 6: Partial update API for app menu (service.rs)
+- [x] Task 7: Default config generation (defaults.rs)
+- [x] Task 8: Integration tests (mod.rs)
+- (commit: 599f9df)
+
+**Phase 1.3 COMPLETE** — Config schema & persistence for fae_llm
+- Created: config/types.rs, config/persist.rs, config/editor.rs, config/service.rs, config/defaults.rs, config/mod.rs
+- 769 tests (all passing), 9 integration tests
+- 5-agent review: PASS (build, error handling, security, quality A-, task spec)
+- Zero clippy warnings, zero compilation warnings
