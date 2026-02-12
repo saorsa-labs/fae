@@ -312,3 +312,27 @@ All 3 phases delivered:
 - 769 tests (all passing), 9 integration tests
 - 5-agent review: PASS (build, error handling, security, quality A-, task spec)
 - Zero clippy warnings, zero compilation warnings
+
+### Phase 1.4: Tool Registry & Implementations — COMPLETE
+- [x] Task 1: Tool trait and ToolResult type (types.rs)
+- [x] Task 2: ToolRegistry with mode gating (registry.rs)
+- [x] Task 3: Path validation utilities (path_validation.rs)
+- [x] Task 4: Read tool with pagination (read.rs)
+- [x] Task 5: Bash tool with timeout (bash.rs)
+- [x] Task 6: Edit tool — deterministic find/replace (edit.rs)
+- [x] Task 7: Write tool with path validation (write.rs)
+- [x] Task 8: Integration tests + module exports (mod.rs)
+- (commit: 8f4f443)
+
+**Phase 1.4 COMPLETE** — Tool registry & implementations for fae_llm
+- Created: tools/types.rs, tools/registry.rs, tools/path_validation.rs, tools/read.rs, tools/bash.rs, tools/edit.rs, tools/write.rs, tools/mod.rs
+- 798 tests (all passing), 15 integration tests
+- 4-agent review: PASS (build, security, quality A-, task spec 100%)
+- Zero clippy warnings, zero compilation warnings
+
+**MILESTONE 1 COMPLETE** — PI Removal & Foundation
+All 4 phases delivered:
+1.1: Remove PI Dependency (8 tasks)
+1.2: Create fae_llm Crate Structure (8 tasks)
+1.3: Config Schema & Persistence (8 tasks)
+1.4: Tool Registry & Implementations (8 tasks)
