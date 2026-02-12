@@ -2483,6 +2483,16 @@ fn app() -> Element {
         }
         _ => current_status.display_text(),
     };
+    // Context-aware secondary message for first-run experience.
+    let welcome_text: &str = match &current_status {
+        AppStatus::PreFlight { .. } => "Welcome to Fae! Setting up your personal AI assistant.",
+        AppStatus::Downloading { .. } => "Downloading AI models \u{2014} this only happens once.",
+        AppStatus::Loading { .. } => "Almost ready \u{2014} loading models into memory.",
+        AppStatus::Error(_) | AppStatus::DownloadError { .. } => {
+            "Something went wrong. Press Retry to try again."
+        }
+        _ => "",
+    };
     let button_enabled = current_status.buttons_enabled();
     let is_running = matches!(current_status, AppStatus::Running);
     let gate_is_active = gate_active_arc
@@ -3031,6 +3041,11 @@ fn app() -> Element {
                 p {
                     class: if is_error { "status status-error" } else { "status" },
                     "{status_text}"
+                }
+
+                // Welcome / context message during first-run
+                if !welcome_text.is_empty() {
+                    p { class: "welcome-text", "{welcome_text}" }
                 }
 
                 // Voice command hints (only when models are loaded and running)
@@ -5588,6 +5603,14 @@ const GLOBAL_CSS: &str = r#"
         transition: color 0.3s ease;
     }
     .status-error { color: var(--red); }
+
+    .welcome-text {
+        color: var(--text-secondary);
+        font-size: 0.8rem;
+        font-style: italic;
+        margin-top: 2px;
+        opacity: 0.85;
+    }
 
     /* --- Hint --- */
     .hint {
