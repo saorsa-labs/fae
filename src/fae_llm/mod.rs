@@ -205,23 +205,23 @@ mod integration_tests {
     /// All error codes are stable SCREAMING_SNAKE_CASE identifiers.
     #[test]
     fn all_error_codes_are_stable() {
-        let errors = [
+        let errors: [FaeLlmError; 7] = [
             FaeLlmError::ConfigError("x".into()),
             FaeLlmError::AuthError("x".into()),
             FaeLlmError::RequestError("x".into()),
             FaeLlmError::StreamError("x".into()),
             FaeLlmError::ToolError("x".into()),
-            FaeLlmError::Timeout("x".into()),
+            FaeLlmError::TimeoutError("x".into()),
             FaeLlmError::ProviderError("x".into()),
         ];
 
-        let expected_codes = [
+        let expected_codes: [&str; 7] = [
             "CONFIG_INVALID",
             "AUTH_FAILED",
             "REQUEST_FAILED",
             "STREAM_FAILED",
             "TOOL_FAILED",
-            "TIMEOUT",
+            "TIMEOUT_ERROR",
             "PROVIDER_ERROR",
         ];
 
@@ -231,7 +231,7 @@ mod integration_tests {
             assert!(
                 err.code()
                     .chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '_'),
+                    .all(|c: char| c.is_ascii_uppercase() || c == '_'),
                 "code {:?} is not SCREAMING_SNAKE_CASE",
                 err.code()
             );

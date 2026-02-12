@@ -1,77 +1,149 @@
-# Phase 1.2: GUI Progress Overhaul
+# Phase 1.2: Create fae_llm Module Structure — Task Plan
 
 ## Goal
-Show rich download progress in the GUI — aggregate totals, per-model stage tracking, download speed, and ETA. Replace the current single-file progress bar with a comprehensive download dashboard.
+Create the foundational `fae_llm` module within the existing `fae` crate. Define core types, normalized streaming events, error types with stable codes, and usage/cost tracking structs. This establishes the type system foundation for multi-provider LLM support.
 
-## Current State
-- GUI shows single-file progress only via `AppStatus::Downloading { current_file, bytes_downloaded, total_bytes }`
-- `DownloadPlanReady` and `AggregateProgress` events exist in progress.rs but return `None` in gui.rs
-- `StagePhase` enum routes ALL downloads to STT stage — LLM/TTS downloads not tracked
-- No speed or ETA in GUI (CLI has it via indicatif)
-- `update_stages_from_progress()` doesn't distinguish which model a download belongs to
+## Strategy
+Build types bottom-up in dependency order: error types first (no deps), then core domain types (EndpointType, ModelRef), then event model (depends on core types), then usage/cost structs. Each task is TDD-first with unit tests.
+
+---
 
 ## Tasks
 
-### Task 1: Add DownloadTracker to progress.rs
-Add a `DownloadTracker` struct that calculates speed and ETA from byte-level progress events.
-- Fields: `started_at: Instant`, `last_bytes: u64`, `last_time: Instant`, `speed_samples: VecDeque<f64>` (rolling window)
-- Methods: `new()`, `update(bytes_downloaded, total_bytes) -> (speed_mbps, eta_secs)`, `reset()`
-- Rolling average over last 5 samples for smooth speed display
-- 6+ tests for edge cases (zero bytes, unknown total, reset)
-- **Files:** `src/progress.rs`
+### Task 1: Create fae_llm module structure and error types
 
-### Task 2: Enrich AppStatus for aggregate download state
-Update `AppStatus::Downloading` to include aggregate fields alongside per-file fields.
-- Add fields: `files_complete: usize`, `files_total: usize`, `aggregate_bytes: u64`, `aggregate_total: u64`, `speed_mbps: f64`, `eta_secs: Option<f64>`
-- Keep existing `current_file`, `bytes_downloaded`, `total_bytes` for per-file display
-- Update all match arms that construct `AppStatus::Downloading`
-- 3+ tests for new fields
-- **Files:** `src/bin/gui.rs`
+**Files to create:**
+- `src/fae_llm/mod.rs` — module declarations and re-exports
+- `src/fae_llm/error.rs` — FaeLlmError enum with stable codes
 
-### Task 3: Route downloads to correct model stage
-Fix `update_stages_from_progress()` to route `DownloadStarted`/`DownloadProgress`/`DownloadComplete`/`Cached` events to the correct model stage (STT/LLM/TTS) based on `repo_id`.
-- Add `model_name_from_repo_id(repo_id, config)` helper that maps repo_id to "STT"/"LLM"/"TTS"
-- Store repo_id→model mappings from the DownloadPlan
-- Update `StagePhase::Downloading` to include bytes progress: `Downloading { filename, bytes_downloaded, total_bytes }`
-- Update stage label to show: "Downloading ears (1.2 GB / 2.3 GB)"
-- **Files:** `src/bin/gui.rs`
+**Files to modify:**
+- `src/lib.rs` — add `pub mod fae_llm;`
 
-### Task 4: Handle DownloadPlanReady in GUI
-Wire the `DownloadPlanReady` event to store the plan and initialize aggregate state.
-- Store `DownloadPlan` in a Dioxus signal for use by the progress display
-- Initialize aggregate counters from plan data
-- Build repo_id → model name mapping from plan files
-- Set status text: "Preparing to download X.X GB..."
-- **Files:** `src/bin/gui.rs`
+**Details:**
+- FaeLlmError with variants: ConfigError, AuthError, RequestError, StreamError, ToolError, Timeout, ProviderError
+- Each variant stores a String message
+- `code()` method returns stable SCREAMING_SNAKE_CASE code (e.g. "CONFIG_INVALID")
+- `Display` impl includes the code prefix: `[CONFIG_INVALID] message`
+- Use thiserror for derive
+- 8+ unit tests: creation, code extraction, display format, From conversions
 
-### Task 5: Handle AggregateProgress in GUI
-Wire `AggregateProgress` events to update the aggregate download state.
-- Update `apply_progress_event()` to return `AppStatus::Downloading` with aggregate fields
-- Integrate `DownloadTracker` for speed/ETA on aggregate bytes
-- Feed real-time `DownloadProgress` events into tracker for smooth speed updates
-- **Files:** `src/bin/gui.rs`
+---
 
-### Task 6: Render aggregate progress bar
-Replace current progress bar with rich aggregate display.
-- Show: "1.2 GB / 4.8 GB (25%)" as progress text
-- Show: "Downloading model 2/3" as status line
-- Progress bar width driven by `aggregate_bytes / aggregate_total`
-- Indeterminate animation when total_bytes unknown
-- **Files:** `src/bin/gui.rs` (rendering + CSS)
+### Task 2: Define EndpointType and ModelRef core types
 
-### Task 7: Render per-model stage pills
-Update stage pill rendering to show download vs loading distinction with progress.
-- "Downloading ears (1.2 GB / 2.3 GB)" during download
-- "Loading ears" during model load
-- "ears ready" when complete
-- CSS styling for download/loading/ready/error states
-- **Files:** `src/bin/gui.rs` (rendering + CSS)
+**Files to create:**
+- `src/fae_llm/types.rs` — EndpointType, ModelRef
 
-### Task 8: Add speed and ETA display
-Add download speed and ETA below the progress bar.
-- Show: "12.5 MB/s — about 3 min remaining"
-- Hide speed when no downloads active
-- Show "Calculating..." for first few seconds
-- Format helpers: `format_bytes()`, `format_eta()`, `format_speed()`
-- Integration tests for format helpers
-- **Files:** `src/bin/gui.rs`
+**Files to modify:**
+- `src/fae_llm/mod.rs` — add `pub mod types;` and re-export key types
+
+**Details:**
+- EndpointType: OpenAI, Anthropic, Local, Custom — with Serialize/Deserialize (rename_all lowercase)
+- ModelRef: model_id (String) + optional version — builder pattern: `new()` + `with_version()`
+- `full_name()` returns `"model@version"` or just `"model"`
+- Display impl delegates to full_name()
+- 8+ unit tests: construction, equality, serialization round-trip, Display
+
+---
+
+### Task 3: Define RequestOptions and ReasoningLevel
+
+**Files to modify:**
+- `src/fae_llm/types.rs` — add RequestOptions, ReasoningLevel
+
+**Details:**
+- ReasoningLevel: Off, Low, Medium, High — serde rename_all lowercase
+- RequestOptions: max_tokens (Option<usize>), temperature (Option<f64>), top_p (Option<f64>), reasoning_level, stream (bool)
+- Default: max_tokens=2048, temperature=0.7, top_p=0.9, reasoning=Off, stream=true
+- Builder: `with_max_tokens()`, `with_temperature()`, `with_reasoning()`, `with_stream()`
+- 8+ unit tests: defaults, builder, serialization round-trip
+
+---
+
+### Task 4: Define normalized event model (stream lifecycle + text)
+
+**Files to create:**
+- `src/fae_llm/events.rs` — LlmEvent, FinishReason
+
+**Files to modify:**
+- `src/fae_llm/mod.rs` — add `pub mod events;`
+
+**Details:**
+- LlmEvent variants: StreamStart { request_id, model: ModelRef }, TextDelta { text }, ThinkingStart, ThinkingDelta { text }, ThinkingEnd, StreamEnd { finish_reason }, StreamError { error }
+- FinishReason: Stop, Length, ToolCalls, ContentFilter, Cancelled, Other
+- All events are Debug + Clone + PartialEq
+- 8+ unit tests: event construction, equality, pattern matching
+
+---
+
+### Task 5: Add tool call events to event model
+
+**Files to modify:**
+- `src/fae_llm/events.rs` — add ToolCallStart, ToolCallArgsDelta, ToolCallEnd variants
+
+**Details:**
+- ToolCallStart { call_id, function_name } — marks start of a tool call
+- ToolCallArgsDelta { call_id, args_fragment } — streaming JSON argument chunks
+- ToolCallEnd { call_id } — arguments complete
+- call_id links all deltas for the same tool call
+- 8+ unit tests: tool call event sequences, multi-tool interleaving
+
+---
+
+### Task 6: Define usage and cost tracking structs
+
+**Files to create:**
+- `src/fae_llm/usage.rs` — TokenUsage, CostEstimate, TokenPricing
+
+**Files to modify:**
+- `src/fae_llm/mod.rs` — add `pub mod usage;`
+
+**Details:**
+- TokenUsage: prompt_tokens (u64), completion_tokens (u64), reasoning_tokens (Option<u64>)
+- `total()` method sums all tokens
+- `add()` method accumulates from another TokenUsage
+- TokenPricing: input_per_1m (f64), output_per_1m (f64) — USD per 1M tokens
+- CostEstimate: usd (f64), pricing — with `calculate(usage, pricing)` constructor
+- Serde support for all types
+- 10+ unit tests: total calculation, accumulation, cost math
+
+---
+
+### Task 7: Define request/response metadata types
+
+**Files to create:**
+- `src/fae_llm/metadata.rs` — RequestMeta, ResponseMeta
+
+**Files to modify:**
+- `src/fae_llm/mod.rs` — add `pub mod metadata;`
+
+**Details:**
+- RequestMeta: request_id (String), model (ModelRef), created_at (std::time::Instant)
+- ResponseMeta: request_id (String), model_id (String), usage (Option<TokenUsage>), latency_ms (u64), finish_reason (FinishReason)
+- ResponseMeta stores model_id (String) not ModelRef for simplicity when returned from providers
+- 6+ unit tests: construction, latency tracking
+
+---
+
+### Task 8: Integration tests and module documentation
+
+**Files to modify:**
+- `src/fae_llm/mod.rs` — comprehensive module-level doc comments with examples
+- All type files — verify doc comments on every public item
+
+**Tests to add (in relevant modules):**
+- Integration test: simulate full event stream (start -> text -> tool call -> text -> end)
+- Integration test: accumulate TokenUsage across multi-turn conversation
+- Integration test: serialize all types to JSON and back
+- Integration test: error code stability (all codes are SCREAMING_SNAKE_CASE)
+- Run `just check` — zero warnings, all tests pass, docs build
+
+---
+
+## Quality Gates
+- `just check` passes (fmt, lint, build, test, doc, panic-scan)
+- Zero `.unwrap()` or `.expect()` in production code
+- 100% doc coverage on public items in fae_llm module
+- 60+ total tests across all tasks
+- All types implement Debug, Clone at minimum
+- Serde support on types that need config/persistence

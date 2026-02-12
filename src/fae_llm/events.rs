@@ -450,10 +450,10 @@ mod tests {
         for reason in &reasons {
             let json = serde_json::to_string(reason);
             assert!(json.is_ok());
-            let parsed: std::result::Result<FinishReason, _> =
-                serde_json::from_str(&json.unwrap_or_default());
+            let json_str = json.expect("serde_json::to_string succeeded");
+            let parsed: std::result::Result<FinishReason, _> = serde_json::from_str(&json_str);
             assert!(parsed.is_ok());
-            assert_eq!(parsed.unwrap_or(FinishReason::Other), *reason);
+            assert_eq!(parsed.expect("serde_json::from_str succeeded"), *reason);
         }
     }
 

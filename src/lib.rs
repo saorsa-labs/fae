@@ -29,6 +29,7 @@ pub mod audio;
 pub mod canvas;
 pub mod config;
 pub mod error;
+pub mod fae_llm;
 pub mod huggingface;
 pub mod llm;
 pub mod memory;

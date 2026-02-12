@@ -8,6 +8,24 @@
 
 A real-time voice conversation system in Rust. Fae is a calm, helpful Scottish voice assistant that runs entirely on-device — no cloud services required.
 
+## Installation
+
+### For Users (Installer / Release Package)
+
+Fae should be installed from GitHub Releases, not built from source.
+
+1. Open the [latest release](https://github.com/saorsa-labs/fae/releases/latest)
+2. Download the installer/package for your platform
+3. Open it and launch Fae
+4. Grant microphone permissions on first run
+
+No terminal commands are required for normal user installs.
+
+### For Developers (CLI / Source Builds)
+
+If you are running `cargo`/`just` commands, you are in the developer setup path.
+Use the "Developer Setup (CLI / Source Builds)" section near the end of this README.
+
 ## Pipeline
 
 ```
@@ -235,7 +253,7 @@ enabled = true
 barge_in_silence_ms = 300
 ```
 
-### Wake Word Setup
+### Wake Word Setup (Developer / Manual)
 
 1. Create the references directory: `mkdir -p ~/.fae/wakeword`
 2. Record 3-5 WAV files of yourself saying "Fae" (16kHz, mono, 16-bit)
@@ -244,20 +262,43 @@ barge_in_silence_ms = 300
 
 The spotter extracts MFCC features from each reference and uses DTW to match against live audio. More reference recordings improve robustness across different speaking styles and volumes.
 
-## Building
+## Developer Setup (CLI / Source Builds)
 
-```bash
-# Debug build (GUI, default features)
-cargo build
+This section is for developers. End users should use release installers/packages.
 
-# Release build with Metal GPU acceleration (macOS)
-cargo build --release
-```
+### Prerequisites
 
-Requires:
 - Rust 1.85+
+- `just` (recommended)
 - Metal Toolchain (macOS): `xcodebuild -downloadComponent MetalToolchain`
 - cmake (for espeak-ng build via misaki-rs)
+
+### Common Developer Commands
+
+```bash
+# Build GUI binary
+just build-gui
+
+# Run app locally
+just run
+
+# Tests
+just test
+
+# Lint
+just lint
+```
+
+### Raw Cargo (Advanced)
+
+On macOS, use an SDK sysroot for bindgen-based dependencies before calling `cargo` directly:
+
+```bash
+export SDKROOT="$(xcrun --show-sdk-path)"
+export BINDGEN_EXTRA_CLANG_ARGS="-isysroot $SDKROOT"
+export CFLAGS="-isysroot $SDKROOT"
+cargo build --features gui
+```
 
 Canvas dependencies (`canvas-core`, `canvas-mcp`, `canvas-renderer`) are published on [crates.io](https://crates.io/crates/canvas-core). For local development against a saorsa-canvas checkout, `[patch.crates-io]` overrides are configured in `Cargo.toml`.
 
