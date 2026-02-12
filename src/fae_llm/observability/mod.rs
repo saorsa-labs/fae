@@ -30,9 +30,10 @@
 ///
 /// # Secret Redaction
 ///
-/// Use [`RedactedString`] to prevent accidental leakage of API keys, tokens, and other
+/// Use [`RedactedString`](redact::RedactedString) to prevent accidental leakage of API keys, tokens, and other
 /// sensitive data in logs and error messages.
 pub mod metrics;
+pub mod redact;
 pub mod spans;
 
 // Re-export span helpers for convenience
@@ -45,3 +46,8 @@ pub use spans::{
 
 // Re-export metrics types for convenience
 pub use metrics::{MetricsCollector, NoopMetrics, duration_to_ms};
+
+// Re-export redaction utilities for convenience
+pub use redact::{
+    RedactedString, redact_all, redact_api_key, redact_api_key_in_json, redact_auth_header,
+};
