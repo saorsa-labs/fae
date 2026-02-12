@@ -88,6 +88,19 @@ mod gui {
         Running,
         /// An error occurred.
         Error(String),
+        /// A download failed with structured error details.
+        DownloadError {
+            /// Human-readable summary message.
+            message: String,
+            /// Which repo the failing file belongs to.
+            repo_id: String,
+            /// Which file failed.
+            filename: String,
+            /// Bytes downloaded before the failure.
+            bytes_downloaded: u64,
+            /// Total expected bytes (if known).
+            total_bytes: Option<u64>,
+        },
     }
 
     impl AppStatus {
@@ -120,19 +133,54 @@ mod gui {
                 Self::Loading { model_name } => format!("Loading {model_name}..."),
                 Self::Running => "Listening...".into(),
                 Self::Error(msg) => format!("Error: {msg}"),
+                Self::DownloadError {
+                    filename,
+                    bytes_downloaded,
+                    total_bytes,
+                    message,
+                    ..
+                } => {
+                    fn fmt_bytes(b: u64) -> String {
+                        if b >= 1_000_000_000 {
+                            format!("{:.1} GB", b as f64 / 1_000_000_000.0)
+                        } else if b >= 1_000_000 {
+                            format!("{:.0} MB", b as f64 / 1_000_000.0)
+                        } else if b >= 1_000 {
+                            format!("{:.0} KB", b as f64 / 1_000.0)
+                        } else {
+                            format!("{b} B")
+                        }
+                    }
+                    let progress = match total_bytes {
+                        Some(total) if *total > 0 => format!(
+                            " ({} / {})",
+                            fmt_bytes(*bytes_downloaded),
+                            fmt_bytes(*total)
+                        ),
+                        _ => String::new(),
+                    };
+                    format!("Failed to download {filename}{progress}: {message}")
+                }
             }
         }
 
         /// Whether the start button should be shown (vs stop).
         pub fn show_start(&self) -> bool {
-            matches!(self, Self::Idle | Self::PreFlight { .. } | Self::Error(_))
+            matches!(
+                self,
+                Self::Idle | Self::PreFlight { .. } | Self::Error(_) | Self::DownloadError { .. }
+            )
         }
 
         /// Whether buttons should be interactive.
         pub fn buttons_enabled(&self) -> bool {
             matches!(
                 self,
-                Self::Idle | Self::PreFlight { .. } | Self::Running | Self::Error(_)
+                Self::Idle
+                    | Self::PreFlight { .. }
+                    | Self::Running
+                    | Self::Error(_)
+                    | Self::DownloadError { .. }
             )
         }
     }
@@ -395,6 +443,36 @@ mod gui {
             assert_eq!(s.display_text(), "Error: network failure");
         }
 
+        #[test]
+        fn download_error_display_text_with_total() {
+            let s = AppStatus::DownloadError {
+                message: "connection timed out".into(),
+                repo_id: "org/model".into(),
+                filename: "model.onnx".into(),
+                bytes_downloaded: 1_200_000_000,
+                total_bytes: Some(2_300_000_000),
+            };
+            assert_eq!(
+                s.display_text(),
+                "Failed to download model.onnx (1.2 GB / 2.3 GB): connection timed out"
+            );
+        }
+
+        #[test]
+        fn download_error_display_text_without_total() {
+            let s = AppStatus::DownloadError {
+                message: "network error".into(),
+                repo_id: "org/model".into(),
+                filename: "big.onnx".into(),
+                bytes_downloaded: 0,
+                total_bytes: None,
+            };
+            assert_eq!(
+                s.display_text(),
+                "Failed to download big.onnx: network error"
+            );
+        }
+
         // --- AppStatus button predicates ---
 
         #[test]
@@ -412,6 +490,16 @@ mod gui {
         fn show_start_when_idle_or_error() {
             assert!(AppStatus::Idle.show_start());
             assert!(AppStatus::Error("x".into()).show_start());
+            assert!(
+                AppStatus::DownloadError {
+                    message: "x".into(),
+                    repo_id: "r".into(),
+                    filename: "f".into(),
+                    bytes_downloaded: 0,
+                    total_bytes: None,
+                }
+                .show_start()
+            );
             assert!(
                 AppStatus::PreFlight {
                     total_bytes: 100,
@@ -2015,7 +2103,10 @@ fn app() -> Element {
     let mut on_button_click = move |_args: ()| {
         let current = status.read().clone();
         match current {
-            AppStatus::Idle | AppStatus::PreFlight { .. } | AppStatus::Error(_) => {
+            AppStatus::Idle
+            | AppStatus::PreFlight { .. }
+            | AppStatus::Error(_)
+            | AppStatus::DownloadError { .. } => {
                 // --- START ---
                 status.set(AppStatus::Downloading {
                     current_file: "Checking models...".into(),
@@ -2290,10 +2381,31 @@ fn app() -> Element {
                                         text_injection_tx.set(None);
                                     }
                                     PipelineMessage::ModelsReady(Err(e)) => {
-                                        status.set(AppStatus::Error(e.to_string()));
-                                        stt_stage.set(StagePhase::Error(e.to_string()));
-                                        llm_stage.set(StagePhase::Error(e.to_string()));
-                                        tts_stage.set(StagePhase::Error(e.to_string()));
+                                        let err_msg = e.to_string();
+                                        // Try to build a structured DownloadError from
+                                        // the current download state at time of failure.
+                                        let current = status.read().clone();
+                                        let error_status = if let AppStatus::Downloading {
+                                            current_file,
+                                            bytes_downloaded,
+                                            total_bytes,
+                                            ..
+                                        } = &current
+                                        {
+                                            AppStatus::DownloadError {
+                                                message: err_msg.clone(),
+                                                repo_id: String::new(),
+                                                filename: current_file.clone(),
+                                                bytes_downloaded: *bytes_downloaded,
+                                                total_bytes: *total_bytes,
+                                            }
+                                        } else {
+                                            AppStatus::Error(err_msg.clone())
+                                        };
+                                        status.set(error_status);
+                                        stt_stage.set(StagePhase::Error(err_msg.clone()));
+                                        llm_stage.set(StagePhase::Error(err_msg.clone()));
+                                        tts_stage.set(StagePhase::Error(err_msg));
                                     }
                                 }
                                 break;

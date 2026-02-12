@@ -137,9 +137,9 @@ impl ModelManager {
         pb.set_message(format!("{repo_id}/{filename}"));
 
         let repo = api.model(repo_id.to_owned());
-        let path = repo
-            .download_with_progress(filename, pb)
-            .map_err(|e| SpeechError::Model(format!("failed to download {filename}: {e}")))?;
+        let path = repo.download_with_progress(filename, pb).map_err(|e| {
+            SpeechError::Model(format!("failed to download {repo_id}/{filename}: {e}"))
+        })?;
 
         if let Some(cb) = callback {
             cb(ProgressEvent::DownloadComplete {
