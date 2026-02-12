@@ -391,3 +391,35 @@ All 4 phases delivered:
 2.2: Compatibility Profile Engine (8 tasks)
 2.3: Local Probe Service (8 tasks)
 2.4: Anthropic Adapter (8 tasks)
+
+## FAE LLM Module — Milestone 3: Agent Loop & Sessions
+
+### Phase 3.1: Agent Loop Engine — COMPLETE
+- [x] Task 1: AgentConfig and AgentLoopResult types (commit: da4de33)
+- [x] Task 2: StreamAccumulator for event collection (commit: af23e55)
+- [x] Task 3: Tool argument validation against JSON schemas (commit: c7eb7bd)
+- [x] Task 4: Tool executor with timeout and cancellation (commit: 1db44dc)
+- [x] Task 5: AgentLoop core implementation (commit: ea792da)
+- [x] Task 6: AgentLoop conversation continuation (commit: 57a7047)
+- [x] Task 7: Module wiring and public API exports (commit: 6d0d4b9)
+- [x] Task 8: Integration tests for full agent loop scenarios (commit: 4e9bc30)
+
+**Phase 3.1 COMPLETE** — Agent Loop Engine
+- Created: agent/types.rs, agent/accumulator.rs, agent/validation.rs, agent/executor.rs, agent/loop_engine.rs, agent/mod.rs
+- Safety guards: max turns (25), max tool calls per turn (10), request timeout (120s), tool timeout (30s), CancellationToken
+- 1,259 tests passing, zero warnings
+
+### Phase 3.2: Session Persistence & Replay — COMPLETE
+- [x] Task 1: Session types and error variants (commit: 944578f)
+- [x] Task 2: SessionStore trait and in-memory implementation (commit: 731190c)
+- [x] Task 3: Filesystem SessionStore implementation (commit: 0cb34d6)
+- [x] Task 4: Session validation on resume (commit: 98def34)
+- [x] Task 5: ConversationContext with auto-persistence (commit: a32b17e)
+- [x] Task 6: Session module structure and re-exports (commit: 6ae0662)
+- [x] Task 7: Session lifecycle integration tests (commit: 297cb22)
+- [x] Task 8: Final validation and formatting cleanup (commit: 7f3c568)
+
+**Phase 3.2 COMPLETE** — Session Persistence & Replay
+- Created: session/types.rs, session/store.rs, session/fs_store.rs, session/validation.rs, session/context.rs, session/mod.rs
+- Key types: Session, SessionStore trait, FsSessionStore (atomic writes), ConversationContext
+- 1,353 tests passing (+94 new), zero warnings
