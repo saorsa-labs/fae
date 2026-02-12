@@ -32,6 +32,7 @@ pub mod events;
 pub mod metadata;
 pub mod provider;
 pub mod providers;
+pub mod session;
 pub mod tools;
 pub mod types;
 pub mod usage;

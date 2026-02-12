@@ -29,6 +29,9 @@ pub mod error_codes {
 
     /// Provider-specific error not covered by other variants.
     pub const PROVIDER_ERROR: &str = "PROVIDER_ERROR";
+
+    /// Session persistence or resume error.
+    pub const SESSION_ERROR: &str = "SESSION_ERROR";
 }
 
 /// Errors produced by the fae_llm module.
@@ -64,6 +67,10 @@ pub enum FaeLlmError {
     /// Provider-specific error not covered by other variants.
     #[error("[{}] {}", error_codes::PROVIDER_ERROR, .0)]
     ProviderError(String),
+
+    /// Session persistence or resume error.
+    #[error("[{}] {}", error_codes::SESSION_ERROR, .0)]
+    SessionError(String),
 }
 
 impl FaeLlmError {
@@ -80,6 +87,7 @@ impl FaeLlmError {
             Self::ToolError(_) => error_codes::TOOL_FAILED,
             Self::TimeoutError(_) => error_codes::TIMEOUT_ERROR,
             Self::ProviderError(_) => error_codes::PROVIDER_ERROR,
+            Self::SessionError(_) => error_codes::SESSION_ERROR,
         }
     }
 
@@ -92,7 +100,8 @@ impl FaeLlmError {
             | Self::StreamError(m)
             | Self::ToolError(m)
             | Self::TimeoutError(m)
-            | Self::ProviderError(m) => m,
+            | Self::ProviderError(m)
+            | Self::SessionError(m) => m,
         }
     }
 }
@@ -178,6 +187,7 @@ mod tests {
             FaeLlmError::ToolError("x".into()),
             FaeLlmError::TimeoutError("x".into()),
             FaeLlmError::ProviderError("x".into()),
+            FaeLlmError::SessionError("x".into()),
         ];
         for err in &errors {
             let code = err.code();
@@ -186,6 +196,26 @@ mod tests {
                 "code {code:?} is not SCREAMING_SNAKE_CASE"
             );
         }
+    }
+
+    #[test]
+    fn session_error_code() {
+        let err = FaeLlmError::SessionError("session not found".into());
+        assert_eq!(err.code(), "SESSION_ERROR");
+    }
+
+    #[test]
+    fn session_error_display() {
+        let err = FaeLlmError::SessionError("corrupted data".into());
+        let display = format!("{err}");
+        assert!(display.starts_with("[SESSION_ERROR]"));
+        assert!(display.contains("corrupted data"));
+    }
+
+    #[test]
+    fn session_error_message() {
+        let err = FaeLlmError::SessionError("resume failed".into());
+        assert_eq!(err.message(), "resume failed");
     }
 
     #[test]
@@ -198,6 +228,7 @@ mod tests {
         assert_eq!(error_codes::TOOL_FAILED, "TOOL_FAILED");
         assert_eq!(error_codes::TIMEOUT_ERROR, "TIMEOUT_ERROR");
         assert_eq!(error_codes::PROVIDER_ERROR, "PROVIDER_ERROR");
+        assert_eq!(error_codes::SESSION_ERROR, "SESSION_ERROR");
     }
 
     #[test]

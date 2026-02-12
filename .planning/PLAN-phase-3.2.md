@@ -1,423 +1,435 @@
-# Phase 3.2: Protocol Alignment & Persistence
+# Phase 3.2: Session Persistence & Replay
 
 ## Overview
 
-This phase fixes protocol mismatches between fae's remote.rs (client) and saorsa-canvas server's sync.rs, then adds filesystem persistence to canvas-server so sessions survive restarts. Both projects are modified. The goal is reliable client-server communication with durable session storage.
+Implement session persistence for the fae_llm agent loop. Sessions store conversation messages (user, assistant, tool calls, tool results) to disk as JSON. Sessions can be resumed with state validation. Typed continuation errors cover session corruption, schema mismatch, and missing data. A `ConversationContext` manager wraps session + agent loop for ergonomic multi-turn usage.
 
-**Projects involved:**
-- **fae** (`/Users/davidirvine/Desktop/Devel/projects/fae`)
-- **saorsa-canvas** (`/Users/davidirvine/Desktop/Devel/projects/saorsa-canvas`)
+**Module:** `src/fae_llm/session/`
 
 ---
 
-## Task 1: Fix fae SceneSnapshot → SceneDocument
+## Task 1: Session types and error variants
 
 **Files:**
-- `fae/src/canvas/remote.rs` (lines 75-83)
+- `src/fae_llm/session/types.rs` (new)
+- `src/fae_llm/error.rs` (add SESSION_ERROR code + SessionError variant)
 
 **Description:**
 
-Currently fae's `SceneSnapshot` struct at line 78 only has `session_id` and `elements` fields. It's missing viewport metadata and timestamp that canvas-server's `SceneDocument` includes.
-
-Update `SceneSnapshot` to match canvas-server's `SceneDocument` structure:
-1. Add `viewport: ViewportDocument` field (import from canvas_core)
-2. Add `timestamp: u64` field
-3. Update `#[serde(default)]` annotations to match canvas_core schema.rs
-4. Rename struct to `SceneDocument` (matching server exactly)
-5. Update all references to `SceneSnapshot` → `SceneDocument` in remote.rs
-6. Update `handle_server_message` at line 641 to use viewport data when rebuilding scene
-7. Import `ViewportDocument` from canvas_core at top of file
-
-**Tests:**
-
-Add test `test_scene_document_deserialization_with_viewport()`:
-- Deserialize JSON with viewport fields (width, height, zoom, pan_x, pan_y)
-- Assert viewport fields are populated correctly
-- Verify backward compat (defaults for missing fields)
-
-**Acceptance:**
-
-- `SceneSnapshot` renamed to `SceneDocument`
-- Struct matches canvas-server's `SceneDocument` exactly
-- Tests pass for viewport deserialization
-- `cargo check` passes in fae
-
----
-
-## Task 2: Add missing ServerMessage variants to fae
-
-**Files:**
-- `fae/src/canvas/remote.rs` (lines 44-73)
-
-**Description:**
-
-Fae's `ServerMessage` enum is missing variants that canvas-server sends:
-- `ElementUpdated` (line 312-317 in canvas-server sync.rs)
-- `SyncResult` (line 351-361 in canvas-server sync.rs)
-
-Add these variants to fae's `ServerMessage` enum:
+Define core session types:
 
 ```rust
-ElementUpdated {
-    element: ElementDocument,
-    #[serde(default)]
-    timestamp: u64,
-},
-SyncResult {
-    synced_count: usize,
-    conflict_count: usize,
-    timestamp: u64,
-    #[serde(default)]
-    failed_operations: Vec<serde_json::Value>, // Simplified for client
-},
+/// Unique session identifier.
+pub type SessionId = String;
+
+/// Metadata about a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMeta {
+    pub id: SessionId,
+    pub created_at: u64,          // Unix epoch seconds
+    pub updated_at: u64,
+    pub turn_count: usize,
+    pub total_tokens: u64,
+    pub system_prompt: Option<String>,
+    pub model: Option<String>,     // ModelRef display string
+    pub schema_version: u32,       // For forward compat
+}
+
+/// A persisted session: metadata + message history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub meta: SessionMeta,
+    pub messages: Vec<Message>,    // re-use providers::message::Message
+}
+
+/// Why a session resume failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionResumeError {
+    NotFound(SessionId),
+    Corrupted { id: SessionId, reason: String },
+    SchemaMismatch { id: SessionId, found: u32, expected: u32 },
+}
 ```
 
-Update `handle_server_message` function at line 628 to handle new variants:
-- `ElementUpdated`: Update element in local shadow scene (similar to ElementAdded)
-- `SyncResult`: Log at trace level for now
+Add to `error.rs`:
+- `pub const SESSION_ERROR: &str = "SESSION_ERROR";`
+- `FaeLlmError::SessionError(String)` variant
 
 **Tests:**
-
-Add tests:
-- `test_server_message_deserialize_element_updated()`
-- `test_server_message_deserialize_sync_result()`
-- `test_handle_element_updated_message()` — verify element is updated in shadow scene
+- `session_meta_serde_round_trip`
+- `session_serde_round_trip`
+- `session_meta_default_values`
+- `session_resume_error_variants`
+- `session_error_code`
+- `session_error_display`
+- All types are Send + Sync
 
 **Acceptance:**
-
-- New variants added to enum
-- Deserialization tests pass
-- Handler logic updates shadow scene correctly
-- `cargo test --lib canvas::remote` passes
+- Types compile, serialize/deserialize correctly
+- Error code follows existing convention
+- `cargo check && cargo clippy -- -D warnings && cargo nextest run`
 
 ---
 
-## Task 3: Add missing ClientMessage variants to fae
+## Task 2: SessionStore trait and in-memory implementation
 
 **Files:**
-- `fae/src/canvas/remote.rs` (lines 22-42)
+- `src/fae_llm/session/store.rs` (new)
 
 **Description:**
 
-Fae's `ClientMessage` enum is missing `UpdateElement` variant that canvas-server expects (line 173-182 in canvas-server sync.rs).
-
-Add to fae's `ClientMessage` enum:
+Define the `SessionStore` trait and an in-memory implementation:
 
 ```rust
-UpdateElement {
-    id: String,
-    changes: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message_id: Option<String>,
-},
+/// Async session storage backend.
+#[async_trait]
+pub trait SessionStore: Send + Sync {
+    /// Create a new session, returning its ID.
+    async fn create(&self, system_prompt: Option<&str>) -> Result<SessionId, FaeLlmError>;
+    /// Load a session by ID.
+    async fn load(&self, id: &str) -> Result<Session, FaeLlmError>;
+    /// Save (overwrite) a session.
+    async fn save(&self, session: &Session) -> Result<(), FaeLlmError>;
+    /// Delete a session.
+    async fn delete(&self, id: &str) -> Result<(), FaeLlmError>;
+    /// List all session IDs with metadata.
+    async fn list(&self) -> Result<Vec<SessionMeta>, FaeLlmError>;
+    /// Check if a session exists.
+    async fn exists(&self, id: &str) -> Result<bool, FaeLlmError>;
+}
+
+/// In-memory session store (for tests and ephemeral usage).
+pub struct MemorySessionStore { ... }
 ```
 
-This variant is NOT yet used by fae but must exist for protocol completeness. It will be wired in future phases when implementing element updates.
+`MemorySessionStore` stores sessions in `Arc<RwLock<HashMap<SessionId, Session>>>`.
+Session IDs generated as `"sess_{unix_millis}_{random_suffix}"`.
 
 **Tests:**
-
-Add test `test_client_message_serialize_update_element()`:
-- Serialize UpdateElement message
-- Assert JSON contains correct "type":"update_element"
-- Assert id and changes fields present
+- `memory_store_create_returns_id`
+- `memory_store_save_and_load`
+- `memory_store_load_not_found`
+- `memory_store_delete`
+- `memory_store_list`
+- `memory_store_exists`
+- `memory_store_overwrite`
+- `memory_store_is_send_sync`
 
 **Acceptance:**
-
-- `UpdateElement` variant added to enum
-- Serialization test passes
-- No compilation warnings
-- `cargo test --lib canvas::remote` passes
+- Trait is object-safe (dyn SessionStore works)
+- All CRUD operations work
+- `cargo check && cargo clippy -- -D warnings && cargo nextest run`
 
 ---
 
-## Task 4: Implement filesystem persistence in canvas-core SceneStore
+## Task 3: Filesystem SessionStore implementation
 
 **Files:**
-- `saorsa-canvas/canvas-core/src/store.rs` (entire file)
-- `saorsa-canvas/canvas-core/Cargo.toml` (dependencies)
+- `src/fae_llm/session/fs_store.rs` (new)
 
 **Description:**
 
-Add `serde_json` filesystem persistence to `SceneStore`. Sessions are saved as JSON files in a configurable directory.
+Implement `SessionStore` for filesystem persistence:
 
-1. Add optional data directory field to `SceneStore`:
-   ```rust
-   pub struct SceneStore {
-       scenes: Arc<RwLock<HashMap<String, Scene>>>,
-       data_dir: Option<PathBuf>, // New field
-   }
-   ```
+```rust
+/// Filesystem-backed session store.
+///
+/// Sessions stored as `{data_dir}/{session_id}.json`.
+/// Uses atomic write (temp file + rename) for crash safety.
+pub struct FsSessionStore {
+    data_dir: PathBuf,
+}
+```
 
-2. Add constructor with persistence:
-   ```rust
-   pub fn with_data_dir(data_dir: impl Into<PathBuf>) -> Result<Self, StoreError>
-   ```
+- Constructor: `FsSessionStore::new(data_dir: impl Into<PathBuf>) -> Result<Self, FaeLlmError>` (creates dir if needed)
+- `save`: write to temp file, fsync, rename (atomic)
+- `load`: read + parse JSON
+- `delete`: remove file
+- `list`: enumerate `*.json` files, parse metadata from each
+- `exists`: check file exists
 
-3. Add persistence methods:
-   ```rust
-   fn save_scene(&self, session_id: &str) -> Result<(), StoreError>
-   fn load_scene(&self, session_id: &str) -> Result<Scene, StoreError>
-   pub fn load_all_sessions(&self) -> Result<Vec<String>, StoreError>
-   ```
-
-4. Update mutation methods (`add_element`, `remove_element`, `update_element`, `replace`, `clear`) to auto-save when `data_dir` is Some.
-
-5. File format: `{data_dir}/{session_id}.json` containing `SceneDocument`
-
-6. Add new `StoreError` variants: `IoError(io::Error)`, `SerializationError(String)`
-
-7. Add `std::fs` and `std::path::PathBuf` imports
-
-**Tests:**
-
-Add to existing `#[cfg(test)]` module:
-- `test_persistence_save_and_load()` — round-trip scene to disk
-- `test_persistence_load_nonexistent_session()` — returns error
-- `test_persistence_auto_save_on_mutation()` — add element triggers save
-- `test_load_all_sessions()` — finds all .json files
-
-Use `tempfile::tempdir()` for test isolation.
+**Tests (using tempfile::tempdir):**
+- `fs_store_create_and_load`
+- `fs_store_save_persists_to_disk`
+- `fs_store_load_not_found`
+- `fs_store_delete_removes_file`
+- `fs_store_list_sessions`
+- `fs_store_exists`
+- `fs_store_atomic_write_creates_file`
+- `fs_store_corrupted_file_returns_error`
+- `fs_store_is_send_sync`
 
 **Acceptance:**
-
-- `SceneStore::with_data_dir()` constructor works
-- Scenes save as JSON on mutation
-- Scenes load from disk on startup
-- All existing tests still pass
-- New tests pass
+- Files appear on disk at expected paths
+- Atomic writes (no partial writes on crash)
+- Corrupted JSON returns SessionError
+- `cargo check && cargo clippy -- -D warnings && cargo nextest run`
 
 ---
 
-## Task 5: Add auto-save on scene mutations in canvas-server
+## Task 4: Session validation on resume
 
 **Files:**
-- `saorsa-canvas/canvas-server/src/main.rs` (lines 129-144)
-- `saorsa-canvas/canvas-server/src/sync.rs` (scene mutation handlers)
+- `src/fae_llm/session/validation.rs` (new)
 
 **Description:**
 
-Wire canvas-server to use `SceneStore::with_data_dir()` with a configured data directory.
+Implement session validation that runs before resume:
 
-1. In `main.rs` at line 129, determine data directory from env var:
-   ```rust
-   let data_dir = std::env::var("CANVAS_DATA_DIR")
-       .unwrap_or_else(|_| {
-           let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-           format!("{}/.saorsa-canvas/sessions", home)
-       });
-   std::fs::create_dir_all(&data_dir)?;
-   let sync_state = SyncState::with_data_dir(&data_dir)?;
-   ```
+```rust
+/// Current schema version for sessions.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
-2. Update `SyncState::new()` in sync.rs to accept optional data_dir and pass to SceneStore.
+/// Validate a session is safe to resume.
+///
+/// Checks:
+/// 1. Schema version matches (or is upgradeable)
+/// 2. Message sequence is valid (alternating roles, proper tool call/result pairing)
+/// 3. Session metadata is consistent with messages
+///
+/// Returns Ok(()) or typed SessionResumeError.
+pub fn validate_session(session: &Session) -> Result<(), SessionResumeError> { ... }
 
-3. Verify auto-save triggers on:
-   - AddElement (sync.rs handler)
-   - UpdateElement (sync.rs handler)
-   - RemoveElement (sync.rs handler)
-   - SyncQueue (batch operations)
+/// Validate message sequence integrity.
+pub fn validate_message_sequence(messages: &[Message]) -> Result<(), String> { ... }
+```
 
-Auto-save is already implemented in Task 4 — just ensure handlers call the store methods.
+Validation rules:
+- Schema version must be <= CURRENT_SCHEMA_VERSION
+- Messages must not be empty (at least system or user message)
+- Tool result messages must be preceded by an assistant message with matching tool call
+- turn_count in meta should match actual message pattern
 
 **Tests:**
-
-Integration test in `canvas-server/tests/persistence.rs`:
-- Start server with temp data dir
-- Add element via WebSocket
-- Kill server
-- Restart server with same data dir
-- Verify element is present in session
+- `validate_empty_session_fails`
+- `validate_valid_session_passes`
+- `validate_schema_mismatch_fails`
+- `validate_future_schema_fails`
+- `validate_orphan_tool_result_fails`
+- `validate_valid_tool_sequence_passes`
+- `validate_turn_count_mismatch_warns` (lenient - warns but passes)
 
 **Acceptance:**
-
-- Server creates data directory on startup
-- Sessions save to `~/.saorsa-canvas/sessions/{session_id}.json` by default
-- `CANVAS_DATA_DIR` env var overrides default
-- Integration test passes
+- All validation rules enforced
+- Typed errors returned (not string parsing)
+- `cargo check && cargo clippy -- -D warnings && cargo nextest run`
 
 ---
 
-## Task 6: Add session loading on canvas-server startup
+## Task 5: Session-aware agent loop (ConversationContext)
 
 **Files:**
-- `saorsa-canvas/canvas-server/src/main.rs` (around line 129)
+- `src/fae_llm/session/context.rs` (new)
 
 **Description:**
 
-Load all persisted sessions from disk when canvas-server starts, before accepting connections.
+`ConversationContext` wraps session store + agent loop for ergonomic multi-turn:
 
-1. After creating `SceneStore::with_data_dir()`, call:
-   ```rust
-   match sync_state.store().load_all_sessions() {
-       Ok(session_ids) => {
-           for session_id in session_ids {
-               if let Err(e) = sync_state.store().load_scene(&session_id) {
-                   tracing::warn!("Failed to load session {}: {}", session_id, e);
-               } else {
-                   tracing::info!("Loaded session: {}", session_id);
-               }
-           }
-       }
-       Err(e) => tracing::warn!("Failed to enumerate sessions: {}", e),
-   }
-   ```
+```rust
+/// Manages a conversation session with automatic persistence.
+///
+/// Each call to `send()` appends the user message, runs the agent loop,
+/// appends the result, and persists the updated session.
+pub struct ConversationContext {
+    session: Session,
+    store: Arc<dyn SessionStore>,
+    config: AgentConfig,
+    provider: Arc<dyn ProviderAdapter>,
+    registry: Arc<ToolRegistry>,
+}
 
-2. Sessions are lazy-loaded into memory from JSON files.
+impl ConversationContext {
+    /// Start a new conversation.
+    pub async fn new(
+        store: Arc<dyn SessionStore>,
+        config: AgentConfig,
+        provider: Arc<dyn ProviderAdapter>,
+        registry: Arc<ToolRegistry>,
+    ) -> Result<Self, FaeLlmError>;
 
-**Tests:**
+    /// Resume an existing conversation.
+    pub async fn resume(
+        id: &str,
+        store: Arc<dyn SessionStore>,
+        config: AgentConfig,
+        provider: Arc<dyn ProviderAdapter>,
+        registry: Arc<ToolRegistry>,
+    ) -> Result<Self, FaeLlmError>;
 
-Add to integration test from Task 5:
-- Create multiple sessions before shutdown
-- Restart server
-- Verify all sessions are loaded
-- GET /api/scene/{session_id} returns correct data for each
+    /// Send a user message and get the agent's response.
+    pub async fn send(&mut self, message: &str) -> Result<AgentLoopResult, FaeLlmError>;
+
+    /// Get the current session.
+    pub fn session(&self) -> &Session;
+
+    /// Get the session ID.
+    pub fn session_id(&self) -> &str;
+}
+```
+
+Flow for `send()`:
+1. Append `Message::user(message)` to session
+2. Build `AgentLoop`, call `run_with_messages(session.messages.clone())`
+3. Append assistant messages (from `build_messages_from_result`)
+4. Update session meta (turn_count, updated_at, total_tokens)
+5. Persist via `store.save(&session)`
+6. Return `AgentLoopResult`
+
+**Tests (using MemorySessionStore + MockProvider):**
+- `context_new_creates_session`
+- `context_send_appends_messages`
+- `context_send_persists_session`
+- `context_resume_loads_session`
+- `context_resume_validates_session`
+- `context_resume_not_found_returns_error`
+- `context_multi_turn_accumulates_messages`
+- `context_session_id_accessor`
 
 **Acceptance:**
-
-- Server logs "Loaded session: {id}" for each session on startup
-- All sessions available immediately after startup
-- No data loss across restarts
+- New conversation creates session in store
+- Each send() persists updated session
+- Resume loads and validates
+- `cargo check && cargo clippy -- -D warnings && cargo nextest run`
 
 ---
 
-## Task 7: Add session expiry background task
+## Task 6: Session module structure and re-exports
 
 **Files:**
-- `saorsa-canvas/canvas-server/src/sync.rs` (new background task)
-- `saorsa-canvas/canvas-server/src/main.rs` (spawn task)
+- `src/fae_llm/session/mod.rs` (new)
+- `src/fae_llm/mod.rs` (add session module + re-exports)
 
 **Description:**
 
-Add configurable TTL for sessions. Delete stale sessions (not accessed within TTL) on a periodic timer.
+Wire all session submodules together:
 
-1. Add to `SyncState`:
-   ```rust
-   pub struct SyncState {
-       store: SceneStore,
-       // ... existing fields
-       last_access: Arc<RwLock<HashMap<String, Instant>>>, // New
-   }
-   ```
+```rust
+// src/fae_llm/session/mod.rs
+pub mod context;
+pub mod fs_store;
+pub mod store;
+pub mod types;
+pub mod validation;
 
-2. Update session access tracking:
-   - Record access time on every WebSocket Subscribe
-   - Record access time on every HTTP GET /api/scene/{session_id}
+pub use context::ConversationContext;
+pub use fs_store::FsSessionStore;
+pub use store::{MemorySessionStore, SessionStore};
+pub use types::{Session, SessionId, SessionMeta, SessionResumeError};
+pub use validation::{CURRENT_SCHEMA_VERSION, validate_session, validate_message_sequence};
+```
 
-3. Add expiry task spawned in main.rs:
-   ```rust
-   let session_ttl = std::env::var("CANVAS_SESSION_TTL_HOURS")
-       .ok()
-       .and_then(|v| v.parse().ok())
-       .unwrap_or(24); // Default 24 hours
-   let cleanup_interval = Duration::from_secs(3600); // Check hourly
-   
-   tokio::spawn(async move {
-       let mut interval = tokio::time::interval(cleanup_interval);
-       loop {
-           interval.tick().await;
-           sync_state.cleanup_expired_sessions(Duration::from_secs(session_ttl * 3600));
-       }
-   });
-   ```
-
-4. Implement `cleanup_expired_sessions()` in sync.rs:
-   - Iterate sessions
-   - Check last_access time
-   - Delete JSON file and remove from memory if expired
-   - Log deletion
+Update `src/fae_llm/mod.rs`:
+- Add `pub mod session;`
+- Add re-exports for key session types
 
 **Tests:**
-
-Unit test in sync.rs:
-- `test_session_expiry()` — mock time, verify expired session removed
-- `test_session_expiry_preserves_active()` — active sessions not deleted
+- `session_types_accessible_from_fae_llm`
+- `all_session_types_are_send_sync`
+- Verify doc comments compile
 
 **Acceptance:**
-
-- Sessions expire after TTL (default 24h)
-- `CANVAS_SESSION_TTL_HOURS` env var configures TTL
-- Background task runs every hour
-- Expired sessions deleted from disk and memory
-- Tests pass
+- All session types accessible from `fae::fae_llm::session::*`
+- Key types re-exported from `fae::fae_llm::*`
+- `cargo check && cargo clippy -- -D warnings && cargo nextest run`
+- `cargo doc --all-features --no-deps` passes
 
 ---
 
-## Task 8: Integration tests for protocol and persistence
+## Task 7: Session lifecycle integration tests
 
 **Files:**
-- `fae/src/canvas/remote.rs` (add tests module)
-- `saorsa-canvas/canvas-server/tests/protocol_roundtrip.rs` (new file)
-- `saorsa-canvas/canvas-server/tests/persistence_restart.rs` (new file)
+- `src/fae_llm/session/mod.rs` (add integration_tests module)
 
 **Description:**
 
-Comprehensive integration tests across the entire stack.
+End-to-end integration tests covering the full session lifecycle:
 
-**fae tests (remote.rs):**
+1. **Create → send → persist → resume → send → verify**
+   - Create ConversationContext with MemorySessionStore
+   - Send user message, verify response
+   - Extract session ID
+   - Resume with new ConversationContext from same store
+   - Send follow-up, verify conversation history preserved
 
-Add `#[cfg(test)]` module tests:
-1. `test_protocol_roundtrip_scene_update()` — mock server sends SceneUpdate with viewport
-2. `test_protocol_roundtrip_element_updated()` — mock server sends ElementUpdated
-3. `test_protocol_roundtrip_sync_result()` — mock server sends SyncResult
+2. **Filesystem round-trip**
+   - Create ConversationContext with FsSessionStore (tempdir)
+   - Send messages
+   - Create new FsSessionStore on same dir
+   - Resume, verify messages intact
 
-Use test helpers to create mock ServerMessage JSON and deserialize.
+3. **Corrupted session recovery**
+   - Manually corrupt session JSON in FsSessionStore
+   - Attempt resume, verify SessionError returned
+   - Verify error is typed (SessionResumeError::Corrupted)
 
-**canvas-server integration tests:**
+4. **Multiple concurrent sessions**
+   - Create 3 sessions in same store
+   - Send messages to each
+   - List sessions, verify all 3 exist
+   - Delete one, verify 2 remain
 
-New file `tests/protocol_roundtrip.rs`:
-- Start test server
-- Connect fae-like WebSocket client
-- Subscribe to session
-- Add element from client
-- Verify server broadcasts ElementAdded
-- Update element from client
-- Verify server broadcasts ElementUpdated
-- Verify SceneUpdate includes viewport
+5. **Session with tool calls**
+   - Create context with mock tool-calling provider
+   - Send message that triggers tool call
+   - Resume session
+   - Verify tool call + result messages preserved
 
-New file `tests/persistence_restart.rs`:
-- Start server with temp data dir
-- Create session, add elements via WebSocket
-- Shutdown server
-- Restart server with same data dir
-- Verify session persists
-- Verify elements intact
-
-New file `tests/session_expiry.rs`:
-- Start server with TTL=1 second
-- Create session, access it
-- Wait 2 seconds
-- Trigger cleanup task
-- Verify session deleted
+**Tests:**
+- `integration_create_send_resume_send`
+- `integration_fs_round_trip`
+- `integration_corrupted_session_recovery`
+- `integration_multiple_concurrent_sessions`
+- `integration_session_with_tool_calls`
 
 **Acceptance:**
+- All integration tests pass
+- Full lifecycle verified
+- `cargo check && cargo clippy -- -D warnings && cargo nextest run`
 
-- All fae protocol tests pass
-- All canvas-server integration tests pass
-- `cargo test` passes in both projects
-- No warnings or test failures
+---
+
+## Task 8: Final validation, cleanup, and documentation
+
+**Files:**
+- All session module files (doc cleanup)
+- `src/fae_llm/mod.rs` (verify re-exports)
+
+**Description:**
+
+Final pass:
+1. Run full validation: `just check` (or cargo fmt + clippy + test + doc)
+2. Verify all public items have doc comments
+3. Verify all doc examples compile
+4. Verify zero warnings from `cargo doc --all-features --no-deps`
+5. Verify zero clippy warnings
+6. Clean up any unused imports
+7. Verify no `.unwrap()` or `.expect()` in production code
+8. Verify all types are Send + Sync
+
+**Tests:**
+- Run full test suite: `cargo nextest run --all-features`
+- Verify test count increased
+
+**Acceptance:**
+- `just check` passes (or full manual validation)
+- Zero warnings
+- Zero test failures
+- All public APIs documented
+- Session module fully integrated
 
 ---
 
 ## Summary
 
 **Task dependency order:**
-1. Task 1 (SceneDocument in fae) — standalone
-2. Task 2 (ServerMessage variants) — depends on Task 1
-3. Task 3 (ClientMessage variants) — standalone
-4. Task 4 (SceneStore persistence) — standalone
-5. Task 5 (canvas-server auto-save) — depends on Task 4
-6. Task 6 (session loading) — depends on Task 4, 5
-7. Task 7 (session expiry) — depends on Task 4, 5, 6
-8. Task 8 (integration tests) — depends on all previous tasks
+1. Task 1 (types + error) — standalone
+2. Task 2 (store trait + memory impl) — depends on Task 1
+3. Task 3 (fs store) — depends on Task 1, 2
+4. Task 4 (validation) — depends on Task 1
+5. Task 5 (ConversationContext) — depends on Task 1, 2, 4
+6. Task 6 (module wiring) — depends on Task 1-5
+7. Task 7 (integration tests) — depends on all
+8. Task 8 (final validation) — depends on all
 
-**Total changes:**
-- fae: ~150 lines (protocol alignment)
-- canvas-core: ~200 lines (persistence)
-- canvas-server: ~150 lines (startup loading, expiry task)
-- Tests: ~300 lines across both projects
-
-**Verification:**
-- Protocol alignment: fae and canvas-server have matching message types
-- Persistence: sessions survive server restarts
-- Expiry: stale sessions cleaned up automatically
-- Zero warnings, zero test failures in both projects
+**Total new code:** ~800-1000 lines across 6 new files
+**Total new tests:** ~40-50 tests
