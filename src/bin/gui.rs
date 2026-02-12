@@ -779,6 +779,63 @@ mod gui {
             assert_eq!(increment_counter(&counter), 2);
             assert_eq!(counter.load(Ordering::Relaxed), 2);
         }
+
+        // --- format_bytes_short ---
+
+        #[test]
+        fn format_bytes_short_gb() {
+            assert_eq!(super::super::format_bytes_short(2_400_000_000), "2.2 GB");
+        }
+
+        #[test]
+        fn format_bytes_short_mb() {
+            assert_eq!(super::super::format_bytes_short(89_000_000), "85 MB");
+        }
+
+        #[test]
+        fn format_bytes_short_kb() {
+            assert_eq!(super::super::format_bytes_short(92_000), "90 KB");
+        }
+
+        #[test]
+        fn format_bytes_short_bytes() {
+            assert_eq!(super::super::format_bytes_short(500), "500 B");
+        }
+
+        // --- format_speed ---
+
+        #[test]
+        fn format_speed_mb_per_sec() {
+            assert_eq!(super::super::format_speed(12_500_000.0), "11.9 MB/s");
+        }
+
+        #[test]
+        fn format_speed_kb_per_sec() {
+            assert_eq!(super::super::format_speed(500_000.0), "488 KB/s");
+        }
+
+        // --- format_eta ---
+
+        #[test]
+        fn format_eta_seconds() {
+            assert_eq!(
+                super::super::format_eta(45.0),
+                "less than a minute remaining"
+            );
+        }
+
+        #[test]
+        fn format_eta_minutes() {
+            assert_eq!(super::super::format_eta(180.0), "about 3 min remaining");
+        }
+
+        #[test]
+        fn format_eta_hours() {
+            assert_eq!(
+                super::super::format_eta(3900.0),
+                "about 1 hr 5 min remaining"
+            );
+        }
     }
 }
 
@@ -1234,6 +1291,68 @@ fn format_bytes_short(bytes: u64) -> String {
         format!("{:.0} KB", b / KB)
     } else {
         format!("{bytes} B")
+    }
+}
+
+/// Format download speed in bytes/sec as human-readable (e.g. "12.5 MB/s").
+#[cfg(feature = "gui")]
+fn format_speed(bytes_per_sec: f64) -> String {
+    const GB: f64 = 1_073_741_824.0;
+    const MB: f64 = 1_048_576.0;
+    const KB: f64 = 1_024.0;
+
+    if bytes_per_sec >= GB {
+        format!("{:.1} GB/s", bytes_per_sec / GB)
+    } else if bytes_per_sec >= MB {
+        format!("{:.1} MB/s", bytes_per_sec / MB)
+    } else if bytes_per_sec >= KB {
+        format!("{:.0} KB/s", bytes_per_sec / KB)
+    } else {
+        format!("{:.0} B/s", bytes_per_sec)
+    }
+}
+
+/// Format ETA seconds as human-readable (e.g. "about 3 min remaining").
+#[cfg(feature = "gui")]
+fn format_eta(secs: f64) -> String {
+    let s = secs as u64;
+    if s < 60 {
+        "less than a minute remaining".to_owned()
+    } else if s < 3600 {
+        let mins = s / 60;
+        if mins == 1 {
+            "about 1 min remaining".to_owned()
+        } else {
+            format!("about {mins} min remaining")
+        }
+    } else {
+        let hours = s / 3600;
+        let mins = (s % 3600) / 60;
+        if hours == 1 {
+            format!("about 1 hr {mins} min remaining")
+        } else {
+            format!("about {hours} hr {mins} min remaining")
+        }
+    }
+}
+
+/// Update speed and ETA on an `AppStatus::Downloading` using the tracker.
+///
+/// Feeds the current aggregate bytes into the tracker and writes back
+/// the computed speed and ETA.
+#[cfg(feature = "gui")]
+fn update_speed_eta(status: &mut gui::AppStatus, tracker: &mut fae::progress::DownloadTracker) {
+    if let gui::AppStatus::Downloading {
+        aggregate_bytes,
+        aggregate_total,
+        speed_bps,
+        eta_secs,
+        ..
+    } = status
+    {
+        let (speed, eta) = tracker.update(*aggregate_bytes, *aggregate_total);
+        *speed_bps = speed;
+        *eta_secs = eta;
     }
 }
 
@@ -1898,6 +2017,8 @@ fn app() -> Element {
 
                 // Coroutine on the Dioxus (main) thread: poll channels and update signals.
                 spawn(async move {
+                    let mut tracker = fae::progress::DownloadTracker::new();
+
                     // Drain progress events periodically while waiting for result.
                     loop {
                         tokio::select! {
@@ -1905,12 +2026,14 @@ fn app() -> Element {
                                 // Build repo→model map when download plan arrives
                                 if let fae::progress::ProgressEvent::DownloadPlanReady { ref plan } = event {
                                     repo_model_map.set(build_repo_model_map(plan));
+                                    tracker.reset();
                                 }
                                 let map = repo_model_map.read();
                                 update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage, &map);
                                 drop(map);
                                 let current = status.read().clone();
-                                if let Some(new_status) = gui::apply_progress_event(event, &current) {
+                                if let Some(mut new_status) = gui::apply_progress_event(event, &current) {
+                                    update_speed_eta(&mut new_status, &mut tracker);
                                     status.set(new_status);
                                 }
                             }
@@ -1919,12 +2042,14 @@ fn app() -> Element {
                                 while let Ok(event) = rx.try_recv() {
                                     if let fae::progress::ProgressEvent::DownloadPlanReady { ref plan } = event {
                                         repo_model_map.set(build_repo_model_map(plan));
+                                        tracker.reset();
                                     }
                                     let map = repo_model_map.read();
                                     update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage, &map);
                                     drop(map);
                                     let current = status.read().clone();
-                                    if let Some(new_status) = gui::apply_progress_event(event, &current) {
+                                    if let Some(mut new_status) = gui::apply_progress_event(event, &current) {
+                                        update_speed_eta(&mut new_status, &mut tracker);
                                         status.set(new_status);
                                     }
                                 }
@@ -2267,30 +2392,74 @@ fn app() -> Element {
         )
     );
 
-    // Progress bar fraction (0.0 to 1.0) — prefer aggregate, fall back to per-file
-    let progress_fraction = if let AppStatus::Downloading {
-        bytes_downloaded,
-        total_bytes,
-        aggregate_bytes,
-        aggregate_total,
-        ..
-    } = &current_status
-    {
-        if *aggregate_total > 0 {
-            *aggregate_bytes as f64 / *aggregate_total as f64
-        } else if let Some(total) = total_bytes {
-            if *total > 0 {
-                *bytes_downloaded as f64 / *total as f64
+    // Extract download progress display data from current status
+    let (progress_fraction, progress_detail, speed_text, eta_text) =
+        if let AppStatus::Downloading {
+            bytes_downloaded,
+            total_bytes,
+            aggregate_bytes,
+            aggregate_total,
+            files_complete,
+            files_total,
+            speed_bps,
+            eta_secs,
+            ..
+        } = &current_status
+        {
+            let frac = if *aggregate_total > 0 {
+                *aggregate_bytes as f64 / *aggregate_total as f64
+            } else if let Some(total) = total_bytes {
+                if *total > 0 {
+                    *bytes_downloaded as f64 / *total as f64
+                } else {
+                    0.0
+                }
             } else {
                 0.0
-            }
+            };
+
+            let detail = if *aggregate_total > 0 {
+                format!(
+                    "{} / {} ({:.0}%)",
+                    format_bytes_short(*aggregate_bytes),
+                    format_bytes_short(*aggregate_total),
+                    frac * 100.0
+                )
+            } else if let Some(total) = total_bytes {
+                if *total > 0 {
+                    format!(
+                        "{} / {} ({:.0}%)",
+                        format_bytes_short(*bytes_downloaded),
+                        format_bytes_short(*total),
+                        frac * 100.0
+                    )
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            let speed = if *speed_bps > 0.0 {
+                format_speed(*speed_bps)
+            } else if *files_total > 0 {
+                "Calculating...".to_owned()
+            } else {
+                String::new()
+            };
+
+            let eta = eta_secs
+                .filter(|s| *s > 0.0 && *files_total > 0)
+                .map(format_eta)
+                .unwrap_or_default();
+
+            let _ = files_complete; // used in display_text
+
+            (frac, detail, speed, eta)
         } else {
-            0.0
-        }
-    } else {
-        0.0
-    };
-    let progress_pct = format!("{:.0}%", progress_fraction * 100.0);
+            (0.0, String::new(), String::new(), String::new())
+        };
+
     let progress_width = format!("{}%", (progress_fraction * 100.0) as u32);
 
     let stt_tooltip = {
@@ -2704,8 +2873,19 @@ fn app() -> Element {
                                 style: "width: {progress_width};",
                             }
                         }
-                        if progress_fraction > 0.0 {
-                            p { class: "progress-text", "{progress_pct}" }
+                        if !progress_detail.is_empty() {
+                            p { class: "progress-text", "{progress_detail}" }
+                        }
+                        if !speed_text.is_empty() || !eta_text.is_empty() {
+                            p { class: "progress-speed",
+                                if !speed_text.is_empty() && !eta_text.is_empty() {
+                                    "{speed_text} — {eta_text}"
+                                } else if !speed_text.is_empty() {
+                                    "{speed_text}"
+                                } else {
+                                    "{eta_text}"
+                                }
+                            }
                         }
                     }
                 }
@@ -5101,6 +5281,11 @@ const GLOBAL_CSS: &str = r#"
     }
 
     .stage-pending { opacity: 0.5; }
+    .stage-downloading {
+        border-color: rgba(59, 130, 246, 0.4);
+        box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15) inset;
+        color: #60a5fa;
+    }
     .stage-loading {
         border-color: rgba(167, 139, 250, 0.4);
         box-shadow: 0 0 0 1px var(--accent-dim) inset;
@@ -5244,6 +5429,12 @@ const GLOBAL_CSS: &str = r#"
     .progress-text {
         color: var(--text-tertiary);
         font-size: 0.72rem;
+    }
+
+    .progress-speed {
+        color: var(--text-tertiary);
+        font-size: 0.65rem;
+        opacity: 0.7;
     }
 
     /* --- Button --- */
