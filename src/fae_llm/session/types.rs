@@ -8,7 +8,7 @@
 //! ```
 //! use fae::fae_llm::session::types::{Session, SessionMeta};
 //!
-//! let meta = SessionMeta::new("sess_001", None, None);
+//! let meta = SessionMeta::new("sess_001", None, None, None);
 //! assert_eq!(meta.id, "sess_001");
 //! assert_eq!(meta.schema_version, 1);
 //! ```
@@ -43,6 +43,8 @@ pub struct SessionMeta {
     pub system_prompt: Option<String>,
     /// Display string of the model used (e.g. "claude-opus-4").
     pub model: Option<String>,
+    /// Provider identifier (e.g. "openai", "anthropic") used for this session.
+    pub provider_id: Option<String>,
     /// Schema version for forward compatibility.
     pub schema_version: u32,
 }
@@ -56,6 +58,7 @@ impl SessionMeta {
         id: impl Into<SessionId>,
         system_prompt: Option<String>,
         model: Option<String>,
+        provider_id: Option<String>,
     ) -> Self {
         let now = current_epoch_secs();
         Self {
@@ -66,6 +69,7 @@ impl SessionMeta {
             total_tokens: 0,
             system_prompt,
             model,
+            provider_id,
             schema_version: CURRENT_SCHEMA_VERSION,
         }
     }
@@ -94,8 +98,9 @@ impl Session {
         id: impl Into<SessionId>,
         system_prompt: Option<String>,
         model: Option<String>,
+        provider_id: Option<String>,
     ) -> Self {
-        let meta = SessionMeta::new(id, system_prompt, model);
+        let meta = SessionMeta::new(id, system_prompt, model, provider_id);
         Self {
             meta,
             messages: Vec::new(),
@@ -179,7 +184,7 @@ mod tests {
 
     #[test]
     fn session_meta_new_sets_defaults() {
-        let meta = SessionMeta::new("sess_001", None, None);
+        let meta = SessionMeta::new("sess_001", None, None, None);
         assert_eq!(meta.id, "sess_001");
         assert_eq!(meta.turn_count, 0);
         assert_eq!(meta.total_tokens, 0);
@@ -196,6 +201,7 @@ mod tests {
             "sess_002",
             Some("Be helpful.".into()),
             Some("claude-opus-4".into()),
+            None,
         );
         assert_eq!(meta.system_prompt.as_deref(), Some("Be helpful."));
         assert_eq!(meta.model.as_deref(), Some("claude-opus-4"));
@@ -203,7 +209,7 @@ mod tests {
 
     #[test]
     fn session_meta_touch_updates_timestamp() {
-        let mut meta = SessionMeta::new("sess_003", None, None);
+        let mut meta = SessionMeta::new("sess_003", None, None, None);
         let original = meta.updated_at;
         // Touch should set updated_at to now (>= original)
         meta.touch();
@@ -212,7 +218,8 @@ mod tests {
 
     #[test]
     fn session_meta_serde_round_trip() {
-        let original = SessionMeta::new("sess_rt", Some("system".into()), Some("gpt-4".into()));
+        let original =
+            SessionMeta::new("sess_rt", Some("system".into()), Some("gpt-4".into()), None);
         let json = serde_json::to_string(&original).unwrap_or_default();
         assert!(!json.is_empty());
         let parsed: Result<SessionMeta, _> = serde_json::from_str(&json);
@@ -228,21 +235,21 @@ mod tests {
 
     #[test]
     fn session_new_creates_empty() {
-        let session = Session::new("sess_010", None, None);
+        let session = Session::new("sess_010", None, None, None);
         assert_eq!(session.meta.id, "sess_010");
         assert!(session.messages.is_empty());
     }
 
     #[test]
     fn session_push_message() {
-        let mut session = Session::new("sess_011", None, None);
+        let mut session = Session::new("sess_011", None, None, None);
         session.push_message(Message::user("Hello"));
         assert_eq!(session.messages.len(), 1);
     }
 
     #[test]
     fn session_set_messages() {
-        let mut session = Session::new("sess_012", None, None);
+        let mut session = Session::new("sess_012", None, None, None);
         session.push_message(Message::user("first"));
         let new_msgs = vec![Message::user("replaced")];
         session.set_messages(new_msgs);
@@ -258,7 +265,7 @@ mod tests {
 
     #[test]
     fn session_serde_round_trip() {
-        let mut session = Session::new("sess_rt2", Some("system".into()), None);
+        let mut session = Session::new("sess_rt2", Some("system".into()), None, None);
         session.push_message(Message::system("system"));
         session.push_message(Message::user("hello"));
         session.push_message(Message::assistant("hi there"));
@@ -277,7 +284,7 @@ mod tests {
 
     #[test]
     fn session_serde_with_tool_calls() {
-        let mut session = Session::new("sess_tc", None, None);
+        let mut session = Session::new("sess_tc", None, None, None);
         let tool_calls = vec![crate::fae_llm::providers::message::AssistantToolCall {
             call_id: "call_1".into(),
             function_name: "read".into(),
@@ -384,5 +391,55 @@ mod tests {
         let now = current_epoch_secs();
         // Should be well past 2020 (1577836800)
         assert!(now > 1_577_836_800);
+    }
+
+    // ── provider_id field ──────────────────────────────────
+
+    #[test]
+    fn session_meta_with_provider_id() {
+        let meta = SessionMeta::new(
+            "sess_prov",
+            None,
+            Some("gpt-4".into()),
+            Some("openai".into()),
+        );
+        assert_eq!(meta.provider_id.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn session_meta_without_provider_id() {
+        let meta = SessionMeta::new("sess_no_prov", None, None, None);
+        assert!(meta.provider_id.is_none());
+    }
+
+    #[test]
+    fn session_meta_serde_with_provider_id() {
+        let original = SessionMeta::new(
+            "sess_rt_prov",
+            Some("system".into()),
+            Some("gpt-4".into()),
+            Some("openai".into()),
+        );
+        let json = serde_json::to_string(&original).unwrap_or_default();
+        assert!(!json.is_empty());
+        assert!(json.contains("openai"));
+        let parsed: Result<SessionMeta, _> = serde_json::from_str(&json);
+        assert!(parsed.is_ok());
+        let parsed = match parsed {
+            Ok(m) => m,
+            Err(_) => unreachable!("deserialization succeeded"),
+        };
+        assert_eq!(parsed.provider_id.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn session_with_provider_id() {
+        let session = Session::new(
+            "sess_with_prov",
+            None,
+            Some("claude-opus-4".into()),
+            Some("anthropic".into()),
+        );
+        assert_eq!(session.meta.provider_id.as_deref(), Some("anthropic"));
     }
 }

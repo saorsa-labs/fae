@@ -45,7 +45,7 @@ pub mod validation;
 // Re-export key types for convenience
 pub use accumulator::{AccumulatedToolCall, AccumulatedTurn, StreamAccumulator};
 pub use executor::ToolExecutor;
-pub use loop_engine::{build_messages_from_result, AgentLoop};
+pub use loop_engine::{AgentLoop, build_messages_from_result};
 pub use types::{AgentConfig, AgentLoopResult, ExecutedToolCall, StopReason, TurnResult};
 pub use validation::validate_tool_args;
 
@@ -122,9 +122,7 @@ mod integration_tests {
                     request_id: "req-1".into(),
                     model: ModelRef::new("mock"),
                 },
-                LlmEvent::StreamError {
-                    error: msg.into(),
-                },
+                LlmEvent::StreamError { error: msg.into() },
             ]
         }
     }
@@ -312,9 +310,7 @@ mod integration_tests {
     #[tokio::test]
     async fn integration_max_turns_reached() {
         let responses: Vec<Vec<LlmEvent>> = (0..10)
-            .map(|i| {
-                MockProvider::tool_call(&format!("c{i}"), "echo", r#"{"message":"loop"}"#)
-            })
+            .map(|i| MockProvider::tool_call(&format!("c{i}"), "echo", r#"{"message":"loop"}"#))
             .collect();
         let provider = Arc::new(MockProvider::new(responses));
         let config = AgentConfig::new().with_max_turns(3);
@@ -341,17 +337,23 @@ mod integration_tests {
                 call_id: "a".into(),
                 function_name: "echo".into(),
             },
-            LlmEvent::ToolCallEnd { call_id: "a".into() },
+            LlmEvent::ToolCallEnd {
+                call_id: "a".into(),
+            },
             LlmEvent::ToolCallStart {
                 call_id: "b".into(),
                 function_name: "echo".into(),
             },
-            LlmEvent::ToolCallEnd { call_id: "b".into() },
+            LlmEvent::ToolCallEnd {
+                call_id: "b".into(),
+            },
             LlmEvent::ToolCallStart {
                 call_id: "c".into(),
                 function_name: "echo".into(),
             },
-            LlmEvent::ToolCallEnd { call_id: "c".into() },
+            LlmEvent::ToolCallEnd {
+                call_id: "c".into(),
+            },
             LlmEvent::StreamEnd {
                 finish_reason: FinishReason::ToolCalls,
             },
@@ -403,9 +405,9 @@ mod integration_tests {
 
     #[tokio::test]
     async fn integration_cancellation_during_tool_execution() {
-        let provider = Arc::new(MockProvider::new(vec![
-            MockProvider::tool_call("c1", "slow", r#"{}"#),
-        ]));
+        let provider = Arc::new(MockProvider::new(vec![MockProvider::tool_call(
+            "c1", "slow", r#"{}"#,
+        )]));
         let config = AgentConfig::new().with_tool_timeout_secs(30);
         let agent = AgentLoop::new(config, provider, registry_with_echo_and_slow());
 
@@ -420,8 +422,7 @@ mod integration_tests {
         let r = result.unwrap_or_else(|_| unreachable!());
         // Should be cancelled (tool was slow and we cancelled after 100ms)
         assert!(
-            r.stop_reason == StopReason::Cancelled
-                || matches!(r.stop_reason, StopReason::Error(_))
+            r.stop_reason == StopReason::Cancelled || matches!(r.stop_reason, StopReason::Error(_))
         );
     }
 
@@ -443,7 +444,9 @@ mod integration_tests {
                 call_id: "c1".into(),
                 args_fragment: "not valid json {{{".into(),
             },
-            LlmEvent::ToolCallEnd { call_id: "c1".into() },
+            LlmEvent::ToolCallEnd {
+                call_id: "c1".into(),
+            },
             LlmEvent::StreamEnd {
                 finish_reason: FinishReason::ToolCalls,
             },
@@ -476,12 +479,14 @@ mod integration_tests {
         assert!(result.is_ok());
         let r = result.unwrap_or_else(|_| unreachable!());
         assert!(!r.turns[0].tool_calls[0].result.success);
-        assert!(r.turns[0].tool_calls[0]
-            .result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("not found"));
+        assert!(
+            r.turns[0].tool_calls[0]
+                .result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not found")
+        );
         assert_eq!(r.final_text, "Tool not found.");
     }
 

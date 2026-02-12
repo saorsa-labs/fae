@@ -148,15 +148,23 @@ mod tests {
 
         let json = serde_json::to_string(&original);
         assert!(json.is_ok());
-        let json_str = json.expect("serde_json::to_string succeeded");
-        let parsed: std::result::Result<ResponseMeta, _> = serde_json::from_str(&json_str);
-        assert!(parsed.is_ok());
-        let parsed = parsed.expect("serde_json::from_str succeeded");
-        assert_eq!(parsed.request_id, "req-001");
-        assert_eq!(parsed.model_id, "claude-opus-4");
-        assert_eq!(parsed.finish_reason, FinishReason::ToolCalls);
-        assert_eq!(parsed.latency_ms, 800);
-        assert!(parsed.usage.is_some_and(|u| u.reasoning_tokens == Some(50)));
+        match json {
+            Ok(json_str) => {
+                let parsed: std::result::Result<ResponseMeta, _> = serde_json::from_str(&json_str);
+                assert!(parsed.is_ok());
+                match parsed {
+                    Ok(p) => {
+                        assert_eq!(p.request_id, "req-001");
+                        assert_eq!(p.model_id, "claude-opus-4");
+                        assert_eq!(p.finish_reason, FinishReason::ToolCalls);
+                        assert_eq!(p.latency_ms, 800);
+                        assert!(p.usage.is_some_and(|u| u.reasoning_tokens == Some(50)));
+                    }
+                    Err(_) => unreachable!("serde_json::from_str succeeded"),
+                }
+            }
+            Err(_) => unreachable!("serde_json::to_string succeeded"),
+        }
     }
 
     #[test]
@@ -164,11 +172,17 @@ mod tests {
         let original = ResponseMeta::new("req-002", "llama3:8b", FinishReason::Length, 5000);
         let json = serde_json::to_string(&original);
         assert!(json.is_ok());
-        let json_str = json.expect("serde_json::to_string succeeded");
-        let parsed: std::result::Result<ResponseMeta, _> = serde_json::from_str(&json_str);
-        assert!(parsed.is_ok());
-        let parsed = parsed.expect("serde_json::from_str succeeded");
-        assert!(parsed.usage.is_none());
+        match json {
+            Ok(json_str) => {
+                let parsed: std::result::Result<ResponseMeta, _> = serde_json::from_str(&json_str);
+                assert!(parsed.is_ok());
+                match parsed {
+                    Ok(p) => assert!(p.usage.is_none()),
+                    Err(_) => unreachable!("serde_json::from_str succeeded"),
+                }
+            }
+            Err(_) => unreachable!("serde_json::to_string succeeded"),
+        }
     }
 
     #[test]

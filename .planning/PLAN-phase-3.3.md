@@ -1,148 +1,153 @@
-# Phase 3.3: Server-Side Export
+# Phase 3.3: Multi-Provider Hardening
 
 ## Overview
-Implement scene-to-image export in canvas-renderer and expose via canvas-server REST endpoint.
-Wire fae's canvas_export tool to call the server export API.
-
-**Cross-project: modifies both saorsa-canvas and fae**
+Harden the agent loop and session system for production use. Enable provider switching during resumed conversations, implement error recovery with retry policies, add comprehensive end-to-end tests, and integrate tool mode switching between read_only and full modes.
 
 ## Tasks
 
-### Task 1: Add export dependencies to canvas-renderer
-**Files:** `saorsa-canvas/canvas-renderer/Cargo.toml`
+### Task 1: Provider switch validation for resumed sessions
+**Files:** `src/fae_llm/session/validation.rs`, `src/fae_llm/session/types.rs`, `src/fae_llm/agent/loop_engine.rs`
 
-Add behind a new `export` feature flag:
-- `resvg` — SVG to raster rendering
-- `usvg` — SVG tree construction
-- `tiny-skia` — CPU raster backend (required by resvg)
-- `printpdf` — PDF generation
-
-Also need `image` crate (already present behind `images` feature) for PNG/JPEG encoding.
-The `export` feature should pull in `images` automatically.
+Add validation logic to detect and handle provider switches during session resume:
+- Detect when resuming session uses different provider than original
+- Validate that new provider supports same capabilities (tool calling, streaming, etc.)
+- Add `provider_id` field to Session metadata
+- Log warnings when provider switches occur
+- Add tests for provider switch scenarios
 
 **Acceptance:**
-- `cargo check -p canvas-renderer --features export` passes
-- No new warnings
+- Can resume session with different provider (OpenAI → Anthropic or vice versa)
+- Warning logged when provider switch detected
+- Session metadata tracks original and current provider
+- Tests pass with zero warnings
 
-### Task 2: Implement SceneExporter — Scene → PNG via SVG intermediate
-**Files:** `saorsa-canvas/canvas-renderer/src/export.rs`, `saorsa-canvas/canvas-renderer/src/lib.rs`
+### Task 2: Request retry policy implementation
+**Files:** `src/fae_llm/agent/loop_engine.rs`, `src/fae_llm/agent/types.rs`, `src/fae_llm/error.rs`
 
-Create `export` module (feature-gated behind `export`):
-- `ExportConfig { width: u32, height: u32, dpi: f32, background: [u8; 4] }`
-- `SceneExporter::new(config: ExportConfig) -> Self`
-- `SceneExporter::render_to_png(scene: &Scene) -> RenderResult<Vec<u8>>`
-
-Implementation approach:
-1. Build SVG string from Scene elements (text → `<text>`, chart → render plotters to embedded PNG `<image>`, image → `<image>` with base64, shapes → SVG primitives)
-2. Parse SVG with `usvg::Tree::from_str()`
-3. Render to `tiny_skia::Pixmap`
-4. Encode pixmap to PNG bytes via `image` crate
-
-**Acceptance:**
-- Can export a scene with Text elements to PNG bytes
-- PNG bytes are valid (start with PNG magic bytes)
-- Tests pass
-
-### Task 3: Add JPEG, SVG, and WebP output format support
-**Files:** `saorsa-canvas/canvas-renderer/src/export.rs`
-
-Extend SceneExporter:
-- `render_to_jpeg(scene: &Scene, quality: u8) -> RenderResult<Vec<u8>>`
-- `render_to_svg(scene: &Scene) -> RenderResult<String>` (returns raw SVG string, no raster step)
-- `render_to_webp(scene: &Scene) -> RenderResult<Vec<u8>>` (if image crate supports, else skip)
-- `export(scene: &Scene, format: ExportFormat) -> RenderResult<Vec<u8>>` (dispatcher)
-
-Use `ExportFormat` from canvas-mcp (or define locally and map).
+Implement retry logic for transient failures:
+- Add `RetryPolicy` struct with configurable max_attempts, base_delay, max_delay, backoff_multiplier
+- Implement exponential backoff with jitter
+- Retry on network errors, rate limits (429), server errors (5xx)
+- Do NOT retry on auth errors (401, 403) or bad requests (400)
+- Add retry counters to RequestMeta
+- Add `is_retryable()` method to FaeLlmError
 
 **Acceptance:**
-- PNG, JPEG, SVG each produce valid output
-- SVG output is valid XML
-- JPEG output starts with FFD8 magic bytes
+- Retry logic retries transient errors up to max_attempts
+- Exponential backoff delays between retries
+- Non-retryable errors fail immediately
+- Retry count tracked in metadata
+- Tests verify retry behavior
 
-### Task 4: Add PDF export via printpdf
-**Files:** `saorsa-canvas/canvas-renderer/src/export.rs`
+### Task 3: Circuit breaker for provider failures
+**Files:** `src/fae_llm/agent/loop_engine.rs`, `src/fae_llm/agent/types.rs`
 
-Add PDF output path:
-- `render_to_pdf(scene: &Scene) -> RenderResult<Vec<u8>>`
-- Approach: render scene to PNG first, then embed as image in PDF page via printpdf
-- Page size matches scene viewport (viewport_width × viewport_height in points)
-
-**Acceptance:**
-- PDF bytes start with `%PDF`
-- PDF contains embedded image of scene
-- Tests pass
-
-### Task 5: Add POST /api/export endpoint to canvas-server
-**Files:** `saorsa-canvas/canvas-server/src/routes.rs`, `saorsa-canvas/canvas-server/Cargo.toml`
-
-Add REST endpoint:
-- `POST /api/export` with JSON body: `{ session_id, format, width?, height?, dpi?, quality? }`
-- Returns binary response with appropriate Content-Type header
-- Content-Type: `image/png`, `image/jpeg`, `image/svg+xml`, `application/pdf`
-- Error responses as JSON: `{ success: false, error: "..." }`
-
-Add `canvas-renderer` dependency with `export` feature to canvas-server.
-
-Wire into axum router in main.rs.
+Add circuit breaker pattern to prevent cascade failures:
+- Track consecutive failures per provider
+- Open circuit after N consecutive failures (default: 5)
+- Half-open state after cooldown period (default: 60s)
+- Close circuit after successful request in half-open state
+- Add circuit breaker state to AgentLoop
+- Log circuit breaker state changes
 
 **Acceptance:**
-- Endpoint responds to POST requests
-- Returns correct Content-Type for each format
-- Returns 404 for non-existent sessions
-- Returns 400 for invalid format
+- Circuit opens after consecutive failures
+- No requests sent while circuit open
+- Circuit tests recovery via half-open state
+- State transitions logged
+- Tests verify circuit breaker logic
 
-### Task 6: Wire fae's canvas_export tool to call server export API
-**Files:** `fae/src/canvas/tools/export.rs` (or equivalent)
+### Task 4: Tool mode switching enforcement
+**Files:** `src/fae_llm/agent/executor.rs`, `src/fae_llm/tools/registry.rs`, `src/fae_llm/tools/types.rs`
 
-Update fae's `canvas_export` tool implementation:
-- For local sessions: call SceneExporter directly
-- For remote sessions: POST to `/api/export` endpoint
-- Return base64-encoded data in MCP response
-- Handle errors gracefully
-
-**Acceptance:**
-- Local export works for PNG/JPEG/SVG
-- Remote export makes HTTP POST
-- Errors reported via MCP error response
-
-### Task 7: Add export configuration options (size/DPI)
-**Files:** `saorsa-canvas/canvas-renderer/src/export.rs`, `saorsa-canvas/canvas-server/src/routes.rs`
-
-Add configurable export parameters:
-- Width/height override (default: scene viewport size)
-- DPI setting (default: 96.0 for screen, 300.0 for print)
-- JPEG quality (default: 85)
-- Background color (default: white)
-- Scale factor (1x, 2x for retina)
-
-Update ExportConfig to include all parameters.
-Update POST /api/export to accept these in request body.
+Integrate tool mode switching (read_only vs full) into agent loop:
+- Add `tool_mode` field to AgentLoop and Session
+- Reject mutation tools (bash, write, edit) in read_only mode
+- Return clear error when tool blocked by mode
+- Add `allowed_in_mode()` method to Tool trait
+- Update ToolRegistry to filter by mode
 
 **Acceptance:**
-- Export with custom dimensions produces correct size
-- DPI affects output resolution
-- JPEG quality parameter is respected
+- read_only mode blocks bash, write, edit tools
+- read_only mode allows read tool
+- full mode allows all tools
+- Clear error message when tool rejected
+- Session persists tool_mode
+- Tests verify mode enforcement
 
-### Task 8: Tests — each format, large scenes, error handling
-**Files:** `saorsa-canvas/canvas-renderer/tests/export_integration.rs`, `saorsa-canvas/canvas-server/tests/export_integration.rs`
+### Task 5: Error recovery with partial results
+**Files:** `src/fae_llm/agent/loop_engine.rs`, `src/fae_llm/agent/accumulator.rs`
 
-Canvas-renderer tests:
-- PNG export of text-only scene
-- PNG export of scene with chart + text
-- JPEG export with quality settings
-- SVG export produces valid XML
-- PDF export produces valid header
-- Empty scene export
-- Large scene (100+ elements) export
-- Custom dimensions/DPI
-
-Canvas-server tests:
-- POST /api/export returns PNG
-- POST /api/export returns JPEG
-- POST /api/export with invalid session → 404
-- POST /api/export with invalid format → 400
+Handle partial results gracefully when requests fail mid-stream:
+- Preserve accumulated text/tool calls on stream error
+- Add `partial` flag to StreamAccumulator result
+- Allow continuation from partial state
+- Save partial results to session on error
+- Add recovery tests with simulated stream failures
 
 **Acceptance:**
-- All tests pass
-- Zero clippy warnings across workspace
-- `just check` passes (or `cargo` equivalent)
+- Partial text preserved on stream error
+- Partial tool calls preserved on stream error
+- Session can resume from partial state
+- Tests verify partial result recovery
+- No data loss on stream interruption
+
+### Task 6: End-to-end multi-turn tool loop tests (OpenAI)
+**Files:** `tests/fae_llm/e2e_openai.rs` (new file)
+
+Comprehensive integration tests for OpenAI provider:
+- Test 1: Simple prompt → response (no tools)
+- Test 2: Prompt → tool call → execute → continue → final response
+- Test 3: Multi-turn with multiple tool calls per turn
+- Test 4: Session save → resume → continue conversation
+- Test 5: Provider switch (mock OpenAI → mock Anthropic)
+- Test 6: Error recovery with retry
+- Test 7: Tool mode switch (start full, switch to read_only, verify rejection)
+- Test 8: Circuit breaker triggers on failures
+
+Use mock HTTP server for reproducible tests (don't call real API).
+
+**Acceptance:**
+- All 8 tests pass
+- Tests use mock server (no real API calls)
+- Tests cover happy path and error cases
+- Zero warnings
+
+### Task 7: End-to-end multi-turn tool loop tests (Anthropic)
+**Files:** `tests/fae_llm/e2e_anthropic.rs` (new file)
+
+Comprehensive integration tests for Anthropic provider:
+- Test 1: Simple prompt → response (no tools)
+- Test 2: Prompt → thinking block → tool use → continue → response
+- Test 3: Multi-turn with tool calls
+- Test 4: Session persistence and resume
+- Test 5: Provider switch
+- Test 6: Error recovery
+- Test 7: Tool mode enforcement
+- Test 8: Stream interruption recovery
+
+Use mock HTTP server for reproducible tests.
+
+**Acceptance:**
+- All 8 tests pass
+- Tests use mock server
+- Tests verify Anthropic-specific behavior (thinking blocks)
+- Zero warnings
+
+### Task 8: Cross-provider compatibility test matrix
+**Files:** `tests/fae_llm/cross_provider.rs` (new file)
+
+Test compatibility and switching between providers:
+- Matrix test: OpenAI → Anthropic → OpenAI (same session)
+- Test tool call format compatibility across providers
+- Test that session format is provider-agnostic
+- Test mode switching with different providers
+- Verify retry policy works with both providers
+- Test circuit breaker per-provider isolation
+
+**Acceptance:**
+- Can switch between providers mid-conversation
+- Session data compatible across providers
+- Retry and circuit breaker work with all providers
+- Tests pass with zero warnings
+- Documentation updated with provider compatibility notes

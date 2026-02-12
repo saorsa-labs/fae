@@ -110,7 +110,7 @@ fn rand_suffix() -> u32 {
 impl SessionStore for MemorySessionStore {
     async fn create(&self, system_prompt: Option<&str>) -> Result<SessionId, FaeLlmError> {
         let id = generate_session_id();
-        let session = Session::new(id.clone(), system_prompt.map(String::from), None);
+        let session = Session::new(id.clone(), system_prompt.map(String::from), None, None);
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), session);
         Ok(id)
@@ -186,7 +186,7 @@ mod tests {
     #[tokio::test]
     async fn memory_store_save_and_load() {
         let store = MemorySessionStore::new();
-        let mut session = Session::new("test_001", None, None);
+        let mut session = Session::new("test_001", None, None, None);
         session.push_message(crate::fae_llm::providers::message::Message::user("hello"));
 
         let save_result = store.save(&session).await;
@@ -277,7 +277,7 @@ mod tests {
         let exists_before = store.exists("test_exist").await;
         assert!(matches!(exists_before, Ok(false)));
 
-        let session = Session::new("test_exist", None, None);
+        let session = Session::new("test_exist", None, None, None);
         let save = store.save(&session).await;
         assert!(save.is_ok());
 
@@ -288,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn memory_store_overwrite() {
         let store = MemorySessionStore::new();
-        let mut session = Session::new("overwrite_test", None, None);
+        let mut session = Session::new("overwrite_test", None, None, None);
         let save1 = store.save(&session).await;
         assert!(save1.is_ok());
 

@@ -137,7 +137,7 @@ fn rand_suffix() -> u32 {
 impl SessionStore for FsSessionStore {
     async fn create(&self, system_prompt: Option<&str>) -> Result<SessionId, FaeLlmError> {
         let id = generate_session_id();
-        let session = Session::new(id.clone(), system_prompt.map(String::from), None);
+        let session = Session::new(id.clone(), system_prompt.map(String::from), None, None);
         self.write_session_atomic(&session)?;
         Ok(id)
     }
@@ -247,7 +247,7 @@ mod tests {
     #[tokio::test]
     async fn fs_store_save_persists_to_disk() {
         let (_dir, store) = temp_store();
-        let mut session = Session::new("persist_test", None, None);
+        let mut session = Session::new("persist_test", None, None, None);
         session.push_message(Message::user("hello"));
         session.push_message(Message::assistant("hi there"));
 
@@ -343,7 +343,7 @@ mod tests {
         let exists_before = store.exists("test_exist").await;
         assert!(matches!(exists_before, Ok(false)));
 
-        let session = Session::new("test_exist", None, None);
+        let session = Session::new("test_exist", None, None, None);
         let save = store.save(&session).await;
         assert!(save.is_ok());
 
@@ -354,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn fs_store_atomic_write_creates_file() {
         let (_dir, store) = temp_store();
-        let session = Session::new("atomic_test", None, None);
+        let session = Session::new("atomic_test", None, None, None);
         let result = store.write_session_atomic(&session);
         assert!(result.is_ok());
 
@@ -387,7 +387,7 @@ mod tests {
     #[tokio::test]
     async fn fs_store_overwrite_preserves_data() {
         let (_dir, store) = temp_store();
-        let mut session = Session::new("overwrite_test", None, None);
+        let mut session = Session::new("overwrite_test", None, None, None);
         let save1 = store.save(&session).await;
         assert!(save1.is_ok());
 
@@ -427,7 +427,7 @@ mod tests {
     #[tokio::test]
     async fn fs_store_with_tool_calls() {
         let (_dir, store) = temp_store();
-        let mut session = Session::new("tool_test", None, None);
+        let mut session = Session::new("tool_test", None, None, None);
 
         let tool_calls = vec![crate::fae_llm::providers::message::AssistantToolCall {
             call_id: "call_1".into(),

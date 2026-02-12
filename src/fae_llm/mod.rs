@@ -60,12 +60,12 @@ pub use providers::local_probe::{
 pub use providers::message::{AssistantToolCall, Message, MessageContent, Role};
 pub use providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
 pub use providers::profile::{CompatibilityProfile, ProfileRegistry, resolve_profile};
-pub use tools::{BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool};
-pub use types::{EndpointType, ModelRef, ReasoningLevel, RequestOptions};
 pub use session::{
     ConversationContext, FsSessionStore, MemorySessionStore, Session, SessionId, SessionMeta,
     SessionResumeError, SessionStore, validate_message_sequence, validate_session,
 };
+pub use tools::{BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool};
+pub use types::{EndpointType, ModelRef, ReasoningLevel, RequestOptions};
 pub use usage::{CostEstimate, TokenPricing, TokenUsage};
 
 #[cfg(test)]

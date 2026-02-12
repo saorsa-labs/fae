@@ -10,14 +10,14 @@
 //! use fae::fae_llm::session::types::Session;
 //! use fae::fae_llm::providers::message::Message;
 //!
-//! let mut session = Session::new("test", None, None);
+//! let mut session = Session::new("test", None, None, None);
 //! session.push_message(Message::user("hello"));
 //! session.push_message(Message::assistant("hi"));
 //! let result = validate_session(&session);
 //! assert!(result.is_ok());
 //! ```
 
-use super::types::{Session, SessionResumeError, CURRENT_SCHEMA_VERSION};
+use super::types::{CURRENT_SCHEMA_VERSION, Session, SessionResumeError};
 use crate::fae_llm::providers::message::{Message, MessageContent, Role};
 
 /// Validate a session is safe to resume.
@@ -59,6 +59,32 @@ pub fn validate_session(session: &Session) -> Result<(), SessionResumeError> {
     }
 
     Ok(())
+}
+
+/// Validate provider switch during session resume.
+///
+/// Checks if the session was originally created with a different provider
+/// than the one being used to resume it. Returns a warning message if a
+/// switch is detected, or `Ok(())` if no switch or provider_id is unset.
+///
+/// This is informational only - provider switches are allowed, but callers
+/// may want to log warnings for debugging.
+///
+/// # Errors
+///
+/// Returns a warning message if providers differ, `Ok(())` otherwise.
+pub fn validate_provider_switch(
+    session: &Session,
+    current_provider_id: &str,
+) -> Result<(), String> {
+    match &session.meta.provider_id {
+        None => Ok(()), // No provider recorded, allow
+        Some(original_provider) if original_provider == current_provider_id => Ok(()), // Same provider
+        Some(original_provider) => Err(format!(
+            "session '{}' was created with provider '{}' but resuming with '{}'",
+            session.meta.id, original_provider, current_provider_id
+        )),
+    }
 }
 
 /// Validate message sequence integrity.
@@ -133,7 +159,7 @@ mod tests {
 
     #[test]
     fn validate_empty_session_fails() {
-        let session = Session::new("empty", None, None);
+        let session = Session::new("empty", None, None, None);
         let result = validate_session(&session);
         assert!(result.is_err());
         match result {
@@ -147,7 +173,7 @@ mod tests {
 
     #[test]
     fn validate_valid_session_passes() {
-        let mut session = Session::new("valid", None, None);
+        let mut session = Session::new("valid", None, None, None);
         session.push_message(Message::user("hello"));
         session.push_message(Message::assistant("hi there"));
         let result = validate_session(&session);
@@ -156,7 +182,7 @@ mod tests {
 
     #[test]
     fn validate_session_with_system_prompt() {
-        let mut session = Session::new("sys", Some("Be helpful.".into()), None);
+        let mut session = Session::new("sys", Some("Be helpful.".into()), None, None);
         session.push_message(Message::system("Be helpful."));
         session.push_message(Message::user("hello"));
         let result = validate_session(&session);
@@ -165,7 +191,7 @@ mod tests {
 
     #[test]
     fn validate_schema_mismatch_fails() {
-        let mut session = Session::new("future", None, None);
+        let mut session = Session::new("future", None, None, None);
         session.meta.schema_version = 999;
         session.push_message(Message::user("hello"));
         let result = validate_session(&session);
@@ -186,7 +212,7 @@ mod tests {
 
     #[test]
     fn validate_current_schema_passes() {
-        let mut session = Session::new("current", None, None);
+        let mut session = Session::new("current", None, None, None);
         session.meta.schema_version = CURRENT_SCHEMA_VERSION;
         session.push_message(Message::user("hello"));
         let result = validate_session(&session);
@@ -196,7 +222,7 @@ mod tests {
     #[test]
     fn validate_older_schema_passes() {
         // Schema version 0 (hypothetically older) should still be valid
-        let mut session = Session::new("old", None, None);
+        let mut session = Session::new("old", None, None, None);
         session.meta.schema_version = 0;
         session.push_message(Message::user("hello"));
         let result = validate_session(&session);
@@ -232,10 +258,7 @@ mod tests {
 
     #[test]
     fn validate_system_after_user_fails() {
-        let messages = vec![
-            Message::user("hello"),
-            Message::system("too late"),
-        ];
+        let messages = vec![Message::user("hello"), Message::system("too late")];
         let result = validate_message_sequence(&messages);
         assert!(result.is_err());
         let err = match result {
@@ -362,5 +385,55 @@ mod tests {
         ];
         let result = validate_message_sequence(&messages);
         assert!(result.is_ok());
+    }
+
+    // ── validate_provider_switch ───────────────────────────
+
+    #[test]
+    fn provider_switch_no_original_provider() {
+        let mut session = Session::new("test", None, None, None);
+        session.push_message(Message::user("hello"));
+        let result = validate_provider_switch(&session, "openai");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn provider_switch_same_provider() {
+        let mut session = Session::new("test", None, None, Some("openai".into()));
+        session.push_message(Message::user("hello"));
+        let result = validate_provider_switch(&session, "openai");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn provider_switch_different_provider() {
+        let mut session = Session::new("test", None, None, Some("openai".into()));
+        session.push_message(Message::user("hello"));
+        let result = validate_provider_switch(&session, "anthropic");
+        assert!(result.is_err());
+        let err = match result {
+            Err(e) => e,
+            Ok(()) => unreachable!("expected error"),
+        };
+        assert!(err.contains("openai"));
+        assert!(err.contains("anthropic"));
+        assert!(err.contains("test"));
+    }
+
+    #[test]
+    fn provider_switch_returns_descriptive_message() {
+        let mut session = Session::new("sess_123", None, None, Some("provider_a".into()));
+        session.push_message(Message::user("hello"));
+        let result = validate_provider_switch(&session, "provider_b");
+        assert!(result.is_err());
+        let err = match result {
+            Err(e) => e,
+            Ok(()) => unreachable!("expected error"),
+        };
+        assert!(err.contains("sess_123"));
+        assert!(err.contains("provider_a"));
+        assert!(err.contains("provider_b"));
+        assert!(err.contains("created with"));
+        assert!(err.contains("resuming with"));
     }
 }

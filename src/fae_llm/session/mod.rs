@@ -20,7 +20,7 @@ pub mod validation;
 pub use context::ConversationContext;
 pub use fs_store::FsSessionStore;
 pub use store::{MemorySessionStore, SessionStore};
-pub use types::{Session, SessionId, SessionMeta, SessionResumeError, CURRENT_SCHEMA_VERSION};
+pub use types::{CURRENT_SCHEMA_VERSION, Session, SessionId, SessionMeta, SessionResumeError};
 pub use validation::{validate_message_sequence, validate_session};
 
 #[cfg(test)]
@@ -163,9 +163,8 @@ mod integration_tests {
         let store: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
 
         // Create context and send first message
-        let provider1: Arc<dyn ProviderAdapter> = Arc::new(MockProvider::new(vec![
-            MockProvider::text("First answer."),
-        ]));
+        let provider1: Arc<dyn ProviderAdapter> =
+            Arc::new(MockProvider::new(vec![MockProvider::text("First answer.")]));
         let config = AgentConfig::new().with_system_prompt("Be helpful.");
 
         let ctx = ConversationContext::new(
@@ -193,9 +192,10 @@ mod integration_tests {
         let msg_count_before = ctx.message_count();
 
         // Resume with a new provider
-        let provider2: Arc<dyn ProviderAdapter> = Arc::new(MockProvider::new(vec![
-            MockProvider::text("Second answer."),
-        ]));
+        let provider2: Arc<dyn ProviderAdapter> =
+            Arc::new(MockProvider::new(vec![MockProvider::text(
+                "Second answer.",
+            )]));
         let resumed = ConversationContext::resume(
             &session_id,
             Arc::clone(&store),
@@ -238,9 +238,10 @@ mod integration_tests {
         );
 
         // Create context and send
-        let provider1: Arc<dyn ProviderAdapter> = Arc::new(MockProvider::new(vec![
-            MockProvider::text("Persisted answer."),
-        ]));
+        let provider1: Arc<dyn ProviderAdapter> =
+            Arc::new(MockProvider::new(vec![MockProvider::text(
+                "Persisted answer.",
+            )]));
         let config = AgentConfig::new();
 
         let ctx = ConversationContext::new(
@@ -266,17 +267,13 @@ mod integration_tests {
         );
 
         // Resume from the new store
-        let provider2: Arc<dyn ProviderAdapter> = Arc::new(MockProvider::new(vec![
-            MockProvider::text("After restart."),
-        ]));
-        let resumed = ConversationContext::resume(
-            &session_id,
-            store2,
-            config,
-            provider2,
-            empty_registry(),
-        )
-        .await;
+        let provider2: Arc<dyn ProviderAdapter> =
+            Arc::new(MockProvider::new(vec![MockProvider::text(
+                "After restart.",
+            )]));
+        let resumed =
+            ConversationContext::resume(&session_id, store2, config, provider2, empty_registry())
+                .await;
         assert!(resumed.is_ok());
         let resumed = match resumed {
             Ok(c) => c,
@@ -299,19 +296,15 @@ mod integration_tests {
 
         // Create a session file with corrupted content
         let bad_path = dir.path().join("bad_session.json");
-        std::fs::write(&bad_path, "{{{{not valid json}}}}").unwrap_or_else(|_| unreachable!("write succeeded"));
+        std::fs::write(&bad_path, "{{{{not valid json}}}}")
+            .unwrap_or_else(|_| unreachable!("write succeeded"));
 
         let provider: Arc<dyn ProviderAdapter> = Arc::new(MockProvider::new(vec![]));
         let config = AgentConfig::new();
 
-        let result = ConversationContext::resume(
-            "bad_session",
-            store,
-            config,
-            provider,
-            empty_registry(),
-        )
-        .await;
+        let result =
+            ConversationContext::resume("bad_session", store, config, provider, empty_registry())
+                .await;
 
         assert!(result.is_err());
         let err = match result {
@@ -331,9 +324,10 @@ mod integration_tests {
         // Create 3 sessions
         let mut contexts = Vec::new();
         for i in 0..3 {
-            let provider: Arc<dyn ProviderAdapter> = Arc::new(MockProvider::new(vec![
-                MockProvider::text(&format!("Answer {i}")),
-            ]));
+            let provider: Arc<dyn ProviderAdapter> =
+                Arc::new(MockProvider::new(vec![MockProvider::text(&format!(
+                    "Answer {i}"
+                ))]));
             let ctx = ConversationContext::new(
                 Arc::clone(&store),
                 config.clone(),
@@ -416,9 +410,10 @@ mod integration_tests {
         let session_id = ctx.session_id().to_string();
 
         // Resume and verify tool call messages are preserved
-        let provider2: Arc<dyn ProviderAdapter> = Arc::new(MockProvider::new(vec![
-            MockProvider::text("Continued after tool call."),
-        ]));
+        let provider2: Arc<dyn ProviderAdapter> =
+            Arc::new(MockProvider::new(vec![MockProvider::text(
+                "Continued after tool call.",
+            )]));
         let resumed = ConversationContext::resume(
             &session_id,
             Arc::clone(&store),
