@@ -25,4 +25,5 @@
 //! 5. If cancelled or limits hit: return with appropriate StopReason
 //! ```
 
+pub mod accumulator;
 pub mod types;
