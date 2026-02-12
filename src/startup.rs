@@ -11,7 +11,7 @@ use crate::error::Result;
 use crate::llm::LocalLlm;
 use crate::llm::server::LlmServer;
 use crate::models::ModelManager;
-use crate::progress::{ProgressCallback, ProgressEvent};
+use crate::progress::{DownloadFile, DownloadPlan, ProgressCallback, ProgressEvent};
 use crate::stt::ParakeetStt;
 use crate::tts::KokoroTts;
 use std::time::Instant;
@@ -66,6 +66,82 @@ const STT_FILES: &[&str] = &[
 /// LLM tokenizer files to pre-download (from the tokenizer repo).
 const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"];
 
+/// Build a download plan listing all files needed for startup.
+///
+/// Checks cache status and queries file sizes for each file.
+/// The plan is used by the GUI to show total download size before starting.
+pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
+    let use_local_llm = matches!(
+        config.llm.backend,
+        LlmBackend::Local | LlmBackend::Agent | LlmBackend::Pi
+    );
+
+    let mut files = Vec::new();
+
+    // STT files
+    let stt_sizes = ModelManager::query_file_sizes(&config.stt.model_id, STT_FILES);
+    for (filename, size_bytes) in stt_sizes {
+        files.push(DownloadFile {
+            repo_id: config.stt.model_id.clone(),
+            filename: filename.clone(),
+            size_bytes,
+            cached: ModelManager::is_file_cached(&config.stt.model_id, &filename),
+        });
+    }
+
+    // LLM GGUF
+    if use_local_llm {
+        let llm_sizes =
+            ModelManager::query_file_sizes(&config.llm.model_id, &[config.llm.gguf_file.as_str()]);
+        for (filename, size_bytes) in llm_sizes {
+            files.push(DownloadFile {
+                repo_id: config.llm.model_id.clone(),
+                filename: filename.clone(),
+                size_bytes,
+                cached: ModelManager::is_file_cached(&config.llm.model_id, &filename),
+            });
+        }
+
+        // LLM tokenizer
+        if !config.llm.tokenizer_id.is_empty() {
+            let tok_sizes =
+                ModelManager::query_file_sizes(&config.llm.tokenizer_id, LLM_TOKENIZER_FILES);
+            for (filename, size_bytes) in tok_sizes {
+                files.push(DownloadFile {
+                    repo_id: config.llm.tokenizer_id.clone(),
+                    filename: filename.clone(),
+                    size_bytes,
+                    cached: ModelManager::is_file_cached(&config.llm.tokenizer_id, &filename),
+                });
+            }
+        }
+    }
+
+    // TTS (Kokoro)
+    if matches!(config.tts.backend, TtsBackend::Kokoro) {
+        let tts_repo = crate::tts::kokoro::download::KOKORO_REPO_ID;
+        let model_file = crate::tts::kokoro::download::model_filename(&config.tts.model_variant);
+        let voice_file = crate::tts::kokoro::download::voice_filename(&config.tts.voice);
+
+        let mut tts_filenames: Vec<&str> = vec![model_file, "tokenizer.json"];
+        if let Some(ref vf) = voice_file {
+            tts_filenames.push(vf.as_str());
+        }
+
+        let tts_sizes = ModelManager::query_file_sizes(tts_repo, &tts_filenames);
+        for (filename, size_bytes) in tts_sizes {
+            files.push(DownloadFile {
+                repo_id: tts_repo.to_owned(),
+                filename: filename.clone(),
+                size_bytes,
+                cached: ModelManager::is_file_cached(tts_repo, &filename),
+            });
+        }
+    }
+
+    DownloadPlan { files }
+}
+
 /// Download all model files with progress bars, then eagerly load each model.
 ///
 /// Prints user-friendly progress to stdout. This is designed for CLI use.
@@ -112,6 +188,22 @@ pub async fn initialize_models_with_progress(
             "  Note: tool_mode is ignored for {:?} backend; use llm.backend=pi or llm.backend=agent for tool access.",
             config.llm.backend
         );
+    }
+
+    // --- Phase 0: Build download plan ---
+    let plan = build_download_plan(config);
+    if let Some(cb) = callback {
+        cb(ProgressEvent::DownloadPlanReady { plan: plan.clone() });
+    }
+    if plan.needs_download() {
+        info!(
+            "download plan: {} files to download ({} bytes), {} cached",
+            plan.files_to_download(),
+            plan.download_bytes(),
+            plan.total_files() - plan.files_to_download()
+        );
+    } else {
+        info!("all {} model files cached", plan.total_files());
     }
 
     // --- Phase 1: Download all model files ---
