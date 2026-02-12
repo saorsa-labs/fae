@@ -27,5 +27,6 @@
 
 pub mod accumulator;
 pub mod executor;
+pub mod loop_engine;
 pub mod types;
 pub mod validation;
