@@ -128,6 +128,30 @@ impl AgentLoop {
         self.run_loop(messages).await
     }
 
+    /// Continue a conversation from a previous agent loop result.
+    ///
+    /// Reconstructs the message history from the previous result,
+    /// appends the new user message, and runs the loop.
+    ///
+    /// # Arguments
+    ///
+    /// * `previous` — The result of a previous agent loop run
+    /// * `user_message` — The new user message to continue with
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FaeLlmError`] if the provider request fails.
+    pub async fn run_continuation(
+        &self,
+        previous: &AgentLoopResult,
+        user_message: &str,
+    ) -> Result<AgentLoopResult, FaeLlmError> {
+        let mut messages =
+            build_messages_from_result(previous, self.config.system_prompt.as_deref());
+        messages.push(Message::user(user_message));
+        self.run_loop(messages).await
+    }
+
     /// The main agent loop implementation.
     async fn run_loop(
         &self,
@@ -960,6 +984,119 @@ mod tests {
             Err(_) => unreachable!("run succeeded"),
         };
         assert_eq!(result.final_text, "Continued!");
+    }
+
+    // ── run_continuation ────────────────────────────────────
+
+    #[tokio::test]
+    async fn agent_loop_continuation_from_text() {
+        // First run
+        let provider1 = Arc::new(MockProvider::new(vec![MockProvider::text_response(
+            "First answer.",
+        )]));
+        let registry1 = make_registry_with_mock();
+        let config1 = AgentConfig::new().with_system_prompt("Be helpful.");
+        let agent1 = AgentLoop::new(config1, provider1, registry1);
+        let first_result = agent1.run("Hello").await;
+        assert!(first_result.is_ok());
+        let first_result = match first_result {
+            Ok(r) => r,
+            Err(_) => unreachable!("first run succeeded"),
+        };
+
+        // Continuation
+        let provider2 = Arc::new(MockProvider::new(vec![MockProvider::text_response(
+            "Second answer.",
+        )]));
+        let registry2 = make_registry_with_mock();
+        let config2 = AgentConfig::new().with_system_prompt("Be helpful.");
+        let agent2 = AgentLoop::new(config2, provider2, registry2);
+        let second_result = agent2.run_continuation(&first_result, "Follow up").await;
+
+        assert!(second_result.is_ok());
+        let second_result = match second_result {
+            Ok(r) => r,
+            Err(_) => unreachable!("continuation succeeded"),
+        };
+        assert_eq!(second_result.final_text, "Second answer.");
+        assert_eq!(second_result.stop_reason, StopReason::Complete);
+    }
+
+    #[tokio::test]
+    async fn agent_loop_continuation_from_tool_call() {
+        // First run with a tool call
+        let provider1 = Arc::new(MockProvider::new(vec![
+            MockProvider::tool_call_response("call_1", "read", r#"{"input":"x"}"#),
+            MockProvider::text_response("I read the file."),
+        ]));
+        let registry1 = make_registry_with_mock();
+        let config1 = AgentConfig::new();
+        let agent1 = AgentLoop::new(config1, provider1, registry1);
+        let first_result = agent1.run("Read something").await;
+        assert!(first_result.is_ok());
+        let first_result = match first_result {
+            Ok(r) => r,
+            Err(_) => unreachable!("first run succeeded"),
+        };
+        assert_eq!(first_result.turns.len(), 2);
+
+        // Continuation
+        let provider2 = Arc::new(MockProvider::new(vec![MockProvider::text_response(
+            "Here is more info.",
+        )]));
+        let registry2 = make_registry_with_mock();
+        let config2 = AgentConfig::new();
+        let agent2 = AgentLoop::new(config2, provider2, registry2);
+        let second_result = agent2.run_continuation(&first_result, "Tell me more").await;
+
+        assert!(second_result.is_ok());
+        let second_result = match second_result {
+            Ok(r) => r,
+            Err(_) => unreachable!("continuation succeeded"),
+        };
+        assert_eq!(second_result.final_text, "Here is more info.");
+    }
+
+    #[tokio::test]
+    async fn agent_loop_continuation_preserves_tool_results() {
+        // First run with tool call
+        let provider1 = Arc::new(MockProvider::new(vec![
+            MockProvider::tool_call_response("call_1", "read", r#"{"input":"data"}"#),
+            MockProvider::text_response("Got data."),
+        ]));
+        let registry1 = make_registry_with_mock();
+        let config1 = AgentConfig::new();
+        let agent1 = AgentLoop::new(config1, provider1, registry1);
+        let first_result = agent1.run("Get data").await;
+        assert!(first_result.is_ok());
+        let first_result = match first_result {
+            Ok(r) => r,
+            Err(_) => unreachable!("first run succeeded"),
+        };
+
+        // Verify that build_messages_from_result includes the tool call and result
+        let messages = build_messages_from_result(&first_result, None);
+        // Should have: assistant(with tool call) + tool_result + assistant(text)
+        assert_eq!(messages.len(), 3);
+
+        // The first message should be an assistant with tool calls
+        assert_eq!(
+            messages[0].role,
+            crate::fae_llm::providers::message::Role::Assistant
+        );
+        assert_eq!(messages[0].tool_calls.len(), 1);
+
+        // Second message should be tool result
+        assert_eq!(
+            messages[1].role,
+            crate::fae_llm::providers::message::Role::Tool
+        );
+
+        // Third should be assistant text
+        assert_eq!(
+            messages[2].role,
+            crate::fae_llm::providers::message::Role::Assistant
+        );
     }
 
     // ── Send + Sync ──────────────────────────────────────────
