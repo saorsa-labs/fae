@@ -472,3 +472,32 @@ Task 1 starting...
 - [x] Task 4: Compatibility profile tests (commit: e7c0619)
 - [x] Task 5: E2E multi-turn tool workflow tests (commit: eaab1af)
 - [x] Task 6: Failure injection tests (commit: d6bed77)
+- [x] Task 7: Mode gating security tests (commit: 6960f5d)
+- [x] Task 8: Integration test documentation and cleanup (complete)
+
+## Phase 4.2 Complete - 2026-02-12
+
+All 8 tasks complete:
+✅ Task 1: OpenAI provider contract tests (23 tests)
+✅ Task 2: Anthropic provider contract tests (19 tests)
+✅ Task 3: Local endpoint probing tests (20 tests)
+✅ Task 4: Compatibility profile tests (29 tests)
+✅ Task 5: E2E multi-turn tool workflow tests (15 tests)
+✅ Task 6: Failure injection tests (23 tests)
+✅ Task 7: Mode gating security tests (23 tests)
+✅ Task 8: Integration test documentation and cleanup
+
+**Total new tests**: 152
+**Final test count**: 1474
+**Zero warnings**: ✓
+**Zero clippy violations**: ✓
+**All tests pass**: ✓
+
+Phase 4.2 delivered comprehensive integration test coverage for fae_llm module including:
+- Provider contract tests (OpenAI, Anthropic)
+- Local endpoint probing with health checks and model discovery
+- Compatibility profile tests for OpenAI-compatible providers
+- E2E multi-turn workflow tests
+- Failure injection and circuit breaker tests
+- Tool mode gating security tests
+- Complete test documentation
