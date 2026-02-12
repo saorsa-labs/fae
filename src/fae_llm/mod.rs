@@ -11,6 +11,7 @@
 //! - [`events`] — Normalized streaming event model
 //! - [`usage`] — Token usage and cost tracking
 //! - [`metadata`] — Request/response metadata
+//! - [`config`] — Configuration schema and persistence
 //!
 //! # Event Model
 //!
@@ -22,12 +23,18 @@
 //! All errors carry a stable code (e.g. `CONFIG_INVALID`, `AUTH_FAILED`)
 //! that is safe to match on programmatically.
 
+pub mod config;
 pub mod error;
 pub mod events;
 pub mod metadata;
 pub mod types;
 pub mod usage;
 
+pub use config::{
+    ConfigEditor, ConfigService, DefaultsConfig, FaeLlmConfig, ModelConfig, ModelTier, ModelUpdate,
+    ProviderConfig, ProviderUpdate, RuntimeConfig, SecretRef, ToolConfig, ToolMode, backup_config,
+    default_config, ensure_config_exists, read_config, validate_config, write_config_atomic,
+};
 pub use error::FaeLlmError;
 pub use events::{FinishReason, LlmEvent};
 pub use metadata::{RequestMeta, ResponseMeta};

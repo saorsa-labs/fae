@@ -79,6 +79,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+toml_edit = "0.22"
 urlencoding = "2"
 base64 = "0.22"
 
@@ -134,6 +135,8 @@ mistralrs = { version = "0.7", features = ["metal"] }
 [dev-dependencies]
 # Mock HTTP server for API integration tests
 axum = "0.8"
+# Temp directories for config persistence tests
+tempfile = "3"
 
 # Local path overrides for development (uncomment to use local saorsa-canvas checkout):
 # [patch.crates-io]
