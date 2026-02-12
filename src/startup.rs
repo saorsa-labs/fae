@@ -144,8 +144,19 @@ pub async fn initialize_models_with_progress(
         }
     }
 
-    // TTS: Kokoro assets are downloaded by the engine via hf-hub on load.
-    // (Pre-download with progress is added in Task 5.)
+    // TTS: Pre-download Kokoro assets with progress callbacks.
+    let kokoro_paths = if matches!(config.tts.backend, TtsBackend::Kokoro) {
+        Some(
+            crate::tts::kokoro::download::download_kokoro_assets_with_progress(
+                &config.tts.model_variant,
+                &config.tts.voice,
+                &model_manager,
+                callback,
+            )?,
+        )
+    } else {
+        None
+    };
 
     // --- Phase 2: Load models ---
     println!("\nLoading models...");
@@ -160,7 +171,9 @@ pub async fn initialize_models_with_progress(
         );
         None
     };
-    let tts = if matches!(config.tts.backend, TtsBackend::Kokoro) {
+    let tts = if let Some(paths) = kokoro_paths {
+        Some(load_tts_from_paths(paths, config, callback)?)
+    } else if matches!(config.tts.backend, TtsBackend::Kokoro) {
         Some(load_tts(config, callback)?)
     } else {
         println!(
@@ -286,6 +299,17 @@ async fn load_llm(config: &SpeechConfig, callback: Option<&ProgressCallback>) ->
 fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<KokoroTts> {
     load_model_with_progress("TTS (Kokoro-82M)".to_owned(), callback, || {
         KokoroTts::new(&config.tts)
+    })
+}
+
+/// Load TTS from pre-downloaded paths (skips download phase).
+fn load_tts_from_paths(
+    paths: crate::tts::kokoro::download::KokoroPaths,
+    config: &SpeechConfig,
+    callback: Option<&ProgressCallback>,
+) -> Result<KokoroTts> {
+    load_model_with_progress("TTS (Kokoro-82M)".to_owned(), callback, || {
+        KokoroTts::from_paths(paths, &config.tts)
     })
 }
 

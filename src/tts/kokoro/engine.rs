@@ -32,16 +32,16 @@ pub struct KokoroTts {
 }
 
 impl KokoroTts {
-    /// Load the Kokoro engine.
+    /// Load the Kokoro engine from pre-downloaded paths.
     ///
-    /// Downloads model files on first use (cached by HuggingFace Hub).
+    /// This skips all download logic and loads directly from disk.
+    /// Use when files have already been downloaded via
+    /// [`download_kokoro_assets_with_progress`](super::download::download_kokoro_assets_with_progress).
     ///
     /// # Errors
     ///
-    /// Returns an error if model download, loading, or phonemizer init fails.
-    pub fn new(config: &TtsConfig) -> Result<Self> {
-        let paths = download_kokoro_assets(&config.model_variant, &config.voice)?;
-
+    /// Returns an error if model loading or phonemizer init fails.
+    pub fn from_paths(paths: super::download::KokoroPaths, config: &TtsConfig) -> Result<Self> {
         info!("loading Kokoro ONNX model");
         let session = Session::builder()
             .and_then(|b| b.with_intra_threads(4))
@@ -51,7 +51,6 @@ impl KokoroTts {
         info!("loading tokenizer");
         let tokenizer = load_tokenizer(&paths.tokenizer_json)?;
 
-        // Use British phonemizer for bf_* voices, American for af_*/am_* voices.
         let is_british = config.voice.starts_with("bf_") || config.voice.starts_with("bm_");
         info!("initialising misaki phonemizer (british={is_british})");
         let phonemizer = Phonemizer::new(is_british);
@@ -73,6 +72,19 @@ impl KokoroTts {
             voice_styles,
             speed,
         })
+    }
+
+    /// Load the Kokoro engine.
+    ///
+    /// Downloads model files on first use (cached by HuggingFace Hub),
+    /// then loads them. For pre-downloaded files, use [`Self::from_paths`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if model download, loading, or phonemizer init fails.
+    pub fn new(config: &TtsConfig) -> Result<Self> {
+        let paths = download_kokoro_assets(&config.model_variant, &config.voice)?;
+        Self::from_paths(paths, config)
     }
 
     /// Synthesize text to audio samples.

@@ -1,6 +1,6 @@
 //! Kokoro-82M TTS engine — single-model ONNX inference with espeak-ng phonemization.
 
-mod download;
+pub mod download;
 mod engine;
 mod phonemize;
 

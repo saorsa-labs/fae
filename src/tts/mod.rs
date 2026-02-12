@@ -4,7 +4,7 @@
 //! - **Kokoro** (default) — Kokoro-82M ONNX with pre-trained voice styles.
 //! - **Fish Speech** (optional, `fish-speech` feature) — voice cloning from reference audio.
 
-mod kokoro;
+pub mod kokoro;
 
 #[cfg(feature = "fish-speech")]
 pub mod fish_speech;
