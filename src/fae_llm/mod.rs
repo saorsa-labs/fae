@@ -27,6 +27,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod metadata;
+pub mod tools;
 pub mod types;
 pub mod usage;
 
@@ -38,6 +39,7 @@ pub use config::{
 pub use error::FaeLlmError;
 pub use events::{FinishReason, LlmEvent};
 pub use metadata::{RequestMeta, ResponseMeta};
+pub use tools::{BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool};
 pub use types::{EndpointType, ModelRef, ReasoningLevel, RequestOptions};
 pub use usage::{CostEstimate, TokenPricing, TokenUsage};
 
