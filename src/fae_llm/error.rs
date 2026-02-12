@@ -104,6 +104,34 @@ impl FaeLlmError {
             | Self::SessionError(m) => m,
         }
     }
+
+    /// Returns true if this error represents a transient failure that can be retried.
+    ///
+    /// Retryable errors include:
+    /// - Network errors (connection refused, timeouts, etc.)
+    /// - Rate limits (429)
+    /// - Server errors (5xx)
+    /// - Stream interruptions
+    ///
+    /// Non-retryable errors include:
+    /// - Authentication failures (401, 403)
+    /// - Bad requests (400)
+    /// - Configuration errors
+    /// - Tool execution failures
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            // Configuration and auth errors are not retryable
+            Self::ConfigError(_) | Self::AuthError(_) => false,
+            // Tool failures are not retryable (need code fix, not retry)
+            Self::ToolError(_) => false,
+            // Request, stream, and timeout errors are typically transient
+            Self::RequestError(_) | Self::StreamError(_) | Self::TimeoutError(_) => true,
+            // Provider errors may be rate limits (429) or server errors (5xx) - retryable
+            Self::ProviderError(_) => true,
+            // Session errors are not retryable
+            Self::SessionError(_) => false,
+        }
+    }
 }
 
 /// Convenience alias for fae_llm results.
@@ -235,5 +263,53 @@ mod tests {
     fn error_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<FaeLlmError>();
+    }
+
+    #[test]
+    fn is_retryable_config_error() {
+        let err = FaeLlmError::ConfigError("missing model".into());
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_auth_error() {
+        let err = FaeLlmError::AuthError("invalid key".into());
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_request_error() {
+        let err = FaeLlmError::RequestError("connection refused".into());
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_stream_error() {
+        let err = FaeLlmError::StreamError("unexpected EOF".into());
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_tool_error() {
+        let err = FaeLlmError::ToolError("bash failed".into());
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_timeout_error() {
+        let err = FaeLlmError::TimeoutError("30s elapsed".into());
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_provider_error() {
+        let err = FaeLlmError::ProviderError("rate limited".into());
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn is_retryable_session_error() {
+        let err = FaeLlmError::SessionError("resume failed".into());
+        assert!(!err.is_retryable());
     }
 }

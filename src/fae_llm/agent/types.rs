@@ -5,6 +5,7 @@
 //! agent run including all turns, tool calls, and usage.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::fae_llm::events::FinishReason;
 use crate::fae_llm::tools::types::ToolResult;
@@ -21,6 +22,110 @@ pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
 
 /// Default per-tool execution timeout in seconds.
 pub const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 30;
+
+/// Default maximum retry attempts for transient errors.
+pub const DEFAULT_MAX_RETRY_ATTEMPTS: u32 = 3;
+
+/// Default base delay for exponential backoff in milliseconds.
+pub const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 1000;
+
+/// Default maximum delay for exponential backoff in milliseconds.
+pub const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 32000;
+
+/// Default backoff multiplier (2.0 for exponential backoff).
+pub const DEFAULT_RETRY_BACKOFF_MULTIPLIER: f64 = 2.0;
+
+/// Retry policy for handling transient failures.
+///
+/// Implements exponential backoff with jitter for retrying failed requests.
+/// Only retryable errors (network errors, rate limits, server errors) are retried.
+///
+/// # Examples
+///
+/// ```
+/// use fae::fae_llm::agent::types::RetryPolicy;
+///
+/// let policy = RetryPolicy::default();
+/// assert_eq!(policy.max_attempts, 3);
+/// assert_eq!(policy.base_delay_ms, 1000);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    /// Maximum number of retry attempts (0 = no retries, 1 = one retry, etc.).
+    pub max_attempts: u32,
+    /// Base delay in milliseconds for exponential backoff.
+    pub base_delay_ms: u64,
+    /// Maximum delay in milliseconds (caps exponential growth).
+    pub max_delay_ms: u64,
+    /// Backoff multiplier (2.0 for exponential backoff).
+    pub backoff_multiplier: f64,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: DEFAULT_MAX_RETRY_ATTEMPTS,
+            base_delay_ms: DEFAULT_RETRY_BASE_DELAY_MS,
+            max_delay_ms: DEFAULT_RETRY_MAX_DELAY_MS,
+            backoff_multiplier: DEFAULT_RETRY_BACKOFF_MULTIPLIER,
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Create a new retry policy with default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the maximum number of retry attempts.
+    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
+        self.max_attempts = max_attempts;
+        self
+    }
+
+    /// Set the base delay in milliseconds.
+    pub fn with_base_delay_ms(mut self, base_delay_ms: u64) -> Self {
+        self.base_delay_ms = base_delay_ms;
+        self
+    }
+
+    /// Set the maximum delay in milliseconds.
+    pub fn with_max_delay_ms(mut self, max_delay_ms: u64) -> Self {
+        self.max_delay_ms = max_delay_ms;
+        self
+    }
+
+    /// Set the backoff multiplier.
+    pub fn with_backoff_multiplier(mut self, backoff_multiplier: f64) -> Self {
+        self.backoff_multiplier = backoff_multiplier;
+        self
+    }
+
+    /// Calculate the delay for a given retry attempt with exponential backoff and jitter.
+    ///
+    /// Formula: min(base * multiplier^attempt, max_delay) + jitter
+    /// where jitter is a random value between 0 and 10% of the delay.
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        if attempt == 0 {
+            return Duration::from_millis(0);
+        }
+
+        let base = self.base_delay_ms as f64;
+        let multiplier = self.backoff_multiplier;
+        let max = self.max_delay_ms as f64;
+
+        // Calculate exponential backoff
+        let exp = multiplier.powi(attempt as i32 - 1);
+        let delay = (base * exp).min(max);
+
+        // Add jitter (0-10% of delay)
+        let jitter = delay * (rand::random::<f64>() * 0.1);
+        let total_ms = (delay + jitter) as u64;
+
+        Duration::from_millis(total_ms)
+    }
+}
 
 /// Configuration for the agent loop.
 ///
@@ -507,5 +612,101 @@ mod tests {
         assert_send_sync::<ExecutedToolCall>();
         assert_send_sync::<TurnResult>();
         assert_send_sync::<AgentLoopResult>();
+        assert_send_sync::<RetryPolicy>();
+    }
+
+    // ── RetryPolicy ───────────────────────────────────────────
+
+    #[test]
+    fn retry_policy_defaults() {
+        let policy = RetryPolicy::new();
+        assert_eq!(policy.max_attempts, DEFAULT_MAX_RETRY_ATTEMPTS);
+        assert_eq!(policy.base_delay_ms, DEFAULT_RETRY_BASE_DELAY_MS);
+        assert_eq!(policy.max_delay_ms, DEFAULT_RETRY_MAX_DELAY_MS);
+        assert_eq!(policy.backoff_multiplier, DEFAULT_RETRY_BACKOFF_MULTIPLIER);
+    }
+
+    #[test]
+    fn retry_policy_builder() {
+        let policy = RetryPolicy::new()
+            .with_max_attempts(5)
+            .with_base_delay_ms(500)
+            .with_max_delay_ms(16000)
+            .with_backoff_multiplier(1.5);
+        assert_eq!(policy.max_attempts, 5);
+        assert_eq!(policy.base_delay_ms, 500);
+        assert_eq!(policy.max_delay_ms, 16000);
+        assert_eq!(policy.backoff_multiplier, 1.5);
+    }
+
+    #[test]
+    fn retry_policy_delay_zero_attempt() {
+        let policy = RetryPolicy::new();
+        let delay = policy.delay_for_attempt(0);
+        assert_eq!(delay.as_millis(), 0);
+    }
+
+    #[test]
+    fn retry_policy_delay_first_attempt() {
+        let policy = RetryPolicy::new().with_base_delay_ms(1000);
+        let delay = policy.delay_for_attempt(1);
+        // Should be ~1000ms + jitter (0-10%)
+        assert!(delay.as_millis() >= 1000);
+        assert!(delay.as_millis() <= 1100);
+    }
+
+    #[test]
+    fn retry_policy_delay_exponential_growth() {
+        let policy = RetryPolicy::new()
+            .with_base_delay_ms(1000)
+            .with_backoff_multiplier(2.0)
+            .with_max_delay_ms(100000);
+        let delay1 = policy.delay_for_attempt(1);
+        let delay2 = policy.delay_for_attempt(2);
+        let delay3 = policy.delay_for_attempt(3);
+        // Delays should grow exponentially: ~1s, ~2s, ~4s (+ jitter)
+        assert!(delay1.as_millis() >= 1000 && delay1.as_millis() <= 1100);
+        assert!(delay2.as_millis() >= 2000 && delay2.as_millis() <= 2200);
+        assert!(delay3.as_millis() >= 4000 && delay3.as_millis() <= 4400);
+    }
+
+    #[test]
+    fn retry_policy_delay_capped_by_max() {
+        let policy = RetryPolicy::new()
+            .with_base_delay_ms(1000)
+            .with_backoff_multiplier(2.0)
+            .with_max_delay_ms(3000);
+        let delay5 = policy.delay_for_attempt(5);
+        // Without cap: 1000 * 2^4 = 16000ms
+        // With cap: 3000ms + jitter (max 3300ms)
+        assert!(delay5.as_millis() <= 3300);
+    }
+
+    #[test]
+    fn retry_policy_serde_round_trip() {
+        let original = RetryPolicy::new().with_max_attempts(4);
+        let json = serde_json::to_string(&original).unwrap_or_default();
+        let parsed: Result<RetryPolicy, _> = serde_json::from_str(&json);
+        assert!(parsed.is_ok());
+        let parsed = match parsed {
+            Ok(p) => p,
+            Err(_) => unreachable!("deserialization succeeded"),
+        };
+        assert_eq!(parsed.max_attempts, 4);
+    }
+
+    #[test]
+    fn retry_policy_clone() {
+        let policy = RetryPolicy::new().with_max_attempts(3);
+        let cloned = policy.clone();
+        assert_eq!(cloned.max_attempts, 3);
+    }
+
+    #[test]
+    fn retry_policy_debug() {
+        let policy = RetryPolicy::new();
+        let debug = format!("{policy:?}");
+        assert!(debug.contains("RetryPolicy"));
+        assert!(debug.contains("max_attempts"));
     }
 }

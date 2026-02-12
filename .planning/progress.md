@@ -423,3 +423,4 @@ All 4 phases delivered:
 - Created: session/types.rs, session/store.rs, session/fs_store.rs, session/validation.rs, session/context.rs, session/mod.rs
 - Key types: Session, SessionStore trait, FsSessionStore (atomic writes), ConversationContext
 - 1,353 tests passing (+94 new), zero warnings
+- [x] Task 1: Provider switch validation for resumed sessions (commit: 6d729bf)
