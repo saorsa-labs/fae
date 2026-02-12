@@ -123,12 +123,33 @@ mod gui {
         pub cancel_token: Option<CancellationToken>,
     }
 
-    /// Apply a progress event to an optional `AppStatus` update.
+    /// Apply a progress event to produce an updated `AppStatus`.
     ///
-    /// Returns `Some(new_status)` when the event warrants a UI state change,
-    /// or `None` for intermediate events (e.g. `DownloadComplete`, `LoadComplete`)
-    /// that don't directly change the displayed state.
-    pub fn apply_progress_event(event: ProgressEvent) -> Option<AppStatus> {
+    /// Takes the current status so aggregate download state is preserved
+    /// across per-file events. Returns `Some(new_status)` when the event
+    /// warrants a UI state change, or `None` for intermediate events.
+    pub fn apply_progress_event(event: ProgressEvent, current: &AppStatus) -> Option<AppStatus> {
+        // Extract aggregate state from current status (preserved across events)
+        let (agg_fc, agg_ft, agg_bytes, agg_total, agg_speed, agg_eta) = match current {
+            AppStatus::Downloading {
+                files_complete,
+                files_total,
+                aggregate_bytes,
+                aggregate_total,
+                speed_bps,
+                eta_secs,
+                ..
+            } => (
+                *files_complete,
+                *files_total,
+                *aggregate_bytes,
+                *aggregate_total,
+                *speed_bps,
+                *eta_secs,
+            ),
+            _ => (0, 0, 0, 0, 0.0, None),
+        };
+
         match event {
             ProgressEvent::DownloadStarted {
                 filename,
@@ -138,12 +159,12 @@ mod gui {
                 current_file: filename,
                 bytes_downloaded: 0,
                 total_bytes,
-                files_complete: 0,
-                files_total: 0,
-                aggregate_bytes: 0,
-                aggregate_total: 0,
-                speed_bps: 0.0,
-                eta_secs: None,
+                files_complete: agg_fc,
+                files_total: agg_ft,
+                aggregate_bytes: agg_bytes,
+                aggregate_total: agg_total,
+                speed_bps: agg_speed,
+                eta_secs: agg_eta,
             }),
             ProgressEvent::DownloadProgress {
                 filename,
@@ -154,26 +175,55 @@ mod gui {
                 current_file: filename,
                 bytes_downloaded,
                 total_bytes,
+                files_complete: agg_fc,
+                files_total: agg_ft,
+                aggregate_bytes: agg_bytes,
+                aggregate_total: agg_total,
+                speed_bps: agg_speed,
+                eta_secs: agg_eta,
+            }),
+            ProgressEvent::DownloadComplete { .. } | ProgressEvent::Cached { .. } => None,
+            ProgressEvent::LoadStarted { model_name } => Some(AppStatus::Loading { model_name }),
+            ProgressEvent::LoadComplete { .. } => None,
+            ProgressEvent::Error { message } => Some(AppStatus::Error(message)),
+            ProgressEvent::DownloadPlanReady { plan } => Some(AppStatus::Downloading {
+                current_file: "Preparing downloads...".into(),
+                bytes_downloaded: 0,
+                total_bytes: None,
                 files_complete: 0,
-                files_total: 0,
+                files_total: plan.files_to_download(),
                 aggregate_bytes: 0,
-                aggregate_total: 0,
+                aggregate_total: plan.download_bytes(),
                 speed_bps: 0.0,
                 eta_secs: None,
             }),
-            ProgressEvent::DownloadComplete { .. } | ProgressEvent::Cached { .. } => {
-                // Progress continues to next file or load phase — no state change
-                None
-            }
-            ProgressEvent::LoadStarted { model_name } => Some(AppStatus::Loading { model_name }),
-            ProgressEvent::LoadComplete { .. } => {
-                // Will transition to Running after all loads complete
-                None
-            }
-            ProgressEvent::Error { message } => Some(AppStatus::Error(message)),
-            // Plan and aggregate events are handled by Phase 1.2 GUI overhaul
-            ProgressEvent::DownloadPlanReady { .. } | ProgressEvent::AggregateProgress { .. } => {
-                None
+            ProgressEvent::AggregateProgress {
+                bytes_downloaded,
+                total_bytes,
+                files_complete,
+                files_total,
+            } => {
+                // Preserve current per-file display, update aggregate
+                let (cur_file, cur_bytes, cur_total) = match current {
+                    AppStatus::Downloading {
+                        current_file,
+                        bytes_downloaded,
+                        total_bytes,
+                        ..
+                    } => (current_file.clone(), *bytes_downloaded, *total_bytes),
+                    _ => ("downloading...".into(), 0, None),
+                };
+                Some(AppStatus::Downloading {
+                    current_file: cur_file,
+                    bytes_downloaded: cur_bytes,
+                    total_bytes: cur_total,
+                    files_complete,
+                    files_total,
+                    aggregate_bytes: bytes_downloaded,
+                    aggregate_total: total_bytes,
+                    speed_bps: agg_speed,
+                    eta_secs: agg_eta,
+                })
             }
         }
     }
@@ -365,11 +415,14 @@ mod gui {
 
         #[test]
         fn download_started_sets_downloading() {
-            let result = apply_progress_event(ProgressEvent::DownloadStarted {
-                repo_id: "test/repo".into(),
-                filename: "weights.bin".into(),
-                total_bytes: Some(2048),
-            });
+            let result = apply_progress_event(
+                ProgressEvent::DownloadStarted {
+                    repo_id: "test/repo".into(),
+                    filename: "weights.bin".into(),
+                    total_bytes: Some(2048),
+                },
+                &AppStatus::Idle,
+            );
             assert!(result.is_some());
             let status = result.unwrap_or(AppStatus::Idle);
             match status {
@@ -389,12 +442,15 @@ mod gui {
 
         #[test]
         fn download_progress_updates_bytes() {
-            let result = apply_progress_event(ProgressEvent::DownloadProgress {
-                repo_id: "test/repo".into(),
-                filename: "weights.bin".into(),
-                bytes_downloaded: 1024,
-                total_bytes: Some(2048),
-            });
+            let result = apply_progress_event(
+                ProgressEvent::DownloadProgress {
+                    repo_id: "test/repo".into(),
+                    filename: "weights.bin".into(),
+                    bytes_downloaded: 1024,
+                    total_bytes: Some(2048),
+                },
+                &AppStatus::Idle,
+            );
             assert!(result.is_some());
             let status = result.unwrap_or(AppStatus::Idle);
             match status {
@@ -407,27 +463,36 @@ mod gui {
 
         #[test]
         fn download_complete_returns_none() {
-            let result = apply_progress_event(ProgressEvent::DownloadComplete {
-                repo_id: "test/repo".into(),
-                filename: "weights.bin".into(),
-            });
+            let result = apply_progress_event(
+                ProgressEvent::DownloadComplete {
+                    repo_id: "test/repo".into(),
+                    filename: "weights.bin".into(),
+                },
+                &AppStatus::Idle,
+            );
             assert!(result.is_none());
         }
 
         #[test]
         fn cached_returns_none() {
-            let result = apply_progress_event(ProgressEvent::Cached {
-                repo_id: "test/repo".into(),
-                filename: "weights.bin".into(),
-            });
+            let result = apply_progress_event(
+                ProgressEvent::Cached {
+                    repo_id: "test/repo".into(),
+                    filename: "weights.bin".into(),
+                },
+                &AppStatus::Idle,
+            );
             assert!(result.is_none());
         }
 
         #[test]
         fn load_started_sets_loading() {
-            let result = apply_progress_event(ProgressEvent::LoadStarted {
-                model_name: "STT (Parakeet)".into(),
-            });
+            let result = apply_progress_event(
+                ProgressEvent::LoadStarted {
+                    model_name: "STT (Parakeet)".into(),
+                },
+                &AppStatus::Idle,
+            );
             assert!(result.is_some());
             let status = result.unwrap_or(AppStatus::Idle);
             match status {
@@ -440,23 +505,148 @@ mod gui {
 
         #[test]
         fn load_complete_returns_none() {
-            let result = apply_progress_event(ProgressEvent::LoadComplete {
-                model_name: "STT".into(),
-                duration_secs: 1.5,
-            });
+            let result = apply_progress_event(
+                ProgressEvent::LoadComplete {
+                    model_name: "STT".into(),
+                    duration_secs: 1.5,
+                },
+                &AppStatus::Idle,
+            );
             assert!(result.is_none());
         }
 
         #[test]
         fn error_event_sets_error() {
-            let result = apply_progress_event(ProgressEvent::Error {
-                message: "download failed".into(),
-            });
+            let result = apply_progress_event(
+                ProgressEvent::Error {
+                    message: "download failed".into(),
+                },
+                &AppStatus::Idle,
+            );
             assert!(result.is_some());
             let status = result.unwrap_or(AppStatus::Idle);
             match status {
                 AppStatus::Error(msg) => assert_eq!(msg, "download failed"),
                 other => unreachable!("expected Error, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn download_plan_ready_sets_aggregate() {
+            let plan = fae::progress::DownloadPlan {
+                files: vec![
+                    fae::progress::DownloadFile {
+                        repo_id: "r1".into(),
+                        filename: "a.onnx".into(),
+                        size_bytes: Some(2_000_000),
+                        cached: false,
+                    },
+                    fae::progress::DownloadFile {
+                        repo_id: "r2".into(),
+                        filename: "b.gguf".into(),
+                        size_bytes: Some(3_000_000),
+                        cached: false,
+                    },
+                ],
+            };
+            let result =
+                apply_progress_event(ProgressEvent::DownloadPlanReady { plan }, &AppStatus::Idle);
+            assert!(result.is_some());
+            let status = result.unwrap_or(AppStatus::Idle);
+            match status {
+                AppStatus::Downloading {
+                    files_total,
+                    aggregate_total,
+                    ..
+                } => {
+                    assert_eq!(files_total, 2);
+                    assert_eq!(aggregate_total, 5_000_000);
+                }
+                other => unreachable!("expected Downloading, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn aggregate_progress_updates_state() {
+            let current = AppStatus::Downloading {
+                current_file: "model.onnx".into(),
+                bytes_downloaded: 500,
+                total_bytes: Some(1000),
+                files_complete: 0,
+                files_total: 3,
+                aggregate_bytes: 0,
+                aggregate_total: 5_000_000,
+                speed_bps: 0.0,
+                eta_secs: None,
+            };
+            let result = apply_progress_event(
+                ProgressEvent::AggregateProgress {
+                    bytes_downloaded: 2_000_000,
+                    total_bytes: 5_000_000,
+                    files_complete: 1,
+                    files_total: 3,
+                },
+                &current,
+            );
+            assert!(result.is_some());
+            let status = result.unwrap_or(AppStatus::Idle);
+            match status {
+                AppStatus::Downloading {
+                    files_complete,
+                    aggregate_bytes,
+                    aggregate_total,
+                    current_file,
+                    ..
+                } => {
+                    assert_eq!(files_complete, 1);
+                    assert_eq!(aggregate_bytes, 2_000_000);
+                    assert_eq!(aggregate_total, 5_000_000);
+                    assert_eq!(current_file, "model.onnx");
+                }
+                other => unreachable!("expected Downloading, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn aggregate_preserved_across_download_events() {
+            let current = AppStatus::Downloading {
+                current_file: "old.onnx".into(),
+                bytes_downloaded: 500,
+                total_bytes: Some(1000),
+                files_complete: 1,
+                files_total: 3,
+                aggregate_bytes: 2_000_000,
+                aggregate_total: 5_000_000,
+                speed_bps: 10_000_000.0,
+                eta_secs: Some(300.0),
+            };
+            let result = apply_progress_event(
+                ProgressEvent::DownloadStarted {
+                    repo_id: "new/repo".into(),
+                    filename: "new.gguf".into(),
+                    total_bytes: Some(3_000_000),
+                },
+                &current,
+            );
+            assert!(result.is_some());
+            let status = result.unwrap_or(AppStatus::Idle);
+            match status {
+                AppStatus::Downloading {
+                    current_file,
+                    files_complete,
+                    files_total,
+                    aggregate_bytes,
+                    aggregate_total,
+                    ..
+                } => {
+                    assert_eq!(current_file, "new.gguf");
+                    // Aggregate state preserved from current
+                    assert_eq!(files_complete, 1);
+                    assert_eq!(files_total, 3);
+                    assert_eq!(aggregate_bytes, 2_000_000);
+                    assert_eq!(aggregate_total, 5_000_000);
+                }
+                other => unreachable!("expected Downloading, got {other:?}"),
             }
         }
 
@@ -1719,7 +1909,8 @@ fn app() -> Element {
                                 let map = repo_model_map.read();
                                 update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage, &map);
                                 drop(map);
-                                if let Some(new_status) = gui::apply_progress_event(event) {
+                                let current = status.read().clone();
+                                if let Some(new_status) = gui::apply_progress_event(event, &current) {
                                     status.set(new_status);
                                 }
                             }
@@ -1732,7 +1923,8 @@ fn app() -> Element {
                                     let map = repo_model_map.read();
                                     update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage, &map);
                                     drop(map);
-                                    if let Some(new_status) = gui::apply_progress_event(event) {
+                                    let current = status.read().clone();
+                                    if let Some(new_status) = gui::apply_progress_event(event, &current) {
                                         status.set(new_status);
                                     }
                                 }
