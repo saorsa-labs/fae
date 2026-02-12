@@ -541,6 +541,56 @@ pub fn check_disk_space(required_bytes: u64) -> Result<DiskSpaceCheck> {
     })
 }
 
+// ── Pre-flight check ────────────────────────────────────────────────────────
+
+/// Pre-flight check result: everything the GUI needs to show the confirmation
+/// dialog before starting downloads.
+pub struct PreFlightResult {
+    /// Full download plan with per-file details.
+    pub plan: DownloadPlan,
+    /// Free disk space in bytes.
+    pub free_space: u64,
+    /// Whether any files need downloading (false = all cached).
+    pub needs_download: bool,
+}
+
+/// Run a pre-flight check: build the download plan and check disk space
+/// without starting any downloads.
+///
+/// The GUI calls this on a background thread (file size queries are blocking
+/// HTTP HEAD requests) to populate the pre-flight confirmation dialog.
+///
+/// # Errors
+///
+/// Returns an error if disk space cannot be determined.
+pub fn preflight_check(config: &SpeechConfig) -> Result<PreFlightResult> {
+    let plan = build_download_plan(config);
+    let needs_download = plan.needs_download();
+
+    let free_space = if needs_download {
+        let space = check_disk_space(plan.download_bytes())?;
+        if !space.has_enough_space() {
+            return Err(SpeechError::Model(format!(
+                "Not enough disk space. Need {:.1} GB, have {:.1} GB free.",
+                space.required_bytes as f64 / 1_000_000_000.0,
+                space.free_bytes as f64 / 1_000_000_000.0,
+            )));
+        }
+        space.free_bytes
+    } else {
+        // All cached — still report free space for display.
+        check_disk_space(0)
+            .map(|s| s.free_bytes)
+            .unwrap_or(u64::MAX)
+    };
+
+    Ok(PreFlightResult {
+        plan,
+        free_space,
+        needs_download,
+    })
+}
+
 /// Run a background update check for Fae.
 ///
 /// Respects the user's auto-update preference and only checks if the last

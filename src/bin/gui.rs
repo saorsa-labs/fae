@@ -47,6 +47,17 @@ mod gui {
     pub enum AppStatus {
         /// Waiting for user to press Start.
         Idle,
+        /// Pre-flight: showing download confirmation before starting.
+        PreFlight {
+            /// Total bytes that need to be downloaded.
+            total_bytes: u64,
+            /// Number of files that need downloading.
+            files_to_download: usize,
+            /// Total number of model files (including cached).
+            total_files: usize,
+            /// Free disk space available in bytes.
+            free_space: u64,
+        },
         /// Downloading model files.
         Downloading {
             /// Current file being downloaded.
@@ -84,6 +95,12 @@ mod gui {
         pub fn display_text(&self) -> String {
             match self {
                 Self::Idle => "Ready".into(),
+                Self::PreFlight { total_bytes, .. } => {
+                    format!(
+                        "Ready to download {:.1} GB",
+                        *total_bytes as f64 / 1_000_000_000.0
+                    )
+                }
                 Self::Downloading {
                     current_file,
                     files_complete,
@@ -108,12 +125,15 @@ mod gui {
 
         /// Whether the start button should be shown (vs stop).
         pub fn show_start(&self) -> bool {
-            matches!(self, Self::Idle | Self::Error(_))
+            matches!(self, Self::Idle | Self::PreFlight { .. } | Self::Error(_))
         }
 
         /// Whether buttons should be interactive.
         pub fn buttons_enabled(&self) -> bool {
-            matches!(self, Self::Idle | Self::Running | Self::Error(_))
+            matches!(
+                self,
+                Self::Idle | Self::PreFlight { .. } | Self::Running | Self::Error(_)
+            )
         }
     }
 
@@ -378,9 +398,29 @@ mod gui {
         // --- AppStatus button predicates ---
 
         #[test]
+        fn preflight_display_text() {
+            let s = AppStatus::PreFlight {
+                total_bytes: 4_800_000_000,
+                files_to_download: 6,
+                total_files: 8,
+                free_space: 50_000_000_000,
+            };
+            assert_eq!(s.display_text(), "Ready to download 4.8 GB");
+        }
+
+        #[test]
         fn show_start_when_idle_or_error() {
             assert!(AppStatus::Idle.show_start());
             assert!(AppStatus::Error("x".into()).show_start());
+            assert!(
+                AppStatus::PreFlight {
+                    total_bytes: 100,
+                    files_to_download: 1,
+                    total_files: 1,
+                    free_space: 1000,
+                }
+                .show_start()
+            );
             assert!(!AppStatus::Running.show_start());
         }
 
@@ -389,6 +429,15 @@ mod gui {
             assert!(AppStatus::Idle.buttons_enabled());
             assert!(AppStatus::Running.buttons_enabled());
             assert!(AppStatus::Error("x".into()).buttons_enabled());
+            assert!(
+                AppStatus::PreFlight {
+                    total_bytes: 100,
+                    files_to_download: 1,
+                    total_files: 1,
+                    free_space: 1000,
+                }
+                .buttons_enabled()
+            );
             assert!(
                 !AppStatus::Loading {
                     model_name: "x".into()
@@ -1966,7 +2015,7 @@ fn app() -> Element {
     let mut on_button_click = move |_args: ()| {
         let current = status.read().clone();
         match current {
-            AppStatus::Idle | AppStatus::Error(_) => {
+            AppStatus::Idle | AppStatus::PreFlight { .. } | AppStatus::Error(_) => {
                 // --- START ---
                 status.set(AppStatus::Downloading {
                     current_file: "Checking models...".into(),
@@ -2272,10 +2321,41 @@ fn app() -> Element {
         }
     };
 
-    // Auto-start model loading on app launch.
+    // Auto-start: run pre-flight check on app launch.
+    // If downloads are needed, show the PreFlight confirmation first.
+    // If everything is cached, go straight to model loading.
     if !*auto_started.read() {
         auto_started.set(true);
-        on_button_click(());
+
+        let config_for_preflight = config_state.read().clone();
+        spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                fae::startup::preflight_check(&config_for_preflight)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(preflight)) => {
+                    if preflight.needs_download {
+                        status.set(AppStatus::PreFlight {
+                            total_bytes: preflight.plan.download_bytes(),
+                            files_to_download: preflight.plan.files_to_download(),
+                            total_files: preflight.plan.total_files(),
+                            free_space: preflight.free_space,
+                        });
+                    } else {
+                        // All cached — skip preflight, go straight to loading.
+                        on_button_click(());
+                    }
+                }
+                Ok(Err(e)) => {
+                    status.set(AppStatus::Error(format!("{e}")));
+                }
+                Err(e) => {
+                    status.set(AppStatus::Error(format!("preflight check failed: {e}")));
+                }
+            }
+        });
     }
 
     let current_status = status.read().clone();
