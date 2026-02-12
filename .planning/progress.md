@@ -465,7 +465,8 @@ All 3 phases delivered:
 - MetricsCollector trait with NoopMetrics default, integrated into AgentLoop
 - RedactedString wrapper and secret redaction for API keys, auth headers
 - 1,474 tests passing, zero warnings
-Task 1 starting...
+
+### Phase 4.2: Full Integration Test Matrix — COMPLETE
 - [x] Task 1: OpenAI provider contract tests (commit: 01796c1)
 - [x] Task 2: Anthropic provider contract tests (commit: 44688f2)
 - [x] Task 3: Local endpoint probing tests (commit: 881c9f5)
@@ -501,3 +502,5 @@ Phase 4.2 delivered comprehensive integration test coverage for fae_llm module i
 - Failure injection and circuit breaker tests
 - Tool mode gating security tests
 - Complete test documentation
+
+### Phase 4.3: App Integration & Release — STARTING...
