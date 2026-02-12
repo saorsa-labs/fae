@@ -1,111 +1,77 @@
-# Phase 1.2: Priority-Aware Candidate Resolution — Task Plan
+# Phase 1.2: GUI Progress Overhaul
 
 ## Goal
-Rewrite `resolve_pi_model_candidates()` to sort candidates by tier + user priority. Add `priority` field to `PiModel` and tier/priority to `ProviderModelRef`.
+Show rich download progress in the GUI — aggregate totals, per-model stage tracking, download speed, and ETA. Replace the current single-file progress bar with a comprehensive download dashboard.
 
-## Dependencies
-- Phase 1.1 (model_tier.rs) — COMPLETE
+## Current State
+- GUI shows single-file progress only via `AppStatus::Downloading { current_file, bytes_downloaded, total_bytes }`
+- `DownloadPlanReady` and `AggregateProgress` events exist in progress.rs but return `None` in gui.rs
+- `StagePhase` enum routes ALL downloads to STT stage — LLM/TTS downloads not tracked
+- No speed or ETA in GUI (CLI has it via indicatif)
+- `update_stages_from_progress()` doesn't distinguish which model a download belongs to
 
----
+## Tasks
 
-## Tasks (TDD Order)
+### Task 1: Add DownloadTracker to progress.rs
+Add a `DownloadTracker` struct that calculates speed and ETA from byte-level progress events.
+- Fields: `started_at: Instant`, `last_bytes: u64`, `last_time: Instant`, `speed_samples: VecDeque<f64>` (rolling window)
+- Methods: `new()`, `update(bytes_downloaded, total_bytes) -> (speed_mbps, eta_secs)`, `reset()`
+- Rolling average over last 5 samples for smooth speed display
+- 6+ tests for edge cases (zero bytes, unknown total, reset)
+- **Files:** `src/progress.rs`
 
-### Task 1: Add `priority` field to `PiModel`
-**Files:** `src/llm/pi_config.rs`
-**Description:**
-- Add `#[serde(default)] pub priority: Option<i32>` to `PiModel` struct (after `compat` field, before `extra`)
-- Default is `None` (treated as 0 during sorting)
-- Higher priority = preferred within same tier
-- Write test: deserialize a models.json snippet with and without priority field
-- Ensure backward compatibility: existing models.json files without priority still parse
+### Task 2: Enrich AppStatus for aggregate download state
+Update `AppStatus::Downloading` to include aggregate fields alongside per-file fields.
+- Add fields: `files_complete: usize`, `files_total: usize`, `aggregate_bytes: u64`, `aggregate_total: u64`, `speed_mbps: f64`, `eta_secs: Option<f64>`
+- Keep existing `current_file`, `bytes_downloaded`, `total_bytes` for per-file display
+- Update all match arms that construct `AppStatus::Downloading`
+- 3+ tests for new fields
+- **Files:** `src/bin/gui.rs`
 
-### Task 2: Add tier and priority fields to `ProviderModelRef`
-**Files:** `src/pi/engine.rs`
-**Description:**
-- Add `tier: ModelTier` and `priority: i32` to `ProviderModelRef` struct
-- Import `crate::model_tier::{ModelTier, tier_for_provider_model}`
-- Update `ProviderModelRef::display()` to optionally show tier
-- Add `ProviderModelRef::new(provider, model, priority)` constructor that auto-computes tier
-- Update all existing construction sites (the `push` closure in `resolve_pi_model_candidates`)
-- Write test: constructing ProviderModelRef sets correct tier
+### Task 3: Route downloads to correct model stage
+Fix `update_stages_from_progress()` to route `DownloadStarted`/`DownloadProgress`/`DownloadComplete`/`Cached` events to the correct model stage (STT/LLM/TTS) based on `repo_id`.
+- Add `model_name_from_repo_id(repo_id, config)` helper that maps repo_id to "STT"/"LLM"/"TTS"
+- Store repo_id→model mappings from the DownloadPlan
+- Update `StagePhase::Downloading` to include bytes progress: `Downloading { filename, bytes_downloaded, total_bytes }`
+- Update stage label to show: "Downloading ears (1.2 GB / 2.3 GB)"
+- **Files:** `src/bin/gui.rs`
 
-### Task 3: Look up tier and priority during candidate resolution
-**Files:** `src/pi/engine.rs`
-**Description:**
-- In `resolve_pi_model_candidates()`, when reading from pi_config:
-  - Look up `PiModel.priority` for each model via `pi_config.find_model()`
-  - Pass priority to `ProviderModelRef::new()`
-- For models NOT in pi_config (e.g. from config.cloud_provider):
-  - Use priority 0 (default)
-- The tier is computed automatically by `ProviderModelRef::new()`
-- Write test: candidates from pi_config carry correct priority values
+### Task 4: Handle DownloadPlanReady in GUI
+Wire the `DownloadPlanReady` event to store the plan and initialize aggregate state.
+- Store `DownloadPlan` in a Dioxus signal for use by the progress display
+- Initialize aggregate counters from plan data
+- Build repo_id → model name mapping from plan files
+- Set status text: "Preparing to download X.X GB..."
+- **Files:** `src/bin/gui.rs`
 
-### Task 4: Sort candidates by (tier, -priority)
-**Files:** `src/pi/engine.rs`
-**Description:**
-- After building the candidate list, sort it:
-  ```rust
-  out.sort_by(|a, b| {
-      a.tier.cmp(&b.tier)
-          .then_with(|| b.priority.cmp(&a.priority))
-  });
-  ```
-- This puts:
-  1. Best tier first (Flagship < Strong < Mid < Small < Unknown)
-  2. Within same tier, highest priority first
-- Write test: verify sort order with mixed tiers and priorities
-- Write test: verify fae-local fallback is still present but sorted to correct position
+### Task 5: Handle AggregateProgress in GUI
+Wire `AggregateProgress` events to update the aggregate download state.
+- Update `apply_progress_event()` to return `AppStatus::Downloading` with aggregate fields
+- Integrate `DownloadTracker` for speed/ETA on aggregate bytes
+- Feed real-time `DownloadProgress` events into tracker for smooth speed updates
+- **Files:** `src/bin/gui.rs`
 
-### Task 5: Update `pick_failover_candidate` to respect new ordering
-**Files:** `src/pi/engine.rs`
-**Description:**
-- Read current `pick_failover_candidate()` implementation
-- Ensure it respects the new pre-sorted order (it already picks next untried candidate)
-- Verify that network errors still prefer fae-local (or verify it's sorted appropriately)
-- Write test: failover walks candidates in tier order
+### Task 6: Render aggregate progress bar
+Replace current progress bar with rich aggregate display.
+- Show: "1.2 GB / 4.8 GB (25%)" as progress text
+- Show: "Downloading model 2/3" as status line
+- Progress bar width driven by `aggregate_bytes / aggregate_total`
+- Indeterminate animation when total_bytes unknown
+- **Files:** `src/bin/gui.rs` (rendering + CSS)
 
-### Task 6: Integration tests and documentation
-**Files:** `src/pi/engine.rs`, `src/llm/pi_config.rs`
-**Description:**
-- Add integration test: full resolution with multiple providers and priorities
-- Add doc comments to new/modified public items
-- Run `just check` — full validation
-- Verify: zero warnings, zero errors, all tests pass
+### Task 7: Render per-model stage pills
+Update stage pill rendering to show download vs loading distinction with progress.
+- "Downloading ears (1.2 GB / 2.3 GB)" during download
+- "Loading ears" during model load
+- "ears ready" when complete
+- CSS styling for download/loading/ready/error states
+- **Files:** `src/bin/gui.rs` (rendering + CSS)
 
----
-
-## File Change Summary
-
-| File | Action |
-|------|--------|
-| `src/llm/pi_config.rs` | **MODIFY** — Add `priority` to `PiModel` |
-| `src/pi/engine.rs` | **MODIFY** — Add tier/priority to `ProviderModelRef`, sort candidates |
-
-## Key Types After Changes
-
-```rust
-// pi_config.rs
-pub struct PiModel {
-    pub id: String,
-    // ... existing fields ...
-    #[serde(default)]
-    pub priority: Option<i32>,  // NEW
-    #[serde(default, flatten)]
-    pub extra: HashMap<String, serde_json::Value>,
-}
-
-// engine.rs
-struct ProviderModelRef {
-    provider: String,
-    model: String,
-    tier: ModelTier,    // NEW — from model_tier::tier_for_provider_model()
-    priority: i32,      // NEW — from PiModel.priority or 0
-}
-```
-
-## Quality Gates
-- `just check` passes
-- Zero `.unwrap()` or `.expect()` in production code
-- Backward-compatible with existing models.json files
-- Existing tests still pass
-- fae-local fallback still works correctly
+### Task 8: Add speed and ETA display
+Add download speed and ETA below the progress bar.
+- Show: "12.5 MB/s — about 3 min remaining"
+- Hide speed when no downloads active
+- Show "Calculating..." for first few seconds
+- Format helpers: `format_bytes()`, `format_eta()`, `format_speed()`
+- Integration tests for format helpers
+- **Files:** `src/bin/gui.rs`

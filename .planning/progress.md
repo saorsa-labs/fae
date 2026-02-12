@@ -202,6 +202,57 @@ All features:
 ✓ Voice command detection and parsing
 ✓ Runtime model switching with TTS acknowledgment
 ✓ Help, list, and query commands
+
+---
+
+## Milestone 1: First-Run Download Experience — IN PROGRESS
+
+### Phase 1.1: Extract & Unify Downloads — COMPLETE
+- [x] Task 1: Add DownloadPlan and AggregateProgress to progress.rs (commit: 737cf8b)
+- [x] Task 2: Add query_file_sizes and is_file_cached to ModelManager (commit: b562775)
+- [x] Task 3: Pre-download LLM GGUF file explicitly (commit: adfb3a1)
+- [x] Task 4: Pre-download LLM tokenizer files (commit: dc5882b)
+- [x] Task 5-6: TTS progress-aware download and from_paths loading (commit: d614476)
+- [x] Task 7: Build DownloadPlan from config (commit: 62e0310)
+- [x] Task 8: Aggregate progress tracking and plan→download→load flow (commit: 64915bc)
+
+**Phase 1.1 COMPLETE** — All model downloads now go through unified progress pipeline
 ✓ Edge case handling (interrupt, fallback, unavailable)
 ✓ GUI active model indicator
 ✓ Comprehensive documentation (user + developer)
+
+### Phase 1.2: GUI Progress Overhaul — COMPLETE
+- [x] Task 1: DownloadTracker for speed/ETA calculation (commit: 7e3c1e1)
+- [x] Task 2: Enrich AppStatus with aggregate download fields (commit: 6b20746)
+- [x] Task 3: Route downloads to correct model stage via repo_id mapping (commit: f7b80b8)
+- [x] Task 4-5: Wire DownloadPlanReady and AggregateProgress into GUI (commit: a07b38f)
+- [x] Task 6-8: Aggregate progress bar, per-model stage pills, speed/ETA display (commit: 7b53e69)
+
+**Phase 1.2 COMPLETE** — Rich download progress UI
+✓ Aggregate progress: "X.X GB / Y.Y GB (N%)"
+✓ Per-model stage pills: downloading vs loading with byte progress
+✓ Download speed and ETA display
+✓ DownloadTracker with rolling-window speed averaging
+
+### Phase 1.3: Pre-flight & Error Resilience — COMPLETE
+- [x] Task 1: Disk space check with statvfs (commit: 9d51960)
+- [x] Tasks 2-4: PreFlight status, preflight_check(), GUI wiring (commit: 514f2e4)
+- [x] Task 5: Structured download error messages (commit: f8dcebb)
+- [x] Task 6: Retry button and contextual button labels (commit: e01bfc1)
+- [x] Task 7: Welcome text and first-run polish (commit: 38a5a29)
+- [x] Task 8: Integration tests and verification (commit: ba41ceb)
+
+**Phase 1.3 COMPLETE** — Pre-flight & Error Resilience
+✓ Disk space check before downloads (statvfs + 500 MB headroom)
+✓ PreFlight confirmation screen with download size
+✓ preflight_check() runs on background thread before downloads
+✓ Structured DownloadError with file/bytes progress context
+✓ Contextual button labels: Start, Continue, Retry, Stop Listening
+✓ Welcome text for each app state during first-run
+✓ 785 tests passing, zero warnings
+
+**MILESTONE 1 COMPLETE** — First-Run Download Experience
+All 3 phases delivered:
+1.1: Extract & Unify Downloads (8 tasks)
+1.2: GUI Progress Overhaul (8 tasks)
+1.3: Pre-flight & Error Resilience (8 tasks)

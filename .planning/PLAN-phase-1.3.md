@@ -1,133 +1,79 @@
-# Phase 1.3: Startup Model Selection
+# Phase 1.3: Pre-flight & Error Resilience
 
-## Overview
-Implement intelligent model selection at startup: auto-select the best available model, or present an interactive canvas-based picker when multiple top-tier models are available. This completes the model selection feature by adding the user-facing startup flow.
+## Goal
+Inform users before downloading and handle failures gracefully. Add pre-flight confirmation, disk space check, better error messages, retry capability, and welcome text.
 
----
+## Current State
+- App auto-starts model loading on launch via `on_button_click()` in `use_hook`
+- Download errors are a single `Error(String)` variant — no structured detail
+- No disk space check before downloading ~4.8 GB
+- No retry mechanism after failure
+- No pre-flight confirmation dialog
+- Build plan exists in `build_download_plan()` with file sizes
 
-## Task 1: Add model selection types and logic
+## Tasks
 
-Create types and pure functions for model selection decision-making.
+### Task 1: Add disk space check to startup.rs
+Add a `check_disk_space()` function that verifies sufficient free space before downloading.
+- Use `statvfs` on Unix (via `nix` crate or raw libc) to check free space at cache dir
+- Use `available_space()` from `fs2` or manual platform check
+- Return `Result<()>` with clear error: "Not enough disk space. Need X.X GB, have Y.Y GB free."
+- Add as first check in `initialize_models_with_progress()` before download plan
+- 3+ tests for the function (mock via temp dirs)
+- **Files:** `src/startup.rs`
 
-**Files to create**: `src/model_selection.rs`
+### Task 2: Add PreFlight AppStatus variant
+Add `AppStatus::PreFlight` variant for the pre-download confirmation screen.
+- Fields: `total_bytes: u64`, `files_to_download: usize`, `total_files: usize`, `free_space: u64`
+- `display_text()`: "Ready to download X.X GB"
+- `show_start()` returns true (so user can click to proceed)
+- `buttons_enabled()` returns true
+- Update tests for new variant
+- **Files:** `src/bin/gui.rs`
 
-**Implementation**:
-- `ModelSelectionDecision` enum: `AutoSelect(candidate)`, `PromptUser(Vec<candidate>)`, `NoModels`
-- `fn decide_model_selection(candidates: &[ProviderModelRef]) -> ModelSelectionDecision`
-  - Logic: if 0 candidates → NoModels, if 1 candidate → AutoSelect, if multiple with same top tier → PromptUser, else → AutoSelect(first)
-- Add module to `src/lib.rs`
+### Task 3: Pre-flight check function
+Add `preflight_check()` that builds the plan and checks disk space without starting downloads.
+- Takes `&SpeechConfig`, returns `PreFlightResult { plan, free_space, needs_download }`
+- Called before the main download sequence
+- Runs on background task (file size queries are blocking HTTP)
+- **Files:** `src/startup.rs`
 
-**Tests**: Unit tests for decision logic with various candidate scenarios
+### Task 4: Pre-flight dialog in GUI
+Show pre-flight dialog before downloading when `needs_download` is true.
+- Replace auto-start with: build plan → show pre-flight → user confirms → start downloads
+- Display: "First run setup — Fae needs to download X.X GB of AI models"
+- Show file breakdown: "Speech-to-text (2.4 GB), Intelligence (2.3 GB), Voice (89 MB)"
+- "Continue" button starts downloads, or "X already cached" note
+- Skip dialog when all files cached (go straight to loading)
+- **Files:** `src/bin/gui.rs`
 
----
+### Task 5: Structured download error messages
+Improve error reporting when downloads fail.
+- Add `DownloadError` variant to `ProgressEvent::Error` with structured fields: `repo_id`, `filename`, `bytes_downloaded`, `total_bytes`, `error_detail`
+- Update `download_with_progress()` error handling to include context
+- Show in GUI: "Failed to download model.onnx (1.2 GB / 2.3 GB): connection timed out"
+- **Files:** `src/progress.rs`, `src/models/mod.rs`, `src/bin/gui.rs`
 
-## Task 2: Canvas event types for model selection
+### Task 6: Retry button on download failure
+Add retry capability when downloads fail.
+- Add "Retry" button shown when `AppStatus::Error`
+- On retry, re-run `on_button_click()` — cached files are skipped automatically
+- Show: "Retrying... (2 files cached, 1 remaining)"
+- Track retry count in status for display
+- **Files:** `src/bin/gui.rs`
 
-Add runtime events for model picker UI interactions.
+### Task 7: Welcome text and first-run polish
+Add welcoming copy and polish for first-run experience.
+- Show welcome text during pre-flight: "Welcome to Fae! Setting up your personal AI assistant."
+- During downloads: "Downloading AI models — this only happens once"
+- During loading: "Almost ready — loading models into memory"
+- Show tips during long downloads (rotate through helpful text)
+- **Files:** `src/bin/gui.rs`
 
-**Files to modify**: `src/runtime.rs`
-
-**Implementation**:
-- Add `RuntimeEvent::ModelSelectionPrompt { candidates: Vec<String>, timeout_secs: u32 }`
-- Add `RuntimeEvent::ModelSelected { provider_model: String }`
-- Document the events for GUI consumption
-
-**Tests**: Verify event serialization/deserialization if needed
-
----
-
-## Task 3: Model picker response channel
-
-Add a channel for the GUI to respond to model selection prompts.
-
-**Files to modify**: `src/pi/engine.rs`
-
-**Implementation**:
-- Add `model_selection_rx: Option<mpsc::UnboundedReceiver<String>>` to `PiLlm` struct
-- Update `PiLlm::new()` signature to accept optional model selection receiver
-- Store the receiver for use in selection flow
-
-**Tests**: Construction tests with/without receiver
-
----
-
-## Task 4: Implement model selection flow in PiLlm
-
-Add the actual selection logic that decides whether to auto-select or prompt.
-
-**Files to modify**: `src/pi/engine.rs`
-
-**Implementation**:
-- Add `async fn select_startup_model(&mut self, timeout: Duration) -> Result<usize>`
-  - Calls `decide_model_selection()` on `self.model_candidates`
-  - If `AutoSelect` → return index 0 immediately
-  - If `PromptUser` → emit `ModelSelectionPrompt` event, wait on `model_selection_rx` with timeout
-  - On timeout or no response → auto-select first candidate
-  - On response → find matching candidate index
-  - Update `self.active_model_idx`
-- Call `select_startup_model()` in `PiLlm::new()` after creating session
-
-**Tests**: Mock tests with various decision scenarios and timeout behavior
-
----
-
-## Task 5: GUI model picker component
-
-Add a canvas-based model picker UI component in the GUI.
-
-**Files to modify**: `src/bin/gui.rs`
-
-**Implementation**:
-- Subscribe to `RuntimeEvent::ModelSelectionPrompt` in runtime event handler
-- When received, display modal or drawer with model list (provider/model pairs)
-- Each item clickable, sends selection via `model_selection_tx`
-- Show countdown timer for timeout
-- Auto-dismiss on timeout or selection
-
-**Tests**: GUI tests (if test framework exists), otherwise manual verification
-
----
-
-## Task 6: Wire model selection channel through coordinator
-
-Connect the model selection channel from GUI through coordinator to PiLlm.
-
-**Files to modify**: `src/pipeline/coordinator.rs`, `src/bin/gui.rs`
-
-**Implementation**:
-- Add `model_selection_tx` parameter to coordinator
-- Pass through to PiLlm creation in LLM stage
-- In GUI, create channel and pass tx to pipeline
-
-**Tests**: Integration test verifying channel connectivity
-
----
-
-## Task 7: Add configuration for selection timeout
-
-Add config field for model selection timeout duration.
-
-**Files to modify**: `src/config.rs`
-
-**Implementation**:
-- Add `model_selection_timeout_secs: u32` to `LlmConfig` (default: 30)
-- Use in `select_startup_model()` call
-
-**Tests**: Config serialization tests
-
----
-
-## Task 8: Integration tests and verification
-
-Verify the complete flow works end-to-end.
-
-**Files**: Tests in `src/model_selection.rs`, `src/pi/engine.rs`
-
-**Implementation**:
-- Integration test: Multiple top-tier models → prompt emitted
-- Integration test: Single model → auto-selected immediately
-- Integration test: Timeout expires → first candidate selected
-- Run `just build` and `just lint`
-- Manual GUI test with multiple cloud providers configured
-
-**Tests**: All above tests pass, zero warnings
+### Task 8: Integration test and verification
+Verify the complete first-run flow end-to-end.
+- Test `preflight_check()` returns correct plan data
+- Test `check_disk_space()` with various scenarios
+- Test error message formatting
+- Run `just check` — full validation
+- **Files:** `src/startup.rs`, `src/bin/gui.rs`
