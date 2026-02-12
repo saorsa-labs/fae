@@ -60,6 +60,10 @@ hf-hub = "0.4"
 # HTTP client (for non-HuggingFace model downloads; shared with hf-hub)
 ureq = "2"
 
+# HTTP client for LLM provider APIs (SSE streaming)
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+bytes = "1"
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }

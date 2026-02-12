@@ -12,6 +12,8 @@
 //! - [`usage`] — Token usage and cost tracking
 //! - [`metadata`] — Request/response metadata
 //! - [`config`] — Configuration schema and persistence
+//! - [`provider`] — Provider adapter trait
+//! - [`providers`] — Provider implementations (OpenAI, etc.)
 //!
 //! # Event Model
 //!
@@ -27,6 +29,8 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod metadata;
+pub mod provider;
+pub mod providers;
 pub mod tools;
 pub mod types;
 pub mod usage;
@@ -39,6 +43,8 @@ pub use config::{
 pub use error::FaeLlmError;
 pub use events::{FinishReason, LlmEvent};
 pub use metadata::{RequestMeta, ResponseMeta};
+pub use provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
+pub use providers::message::{AssistantToolCall, Message, MessageContent, Role};
 pub use tools::{BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool};
 pub use types::{EndpointType, ModelRef, ReasoningLevel, RequestOptions};
 pub use usage::{CostEstimate, TokenPricing, TokenUsage};

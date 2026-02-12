@@ -1,138 +1,146 @@
-# Phase 2.1: Voice Command Detection
+# Phase 2.1: OpenAI Adapter
 
 ## Overview
-Add pattern matching for model-switch phrases in transcriptions before LLM generation.
-Users can say "Fae, switch to Claude" or "use the local model" and Fae will detect
-these as voice commands rather than passing them to the LLM.
-
-## Integration Point
-Pipeline flow: `Transcription → IdentityGate → VoiceCommandFilter → LLM`
-
-The new `VoiceCommandFilter` stage sits between `run_identity_gate()` and `run_llm_stage()`.
-It inspects each `Transcription`, and if it matches a voice command pattern, it sends a
-`VoiceCommand` through a new channel instead of forwarding the transcription to the LLM.
+Implement the ProviderAdapter trait and the OpenAI adapter that supports both the Chat Completions API and the Responses API. Includes SSE streaming parser, request builder, tool call streaming with partial JSON accumulation, and normalization to the shared LlmEvent model.
 
 ## Key Files
-- `src/voice_command.rs` (NEW) — types, parser, model name resolution
-- `src/runtime.rs` — new RuntimeEvent variants for voice commands
-- `src/pipeline/coordinator.rs` — wire in VoiceCommandFilter stage
-- `src/pi/engine.rs` — receive and handle voice commands (Phase 2.2)
-- `src/model_selection.rs` — ProviderModelRef (existing, referenced)
-- `src/model_tier.rs` — tier_for_model (existing, referenced)
+- `src/fae_llm/provider.rs` (NEW) -- ProviderAdapter trait definition
+- `src/fae_llm/providers/mod.rs` (NEW) -- providers module
+- `src/fae_llm/providers/openai.rs` (NEW) -- OpenAI adapter
+- `src/fae_llm/providers/sse.rs` (NEW) -- SSE line parser
+- `src/fae_llm/providers/message.rs` (NEW) -- Message types (role, content)
+- `src/fae_llm/mod.rs` -- wire in new modules
+
+## Dependencies needed
+- `reqwest` with `stream` feature for async HTTP + SSE streaming
+- `tokio-stream` for StreamExt on byte streams
+- `pin-project-lite` (transitive, already available)
 
 ---
 
-## Task 1: Define VoiceCommand types
-**~40 lines | src/voice_command.rs**
+## Task 1: ProviderAdapter trait and message types
+**~120 lines | src/fae_llm/provider.rs, src/fae_llm/providers/message.rs**
 
-Create `src/voice_command.rs` with:
-- `VoiceCommand` enum: `SwitchModel { target: ModelTarget }`, `ListModels`, `CurrentModel`
-- `ModelTarget` enum: `ByName(String)`, `ByProvider(String)`, `Local`, `Best`
-- Module-level doc comments explaining purpose
-- Add `pub mod voice_command;` to `src/lib.rs`
+Define the core async trait that all providers implement:
 
-No parsing logic yet — just the types.
+```rust
+#[async_trait]
+pub trait ProviderAdapter: Send + Sync {
+    fn name(&self) -> &str;
+    async fn send(
+        &self,
+        messages: &[Message],
+        options: &RequestOptions,
+        tools: &[ToolDefinition],
+    ) -> Result<Pin<Box<dyn Stream<Item = LlmEvent> + Send>>>;
+}
+```
 
-## Task 2: Unit tests for command parsing (TDD)
-**~80 lines | src/voice_command.rs**
+Also define:
+- `Message` struct with `role: Role`, `content: MessageContent`
+- `Role` enum: System, User, Assistant, Tool
+- `MessageContent` enum: Text(String), ToolResult { call_id, content }
+- `ToolDefinition` struct: name, description, parameters (JSON schema)
+- Wire `pub mod provider;` and `pub mod providers;` into `fae_llm/mod.rs`
 
-Add `#[cfg(test)] mod tests` with test cases for the parser (to be implemented in Task 3):
-- "fae switch to claude" → SwitchModel(ByProvider("anthropic"))
-- "use the local model" → SwitchModel(Local)
-- "switch to gpt-4o" → SwitchModel(ByName("gpt-4o"))
-- "use the best model" → SwitchModel(Best)
-- "what model are you using" → CurrentModel
-- "list models" → ListModels
-- "hello how are you" → None (not a command)
-- "switch to the flagship model" → SwitchModel(Best)
-- Case insensitivity: "FAE SWITCH TO CLAUDE" → same result
-- Partial match: "could you switch to claude please" → SwitchModel
+All types must derive Debug, Clone, Serialize, Deserialize where appropriate.
+Add unit tests for message construction and serialization.
 
-Tests call `parse_voice_command(&str) -> Option<VoiceCommand>` which doesn't exist yet.
-Mark tests with `#[ignore]` so they compile but skip until Task 3.
+## Task 2: SSE line parser
+**~120 lines | src/fae_llm/providers/sse.rs**
 
-## Task 3: Implement parse_voice_command()
-**~80 lines | src/voice_command.rs**
+Implement a reusable SSE (Server-Sent Events) parser:
+- `SseParser` struct that processes a byte stream line by line
+- Handles `data:`, `event:`, `id:`, comment lines (`:` prefix), empty lines as event boundaries
+- `SseEvent { event_type: Option<String>, data: String, id: Option<String> }`
+- `parse_sse_stream(stream: impl Stream<Item = Result<Bytes>>) -> impl Stream<Item = SseEvent>`
+- Handle multi-line `data:` fields (concatenate with newlines)
+- Handle `[DONE]` sentinel
+- Unit tests: single events, multi-line data, comments, empty lines, DONE sentinel
 
-Implement `pub fn parse_voice_command(text: &str) -> Option<VoiceCommand>`:
-- Lowercase and trim input
-- Match patterns:
-  - "switch to {target}" / "use {target}" / "change to {target}"
-  - "what model" / "which model" / "current model" → CurrentModel
-  - "list models" / "show models" / "available models" → ListModels
-- Parse target:
-  - "local" / "local model" / "offline" → ModelTarget::Local
-  - "best" / "best model" / "flagship" → ModelTarget::Best
-  - "claude" / "anthropic" → ModelTarget::ByProvider("anthropic")
-  - "gpt" / "openai" → ModelTarget::ByProvider("openai")
-  - "gemini" / "google" → ModelTarget::ByProvider("google")
-  - Anything else → ModelTarget::ByName(target_string)
-- No regex — use simple string contains/starts_with patterns
-- Remove `#[ignore]` from Task 2 tests; all must pass
+## Task 3: OpenAI Chat Completions request builder
+**~150 lines | src/fae_llm/providers/openai.rs**
 
-## Task 4: Model name resolution
-**~60 lines | src/voice_command.rs**
+Implement the request body builder for OpenAI Chat Completions:
+- `OpenAiConfig` struct: api_key, base_url, org_id (optional), model
+- `build_completions_request(messages, options, tools) -> serde_json::Value`
+- Map Message/Role to OpenAI format: `{ "role": "user", "content": "..." }`
+- Map ToolDefinition to OpenAI tools format: `{ "type": "function", "function": { ... } }`
+- Map RequestOptions: temperature, max_tokens, top_p, stream: true
+- Handle tool results as `{ "role": "tool", "tool_call_id": "...", "content": "..." }`
+- Unit tests verifying JSON structure matches OpenAI spec
 
-Implement `pub fn resolve_model_target(target: &ModelTarget, candidates: &[ProviderModelRef]) -> Option<usize>`:
-- `ModelTarget::Local` → find candidate where `provider == FAE_PROVIDER_KEY`
-- `ModelTarget::Best` → return index 0 (candidates are pre-sorted by tier)
-- `ModelTarget::ByProvider(p)` → find first candidate matching provider (case-insensitive)
-- `ModelTarget::ByName(n)` → find first candidate where model contains name (case-insensitive)
-- Returns `Option<usize>` — index into candidates array
-- Add tests for each target type with mock candidates
+## Task 4: OpenAI SSE response parser (Completions)
+**~150 lines | src/fae_llm/providers/openai.rs**
 
-## Task 5: RuntimeEvent variants for voice commands
-**~20 lines | src/runtime.rs**
+Parse OpenAI Chat Completions streaming responses into LlmEvent:
+- `parse_completions_chunk(data: &str) -> Vec<LlmEvent>`
+- Parse `choices[0].delta.content` -> TextDelta
+- Parse `choices[0].delta.tool_calls[*]` -> ToolCallStart/ToolCallArgsDelta
+- Parse `choices[0].finish_reason` -> StreamEnd with mapped FinishReason
+- Handle `usage` field in final chunk -> store for ResponseMeta
+- Map OpenAI finish reasons: "stop" -> Stop, "length" -> Length, "tool_calls" -> ToolCalls, "content_filter" -> ContentFilter
+- Unit tests with realistic OpenAI SSE payloads (text, tool calls, errors)
 
-Add new variants to `RuntimeEvent`:
-- `VoiceCommandDetected { command: String }` — human-readable description of detected command
-- `ModelSwitchRequested { target: String }` — model switch was requested (before execution)
+## Task 5: Tool call streaming accumulator
+**~100 lines | src/fae_llm/providers/openai.rs**
 
-Keep payloads as simple Strings (lightweight, no heavy types crossing channel).
+Implement streaming tool call accumulation:
+- `ToolCallAccumulator` struct tracking in-flight tool calls
+- Each tool call has: index, id, function name, accumulated args
+- On first chunk with tool_call index -> emit ToolCallStart
+- On subsequent chunks -> emit ToolCallArgsDelta
+- On finish_reason "tool_calls" or new call -> emit ToolCallEnd for completed calls
+- Handle multiple parallel tool calls (different indices)
+- Unit tests: single tool call, parallel tool calls, args split across chunks
 
-## Task 6: VoiceCommandFilter stage in pipeline
-**~70 lines | src/pipeline/coordinator.rs**
+## Task 6: OpenAI ProviderAdapter implementation
+**~120 lines | src/fae_llm/providers/openai.rs**
 
-Add `run_voice_command_filter()` async function:
-- Receives `mpsc::Receiver<Transcription>` from identity gate
-- Sends non-command transcriptions to `mpsc::Sender<Transcription>` (to LLM)
-- Sends detected commands to `mpsc::UnboundedSender<VoiceCommand>` (new channel)
-- Emits `RuntimeEvent::VoiceCommandDetected` via broadcast
-- Only inspects `is_final` transcriptions (ignore partials)
+Wire everything together in the ProviderAdapter impl:
+- `OpenAiAdapter` struct holding `OpenAiConfig` and `reqwest::Client`
+- `OpenAiAdapter::new(config: OpenAiConfig) -> Self`
+- Implement `send()`: build request, POST to /v1/chat/completions, parse SSE stream
+- Map SSE events through `parse_completions_chunk` -> flatten into LlmEvent stream
+- Emit StreamStart at beginning, StreamError on HTTP errors
+- Set Authorization header, optional Organization header
+- Handle non-200 responses: parse error body, emit StreamError
+- Integration-style test with mock (deferred to Task 8)
 
-Wire it into `PipelineCoordinator::run()`:
-- Create new channel pair for voice commands
-- Insert filter between identity gate output and LLM input
-- Pass voice_command_tx through to where PiLlm will consume it (Phase 2.2)
+## Task 7: OpenAI Responses API support
+**~100 lines | src/fae_llm/providers/openai.rs**
 
-## Task 7: Integration tests
-**~80 lines | src/voice_command.rs**
+Add support for the OpenAI Responses API (newer streaming format):
+- `build_responses_request(messages, options, tools) -> serde_json::Value`
+- Responses API uses input items format: `{ "type": "message", "role": "user", "content": [...] }`
+- `parse_responses_event(event_type: &str, data: &str) -> Vec<LlmEvent>`
+- Map response events: `response.output_item.added`, `response.content_part.delta`, `response.function_call_arguments.delta`, `response.completed`
+- `OpenAiApiMode` enum: Completions, Responses -- selectable in config
+- Unit tests for Responses API event parsing
 
-Add integration-style tests that verify the full flow:
-- parse_voice_command() → resolve_model_target() with real candidates
-- Test that non-commands return None and don't affect candidate resolution
-- Test edge cases: empty string, very long string, unicode, numbers
-- Test that "fae" prefix is optional
-- Test multiple command synonyms resolve to same VoiceCommand variant
-- Verify ModelTarget::ByName partial matching works across the tier table
+## Task 8: Integration tests and module wiring
+**~120 lines | src/fae_llm/providers/openai.rs, src/fae_llm/mod.rs**
 
-## Task 8: Documentation and verification
-**~30 lines | src/voice_command.rs, src/lib.rs**
-
-- Add module-level doc comment with examples and supported command list
-- Add doc comments on all public items
-- Verify `just check` passes (zero warnings, zero errors)
-- Verify all tests pass
+Full integration tests:
+- Test complete SSE stream -> LlmEvent sequence for Chat Completions format
+- Test complete SSE stream -> LlmEvent sequence for Responses API format
+- Test error handling: HTTP 401 -> AuthError, 429 -> RequestError, 500 -> ProviderError
+- Test empty response stream
+- Test malformed SSE data (graceful degradation, no panics)
+- Wire all public types into `mod.rs` re-exports
+- Verify `just check` passes with zero warnings
 - Update progress.md
 
 ---
 
 ## Acceptance Criteria
-- [ ] `parse_voice_command()` correctly detects switch/list/current commands
-- [ ] `resolve_model_target()` maps voice targets to candidate indices
-- [ ] VoiceCommandFilter stage wired into pipeline (receives transcriptions, emits commands)
-- [ ] RuntimeEvent variants emitted for detected commands
-- [ ] Non-command transcriptions pass through unchanged
-- [ ] Partial transcriptions are never treated as commands
+- [ ] `ProviderAdapter` trait defined with async streaming interface
+- [ ] SSE parser correctly handles all SSE edge cases
+- [ ] OpenAI Chat Completions request builder produces valid JSON
+- [ ] Streaming text deltas normalized to LlmEvent::TextDelta
+- [ ] Streaming tool calls normalized to ToolCallStart/ArgsDelta/End
+- [ ] Tool call accumulator handles parallel tool calls
+- [ ] Responses API events parsed and normalized
+- [ ] Error responses mapped to appropriate FaeLlmError variants
 - [ ] `just check` passes with zero warnings
 - [ ] All new code has doc comments
