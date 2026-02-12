@@ -33,6 +33,9 @@ pub use types::{Tool, ToolResult, truncate_output};
 pub use write::WriteTool;
 
 #[cfg(test)]
+mod mode_gating_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use super::*;
     use crate::fae_llm::config::types::ToolMode;

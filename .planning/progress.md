@@ -471,3 +471,4 @@ Task 1 starting...
 - [x] Task 3: Local endpoint probing tests (commit: 881c9f5)
 - [x] Task 4: Compatibility profile tests (commit: e7c0619)
 - [x] Task 5: E2E multi-turn tool workflow tests (commit: eaab1af)
+- [x] Task 6: Failure injection tests (commit: d6bed77)
