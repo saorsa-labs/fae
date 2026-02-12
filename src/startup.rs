@@ -766,4 +766,76 @@ mod tests {
         let result = available_disk_space(Path::new("/nonexistent/path/that/does/not/exist"));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn preflight_result_fields() {
+        // Construct a PreFlightResult manually and verify field access.
+        let plan = DownloadPlan {
+            files: vec![
+                DownloadFile {
+                    repo_id: "org/model".into(),
+                    filename: "model.onnx".into(),
+                    size_bytes: Some(2_000_000_000),
+                    cached: false,
+                },
+                DownloadFile {
+                    repo_id: "org/model".into(),
+                    filename: "vocab.txt".into(),
+                    size_bytes: Some(100_000),
+                    cached: true,
+                },
+            ],
+        };
+        let result = PreFlightResult {
+            plan,
+            free_space: 50_000_000_000,
+            needs_download: true,
+        };
+        assert!(result.needs_download);
+        assert_eq!(result.plan.files_to_download(), 1);
+        assert_eq!(result.plan.total_files(), 2);
+        assert_eq!(result.plan.download_bytes(), 2_000_000_000);
+        assert!(result.free_space > 0);
+    }
+
+    #[test]
+    fn preflight_result_all_cached() {
+        let plan = DownloadPlan {
+            files: vec![DownloadFile {
+                repo_id: "org/model".into(),
+                filename: "model.onnx".into(),
+                size_bytes: Some(2_000_000_000),
+                cached: true,
+            }],
+        };
+        let result = PreFlightResult {
+            plan,
+            free_space: 50_000_000_000,
+            needs_download: false,
+        };
+        assert!(!result.needs_download);
+        assert_eq!(result.plan.files_to_download(), 0);
+    }
+
+    #[test]
+    fn disk_space_check_zero_required() {
+        // Zero required bytes should always pass.
+        let check = DiskSpaceCheck {
+            free_bytes: 1,
+            required_bytes: 0,
+        };
+        // Need at least DISK_SPACE_HEADROOM even with 0 required
+        assert!(!check.has_enough_space());
+
+        let check = DiskSpaceCheck {
+            free_bytes: DISK_SPACE_HEADROOM,
+            required_bytes: 0,
+        };
+        assert!(check.has_enough_space());
+    }
+
+    #[test]
+    fn disk_space_headroom_constant_is_500mb() {
+        assert_eq!(DISK_SPACE_HEADROOM, 500 * 1024 * 1024);
+    }
 }
