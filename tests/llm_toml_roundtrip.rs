@@ -149,11 +149,7 @@ fn test_preserves_formatting_spacing() {
     // Count newlines (should be approximately the same, allowing for minor differences)
     let original_newlines = original.matches('\n').count();
     let modified_newlines = modified.matches('\n').count();
-    let diff = if original_newlines > modified_newlines {
-        original_newlines - modified_newlines
-    } else {
-        modified_newlines - original_newlines
-    };
+    let diff = original_newlines.abs_diff(modified_newlines);
 
     assert!(
         diff <= 2,
