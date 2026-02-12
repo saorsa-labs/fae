@@ -305,4 +305,365 @@ mod integration_tests {
             }
         }
     }
+
+    // ── Provider Integration Tests ────────────────────────────
+
+    /// Full SSE text stream: parse raw SSE bytes → LlmEvent sequence.
+    #[test]
+    fn provider_integration_completions_text_stream() {
+        use providers::openai::{ToolCallAccumulator, parse_completions_chunk};
+        use providers::sse::parse_sse_text;
+
+        let raw = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\"The\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\" answer\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\" is 42.\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let sse_events = parse_sse_text(raw);
+        let mut acc = ToolCallAccumulator::new();
+        let mut all_events = Vec::new();
+
+        for sse in &sse_events {
+            if sse.is_done() {
+                continue;
+            }
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+        }
+
+        // Collect text
+        let text: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "The answer is 42.");
+
+        // Verify stream ends correctly
+        assert!(all_events.last().is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
+        )));
+    }
+
+    /// Full SSE tool call stream: parse raw SSE → tool events.
+    #[test]
+    fn provider_integration_completions_tool_stream() {
+        use providers::openai::{ToolCallAccumulator, parse_completions_chunk};
+        use providers::sse::parse_sse_text;
+
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"\"}}]},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"src/\"}}]},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"main.rs\\\"}\"}}]},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\",\"index\":0}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let sse_events = parse_sse_text(raw);
+        let mut acc = ToolCallAccumulator::new();
+        let mut all_events = Vec::new();
+
+        for sse in &sse_events {
+            if sse.is_done() {
+                continue;
+            }
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+        }
+
+        // Verify tool call sequence: Start, ArgsDelta, ArgsDelta, End, StreamEnd
+        let starts: Vec<_> = all_events
+            .iter()
+            .filter(|e| matches!(e, LlmEvent::ToolCallStart { .. }))
+            .collect();
+        assert_eq!(starts.len(), 1);
+
+        let ends: Vec<_> = all_events
+            .iter()
+            .filter(|e| matches!(e, LlmEvent::ToolCallEnd { .. }))
+            .collect();
+        assert_eq!(ends.len(), 1);
+
+        // Collect args
+        let args: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::ToolCallArgsDelta { args_fragment, .. } => Some(args_fragment.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(args, r#"{"path":"src/main.rs"}"#);
+
+        // Finish reason
+        assert!(all_events.last().is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::ToolCalls
+            }
+        )));
+    }
+
+    /// Parallel tool calls in a single response.
+    #[test]
+    fn provider_integration_parallel_tool_calls() {
+        use providers::openai::{ToolCallAccumulator, parse_completions_chunk};
+        use providers::sse::parse_sse_text;
+
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read\",\"arguments\":\"\"}},{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"bash\",\"arguments\":\"\"}}]},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"p\\\":\\\"a\\\"}\"}}]},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"{\\\"c\\\":\\\"ls\\\"}\"}}]},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\",\"index\":0}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let sse_events = parse_sse_text(raw);
+        let mut acc = ToolCallAccumulator::new();
+        let mut all_events = Vec::new();
+
+        for sse in &sse_events {
+            if sse.is_done() {
+                continue;
+            }
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+        }
+
+        let starts: Vec<_> = all_events
+            .iter()
+            .filter(|e| matches!(e, LlmEvent::ToolCallStart { .. }))
+            .collect();
+        assert_eq!(starts.len(), 2);
+
+        let ends: Vec<_> = all_events
+            .iter()
+            .filter(|e| matches!(e, LlmEvent::ToolCallEnd { .. }))
+            .collect();
+        assert_eq!(ends.len(), 2);
+    }
+
+    /// Responses API text stream integration.
+    #[test]
+    fn provider_integration_responses_text_stream() {
+        use providers::openai::{ToolCallAccumulator, parse_responses_event};
+        use providers::sse::parse_sse_text;
+
+        let raw = concat!(
+            "event: response.output_text.delta\ndata: {\"delta\":\"Hello \"}\n\n",
+            "event: response.output_text.delta\ndata: {\"delta\":\"world!\"}\n\n",
+            "event: response.completed\ndata: {\"response\":{\"status\":\"completed\"}}\n\n",
+        );
+
+        let sse_events = parse_sse_text(raw);
+        let mut acc = ToolCallAccumulator::new();
+        let mut all_events = Vec::new();
+
+        for sse in &sse_events {
+            let event_type = sse.event_type.as_deref().unwrap_or("");
+            all_events.extend(parse_responses_event(event_type, &sse.data, &mut acc));
+        }
+
+        let text: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Hello world!");
+
+        assert!(all_events.last().is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
+        )));
+    }
+
+    /// Incremental SSE parsing (split across byte chunks).
+    #[test]
+    fn provider_integration_incremental_sse() {
+        use providers::openai::{ToolCallAccumulator, parse_completions_chunk};
+        use providers::sse::SseLineParser;
+
+        let raw = b"data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}, \"index\":0}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}]}\n\ndata: [DONE]\n\n";
+
+        // Split arbitrarily into two chunks
+        let mid = raw.len() / 2;
+        let chunk1 = &raw[..mid];
+        let chunk2 = &raw[mid..];
+
+        let mut parser = SseLineParser::new();
+        let mut acc = ToolCallAccumulator::new();
+        let mut all_events = Vec::new();
+
+        for sse in parser.push(chunk1) {
+            if !sse.is_done() {
+                all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+            }
+        }
+        for sse in parser.push(chunk2) {
+            if !sse.is_done() {
+                all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+            }
+        }
+
+        let text: String = all_events
+            .iter()
+            .filter_map(|e| match e {
+                LlmEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Hi");
+    }
+
+    /// Malformed SSE data does not panic, gracefully returns empty events.
+    #[test]
+    fn provider_integration_malformed_sse_graceful() {
+        use providers::openai::{ToolCallAccumulator, parse_completions_chunk};
+        use providers::sse::parse_sse_text;
+
+        let raw = concat!(
+            "data: not-json-at-all\n\n",
+            "data: {\"completely\":\"wrong structure\"}\n\n",
+            "data: {\"choices\":\"not-an-array\"}\n\n",
+            "data: {\"choices\":[{\"no-delta\":true}]}\n\n",
+            "data: \n\n",
+        );
+
+        let sse_events = parse_sse_text(raw);
+        let mut acc = ToolCallAccumulator::new();
+        let mut all_events = Vec::new();
+
+        for sse in &sse_events {
+            if sse.is_done() {
+                continue;
+            }
+            all_events.extend(parse_completions_chunk(&sse.data, &mut acc));
+        }
+
+        // No events emitted from malformed data, no panics
+        assert!(all_events.is_empty());
+    }
+
+    /// Empty stream produces no events.
+    #[test]
+    fn provider_integration_empty_stream() {
+        use providers::sse::parse_sse_text;
+
+        let sse_events = parse_sse_text("data: [DONE]\n\n");
+        // Only the DONE sentinel, which is filtered
+        assert_eq!(sse_events.len(), 1);
+        assert!(sse_events[0].is_done());
+    }
+
+    /// HTTP error mapping covers key status codes.
+    #[test]
+    fn provider_integration_error_mapping() {
+        let auth_err = providers::openai::OpenAiAdapter::map_http_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"error":{"message":"Incorrect API key"}}"#,
+        );
+        assert_eq!(auth_err.code(), "AUTH_FAILED");
+
+        let rate_err = providers::openai::OpenAiAdapter::map_http_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"message":"Rate limit exceeded"}}"#,
+        );
+        assert_eq!(rate_err.code(), "REQUEST_FAILED");
+
+        let server_err = providers::openai::OpenAiAdapter::map_http_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error",
+        );
+        assert_eq!(server_err.code(), "PROVIDER_ERROR");
+    }
+
+    /// OpenAI adapter provides correct name.
+    #[test]
+    fn provider_integration_adapter_name() {
+        let config = OpenAiConfig::new("test-key", "gpt-4o");
+        let adapter = OpenAiAdapter::new(config);
+        assert_eq!(adapter.name(), "openai");
+    }
+
+    /// ToolDefinition round-trips through the request builder.
+    #[test]
+    fn provider_integration_tool_definition_in_request() {
+        use providers::openai::build_completions_request;
+
+        let tools = vec![
+            ToolDefinition::new(
+                "read",
+                "Read file content",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"]
+                }),
+            ),
+            ToolDefinition::new(
+                "bash",
+                "Run a command",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "command": { "type": "string" } },
+                    "required": ["command"]
+                }),
+            ),
+        ];
+
+        let opts = RequestOptions::new();
+        let body = build_completions_request("gpt-4o", &[], &opts, &tools);
+
+        let tools_arr = body["tools"].as_array();
+        assert!(tools_arr.is_some_and(|t| t.len() == 2));
+        if let Some(tools_arr) = tools_arr {
+            assert_eq!(tools_arr[0]["function"]["name"], "read");
+            assert_eq!(tools_arr[1]["function"]["name"], "bash");
+        }
+    }
+
+    /// Message types correctly map through the request builder.
+    #[test]
+    fn provider_integration_message_types_in_request() {
+        use providers::openai::build_completions_request;
+
+        let messages = vec![
+            Message::system("You are a coding assistant."),
+            Message::user("Read main.rs"),
+            Message::assistant_with_tool_calls(
+                Some("I'll read that for you.".into()),
+                vec![AssistantToolCall {
+                    call_id: "call_1".into(),
+                    function_name: "read".into(),
+                    arguments: r#"{"path":"main.rs"}"#.into(),
+                }],
+            ),
+            Message::tool_result("call_1", "fn main() {}"),
+            Message::assistant("Here's the file content."),
+        ];
+
+        let opts = RequestOptions::new();
+        let body = build_completions_request("gpt-4o", &messages, &opts, &[]);
+
+        let msgs = body["messages"].as_array();
+        assert!(msgs.is_some_and(|m| m.len() == 5));
+        if let Some(msgs) = msgs {
+            assert_eq!(msgs[0]["role"], "system");
+            assert_eq!(msgs[1]["role"], "user");
+            assert_eq!(msgs[2]["role"], "assistant");
+            assert!(msgs[2]["tool_calls"].is_array());
+            assert_eq!(msgs[3]["role"], "tool");
+            assert_eq!(msgs[3]["tool_call_id"], "call_1");
+            assert_eq!(msgs[4]["role"], "assistant");
+        }
+    }
 }

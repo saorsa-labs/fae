@@ -2,7 +2,7 @@
 //!
 //! Supports both the Chat Completions API (`/v1/chat/completions`) and
 //! the Responses API (`/v1/responses`). Normalizes provider-specific
-//! streaming events to the shared [`LlmEvent`](crate::fae_llm::events::LlmEvent) model.
+//! streaming events to the shared [`LlmEvent`] model.
 //!
 //! # Supported APIs
 //!
@@ -341,13 +341,14 @@ impl ToolCallAccumulator {
     ) -> Vec<LlmEvent> {
         let mut events = Vec::new();
 
-        let state = self.active_calls.entry(index).or_insert_with(|| {
-            ToolCallState {
+        let state = self
+            .active_calls
+            .entry(index)
+            .or_insert_with(|| ToolCallState {
                 call_id: id.unwrap_or("").to_string(),
                 function_name: function_name.unwrap_or("").to_string(),
                 started: false,
-            }
-        });
+            });
 
         // Update call_id and function_name if provided
         if let Some(id_val) = id
@@ -415,10 +416,7 @@ impl ToolCallAccumulator {
 ///
 /// Returns a list of [`LlmEvent`]s extracted from the chunk.
 /// The `accumulator` tracks in-flight tool calls across chunks.
-pub fn parse_completions_chunk(
-    data: &str,
-    accumulator: &mut ToolCallAccumulator,
-) -> Vec<LlmEvent> {
+pub fn parse_completions_chunk(data: &str, accumulator: &mut ToolCallAccumulator) -> Vec<LlmEvent> {
     let parsed: serde_json::Value = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
@@ -449,14 +447,14 @@ pub fn parse_completions_chunk(
                     let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
                     let id = tc.get("id").and_then(|i| i.as_str());
                     let function = tc.get("function");
-                    let function_name =
-                        function.and_then(|f| f.get("name")).and_then(|n| n.as_str());
+                    let function_name = function
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str());
                     let args = function
                         .and_then(|f| f.get("arguments"))
                         .and_then(|a| a.as_str());
 
-                    let tc_events =
-                        accumulator.process_chunk(index, id, function_name, args);
+                    let tc_events = accumulator.process_chunk(index, id, function_name, args);
                     events.extend(tc_events);
                 }
             }
@@ -510,17 +508,13 @@ pub fn parse_responses_event(
                     .get("item_id")
                     .and_then(|i| i.as_str())
                     .unwrap_or("unknown");
-                let name = parsed
-                    .get("name")
-                    .and_then(|n| n.as_str());
-                let index = parsed.get("output_index").and_then(|i| i.as_u64()).unwrap_or(0);
+                let name = parsed.get("name").and_then(|n| n.as_str());
+                let index = parsed
+                    .get("output_index")
+                    .and_then(|i| i.as_u64())
+                    .unwrap_or(0);
 
-                let tc_events = accumulator.process_chunk(
-                    index,
-                    Some(call_id),
-                    name,
-                    Some(delta),
-                );
+                let tc_events = accumulator.process_chunk(index, Some(call_id), name, Some(delta));
                 events.extend(tc_events);
             }
         }
@@ -621,29 +615,24 @@ impl OpenAiAdapter {
         match self.config.api_mode {
             OpenAiApiMode::Completions => {
                 let url = format!("{}/v1/chat/completions", self.config.base_url);
-                let body =
-                    build_completions_request(&self.config.model, messages, options, tools);
+                let body = build_completions_request(&self.config.model, messages, options, tools);
                 (url, body)
             }
             OpenAiApiMode::Responses => {
                 let url = format!("{}/v1/responses", self.config.base_url);
-                let body =
-                    build_responses_request(&self.config.model, messages, options, tools);
+                let body = build_responses_request(&self.config.model, messages, options, tools);
                 (url, body)
             }
         }
     }
 
     /// Map an HTTP error status to the appropriate FaeLlmError.
-    fn map_http_error(status: reqwest::StatusCode, body: &str) -> FaeLlmError {
+    pub fn map_http_error(status: reqwest::StatusCode, body: &str) -> FaeLlmError {
         let message = extract_error_message(body);
         match status.as_u16() {
             401 => FaeLlmError::AuthError(format!("OpenAI authentication failed: {message}")),
             429 => FaeLlmError::RequestError(format!("OpenAI rate limited: {message}")),
-            _ => FaeLlmError::ProviderError(format!(
-                "OpenAI HTTP {}: {message}",
-                status.as_u16()
-            )),
+            _ => FaeLlmError::ProviderError(format!("OpenAI HTTP {}: {message}", status.as_u16())),
         }
     }
 }
@@ -687,9 +676,11 @@ impl ProviderAdapter for OpenAiAdapter {
             request = request.header("OpenAI-Organization", org_id);
         }
 
-        let response = request.json(&body).send().await.map_err(|e| {
-            FaeLlmError::RequestError(format!("OpenAI request failed: {e}"))
-        })?;
+        let response = request
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| FaeLlmError::RequestError(format!("OpenAI request failed: {e}")))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -707,12 +698,7 @@ impl ProviderAdapter for OpenAiAdapter {
 
         let byte_stream = response.bytes_stream();
 
-        let event_stream = create_event_stream(
-            byte_stream,
-            request_id,
-            model,
-            api_mode,
-        );
+        let event_stream = create_event_stream(byte_stream, request_id, model, api_mode);
 
         Ok(Box::pin(event_stream))
     }
@@ -764,14 +750,10 @@ fn create_event_stream(
 
                             let llm_events = match state.api_mode {
                                 OpenAiApiMode::Completions => {
-                                    parse_completions_chunk(
-                                        &sse_event.data,
-                                        &mut state.accumulator,
-                                    )
+                                    parse_completions_chunk(&sse_event.data, &mut state.accumulator)
                                 }
                                 OpenAiApiMode::Responses => {
-                                    let event_type =
-                                        sse_event.event_type.as_deref().unwrap_or("");
+                                    let event_type = sse_event.event_type.as_deref().unwrap_or("");
                                     parse_responses_event(
                                         event_type,
                                         &sse_event.data,
@@ -799,14 +781,10 @@ fn create_event_stream(
                         {
                             let llm_events = match state.api_mode {
                                 OpenAiApiMode::Completions => {
-                                    parse_completions_chunk(
-                                        &sse_event.data,
-                                        &mut state.accumulator,
-                                    )
+                                    parse_completions_chunk(&sse_event.data, &mut state.accumulator)
                                 }
                                 OpenAiApiMode::Responses => {
-                                    let event_type =
-                                        sse_event.event_type.as_deref().unwrap_or("");
+                                    let event_type = sse_event.event_type.as_deref().unwrap_or("");
                                     parse_responses_event(
                                         event_type,
                                         &sse_event.data,
@@ -858,22 +836,19 @@ mod tests {
 
     #[test]
     fn config_with_base_url() {
-        let config = OpenAiConfig::new("key", "model")
-            .with_base_url("https://custom.api.com");
+        let config = OpenAiConfig::new("key", "model").with_base_url("https://custom.api.com");
         assert_eq!(config.base_url, "https://custom.api.com");
     }
 
     #[test]
     fn config_with_org_id() {
-        let config = OpenAiConfig::new("key", "model")
-            .with_org_id("org-123");
+        let config = OpenAiConfig::new("key", "model").with_org_id("org-123");
         assert_eq!(config.org_id.as_deref(), Some("org-123"));
     }
 
     #[test]
     fn config_with_api_mode() {
-        let config = OpenAiConfig::new("key", "model")
-            .with_api_mode(OpenAiApiMode::Responses);
+        let config = OpenAiConfig::new("key", "model").with_api_mode(OpenAiApiMode::Responses);
         assert_eq!(config.api_mode, OpenAiApiMode::Responses);
     }
 
@@ -922,7 +897,12 @@ mod tests {
         assert!(body["tools"].is_array());
         let tools_arr = body["tools"].as_array();
         assert!(tools_arr.is_some_and(|t| t.len() == 1));
-        assert_eq!(tools_arr.and_then(|t| t[0].get("type")).and_then(|t| t.as_str()), Some("function"));
+        assert_eq!(
+            tools_arr
+                .and_then(|t| t[0].get("type"))
+                .and_then(|t| t.as_str()),
+            Some("function")
+        );
     }
 
     #[test]
@@ -1026,14 +1006,18 @@ mod tests {
         // First chunk: id + function name
         let events = acc.process_chunk(0, Some("call_1"), Some("read"), None);
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
-            if call_id == "call_1" && function_name == "read"));
+        assert!(
+            matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
+            if call_id == "call_1" && function_name == "read")
+        );
 
         // Second chunk: args
         let events = acc.process_chunk(0, None, None, Some(r#"{"path":"#));
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], LlmEvent::ToolCallArgsDelta { call_id, args_fragment }
-            if call_id == "call_1" && args_fragment == r#"{"path":"#));
+        assert!(
+            matches!(&events[0], LlmEvent::ToolCallArgsDelta { call_id, args_fragment }
+            if call_id == "call_1" && args_fragment == r#"{"path":"#)
+        );
 
         // Third chunk: more args
         let events = acc.process_chunk(0, None, None, Some(r#""main.rs"}"#));
@@ -1114,7 +1098,9 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            LlmEvent::StreamEnd { finish_reason: FinishReason::Stop }
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
         ));
     }
 
@@ -1131,7 +1117,9 @@ mod tests {
         assert!(matches!(&events[0], LlmEvent::ToolCallEnd { .. }));
         assert!(matches!(
             &events[1],
-            LlmEvent::StreamEnd { finish_reason: FinishReason::ToolCalls }
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::ToolCalls
+            }
         ));
     }
 
@@ -1141,8 +1129,10 @@ mod tests {
         let mut acc = ToolCallAccumulator::new();
         let events = parse_completions_chunk(data, &mut acc);
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
-            if call_id == "call_abc" && function_name == "bash"));
+        assert!(
+            matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
+            if call_id == "call_abc" && function_name == "bash")
+        );
     }
 
     #[test]
@@ -1156,8 +1146,10 @@ mod tests {
         let args_data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":"}}]},"index":0}]}"#;
         let events = parse_completions_chunk(args_data, &mut acc);
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], LlmEvent::ToolCallArgsDelta { call_id, args_fragment }
-            if call_id == "call_abc" && args_fragment == r#"{"cmd":"#));
+        assert!(
+            matches!(&events[0], LlmEvent::ToolCallArgsDelta { call_id, args_fragment }
+            if call_id == "call_abc" && args_fragment == r#"{"cmd":"#)
+        );
     }
 
     #[test]
@@ -1194,7 +1186,9 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            LlmEvent::StreamEnd { finish_reason: FinishReason::Stop }
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
         ));
     }
 
@@ -1204,19 +1198,18 @@ mod tests {
         let mut acc = ToolCallAccumulator::new();
         let events = parse_responses_event("response.output_item.added", data, &mut acc);
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
-            if call_id == "fc_1" && function_name == "read"));
+        assert!(
+            matches!(&events[0], LlmEvent::ToolCallStart { call_id, function_name }
+            if call_id == "fc_1" && function_name == "read")
+        );
     }
 
     #[test]
     fn responses_function_args_delta() {
         let data = r#"{"item_id":"fc_1","delta":"{\"path\":","output_index":0}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event(
-            "response.function_call_arguments.delta",
-            data,
-            &mut acc,
-        );
+        let events =
+            parse_responses_event("response.function_call_arguments.delta", data, &mut acc);
         // Should emit ToolCallStart (first encounter via accumulator) + ToolCallArgsDelta
         assert_eq!(events.len(), 2);
     }
@@ -1225,11 +1218,7 @@ mod tests {
     fn responses_function_args_done() {
         let data = r#"{"item_id":"fc_1"}"#;
         let mut acc = ToolCallAccumulator::new();
-        let events = parse_responses_event(
-            "response.function_call_arguments.done",
-            data,
-            &mut acc,
-        );
+        let events = parse_responses_event("response.function_call_arguments.done", data, &mut acc);
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], LlmEvent::ToolCallEnd { call_id } if call_id == "fc_1"));
     }
@@ -1295,8 +1284,7 @@ mod tests {
 
     #[test]
     fn adapter_build_request_responses() {
-        let config = OpenAiConfig::new("key", "gpt-4o")
-            .with_api_mode(OpenAiApiMode::Responses);
+        let config = OpenAiConfig::new("key", "gpt-4o").with_api_mode(OpenAiApiMode::Responses);
         let adapter = OpenAiAdapter::new(config);
         let (url, body) = adapter.build_request(&[], &RequestOptions::new(), &[]);
         assert!(url.ends_with("/v1/responses"));
@@ -1339,7 +1327,12 @@ mod tests {
 
         // Verify finish
         let last = all_events.last();
-        assert!(last.is_some_and(|e| matches!(e, LlmEvent::StreamEnd { finish_reason: FinishReason::Stop })));
+        assert!(last.is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop
+            }
+        )));
     }
 
     #[test]
@@ -1366,8 +1359,17 @@ mod tests {
 
         // Should have: ToolCallStart, ArgsDelta, ArgsDelta, ToolCallEnd, StreamEnd
         assert!(all_events.iter().any(|e| matches!(e, LlmEvent::ToolCallStart { function_name, .. } if function_name == "read")));
-        assert!(all_events.iter().any(|e| matches!(e, LlmEvent::ToolCallEnd { .. })));
-        assert!(all_events.last().is_some_and(|e| matches!(e, LlmEvent::StreamEnd { finish_reason: FinishReason::ToolCalls })));
+        assert!(
+            all_events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::ToolCallEnd { .. }))
+        );
+        assert!(all_events.last().is_some_and(|e| matches!(
+            e,
+            LlmEvent::StreamEnd {
+                finish_reason: FinishReason::ToolCalls
+            }
+        )));
 
         // Collect args
         let args: String = all_events

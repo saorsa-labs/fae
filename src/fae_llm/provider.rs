@@ -2,7 +2,7 @@
 //!
 //! Defines the [`ProviderAdapter`] trait that all LLM provider implementations
 //! must satisfy. Adapters convert provider-specific APIs into the shared
-//! [`LlmEvent`](super::events::LlmEvent) streaming model.
+//! [`LlmEvent`] streaming model.
 //!
 //! # Examples
 //!

@@ -120,7 +120,7 @@ fn parse_field(line: &str) -> Option<(&str, &str)> {
 ///
 /// This is the primary entry point for parsing SSE data received as a
 /// complete string (e.g. from a buffered response). For streaming use,
-/// create an [`EventBuilder`] and feed lines incrementally.
+/// create an [`SseLineParser`] and feed lines incrementally.
 ///
 /// # Examples
 ///
