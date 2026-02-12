@@ -10,3 +10,4 @@
 //! - `openai` — OpenAI Chat Completions and Responses API (Phase 2.1)
 
 pub mod message;
+pub mod sse;
