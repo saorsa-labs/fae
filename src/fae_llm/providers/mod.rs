@@ -18,3 +18,6 @@ pub mod message;
 pub mod openai;
 pub mod profile;
 pub mod sse;
+
+#[cfg(test)]
+mod local_probe_tests;
