@@ -977,7 +977,11 @@ fn load_avatar_cache(
 #[derive(Debug, Clone, PartialEq)]
 enum StagePhase {
     Pending,
-    Downloading { filename: String },
+    Downloading {
+        filename: String,
+        bytes_downloaded: u64,
+        total_bytes: Option<u64>,
+    },
     Loading,
     Ready,
     Error(String),
@@ -988,7 +992,26 @@ impl StagePhase {
     fn label(&self, thing: &str) -> String {
         match self {
             Self::Pending => thing.to_owned(),
-            Self::Downloading { .. } | Self::Loading => format!("Loading {thing}"),
+            Self::Downloading {
+                bytes_downloaded,
+                total_bytes,
+                ..
+            } => {
+                if let Some(total) = total_bytes {
+                    if *total > 0 {
+                        format!(
+                            "Downloading {thing} ({} / {})",
+                            format_bytes_short(*bytes_downloaded),
+                            format_bytes_short(*total)
+                        )
+                    } else {
+                        format!("Downloading {thing}")
+                    }
+                } else {
+                    format!("Downloading {thing}")
+                }
+            }
+            Self::Loading => format!("Loading {thing}"),
             Self::Ready => format!("{thing} ready"),
             Self::Error(_) => format!("{thing} error"),
         }
@@ -997,11 +1020,81 @@ impl StagePhase {
     fn css_class(&self) -> &'static str {
         match self {
             Self::Pending => "stage stage-pending",
-            Self::Downloading { .. } | Self::Loading => "stage stage-loading",
+            Self::Downloading { .. } => "stage stage-downloading",
+            Self::Loading => "stage stage-loading",
             Self::Ready => "stage stage-ready",
             Self::Error(_) => "stage stage-error",
         }
     }
+}
+
+/// Format byte count as a short human-readable string (e.g. "2.3 GB", "89 MB").
+#[cfg(feature = "gui")]
+fn format_bytes_short(bytes: u64) -> String {
+    const GB: f64 = 1_073_741_824.0;
+    const MB: f64 = 1_048_576.0;
+    const KB: f64 = 1_024.0;
+
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.0} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Determine which model category a repo_id belongs to.
+///
+/// Returns `"STT"`, `"LLM"`, or `"TTS"` based on the repo-to-model mapping,
+/// or `"STT"` as fallback for unknown repos.
+#[cfg(feature = "gui")]
+fn model_category_for_repo<'a>(
+    repo_id: &str,
+    repo_model_map: &'a std::collections::HashMap<String, String>,
+) -> &'a str {
+    repo_model_map
+        .get(repo_id)
+        .map(|s| s.as_str())
+        .unwrap_or("STT")
+}
+
+/// Build a mapping from repo_id to model category ("STT"/"LLM"/"TTS")
+/// from a download plan.
+#[cfg(feature = "gui")]
+fn build_repo_model_map(
+    plan: &fae::progress::DownloadPlan,
+) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+
+    let mut map = HashMap::new();
+    let kokoro_repo = fae::tts::kokoro::download::KOKORO_REPO_ID;
+
+    for file in &plan.files {
+        if map.contains_key(&file.repo_id) {
+            continue;
+        }
+        if file.repo_id == kokoro_repo {
+            map.insert(file.repo_id.clone(), "TTS".to_owned());
+        } else if file.filename.ends_with(".gguf")
+            || file.filename == "tokenizer.json"
+            || file.filename == "tokenizer_config.json"
+        {
+            // GGUF or tokenizer files → LLM
+            // NOTE: STT also has .onnx files but they come from the STT repo_id
+            // This heuristic works because:
+            // - STT files are .onnx and .data and vocab.txt
+            // - LLM files are .gguf and tokenizer*.json
+            // - TTS is identified by KOKORO_REPO_ID above
+            map.insert(file.repo_id.clone(), "LLM".to_owned());
+        } else {
+            map.insert(file.repo_id.clone(), "STT".to_owned());
+        }
+    }
+    map
 }
 
 #[cfg(feature = "gui")]
@@ -1010,15 +1103,51 @@ fn update_stages_from_progress(
     stt: &mut Signal<StagePhase>,
     llm: &mut Signal<StagePhase>,
     tts: &mut Signal<StagePhase>,
+    repo_model_map: &std::collections::HashMap<String, String>,
 ) {
     use fae::progress::ProgressEvent;
 
     match event {
-        ProgressEvent::DownloadStarted { filename, .. }
-        | ProgressEvent::DownloadProgress { filename, .. } => {
-            stt.set(StagePhase::Downloading {
+        ProgressEvent::DownloadStarted {
+            repo_id,
+            filename,
+            total_bytes,
+        } => {
+            let stage = StagePhase::Downloading {
                 filename: filename.clone(),
-            });
+                bytes_downloaded: 0,
+                total_bytes: *total_bytes,
+            };
+            match model_category_for_repo(repo_id, repo_model_map) {
+                "LLM" => llm.set(stage),
+                "TTS" => tts.set(stage),
+                _ => stt.set(stage),
+            }
+        }
+        ProgressEvent::DownloadProgress {
+            repo_id,
+            filename,
+            bytes_downloaded,
+            total_bytes,
+        } => {
+            let stage = StagePhase::Downloading {
+                filename: filename.clone(),
+                bytes_downloaded: *bytes_downloaded,
+                total_bytes: *total_bytes,
+            };
+            match model_category_for_repo(repo_id, repo_model_map) {
+                "LLM" => llm.set(stage),
+                "TTS" => tts.set(stage),
+                _ => stt.set(stage),
+            }
+        }
+        ProgressEvent::DownloadComplete { repo_id, .. } | ProgressEvent::Cached { repo_id, .. } => {
+            // Mark the model's download as done (transition handled by LoadStarted)
+            match model_category_for_repo(repo_id, repo_model_map) {
+                "LLM" => { /* Stay in Downloading until LoadStarted */ }
+                "TTS" => { /* Stay in Downloading until LoadStarted */ }
+                _ => { /* Stay in Downloading until LoadStarted */ }
+            }
         }
         ProgressEvent::LoadStarted { model_name } => {
             if model_name.starts_with("STT") {
@@ -1044,8 +1173,6 @@ fn update_stages_from_progress(
             llm.set(StagePhase::Error(msg.clone()));
             tts.set(StagePhase::Error(msg));
         }
-        ProgressEvent::DownloadComplete { .. } | ProgressEvent::Cached { .. } => {}
-        // Plan and aggregate events handled in Phase 1.2 GUI overhaul
         ProgressEvent::DownloadPlanReady { .. } | ProgressEvent::AggregateProgress { .. } => {}
     }
 }
@@ -1250,6 +1377,7 @@ fn app() -> Element {
     let mut stt_stage = use_signal(|| StagePhase::Pending);
     let mut llm_stage = use_signal(|| StagePhase::Pending);
     let mut tts_stage = use_signal(|| StagePhase::Pending);
+    let mut repo_model_map = use_signal(|| std::collections::HashMap::<String, String>::new());
     let mut auto_started = use_signal(|| false);
 
     let mut sub_fae = use_signal(Subtitle::default);
@@ -1584,7 +1712,13 @@ fn app() -> Element {
                     loop {
                         tokio::select! {
                             Some(event) = rx.recv() => {
-                                update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage);
+                                // Build repo→model map when download plan arrives
+                                if let fae::progress::ProgressEvent::DownloadPlanReady { ref plan } = event {
+                                    repo_model_map.set(build_repo_model_map(plan));
+                                }
+                                let map = repo_model_map.read();
+                                update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage, &map);
+                                drop(map);
                                 if let Some(new_status) = gui::apply_progress_event(event) {
                                     status.set(new_status);
                                 }
@@ -1592,7 +1726,12 @@ fn app() -> Element {
                             Some(msg) = result_rx.recv() => {
                                 // Drain any remaining progress events first.
                                 while let Ok(event) = rx.try_recv() {
-                                    update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage);
+                                    if let fae::progress::ProgressEvent::DownloadPlanReady { ref plan } = event {
+                                        repo_model_map.set(build_repo_model_map(plan));
+                                    }
+                                    let map = repo_model_map.read();
+                                    update_stages_from_progress(&event, &mut stt_stage, &mut llm_stage, &mut tts_stage, &map);
+                                    drop(map);
                                     if let Some(new_status) = gui::apply_progress_event(event) {
                                         status.set(new_status);
                                     }
