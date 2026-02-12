@@ -207,31 +207,51 @@ pub async fn initialize_models_with_progress(
     }
 
     // --- Phase 1: Download all model files ---
+    // Aggregate progress tracking
+    let files_total = plan.files_to_download();
+    let total_download_bytes = plan.download_bytes();
+    let mut files_complete: usize = 0;
+
     println!("\nChecking models...");
 
     // STT files
     for filename in STT_FILES {
+        let was_cached = ModelManager::is_file_cached(&config.stt.model_id, filename);
         model_manager.download_with_progress(&config.stt.model_id, filename, callback)?;
+        if !was_cached {
+            files_complete += 1;
+            emit_aggregate(callback, files_complete, files_total, total_download_bytes);
+        }
     }
 
     // LLM: Pre-download GGUF and tokenizer so mistralrs finds them in the
     // shared hf-hub cache. This gives us progress visibility instead of a
     // frozen "Loading..." screen.
     if use_local_llm {
+        let was_cached = ModelManager::is_file_cached(&config.llm.model_id, &config.llm.gguf_file);
         model_manager.download_with_progress(
             &config.llm.model_id,
             &config.llm.gguf_file,
             callback,
         )?;
+        if !was_cached {
+            files_complete += 1;
+            emit_aggregate(callback, files_complete, files_total, total_download_bytes);
+        }
 
         // Tokenizer files (from separate repo if configured)
         if !config.llm.tokenizer_id.is_empty() {
             for filename in LLM_TOKENIZER_FILES {
+                let was_cached = ModelManager::is_file_cached(&config.llm.tokenizer_id, filename);
                 model_manager.download_with_progress(
                     &config.llm.tokenizer_id,
                     filename,
                     callback,
                 )?;
+                if !was_cached {
+                    files_complete += 1;
+                    emit_aggregate(callback, files_complete, files_total, total_download_bytes);
+                }
             }
         }
     }
@@ -325,6 +345,30 @@ async fn start_llm_server(llm: &LocalLlm, config: &SpeechConfig) -> Result<LlmSe
     }
 
     Ok(server)
+}
+
+/// Emit an aggregate progress event after a file download completes.
+fn emit_aggregate(
+    callback: Option<&ProgressCallback>,
+    files_complete: usize,
+    files_total: usize,
+    total_bytes: u64,
+) {
+    if let Some(cb) = callback {
+        cb(ProgressEvent::AggregateProgress {
+            // After a file completes, we report aggregate bytes equal to
+            // the proportion of files complete (approximation — exact byte
+            // tracking would require wrapping every download_with_progress call).
+            bytes_downloaded: if files_total > 0 {
+                total_bytes * files_complete as u64 / files_total as u64
+            } else {
+                0
+            },
+            total_bytes,
+            files_complete,
+            files_total,
+        });
+    }
 }
 
 /// Generic wrapper for model loading with timing, logging, and progress callbacks.
