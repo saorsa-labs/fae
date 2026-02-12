@@ -158,6 +158,110 @@ pub enum ProgressEvent {
 /// to receive updates from the model download/load pipeline.
 pub type ProgressCallback = Box<dyn Fn(ProgressEvent) + Send + Sync>;
 
+/// Tracks download speed and estimates time remaining.
+///
+/// Uses a rolling window of speed samples for smooth display values.
+/// Call [`update`](Self::update) with each progress event to get
+/// current speed and ETA.
+pub struct DownloadTracker {
+    /// When the tracked download started.
+    started_at: std::time::Instant,
+    /// Bytes count at last update.
+    last_bytes: u64,
+    /// Timestamp of last update.
+    last_time: std::time::Instant,
+    /// Rolling window of speed samples (bytes per second).
+    speed_samples: std::collections::VecDeque<f64>,
+}
+
+/// Maximum number of speed samples in the rolling window.
+const SPEED_WINDOW_SIZE: usize = 5;
+
+/// Minimum time between speed samples to avoid spiky readings (milliseconds).
+const MIN_SAMPLE_INTERVAL_MS: u64 = 200;
+
+impl DownloadTracker {
+    /// Create a new tracker. Call this when downloads begin.
+    pub fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            started_at: now,
+            last_bytes: 0,
+            last_time: now,
+            speed_samples: std::collections::VecDeque::with_capacity(SPEED_WINDOW_SIZE),
+        }
+    }
+
+    /// Update with current progress and return `(speed_bytes_per_sec, eta_secs)`.
+    ///
+    /// - `bytes_downloaded`: total bytes downloaded so far
+    /// - `total_bytes`: total expected bytes (0 if unknown)
+    ///
+    /// Returns `(0.0, None)` if not enough data yet.
+    pub fn update(&mut self, bytes_downloaded: u64, total_bytes: u64) -> (f64, Option<f64>) {
+        let now = std::time::Instant::now();
+        let elapsed_since_last = now.duration_since(self.last_time);
+
+        // Only add a speed sample if enough time has elapsed
+        if elapsed_since_last.as_millis() >= u128::from(MIN_SAMPLE_INTERVAL_MS)
+            && bytes_downloaded > self.last_bytes
+        {
+            let delta_bytes = bytes_downloaded - self.last_bytes;
+            let delta_secs = elapsed_since_last.as_secs_f64();
+
+            if delta_secs > 0.0 {
+                let sample = delta_bytes as f64 / delta_secs;
+                if self.speed_samples.len() >= SPEED_WINDOW_SIZE {
+                    self.speed_samples.pop_front();
+                }
+                self.speed_samples.push_back(sample);
+            }
+
+            self.last_bytes = bytes_downloaded;
+            self.last_time = now;
+        }
+
+        let speed = self.average_speed();
+
+        let eta = if speed > 0.0 && total_bytes > bytes_downloaded {
+            Some((total_bytes - bytes_downloaded) as f64 / speed)
+        } else {
+            None
+        };
+
+        (speed, eta)
+    }
+
+    /// Reset the tracker for a new download sequence.
+    pub fn reset(&mut self) {
+        let now = std::time::Instant::now();
+        self.started_at = now;
+        self.last_bytes = 0;
+        self.last_time = now;
+        self.speed_samples.clear();
+    }
+
+    /// Average speed across the rolling window (bytes per second).
+    fn average_speed(&self) -> f64 {
+        if self.speed_samples.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.speed_samples.iter().sum();
+        sum / self.speed_samples.len() as f64
+    }
+
+    /// Total elapsed time since the tracker was created or last reset.
+    pub fn elapsed_secs(&self) -> f64 {
+        self.started_at.elapsed().as_secs_f64()
+    }
+}
+
+impl Default for DownloadTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -304,6 +408,93 @@ mod tests {
         assert_eq!(plan.cached_bytes(), 0);
         assert_eq!(plan.files_to_download(), 0);
         assert_eq!(plan.total_files(), 0);
+    }
+
+    // --- DownloadTracker tests ---
+
+    #[test]
+    fn tracker_new_returns_zero_speed() {
+        let tracker = DownloadTracker::new();
+        assert!((tracker.average_speed() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tracker_update_with_zero_bytes_returns_no_eta() {
+        let mut tracker = DownloadTracker::new();
+        let (speed, eta) = tracker.update(0, 1000);
+        assert!((speed - 0.0).abs() < f64::EPSILON);
+        assert!(eta.is_none());
+    }
+
+    #[test]
+    fn tracker_update_produces_speed_after_time() {
+        let mut tracker = DownloadTracker::new();
+        // Simulate time passing by backdating last_time
+        tracker.last_time = std::time::Instant::now() - std::time::Duration::from_secs(1);
+
+        let (speed, eta) = tracker.update(1_000_000, 2_000_000);
+        // Should have a positive speed now
+        assert!(speed > 0.0, "speed should be positive: {speed}");
+        // ETA should exist since total > downloaded
+        assert!(eta.is_some(), "eta should exist");
+    }
+
+    #[test]
+    fn tracker_eta_none_when_download_complete() {
+        let mut tracker = DownloadTracker::new();
+        tracker.last_time = std::time::Instant::now() - std::time::Duration::from_secs(1);
+
+        let (_speed, eta) = tracker.update(1000, 1000);
+        assert!(
+            eta.is_none(),
+            "eta should be None when download is complete"
+        );
+    }
+
+    #[test]
+    fn tracker_eta_none_when_total_unknown() {
+        let mut tracker = DownloadTracker::new();
+        tracker.last_time = std::time::Instant::now() - std::time::Duration::from_secs(1);
+
+        let (_speed, eta) = tracker.update(500, 0);
+        assert!(eta.is_none(), "eta should be None when total_bytes is 0");
+    }
+
+    #[test]
+    fn tracker_reset_clears_state() {
+        let mut tracker = DownloadTracker::new();
+        tracker.last_time = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        tracker.update(1_000_000, 2_000_000);
+        assert!(tracker.average_speed() > 0.0);
+
+        tracker.reset();
+        assert!((tracker.average_speed() - 0.0).abs() < f64::EPSILON);
+        assert_eq!(tracker.last_bytes, 0);
+        assert!(tracker.speed_samples.is_empty());
+    }
+
+    #[test]
+    fn tracker_rolling_window_caps_at_size() {
+        let mut tracker = DownloadTracker::new();
+        // Add more samples than SPEED_WINDOW_SIZE
+        for i in 1..=10u64 {
+            tracker.last_time = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            tracker.last_bytes = (i - 1) * 1_000_000;
+            tracker.update(i * 1_000_000, 20_000_000);
+        }
+        assert!(
+            tracker.speed_samples.len() <= SPEED_WINDOW_SIZE,
+            "rolling window should be capped at {SPEED_WINDOW_SIZE}, got {}",
+            tracker.speed_samples.len()
+        );
+    }
+
+    #[test]
+    fn tracker_default_matches_new() {
+        let a = DownloadTracker::new();
+        let b = DownloadTracker::default();
+        assert!((a.elapsed_secs() - b.elapsed_secs()).abs() < 1.0);
+        assert_eq!(a.last_bytes, b.last_bytes);
     }
 
     #[test]
