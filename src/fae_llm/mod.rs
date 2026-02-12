@@ -16,6 +16,7 @@
 //! - [`providers`] — Provider implementations (OpenAI, etc.)
 //! - [`agent`] — Agent loop engine with tool calling
 //! - [`session`] — Session persistence, validation, and conversation context
+//! - [`observability`] — Structured tracing, metrics, and secret redaction
 //!
 //! # Event Model
 //!
@@ -32,6 +33,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod metadata;
+pub mod observability;
 pub mod provider;
 pub mod providers;
 pub mod session;
