@@ -449,3 +449,4 @@ All 3 phases delivered:
 3.3: Multi-Provider Hardening (8 tasks)
 - [x] Task 4: Integrate tracing spans into provider adapters (commits: ced8467, dd85dfc)
 - [x] Task 5: Integrate tracing spans into agent loop and tools (commit: 505a5ac)
+- [x] Task 6: Add metrics collection hooks (commit: d8f3202)

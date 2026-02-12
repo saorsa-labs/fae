@@ -13,8 +13,8 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 5,
-    "current_task": 6
+    "completed_tasks": 7,
+    "current_task": 8
   },
   "status": "executing",
   "review": {
@@ -23,5 +23,5 @@
     "last_verdict": "PASS"
   },
   "last_updated": 1770920784.365209,
-  "last_action": "task_5_review_passed_moving_to_6"
+  "last_action": "task_7_skipped_moving_to_8"
 }
