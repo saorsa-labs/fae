@@ -9,7 +9,6 @@
 use crate::config::{AgentToolMode, LlmBackend, MemoryConfig, SpeechConfig, TtsBackend};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
-use crate::llm::server::LlmServer;
 use crate::models::ModelManager;
 use crate::progress::{DownloadFile, DownloadPlan, ProgressCallback, ProgressEvent};
 use crate::stt::ParakeetStt;
@@ -26,34 +25,6 @@ pub struct InitializedModels {
     pub llm: Option<LocalLlm>,
     /// Kokoro TTS engine (None if using Fish Speech or other backend).
     pub tts: Option<KokoroTts>,
-    /// OpenAI-compatible HTTP server for local LLM inference.
-    pub llm_server: Option<LlmServer>,
-}
-
-impl InitializedModels {
-    /// Returns the port the LLM server is listening on, if running.
-    pub fn llm_server_port(&self) -> Option<u16> {
-        self.llm_server.as_ref().map(LlmServer::port)
-    }
-}
-
-impl InitializedModels {
-    /// Shut down the LLM server and clean up Pi's models.json.
-    ///
-    /// Call this before dropping the struct if you want to clean up the
-    /// Pi provider entry. The server task is aborted automatically via
-    /// [`LlmServer::drop`], but the models.json cleanup requires this
-    /// explicit call.
-    pub fn shutdown_llm_server(&mut self) {
-        if let Some(server) = self.llm_server.take() {
-            server.shutdown();
-            if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path()
-                && let Err(e) = crate::llm::pi_config::remove_fae_local_provider(&pi_path)
-            {
-                tracing::warn!("failed to clean Pi models.json: {e}");
-            }
-        }
-    }
 }
 
 /// STT model files to pre-download.
@@ -72,10 +43,7 @@ const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"
 /// Checks cache status and queries file sizes for each file.
 /// The plan is used by the GUI to show total download size before starting.
 pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
-    let use_local_llm = matches!(
-        config.llm.backend,
-        LlmBackend::Local | LlmBackend::Agent | LlmBackend::Pi
-    );
+    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Agent);
 
     let mut files = Vec::new();
 
@@ -169,24 +137,19 @@ pub async fn initialize_models_with_progress(
     callback: Option<&ProgressCallback>,
 ) -> Result<InitializedModels> {
     let model_manager = ModelManager::new(&config.models)?;
-    // Agent and Pi backends rely on a local model:
-    // - Agent: in-process inference
-    // - Pi: served via the local OpenAI-compatible HTTP server (`llm_server`)
-    let use_local_llm = matches!(
-        config.llm.backend,
-        LlmBackend::Local | LlmBackend::Agent | LlmBackend::Pi
-    );
+    // Local and Agent backends rely on a local model for in-process inference.
+    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Agent);
 
     if matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Api)
         && !matches!(config.llm.tool_mode, AgentToolMode::Off)
     {
         tracing::warn!(
-            "tool_mode={:?} is ignored for {:?} backend; use llm.backend=pi or llm.backend=agent to enable tools",
+            "tool_mode={:?} is ignored for {:?} backend; use llm.backend=agent to enable tools",
             config.llm.tool_mode,
             config.llm.backend
         );
         println!(
-            "  Note: tool_mode is ignored for {:?} backend; use llm.backend=pi or llm.backend=agent for tool access.",
+            "  Note: tool_mode is ignored for {:?} backend; use llm.backend=agent for tool access.",
             config.llm.backend
         );
     }
@@ -312,53 +275,7 @@ pub async fn initialize_models_with_progress(
         None
     };
 
-    // --- Phase 3: Start LLM HTTP server ---
-    // Pi backend requires the local OpenAI endpoint so it can default to
-    // Fae's local brain (`fae-local/fae-qwen3`) and keep local fallback available.
-    let should_start_llm_server =
-        config.llm_server.enabled || matches!(config.llm.backend, LlmBackend::Pi);
-    if matches!(config.llm.backend, LlmBackend::Pi) && !config.llm_server.enabled {
-        tracing::info!(
-            "llm_server.enabled=false ignored for Pi backend; starting local LLM server"
-        );
-    }
-    let llm_server = match (should_start_llm_server, &llm) {
-        (true, Some(local_llm)) => match start_llm_server(local_llm, config).await {
-            Ok(server) => Some(server),
-            Err(e) => {
-                tracing::warn!("failed to start LLM server: {e}");
-                None
-            }
-        },
-        _ => None,
-    };
-
-    Ok(InitializedModels {
-        stt,
-        llm,
-        tts,
-        llm_server,
-    })
-}
-
-/// Start the LLM HTTP server with the shared model and optionally register with Pi.
-async fn start_llm_server(llm: &LocalLlm, config: &SpeechConfig) -> Result<LlmServer> {
-    let model = llm.shared_model();
-    let server = LlmServer::start(model, &config.llm_server).await?;
-
-    info!(
-        "LLM server listening on http://127.0.0.1:{}/v1",
-        server.port()
-    );
-
-    // Write the fae-local provider to Pi's models.json so Pi can discover us.
-    if let Some(pi_path) = crate::llm::pi_config::default_pi_models_path()
-        && let Err(e) = crate::llm::pi_config::write_fae_local_provider(&pi_path, server.port())
-    {
-        tracing::warn!("failed to write Pi models.json: {e}");
-    }
-
-    Ok(server)
+    Ok(InitializedModels { stt, llm, tts })
 }
 
 /// Emit an aggregate progress event after a file download completes.

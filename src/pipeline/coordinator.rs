@@ -5,7 +5,6 @@ use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::canvas::registry::CanvasSessionRegistry;
 use crate::config::SpeechConfig;
 use crate::error::Result;
-use crate::llm::server::LlmServer;
 use crate::memory::{MemoryOrchestrator, MemoryStore, PrimaryUser};
 use crate::pipeline::messages::{
     AudioChunk, ControlEvent, GateCommand, SentenceChunk, SpeechSegment, SynthesizedAudio,
@@ -55,15 +54,10 @@ pub struct PipelineCoordinator {
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     gate_cmd_rx: Option<mpsc::UnboundedReceiver<GateCommand>>,
     gate_active: Arc<AtomicBool>,
-    /// LLM HTTP server kept alive for the pipeline duration.
-    llm_server: Option<LlmServer>,
     console_output: bool,
-    /// Receiver for model selection responses from the GUI.
-    model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
     /// Sender for voice commands detected by the pipeline filter.
     ///
     /// Created during `run()` and passed to the LLM stage (Phase 2.2)
-    /// where `PiLlm` will consume commands to switch models at runtime.
     voice_command_tx: Option<mpsc::UnboundedSender<crate::voice_command::VoiceCommand>>,
 }
 
@@ -81,9 +75,7 @@ impl PipelineCoordinator {
             canvas_registry: None,
             gate_cmd_rx: None,
             gate_active: Arc::new(AtomicBool::new(false)),
-            llm_server: None,
             console_output: true,
-            model_selection_rx: None,
             voice_command_tx: None,
         }
     }
@@ -103,9 +95,7 @@ impl PipelineCoordinator {
             canvas_registry: None,
             gate_cmd_rx: None,
             gate_active: Arc::new(AtomicBool::new(false)),
-            llm_server: None,
             console_output: true,
-            model_selection_rx: None,
             voice_command_tx: None,
         }
     }
@@ -145,17 +135,6 @@ impl PipelineCoordinator {
     /// into the LLM stage.
     pub fn with_text_injection(mut self, rx: mpsc::UnboundedReceiver<TextInjection>) -> Self {
         self.text_injection_rx = Some(rx);
-        self
-    }
-
-    /// Attach a model selection channel for the startup model picker.
-    ///
-    /// When the Pi backend detects multiple top-tier models, it emits a
-    /// [`RuntimeEvent::ModelSelectionPrompt`]. The GUI should send the user's
-    /// choice (a `"provider/model"` string) through the `tx` side of this
-    /// channel.
-    pub fn with_model_selection(mut self, rx: mpsc::UnboundedReceiver<String>) -> Self {
-        self.model_selection_rx = Some(rx);
         self
     }
 
@@ -210,18 +189,12 @@ impl PipelineCoordinator {
         };
 
         // Split pre-loaded models (if any) into per-stage pieces.
-        // The LLM server runs independently and is kept alive for the
-        // duration of the pipeline (dropped when the coordinator is dropped).
         let (preloaded_stt, preloaded_llm, preloaded_tts) = match self.models.take() {
-            Some(m) => {
-                self.llm_server = m.llm_server;
-                (Some(m.stt), m.llm, m.tts)
-            }
+            Some(m) => (Some(m.stt), m.llm, m.tts),
             None => (None, None, None),
         };
 
         let text_injection_rx = self.text_injection_rx.take();
-        let model_selection_rx = self.model_selection_rx.take();
 
         // Create channels between stages
         let (audio_tx, audio_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
@@ -495,7 +468,6 @@ impl PipelineCoordinator {
                             canvas_registry,
                             console_output,
                             cancel,
-                            model_selection_rx,
                             voice_command_rx: Some(voice_cmd_rx),
                         };
                         run_llm_stage(
@@ -1387,7 +1359,6 @@ enum LlmEngine {
     Local(Box<crate::llm::LocalLlm>),
     Api(Box<crate::llm::ApiLlm>),
     Agent(Box<crate::agent::SaorsaAgentLlm>),
-    Pi(Box<crate::pi::engine::PiLlm>),
 }
 
 struct LlmStageControl {
@@ -1400,7 +1371,6 @@ struct LlmStageControl {
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     console_output: bool,
     cancel: CancellationToken,
-    model_selection_rx: Option<mpsc::UnboundedReceiver<String>>,
     voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
 }
 
@@ -1416,7 +1386,6 @@ impl LlmEngine {
             Self::Local(llm) => llm.generate_response(user_input, tx, interrupt).await,
             Self::Api(llm) => llm.generate_response(user_input, tx, interrupt).await,
             Self::Agent(llm) => llm.generate_response(user_input, tx, interrupt).await,
-            Self::Pi(llm) => llm.generate_response(user_input, tx, interrupt).await,
         }
     }
 
@@ -1427,7 +1396,6 @@ impl LlmEngine {
             Self::Local(llm) => llm.truncate_history(keep_count),
             Self::Api(llm) => llm.truncate_history(keep_count),
             Self::Agent(llm) => llm.truncate_history(keep_count),
-            Self::Pi(llm) => llm.truncate_history(keep_count),
         }
     }
 }
@@ -1437,13 +1405,12 @@ async fn run_llm_stage(
     preloaded: Option<crate::llm::LocalLlm>,
     mut rx: mpsc::Receiver<Transcription>,
     tx: mpsc::Sender<SentenceChunk>,
-    mut ctl: LlmStageControl,
+    ctl: LlmStageControl,
     mut text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
 ) {
     use crate::agent::SaorsaAgentLlm;
     use crate::config::LlmBackend;
     use crate::llm::{ApiLlm, LocalLlm};
-    use crate::pi::engine::PiLlm;
 
     let mut engine = match config.llm.backend {
         LlmBackend::Local => {
@@ -1473,53 +1440,12 @@ async fn run_llm_stage(
                 ctl.runtime_tx.clone(),
                 ctl.tool_approval_tx.clone(),
                 ctl.canvas_registry.clone(),
-                None, // Pi session — wired in Phase 5.7 (Installer Integration)
             )
             .await
             {
                 Ok(l) => LlmEngine::Agent(Box::new(l)),
                 Err(e) => {
                     error!("failed to init agent LLM: {e}");
-                    return;
-                }
-            }
-        }
-        LlmBackend::Pi => {
-            let llm_cfg = config.llm.clone();
-            let pi_cfg = config.pi.clone();
-            let runtime_tx = ctl.runtime_tx.clone();
-            let tool_approval_tx = ctl.tool_approval_tx.clone();
-            let model_sel_rx = ctl.model_selection_rx.take();
-            let voice_cmd_rx = ctl.voice_command_rx.take();
-            let timeout_secs = config.llm.model_selection_timeout_secs;
-            let res = tokio::task::spawn_blocking(move || {
-                PiLlm::new(
-                    llm_cfg,
-                    pi_cfg,
-                    runtime_tx,
-                    tool_approval_tx,
-                    model_sel_rx,
-                    voice_cmd_rx,
-                )
-            })
-            .await
-            .map_err(|e| crate::error::SpeechError::Pi(format!("Pi init task failed: {e}")));
-
-            match res {
-                Ok(Ok(mut pi)) => {
-                    let timeout = std::time::Duration::from_secs(u64::from(timeout_secs));
-                    if let Err(e) = pi.select_startup_model(timeout).await {
-                        error!("model selection failed: {e}");
-                        return;
-                    }
-                    LlmEngine::Pi(Box::new(pi))
-                }
-                Ok(Err(e)) => {
-                    error!("failed to init Pi backend: {e}");
-                    return;
-                }
-                Err(e) => {
-                    error!("failed to init Pi backend: {e}");
                     return;
                 }
             }
@@ -1567,13 +1493,12 @@ async fn run_llm_stage(
         None
     };
 
-    // Extract the voice command receiver from the Pi engine (if present).
-    let mut voice_cmd_rx = match &mut engine {
-        LlmEngine::Pi(pi) => pi.take_voice_command_rx(),
-        _ => None,
-    };
+    // Voice command receiver (currently unused — was Pi-specific).
+    let mut voice_cmd_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>> =
+        ctl.voice_command_rx;
 
     let cancel = ctl.cancel;
+    let mut turn_counter: u64 = 0;
     loop {
         // Optionally receive from the text injection channel. When no channel
         // is configured, `recv_injection` will pend forever (never resolve).
@@ -1584,7 +1509,7 @@ async fn run_llm_stage(
             }
         };
 
-        // Optionally receive voice commands (only when Pi backend active).
+        // Optionally receive voice commands.
         let recv_voice_cmd = async {
             match voice_cmd_rx.as_mut() {
                 Some(rx) => rx.recv().await,
@@ -1689,7 +1614,15 @@ async fn run_llm_stage(
             }
         };
 
-        let turn_id = uuid::Uuid::new_v4().to_string();
+        turn_counter += 1;
+        let turn_id = format!(
+            "{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            turn_counter
+        );
         let mut llm_input = user_text.clone();
         if let Some(memory) = &memory_orchestrator
             && let Ok(Some(memory_ctx)) = memory.recall_context(&user_text)
@@ -1801,6 +1734,13 @@ async fn run_llm_stage(
                     println!();
                 }
                 error!("LLM error: {e}");
+                // Report the error to the user via TTS instead of silently dropping it.
+                let _ = tx
+                    .send(SentenceChunk {
+                        text: "Sorry, something went wrong with that request.".to_owned(),
+                        is_final: true,
+                    })
+                    .await;
                 ctl.assistant_generating.store(false, Ordering::Relaxed);
                 if let Some(rt) = &ctl.runtime_tx {
                     let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
@@ -1834,33 +1774,19 @@ async fn run_llm_stage(
 
 /// Handle a voice command by dispatching to the appropriate engine method.
 ///
-/// Returns a human-readable response string for TTS. Only the Pi backend
-/// supports model switching; other backends return an informational message.
+/// Returns a human-readable response string for TTS.
 fn handle_voice_command(
     cmd: &crate::voice_command::VoiceCommand,
-    engine: &mut LlmEngine,
+    _engine: &mut LlmEngine,
 ) -> String {
     use crate::voice_command::VoiceCommand;
 
-    let pi = match engine {
-        LlmEngine::Pi(pi) => pi,
-        _ => {
-            return "Voice model switching is only available with the Pi backend.".to_owned();
-        }
-    };
-
     match cmd {
-        VoiceCommand::SwitchModel { target } => match pi.switch_model_by_voice(target) {
-            Ok(msg) => msg,
-            Err(msg) => msg,
-        },
-        VoiceCommand::ListModels => {
-            let names = pi.list_model_names();
-            let active_idx = pi.active_model_index();
-            crate::voice_command::list_models_response(&names, active_idx)
+        VoiceCommand::SwitchModel { .. } => {
+            "Voice model switching is not currently available.".to_owned()
         }
-        VoiceCommand::CurrentModel => {
-            crate::voice_command::current_model_response(&pi.current_model_name())
+        VoiceCommand::ListModels | VoiceCommand::CurrentModel => {
+            "Voice model info is not currently available.".to_owned()
         }
         VoiceCommand::Help => crate::voice_command::help_response(),
     }
@@ -3830,7 +3756,6 @@ mod tests {
             canvas_registry: None,
             console_output: false,
             cancel: CancellationToken::new(),
-            model_selection_rx: None,
             voice_command_rx: None,
         }
     }
@@ -4093,102 +4018,5 @@ mod tests {
 
         server.shutdown().await;
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    // ── handle_voice_command ─────────────────────────────────────────
-
-    /// Build a minimal Pi-backed `LlmEngine` for voice command tests.
-    fn pi_engine(candidates: Vec<crate::model_selection::ProviderModelRef>) -> LlmEngine {
-        let (pi, _rx) = crate::pi::engine::PiLlm::test_instance(candidates);
-        LlmEngine::Pi(Box::new(pi))
-    }
-
-    #[test]
-    fn voice_cmd_switch_model_success() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::voice_command::{ModelTarget, VoiceCommand};
-
-        let candidates = vec![
-            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
-            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 0),
-        ];
-        let mut engine = pi_engine(candidates);
-        let cmd = VoiceCommand::SwitchModel {
-            target: ModelTarget::ByName("gpt-4o".into()),
-        };
-        let response = handle_voice_command(&cmd, &mut engine);
-        assert!(response.contains("gpt-4o"), "got: {response}");
-    }
-
-    #[test]
-    fn voice_cmd_list_models() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::voice_command::VoiceCommand;
-
-        let candidates = vec![
-            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
-            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 0),
-        ];
-        let mut engine = pi_engine(candidates);
-        let response = handle_voice_command(&VoiceCommand::ListModels, &mut engine);
-        assert!(
-            response.contains("anthropic/claude-opus-4"),
-            "got: {response}"
-        );
-        assert!(response.contains("openai/gpt-4o"), "got: {response}");
-        assert!(response.contains("Currently using"), "got: {response}");
-    }
-
-    #[test]
-    fn voice_cmd_current_model() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::voice_command::VoiceCommand;
-
-        let candidates = vec![ProviderModelRef::new(
-            "anthropic".into(),
-            "claude-opus-4".into(),
-            0,
-        )];
-        let mut engine = pi_engine(candidates);
-        let response = handle_voice_command(&VoiceCommand::CurrentModel, &mut engine);
-        assert!(
-            response.contains("anthropic/claude-opus-4"),
-            "got: {response}"
-        );
-    }
-
-    #[test]
-    fn voice_cmd_not_found() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::voice_command::{ModelTarget, VoiceCommand};
-
-        let candidates = vec![ProviderModelRef::new(
-            "anthropic".into(),
-            "claude-opus-4".into(),
-            0,
-        )];
-        let mut engine = pi_engine(candidates);
-        let cmd = VoiceCommand::SwitchModel {
-            target: ModelTarget::ByName("nonexistent".into()),
-        };
-        let response = handle_voice_command(&cmd, &mut engine);
-        assert!(response.contains("couldn't find"), "got: {response}");
-    }
-
-    #[test]
-    fn voice_cmd_help() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::voice_command::VoiceCommand;
-
-        let candidates = vec![ProviderModelRef::new(
-            "anthropic".into(),
-            "claude-opus-4".into(),
-            0,
-        )];
-        let mut engine = pi_engine(candidates);
-        let response = handle_voice_command(&VoiceCommand::Help, &mut engine);
-        assert!(response.contains("You can say"), "got: {response}");
-        assert!(response.contains("switch to"), "got: {response}");
-        assert!(response.contains("list models"), "got: {response}");
     }
 }

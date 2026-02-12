@@ -31,10 +31,6 @@ pub struct SpeechConfig {
     pub wakeword: WakewordConfig,
     /// Canvas visual output settings.
     pub canvas: CanvasConfig,
-    /// Local LLM HTTP server settings.
-    pub llm_server: LlmServerConfig,
-    /// Pi coding agent settings.
-    pub pi: PiConfig,
 }
 
 /// Audio I/O configuration.
@@ -152,15 +148,13 @@ impl Default for SttConfig {
 #[serde(rename_all = "lowercase")]
 pub enum LlmBackend {
     /// Local inference via mistral.rs (GGUF models with Metal GPU support).
+    #[default]
     #[serde(alias = "candle")]
     Local,
     /// Remote inference via OpenAI-compatible API (Ollama, MLX, etc.).
     Api,
     /// Agent loop via `saorsa-agent` + `saorsa-ai` (in-process by default, tool-capable).
     Agent,
-    /// External Pi coding-agent in RPC mode (Fae acts as the UI/voice/canvas host).
-    #[default]
-    Pi,
 }
 
 /// Tool capability mode for the agent harness.
@@ -228,13 +222,13 @@ pub struct LlmConfig {
     /// This is appended to the core prompt + personality profile.
     /// Keep this short and specific.
     pub system_prompt: String,
-    /// Cloud provider name from Pi's `~/.pi/agent/models.json`.
+    /// Cloud provider name for remote model selection.
     ///
     /// When set (and backend is `Agent` or `Api`), this provider's base_url
-    /// and api_key are read from models.json instead of from `api_url`/`api_key`.
+    /// and api_key are used instead of `api_url`/`api_key`.
     #[serde(default)]
     pub cloud_provider: Option<String>,
-    /// Cloud model ID within the selected provider from models.json.
+    /// Cloud model ID within the selected provider.
     ///
     /// When set, overrides `api_model` for the cloud provider.
     #[serde(default)]
@@ -407,7 +401,6 @@ Personal context:\n\
                 LlmBackend::Api => {
                     format!("{}/{}", self.api_url, self.api_model)
                 }
-                LlmBackend::Pi => "pi/fae-local/fae-qwen3".to_owned(),
             }
         }
     }
@@ -663,54 +656,6 @@ pub struct CanvasConfig {
     pub server_url: Option<String>,
 }
 
-/// Configuration for the local LLM HTTP server.
-///
-/// When enabled, Fae exposes an OpenAI-compatible endpoint on localhost
-/// so that Pi and other local tools can use the loaded model for inference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LlmServerConfig {
-    /// Whether the server is enabled.
-    pub enabled: bool,
-    /// Port to bind on. Use `0` for automatic assignment.
-    pub port: u16,
-    /// Host address to bind on.
-    pub host: String,
-}
-
-impl Default for LlmServerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            port: 0,
-            host: "127.0.0.1".to_owned(),
-        }
-    }
-}
-
-/// Pi coding agent configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PiConfig {
-    /// Whether Fae should auto-install Pi when not found on the system.
-    pub auto_install: bool,
-    /// Custom install directory override.
-    ///
-    /// When `None`, uses the platform default:
-    /// - Linux/macOS: `~/.local/bin`
-    /// - Windows: `%LOCALAPPDATA%\pi`
-    pub install_dir: Option<PathBuf>,
-}
-
-impl Default for PiConfig {
-    fn default() -> Self {
-        Self {
-            auto_install: true,
-            install_dir: None,
-        }
-    }
-}
-
 fn default_memory_root_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
         PathBuf::from(home).join(".fae")
@@ -838,8 +783,8 @@ mod tests {
     }
 
     #[test]
-    fn llm_backend_default_is_pi() {
-        assert_eq!(LlmBackend::default(), LlmBackend::Pi);
+    fn llm_backend_default_is_local() {
+        assert_eq!(LlmBackend::default(), LlmBackend::Local);
     }
 
     #[test]

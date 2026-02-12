@@ -67,7 +67,7 @@ impl Scheduler {
         self
     }
 
-    /// Register built-in Fae and Pi update check tasks (daily).
+    /// Register built-in Fae update check task (daily).
     pub fn with_update_checks(&mut self) {
         let fae_task = ScheduledTask::new(
             "check_fae_update",
@@ -75,14 +75,7 @@ impl Scheduler {
             Schedule::Daily { hour: 9, min: 0 },
         );
 
-        let pi_task = ScheduledTask::new(
-            "check_pi_update",
-            "Check for Pi updates",
-            Schedule::Daily { hour: 9, min: 5 },
-        );
-
         self.add_task_if_missing(fae_task);
-        self.add_task_if_missing(pi_task);
     }
 
     /// Register built-in memory maintenance tasks.
@@ -309,12 +302,11 @@ mod tests {
     }
 
     #[test]
-    fn with_update_checks_adds_two_tasks() {
+    fn with_update_checks_adds_fae_task() {
         let (mut scheduler, _rx) = make_scheduler();
         scheduler.with_update_checks();
-        assert_eq!(scheduler.tasks().len(), 2);
+        assert_eq!(scheduler.tasks().len(), 1);
         assert_eq!(scheduler.tasks()[0].id, "check_fae_update");
-        assert_eq!(scheduler.tasks()[1].id, "check_pi_update");
     }
 
     #[test]

@@ -1650,14 +1650,11 @@ fn ui_bus() -> tokio::sync::broadcast::Sender<UiBusEvent> {
 #[cfg(feature = "gui")]
 fn read_config_or_default() -> fae::SpeechConfig {
     let path = fae::SpeechConfig::default_config_path();
-    let mut cfg = if path.exists() {
+    if path.exists() {
         fae::SpeechConfig::from_file(&path).unwrap_or_default()
     } else {
         fae::SpeechConfig::default()
-    };
-    // Fae runs with Pi as the primary backend.
-    cfg.llm.backend = fae::config::LlmBackend::Pi;
-    cfg
+    }
 }
 
 #[cfg(feature = "gui")]
@@ -1672,94 +1669,6 @@ struct ModelDetails {
     gguf_files: Vec<String>,
     // filename -> size
     gguf_sizes: Vec<(String, Option<u64>)>,
-}
-
-#[cfg(feature = "gui")]
-#[derive(Clone, Default)]
-struct PiModelInventory {
-    providers: Vec<String>,
-    models_by_provider: std::collections::HashMap<String, Vec<String>>,
-    models_path: Option<std::path::PathBuf>,
-    load_error: Option<String>,
-}
-
-#[cfg(feature = "gui")]
-fn load_pi_model_inventory() -> PiModelInventory {
-    use fae::llm::pi_config::{FAE_MODEL_ID, FAE_PROVIDER_KEY};
-
-    let mut providers = vec![FAE_PROVIDER_KEY.to_owned()];
-    let mut models_by_provider = std::collections::HashMap::new();
-    models_by_provider.insert(FAE_PROVIDER_KEY.to_owned(), vec![FAE_MODEL_ID.to_owned()]);
-
-    let mut models_path = None::<std::path::PathBuf>;
-    let mut load_error = None::<String>;
-
-    if let Some(path) = fae::llm::pi_config::default_pi_models_path() {
-        models_path = Some(path.clone());
-        match fae::llm::pi_config::read_pi_config(&path) {
-            Ok(cfg) => {
-                for provider in cfg.provider_names() {
-                    if provider != FAE_PROVIDER_KEY {
-                        providers.push(provider.clone());
-                    }
-                    let mut models = cfg.model_ids_for_provider(&provider);
-                    if provider == FAE_PROVIDER_KEY && !models.iter().any(|m| m == FAE_MODEL_ID) {
-                        models.insert(0, FAE_MODEL_ID.to_owned());
-                    }
-                    if models.is_empty() {
-                        models_by_provider.entry(provider).or_insert_with(Vec::new);
-                    } else {
-                        models_by_provider.insert(provider, models);
-                    }
-                }
-            }
-            Err(e) => {
-                load_error = Some(format!("Failed reading Pi models.json: {e}"));
-            }
-        }
-    }
-
-    providers.sort();
-    if let Some(pos) = providers.iter().position(|p| p == FAE_PROVIDER_KEY) {
-        providers.remove(pos);
-    }
-    providers.insert(0, FAE_PROVIDER_KEY.to_owned());
-    providers.dedup();
-
-    PiModelInventory {
-        providers,
-        models_by_provider,
-        models_path,
-        load_error,
-    }
-}
-
-#[cfg(feature = "gui")]
-fn selected_pi_provider(cfg: &fae::SpeechConfig) -> String {
-    cfg.llm
-        .cloud_provider
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| fae::llm::pi_config::FAE_PROVIDER_KEY.to_owned())
-}
-
-#[cfg(feature = "gui")]
-fn selected_pi_model(cfg: &fae::SpeechConfig, inventory: &PiModelInventory) -> String {
-    let provider = selected_pi_provider(cfg);
-    if provider == fae::llm::pi_config::FAE_PROVIDER_KEY {
-        return fae::llm::pi_config::FAE_MODEL_ID.to_owned();
-    }
-    if let Some(model) = cfg.llm.cloud_model.clone().filter(|s| !s.trim().is_empty()) {
-        return model;
-    }
-    if let Some(first) = inventory
-        .models_by_provider
-        .get(&provider)
-        .and_then(|models| models.first())
-    {
-        return first.clone();
-    }
-    String::new()
 }
 
 #[cfg(feature = "gui")]
@@ -1823,7 +1732,7 @@ fn app() -> Element {
     let mut stt_stage = use_signal(|| StagePhase::Pending);
     let mut llm_stage = use_signal(|| StagePhase::Pending);
     let mut tts_stage = use_signal(|| StagePhase::Pending);
-    let mut repo_model_map = use_signal(|| std::collections::HashMap::<String, String>::new());
+    let mut repo_model_map = use_signal(std::collections::HashMap::<String, String>::new);
     let mut auto_started = use_signal(|| false);
 
     let mut sub_fae = use_signal(Subtitle::default);
@@ -1869,15 +1778,12 @@ fn app() -> Element {
     let mut update_install_error = use_signal(|| None::<String>);
     let mut update_restart_needed = use_signal(|| false);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
-    let mut pi_inventory = use_signal(load_pi_model_inventory);
-    let mut pi_inventory_status = use_signal(String::new);
     let mut active_model = use_signal(|| None::<String>);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
     use_hook(move || {
         let mut config_state = config_state;
-        let mut pi_inventory = pi_inventory;
         spawn(async move {
             let mut rx = ui_bus().subscribe();
             loop {
@@ -1886,7 +1792,6 @@ fn app() -> Element {
                         let res = tokio::task::spawn_blocking(read_config_or_default).await;
                         if let Ok(cfg) = res {
                             config_state.set(cfg);
-                            pi_inventory.set(load_pi_model_inventory());
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -2204,10 +2109,6 @@ fn app() -> Element {
                                         assistant_buf.set(String::new());
                                         llm_backend.set(Some(config.llm.backend));
                                         tool_mode.set(Some(config.llm.tool_mode));
-                                        if matches!(config.llm.backend, fae::config::LlmBackend::Pi) {
-                                            canvas_visible.set(true);
-                                        }
-
                                         let (runtime_tx, _) =
                                             tokio::sync::broadcast::channel::<fae::RuntimeEvent>(256);
                                         let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<fae::ToolApprovalRequest>();
@@ -2343,11 +2244,6 @@ fn app() -> Element {
                                                         fae::RuntimeEvent::ToolCall { name, .. } => {
                                                             // Auto-open canvas panel when Fae uses a canvas tool.
                                                             if name.starts_with("canvas_") && name != "canvas_clear" {
-                                                                canvas_visible.set(true);
-                                                            }
-                                                            // In Pi mode, keep canvas visible so users can see
-                                                            // live tool activity and approvals.
-                                                            if matches!(*llm_backend.read(), Some(fae::config::LlmBackend::Pi)) {
                                                                 canvas_visible.set(true);
                                                             }
                                                             // Auto-close canvas panel when Fae clears the canvas.
@@ -2521,19 +2417,10 @@ fn app() -> Element {
     );
     let cfg_backend = config_state.read().llm.backend;
     let cfg_tool_mode = config_state.read().llm.tool_mode;
-    let pi_provider_selected = selected_pi_provider(&config_state.read());
-    let pi_model_selected = selected_pi_model(&config_state.read(), &pi_inventory.read());
-    let pi_models_for_selected_provider = pi_inventory
-        .read()
-        .models_by_provider
-        .get(&pi_provider_selected)
-        .cloned()
-        .unwrap_or_default();
     let backend_value = match cfg_backend {
         fae::config::LlmBackend::Local => "local",
         fae::config::LlmBackend::Api => "api",
         fae::config::LlmBackend::Agent => "agent",
-        fae::config::LlmBackend::Pi => "pi",
     };
     let tool_mode_value = match cfg_tool_mode {
         fae::config::AgentToolMode::Off => "off",
@@ -2541,11 +2428,8 @@ fn app() -> Element {
         fae::config::AgentToolMode::ReadWrite => "read_write",
         fae::config::AgentToolMode::Full => "full",
     };
-    let tool_mode_select_enabled = settings_enabled
-        && matches!(
-            cfg_backend,
-            fae::config::LlmBackend::Agent | fae::config::LlmBackend::Pi
-        );
+    let tool_mode_select_enabled =
+        settings_enabled && matches!(cfg_backend, fae::config::LlmBackend::Agent);
     let config_path = fae::SpeechConfig::default_config_path();
     let current_voice = config_state.read().tts.voice.clone();
     let is_builtin_voice = !current_voice.ends_with(".bin") || current_voice.is_empty();
@@ -2572,16 +2456,6 @@ fn app() -> Element {
             fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent => {
                 format!("{} / {}", cfg.llm.model_id, cfg.llm.gguf_file)
             }
-            fae::config::LlmBackend::Pi => {
-                let provider = selected_pi_provider(&cfg);
-                let model = selected_pi_model(&cfg, &pi_inventory.read());
-                let model = if model.is_empty() {
-                    "<set model in Settings>".to_owned()
-                } else {
-                    model
-                };
-                format!("Pi: {provider}/{model}")
-            }
         };
         let tts = format!("Kokoro-82M ({}, {})", cfg.tts.voice, cfg.tts.model_variant);
         (stt, llm, tts)
@@ -2592,7 +2466,7 @@ fn app() -> Element {
     let risky_tools_enabled = matches!(
         (current_backend, current_tool_mode),
         (
-            Some(fae::config::LlmBackend::Agent | fae::config::LlmBackend::Pi),
+            Some(fae::config::LlmBackend::Agent),
             Some(
                 fae::config::AgentToolMode::ReadOnly
                     | fae::config::AgentToolMode::ReadWrite
@@ -2692,19 +2566,6 @@ fn app() -> Element {
                     &cfg.llm.tokenizer_id
                 }
             ),
-            fae::config::LlmBackend::Pi => {
-                let provider = selected_pi_provider(&cfg);
-                let model = selected_pi_model(&cfg, &pi_inventory.read());
-                let model = if model.is_empty() {
-                    "<set model in Settings>".to_owned()
-                } else {
-                    model
-                };
-                format!(
-                    "Intelligence model (Pi)\nProvider: {}\nModel: {}\nTools: {:?}\n",
-                    provider, model, cfg.llm.tool_mode
-                )
-            }
         }
     };
     let tts_tooltip = {
@@ -3312,10 +3173,8 @@ fn app() -> Element {
                                     class: "settings-select",
                                     disabled: true,
                                     value: "{backend_value}",
-                                    option { value: "pi", "Pi (RPC)" }
-                                }
+                                                }
                             }
-                            p { class: "note", "Backend is fixed to Pi for tool-capable voice operation." }
                             div { class: "settings-row",
                                 label { class: "settings-label", "Tool mode" }
                                 select {
@@ -3337,101 +3196,6 @@ fn app() -> Element {
                                     option { value: "read_only", "Read-only (+ask for escalation)" }
                                     option { value: "read_write", "Read/write (approval)" }
                                     option { value: "full", "Full (approval)" }
-                                }
-                            }
-                            if matches!(cfg_backend, fae::config::LlmBackend::Pi) {
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Primary provider" }
-                                    select {
-                                        class: "settings-select",
-                                        disabled: !settings_enabled,
-                                        value: "{pi_provider_selected}",
-                                        onchange: move |evt| {
-                                            let selected = evt.value();
-                                            if selected == fae::llm::pi_config::FAE_PROVIDER_KEY {
-                                                let mut cfg = config_state.write();
-                                                cfg.llm.cloud_provider = None;
-                                                cfg.llm.cloud_model = None;
-                                            } else {
-                                                let mut cfg = config_state.write();
-                                                cfg.llm.cloud_provider = Some(selected.clone());
-                                                let fallback_model = pi_inventory
-                                                    .read()
-                                                    .models_by_provider
-                                                    .get(&selected)
-                                                    .and_then(|models| models.first())
-                                                    .cloned();
-                                                cfg.llm.cloud_model = fallback_model;
-                                            }
-                                        },
-                                        for provider in &pi_inventory.read().providers {
-                                            option { value: "{provider}", "{provider}" }
-                                        }
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Primary model" }
-                                    if pi_provider_selected == fae::llm::pi_config::FAE_PROVIDER_KEY {
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "text",
-                                            disabled: true,
-                                            value: "{fae::llm::pi_config::FAE_MODEL_ID}",
-                                        }
-                                    } else if !pi_models_for_selected_provider.is_empty() {
-                                        select {
-                                            class: "settings-select",
-                                            disabled: !settings_enabled,
-                                            value: "{pi_model_selected}",
-                                            onchange: move |evt| {
-                                                config_state.write().llm.cloud_model = Some(evt.value());
-                                            },
-                                            for model in &pi_models_for_selected_provider {
-                                                option { value: "{model}", "{model}" }
-                                            }
-                                        }
-                                    } else {
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "text",
-                                            disabled: !settings_enabled,
-                                            value: "{config_state.read().llm.cloud_model.clone().unwrap_or_default()}",
-                                            placeholder: "Enter model id (e.g. claude-sonnet-4.5)",
-                                            oninput: move |evt| {
-                                                let val = evt.value();
-                                                config_state.write().llm.cloud_model = if val.trim().is_empty() {
-                                                    None
-                                                } else {
-                                                    Some(val)
-                                                };
-                                            },
-                                        }
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    button {
-                                        class: "settings-save",
-                                        disabled: !settings_enabled,
-                                        onclick: move |_| {
-                                            pi_inventory.set(load_pi_model_inventory());
-                                            pi_inventory_status.set("Refreshed Pi model inventory.".to_owned());
-                                        },
-                                        "Refresh Pi models"
-                                    }
-                                    p { class: "settings-value",
-                                        "{pi_inventory_status.read()}"
-                                    }
-                                }
-                                if let Some(path) = pi_inventory.read().models_path.as_ref() {
-                                    p { class: "note",
-                                        "Pi models source: {path.display()}"
-                                    }
-                                }
-                                if let Some(err) = pi_inventory.read().load_error.as_ref() {
-                                    p { class: "note", "{err}" }
-                                }
-                                p { class: "note",
-                                    "Local brain stays available as {fae::llm::pi_config::FAE_PROVIDER_KEY}/{fae::llm::pi_config::FAE_MODEL_ID}."
                                 }
                             }
                             div { class: "settings-row",
@@ -4001,12 +3765,6 @@ fn app() -> Element {
                                 }
                             }
                             div { class: "settings-row",
-                                label { class: "settings-label", "Pi version" }
-                                p { class: "settings-value",
-                                    "{update_state.read().pi_version.as_deref().unwrap_or(\"not installed\")}"
-                                }
-                            }
-                            div { class: "settings-row",
                                 label { class: "settings-label", "Auto-update" }
                                 select {
                                     class: "settings-select",
@@ -4136,10 +3894,6 @@ fn app() -> Element {
                             div { class: "settings-row",
                                 label { class: "settings-label", "Check Fae updates" }
                                 p { class: "settings-value", "daily at 09:00 UTC" }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Check Pi updates" }
-                                p { class: "settings-value", "daily at 09:05 UTC" }
                             }
                             p { class: "note", "More scheduled tasks coming soon." }
                         }
@@ -4572,7 +4326,6 @@ fn app() -> Element {
                                             move |_| {
                                                 scheduler_notification.set(None);
                                                 if action_id == "install_fae_update"
-                                                    || action_id == "install_pi_update"
                                                 {
                                                     let release = update_available.read().clone();
                                                     if let Some(rel) = release {
@@ -4605,7 +4358,6 @@ fn app() -> Element {
                                                         });
                                                     }
                                                 } else if action_id == "dismiss_fae_update"
-                                                    || action_id == "dismiss_pi_update"
                                                 {
                                                     update_banner_dismissed.set(true);
                                                     if let Some(rel) =
@@ -4662,9 +4414,7 @@ fn models_window() -> Element {
     let cfg_backend = config_state.read().llm.backend;
     let can_pick_local_models = matches!(
         cfg_backend,
-        fae::config::LlmBackend::Local
-            | fae::config::LlmBackend::Agent
-            | fae::config::LlmBackend::Pi
+        fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent
     );
 
     let config_path = fae::SpeechConfig::default_config_path();
@@ -4887,7 +4637,7 @@ fn models_window() -> Element {
 
                 if !can_pick_local_models {
                     p { class: "note",
-                        "Model picker is for Local/Agent/Pi backends. Switch backends in Settings in the main window."
+                        "Model picker is for Local/Agent backends. Switch backends in Settings in the main window."
                     }
                 }
 

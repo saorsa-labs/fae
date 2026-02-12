@@ -2,7 +2,7 @@
 //!
 //! Implements [`saorsa_ai::StreamingProvider`] so that `saorsa-agent` can talk
 //! to any OpenAI-compatible API (Anthropic, OpenRouter, Groq, etc.) using the
-//! connection details from Pi's `~/.pi/agent/models.json`.
+//! connection details from config (`api_url`, `api_key`, `api_model`).
 
 use async_trait::async_trait;
 use saorsa_ai::error::{Result as SaorsaResult, SaorsaAiError};

@@ -18,8 +18,10 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Mutex, OnceLock};
 
 static RECORD_COUNTER: AtomicU64 = AtomicU64::new(1);
+static MEMORY_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MANIFEST_FILE: &str = "manifest.toml";
 const RECORDS_FILE: &str = "records.jsonl";
@@ -36,6 +38,10 @@ const SCORE_FRESHNESS_WEIGHT: f32 = 0.10;
 const SCORE_KIND_BONUS_PROFILE: f32 = 0.05;
 const SCORE_KIND_BONUS_FACT: f32 = 0.03;
 const SECS_PER_DAY: f32 = 86_400.0;
+
+fn memory_write_lock() -> &'static Mutex<()> {
+    MEMORY_WRITE_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[must_use]
 pub fn current_memory_schema_version() -> u32 {
@@ -307,6 +313,14 @@ impl MemoryRepository {
         Ok(())
     }
 
+    fn with_write_lock<T>(&self, op: impl FnOnce() -> Result<T>) -> Result<T> {
+        let _guard = match memory_write_lock().lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        op()
+    }
+
     fn read_manifest(&self) -> Result<MemoryManifest> {
         self.ensure_layout()?;
         let content = std::fs::read_to_string(self.manifest_path())?;
@@ -334,60 +348,62 @@ impl MemoryRepository {
     }
 
     pub fn migrate_if_needed(&self, target_version: u32) -> Result<Option<(u32, u32)>> {
-        self.ensure_layout()?;
-        let mut manifest = self.read_manifest()?;
+        self.with_write_lock(|| {
+            self.ensure_layout()?;
+            let mut manifest = self.read_manifest()?;
 
-        if manifest.schema_version == target_version {
-            return Ok(None);
-        }
-        if manifest.schema_version > target_version {
-            return Err(SpeechError::Memory(format!(
-                "cannot downgrade memory schema from {} to {}",
-                manifest.schema_version, target_version
-            )));
-        }
-
-        let from = manifest.schema_version;
-        let backup_dir = self.create_backup_snapshot(from, target_version)?;
-
-        let mut version = manifest.schema_version;
-        let migration_result = (|| -> Result<()> {
-            while version < target_version {
-                match version {
-                    0 => self.migrate_0_to_1()?,
-                    other => {
-                        return Err(SpeechError::Memory(format!(
-                            "unsupported memory migration from schema version {other}"
-                        )));
-                    }
-                }
-                version = version.saturating_add(1);
+            if manifest.schema_version == target_version {
+                return Ok(None);
             }
-            Ok(())
-        })();
-
-        if let Err(migration_err) = migration_result {
-            if let Err(restore_err) = self.restore_backup_snapshot(&backup_dir) {
+            if manifest.schema_version > target_version {
                 return Err(SpeechError::Memory(format!(
-                    "memory migration failed ({migration_err}); rollback failed ({restore_err})"
+                    "cannot downgrade memory schema from {} to {}",
+                    manifest.schema_version, target_version
                 )));
             }
-            return Err(migration_err);
-        }
 
-        manifest.schema_version = target_version;
-        manifest.updated_at = now_epoch_secs();
-        self.write_manifest(&manifest)?;
+            let from = manifest.schema_version;
+            let backup_dir = self.create_backup_snapshot(from, target_version)?;
 
-        self.append_audit(MemoryAuditEntry {
-            id: new_id("audit"),
-            op: MemoryAuditOp::Migrate,
-            target_id: None,
-            note: format!("schema migrated from {from} to {target_version}"),
-            at: now_epoch_secs(),
-        })?;
+            let mut version = manifest.schema_version;
+            let migration_result = (|| -> Result<()> {
+                while version < target_version {
+                    match version {
+                        0 => self.migrate_0_to_1()?,
+                        other => {
+                            return Err(SpeechError::Memory(format!(
+                                "unsupported memory migration from schema version {other}"
+                            )));
+                        }
+                    }
+                    version = version.saturating_add(1);
+                }
+                Ok(())
+            })();
 
-        Ok(Some((from, target_version)))
+            if let Err(migration_err) = migration_result {
+                if let Err(restore_err) = self.restore_backup_snapshot(&backup_dir) {
+                    return Err(SpeechError::Memory(format!(
+                        "memory migration failed ({migration_err}); rollback failed ({restore_err})"
+                    )));
+                }
+                return Err(migration_err);
+            }
+
+            manifest.schema_version = target_version;
+            manifest.updated_at = now_epoch_secs();
+            self.write_manifest(&manifest)?;
+
+            self.append_audit(MemoryAuditEntry {
+                id: new_id("audit"),
+                op: MemoryAuditOp::Migrate,
+                target_id: None,
+                note: format!("schema migrated from {from} to {target_version}"),
+                at: now_epoch_secs(),
+            })?;
+
+            Ok(Some((from, target_version)))
+        })
     }
 
     fn migrate_0_to_1(&self) -> Result<()> {
@@ -541,72 +557,76 @@ impl MemoryRepository {
         source_turn_id: Option<&str>,
         tags: Vec<String>,
     ) -> Result<MemoryRecord> {
-        self.ensure_layout()?;
-        let clean_text = text.trim();
-        if clean_text.is_empty() {
-            return Err(SpeechError::Memory(
-                "cannot insert empty memory record".to_owned(),
-            ));
-        }
-        if clean_text.len() > MAX_RECORD_TEXT_LEN {
-            return Err(SpeechError::Memory(format!(
-                "memory record text too long ({} bytes, max {})",
-                clean_text.len(),
-                MAX_RECORD_TEXT_LEN
-            )));
-        }
+        self.with_write_lock(|| {
+            self.ensure_layout()?;
+            let clean_text = text.trim();
+            if clean_text.is_empty() {
+                return Err(SpeechError::Memory(
+                    "cannot insert empty memory record".to_owned(),
+                ));
+            }
+            if clean_text.len() > MAX_RECORD_TEXT_LEN {
+                return Err(SpeechError::Memory(format!(
+                    "memory record text too long ({} bytes, max {})",
+                    clean_text.len(),
+                    MAX_RECORD_TEXT_LEN
+                )));
+            }
 
-        let now = now_epoch_secs();
-        let record = MemoryRecord {
-            id: new_id("mem"),
-            kind,
-            status: MemoryStatus::Active,
-            text: clean_text.to_owned(),
-            confidence: confidence.clamp(0.0, 1.0),
-            source_turn_id: source_turn_id.map(ToOwned::to_owned),
-            tags,
-            supersedes: None,
-            created_at: now,
-            updated_at: now,
-        };
+            let now = now_epoch_secs();
+            let record = MemoryRecord {
+                id: new_id("mem"),
+                kind,
+                status: MemoryStatus::Active,
+                text: clean_text.to_owned(),
+                confidence: confidence.clamp(0.0, 1.0),
+                source_turn_id: source_turn_id.map(ToOwned::to_owned),
+                tags,
+                supersedes: None,
+                created_at: now,
+                updated_at: now,
+            };
 
-        self.append_record(&record)?;
-        self.append_audit(MemoryAuditEntry {
-            id: new_id("audit"),
-            op: MemoryAuditOp::Insert,
-            target_id: Some(record.id.clone()),
-            note: format!("inserted {} memory", display_kind(kind)),
-            at: now,
-        })?;
-        Ok(record)
+            self.append_record(&record)?;
+            self.append_audit(MemoryAuditEntry {
+                id: new_id("audit"),
+                op: MemoryAuditOp::Insert,
+                target_id: Some(record.id.clone()),
+                note: format!("inserted {} memory", display_kind(kind)),
+                at: now,
+            })?;
+            Ok(record)
+        })
     }
 
     pub fn patch_record(&self, id: &str, new_text: &str, note: &str) -> Result<()> {
-        let mut records = self.list_records()?;
-        let now = now_epoch_secs();
-        let mut found = false;
-        for record in &mut records {
-            if record.id == id {
-                record.text = new_text.trim().to_owned();
-                record.updated_at = now;
-                found = true;
-                break;
+        self.with_write_lock(|| {
+            let mut records = self.list_records()?;
+            let now = now_epoch_secs();
+            let mut found = false;
+            for record in &mut records {
+                if record.id == id {
+                    record.text = new_text.trim().to_owned();
+                    record.updated_at = now;
+                    found = true;
+                    break;
+                }
             }
-        }
-        if !found {
-            return Err(SpeechError::Memory(format!(
-                "cannot patch memory; id not found: {id}"
-            )));
-        }
-        self.rewrite_records(&records)?;
-        self.append_audit(MemoryAuditEntry {
-            id: new_id("audit"),
-            op: MemoryAuditOp::Patch,
-            target_id: Some(id.to_owned()),
-            note: note.to_owned(),
-            at: now,
-        })?;
-        Ok(())
+            if !found {
+                return Err(SpeechError::Memory(format!(
+                    "cannot patch memory; id not found: {id}"
+                )));
+            }
+            self.rewrite_records(&records)?;
+            self.append_audit(MemoryAuditEntry {
+                id: new_id("audit"),
+                op: MemoryAuditOp::Patch,
+                target_id: Some(id.to_owned()),
+                note: note.to_owned(),
+                at: now,
+            })?;
+            Ok(())
+        })
     }
 
     pub fn supersede_record(
@@ -618,62 +638,64 @@ impl MemoryRepository {
         tags: Vec<String>,
         note: &str,
     ) -> Result<MemoryRecord> {
-        let mut records = self.list_records()?;
-        let now = now_epoch_secs();
-        let mut old_kind: Option<MemoryKind> = None;
-        let mut found = false;
+        self.with_write_lock(|| {
+            let mut records = self.list_records()?;
+            let now = now_epoch_secs();
+            let mut old_kind: Option<MemoryKind> = None;
+            let mut found = false;
 
-        for record in &mut records {
-            if record.id == old_id {
-                old_kind = Some(record.kind);
-                record.status = MemoryStatus::Superseded;
-                record.updated_at = now;
-                found = true;
-                break;
+            for record in &mut records {
+                if record.id == old_id {
+                    old_kind = Some(record.kind);
+                    record.status = MemoryStatus::Superseded;
+                    record.updated_at = now;
+                    found = true;
+                    break;
+                }
             }
-        }
 
-        if !found {
-            return Err(SpeechError::Memory(format!(
-                "cannot supersede memory; id not found: {old_id}"
-            )));
-        }
+            if !found {
+                return Err(SpeechError::Memory(format!(
+                    "cannot supersede memory; id not found: {old_id}"
+                )));
+            }
 
-        let trimmed_new_text = new_text.trim();
-        if trimmed_new_text.len() > MAX_RECORD_TEXT_LEN {
-            return Err(SpeechError::Memory(format!(
-                "memory record text too long ({} bytes, max {})",
-                trimmed_new_text.len(),
-                MAX_RECORD_TEXT_LEN
-            )));
-        }
+            let trimmed_new_text = new_text.trim();
+            if trimmed_new_text.len() > MAX_RECORD_TEXT_LEN {
+                return Err(SpeechError::Memory(format!(
+                    "memory record text too long ({} bytes, max {})",
+                    trimmed_new_text.len(),
+                    MAX_RECORD_TEXT_LEN
+                )));
+            }
 
-        let kind = old_kind.unwrap_or(MemoryKind::Fact);
-        let new_record = MemoryRecord {
-            id: new_id("mem"),
-            kind,
-            status: MemoryStatus::Active,
-            text: trimmed_new_text.to_owned(),
-            confidence: confidence.clamp(0.0, 1.0),
-            source_turn_id: source_turn_id.map(ToOwned::to_owned),
-            tags,
-            supersedes: Some(old_id.to_owned()),
-            created_at: now,
-            updated_at: now,
-        };
+            let kind = old_kind.unwrap_or(MemoryKind::Fact);
+            let new_record = MemoryRecord {
+                id: new_id("mem"),
+                kind,
+                status: MemoryStatus::Active,
+                text: trimmed_new_text.to_owned(),
+                confidence: confidence.clamp(0.0, 1.0),
+                source_turn_id: source_turn_id.map(ToOwned::to_owned),
+                tags,
+                supersedes: Some(old_id.to_owned()),
+                created_at: now,
+                updated_at: now,
+            };
 
-        records.push(new_record.clone());
-        self.rewrite_records(&records)?;
+            records.push(new_record.clone());
+            self.rewrite_records(&records)?;
 
-        self.append_audit(MemoryAuditEntry {
-            id: new_id("audit"),
-            op: MemoryAuditOp::Supersede,
-            target_id: Some(new_record.id.clone()),
-            note: note.to_owned(),
-            at: now,
-        })?;
+            self.append_audit(MemoryAuditEntry {
+                id: new_id("audit"),
+                op: MemoryAuditOp::Supersede,
+                target_id: Some(new_record.id.clone()),
+                note: note.to_owned(),
+                at: now,
+            })?;
 
-        Ok(new_record)
+            Ok(new_record)
+        })
     }
 
     pub fn invalidate_record(&self, id: &str, note: &str) -> Result<()> {
@@ -690,25 +712,27 @@ impl MemoryRepository {
     }
 
     pub fn forget_hard_record(&self, id: &str, note: &str) -> Result<()> {
-        let mut records = self.list_records()?;
-        let now = now_epoch_secs();
-        let before = records.len();
-        records.retain(|r| r.id != id);
-        if records.len() == before {
-            return Err(SpeechError::Memory(format!(
-                "cannot hard-forget memory; id not found: {id}"
-            )));
-        }
+        self.with_write_lock(|| {
+            let mut records = self.list_records()?;
+            let now = now_epoch_secs();
+            let before = records.len();
+            records.retain(|r| r.id != id);
+            if records.len() == before {
+                return Err(SpeechError::Memory(format!(
+                    "cannot hard-forget memory; id not found: {id}"
+                )));
+            }
 
-        self.rewrite_records(&records)?;
-        self.append_audit(MemoryAuditEntry {
-            id: new_id("audit"),
-            op: MemoryAuditOp::ForgetHard,
-            target_id: Some(id.to_owned()),
-            note: note.to_owned(),
-            at: now,
-        })?;
-        Ok(())
+            self.rewrite_records(&records)?;
+            self.append_audit(MemoryAuditEntry {
+                id: new_id("audit"),
+                op: MemoryAuditOp::ForgetHard,
+                target_id: Some(id.to_owned()),
+                note: note.to_owned(),
+                at: now,
+            })?;
+            Ok(())
+        })
     }
 
     fn set_status(
@@ -718,34 +742,36 @@ impl MemoryRepository {
         op: MemoryAuditOp,
         note: &str,
     ) -> Result<()> {
-        let mut records = self.list_records()?;
-        let now = now_epoch_secs();
-        let mut found = false;
+        self.with_write_lock(|| {
+            let mut records = self.list_records()?;
+            let now = now_epoch_secs();
+            let mut found = false;
 
-        for record in &mut records {
-            if record.id == id {
-                record.status = status;
-                record.updated_at = now;
-                found = true;
-                break;
+            for record in &mut records {
+                if record.id == id {
+                    record.status = status;
+                    record.updated_at = now;
+                    found = true;
+                    break;
+                }
             }
-        }
 
-        if !found {
-            return Err(SpeechError::Memory(format!(
-                "cannot update memory; id not found: {id}"
-            )));
-        }
+            if !found {
+                return Err(SpeechError::Memory(format!(
+                    "cannot update memory; id not found: {id}"
+                )));
+            }
 
-        self.rewrite_records(&records)?;
-        self.append_audit(MemoryAuditEntry {
-            id: new_id("audit"),
-            op,
-            target_id: Some(id.to_owned()),
-            note: note.to_owned(),
-            at: now,
-        })?;
-        Ok(())
+            self.rewrite_records(&records)?;
+            self.append_audit(MemoryAuditEntry {
+                id: new_id("audit"),
+                op,
+                target_id: Some(id.to_owned()),
+                note: note.to_owned(),
+                at: now,
+            })?;
+            Ok(())
+        })
     }
 
     pub fn find_active_by_tag(&self, tag: &str) -> Result<Vec<MemoryRecord>> {
@@ -804,38 +830,40 @@ impl MemoryRepository {
     }
 
     pub fn apply_retention_policy(&self, retention_days: u32) -> Result<usize> {
-        if retention_days == 0 {
-            return Ok(0);
-        }
-
-        let mut records = self.list_records()?;
-        let cutoff = now_epoch_secs().saturating_sub((retention_days as u64) * 24 * 3600);
-        let mut changed = 0usize;
-
-        for record in &mut records {
-            if record.kind == MemoryKind::Episode
-                && record.status == MemoryStatus::Active
-                && record.updated_at > 0
-                && record.updated_at < cutoff
-            {
-                record.status = MemoryStatus::Forgotten;
-                record.updated_at = now_epoch_secs();
-                changed = changed.saturating_add(1);
+        self.with_write_lock(|| {
+            if retention_days == 0 {
+                return Ok(0);
             }
-        }
 
-        if changed > 0 {
-            self.rewrite_records(&records)?;
-            self.append_audit(MemoryAuditEntry {
-                id: new_id("audit"),
-                op: MemoryAuditOp::ForgetSoft,
-                target_id: None,
-                note: format!("retention policy soft-forgot {changed} episodic records"),
-                at: now_epoch_secs(),
-            })?;
-        }
+            let mut records = self.list_records()?;
+            let cutoff = now_epoch_secs().saturating_sub((retention_days as u64) * 24 * 3600);
+            let mut changed = 0usize;
 
-        Ok(changed)
+            for record in &mut records {
+                if record.kind == MemoryKind::Episode
+                    && record.status == MemoryStatus::Active
+                    && record.updated_at > 0
+                    && record.updated_at < cutoff
+                {
+                    record.status = MemoryStatus::Forgotten;
+                    record.updated_at = now_epoch_secs();
+                    changed = changed.saturating_add(1);
+                }
+            }
+
+            if changed > 0 {
+                self.rewrite_records(&records)?;
+                self.append_audit(MemoryAuditEntry {
+                    id: new_id("audit"),
+                    op: MemoryAuditOp::ForgetSoft,
+                    target_id: None,
+                    note: format!("retention policy soft-forgot {changed} episodic records"),
+                    at: now_epoch_secs(),
+                })?;
+            }
+
+            Ok(changed)
+        })
     }
 }
 
@@ -1118,37 +1146,41 @@ pub fn run_memory_reflection(root_dir: &Path) -> Result<String> {
     let repo = MemoryRepository::new(root_dir);
     repo.ensure_layout()?;
 
-    // Collapse exact-duplicate active profile/fact records by soft-forgetting older ones.
-    let mut records = repo.list_records()?;
-    let mut seen = HashSet::new();
-    let mut changed = 0usize;
-    let now = now_epoch_secs();
+    let changed = repo.with_write_lock(|| {
+        // Collapse exact-duplicate active profile/fact records by soft-forgetting older ones.
+        let mut records = repo.list_records()?;
+        let mut seen = HashSet::new();
+        let mut changed = 0usize;
+        let now = now_epoch_secs();
 
-    records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    for record in &mut records {
-        if record.status != MemoryStatus::Active {
-            continue;
+        records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        for record in &mut records {
+            if record.status != MemoryStatus::Active {
+                continue;
+            }
+            if !(record.kind == MemoryKind::Profile || record.kind == MemoryKind::Fact) {
+                continue;
+            }
+            let key = format!(
+                "{}::{}",
+                display_kind(record.kind),
+                record.text.trim().to_ascii_lowercase()
+            );
+            if seen.contains(&key) {
+                record.status = MemoryStatus::Forgotten;
+                record.updated_at = now;
+                changed = changed.saturating_add(1);
+            } else {
+                let _ = seen.insert(key);
+            }
         }
-        if !(record.kind == MemoryKind::Profile || record.kind == MemoryKind::Fact) {
-            continue;
-        }
-        let key = format!(
-            "{}::{}",
-            display_kind(record.kind),
-            record.text.trim().to_ascii_lowercase()
-        );
-        if seen.contains(&key) {
-            record.status = MemoryStatus::Forgotten;
-            record.updated_at = now;
-            changed = changed.saturating_add(1);
-        } else {
-            let _ = seen.insert(key);
-        }
-    }
 
-    if changed > 0 {
-        repo.rewrite_records(&records)?;
-    }
+        if changed > 0 {
+            repo.rewrite_records(&records)?;
+        }
+
+        Ok(changed)
+    })?;
 
     Ok(format!(
         "memory reflection completed; deduplicated {changed} records"
@@ -1468,6 +1500,7 @@ mod tests {
 
     use super::*;
     use crate::test_utils::temp_test_root;
+    use std::sync::Arc;
 
     fn test_root(name: &str) -> PathBuf {
         temp_test_root("memory", name)
@@ -1707,6 +1740,68 @@ mod tests {
 
         let active = repo.search("hello", 5, false).expect("search active");
         assert!(active.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_patch_and_insert_preserves_all_records() {
+        let root = test_root("contention");
+        let repo = Arc::new(MemoryRepository::new(&root));
+        repo.ensure_layout().expect("ensure layout");
+
+        let seed = repo
+            .insert_record(
+                MemoryKind::Fact,
+                "Seed fact",
+                0.9,
+                Some("seed-turn"),
+                vec!["seed".into()],
+            )
+            .expect("insert seed");
+
+        let patch_repo = Arc::clone(&repo);
+        let patch_id = seed.id.clone();
+        let patch_handle = std::thread::spawn(move || {
+            for i in 0..250usize {
+                let body = format!("Seed fact revision {i}");
+                patch_repo
+                    .patch_record(&patch_id, &body, "contention patch")
+                    .expect("patch seed");
+            }
+        });
+
+        let mut insert_handles = Vec::new();
+        let workers = 6usize;
+        let inserts_per_worker = 40usize;
+
+        for worker in 0..workers {
+            let repo_clone = Arc::clone(&repo);
+            insert_handles.push(std::thread::spawn(move || {
+                for idx in 0..inserts_per_worker {
+                    let text = format!("worker {worker} record {idx}");
+                    repo_clone
+                        .insert_record(
+                            MemoryKind::Fact,
+                            &text,
+                            0.7,
+                            Some("contention"),
+                            vec!["load".into()],
+                        )
+                        .expect("insert during contention");
+                }
+            }));
+        }
+
+        patch_handle.join().expect("join patch thread");
+        for handle in insert_handles {
+            handle.join().expect("join insert thread");
+        }
+
+        let records = repo.list_records().expect("list final records");
+        let expected = 1 + workers * inserts_per_worker;
+        assert_eq!(records.len(), expected, "no records should be lost");
+        assert!(records.iter().any(|record| record.id == seed.id));
 
         let _ = std::fs::remove_dir_all(root);
     }

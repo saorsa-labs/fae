@@ -256,3 +256,25 @@ All 3 phases delivered:
 1.1: Extract & Unify Downloads (8 tasks)
 1.2: GUI Progress Overhaul (8 tasks)
 1.3: Pre-flight & Error Resilience (8 tasks)
+
+---
+
+## FAE LLM Module — Milestone 1: PI Removal & Foundation
+
+### Phase 1.1: Remove PI Dependency — COMPLETE
+- [x] Task 1: Delete PI module directory and PI-only LLM files
+- [x] Task 2: Remove PiConfig and LlmBackend::Pi from config.rs
+- [x] Task 3: Remove PI from startup.rs and update/checker.rs
+- [x] Task 4: Remove PI from pipeline/coordinator.rs
+- [x] Task 5: Remove PI from agent/mod.rs and llm/api.rs
+- [x] Task 6: Remove PI from GUI, voice commands, skills, and remaining files
+- [x] Task 7: Clean up Cargo.toml dependencies and compile
+- [x] Task 8: Verify tests pass and final cleanup
+
+**Phase 1.1 COMPLETE** — All PI references removed
+- Deleted: src/pi/ (5 files), src/llm/pi_config.rs, src/llm/server.rs, Skills/pi.md
+- Deleted: tests/pi_manager.rs, tests/pi_session.rs, tests/llm_server.rs
+- Removed: axum, tower-http, uuid, async-stream from deps (axum kept as dev-dep for test mock)
+- Removed: SpeechError::Pi, SpeechError::Server, LlmServerConfig, model_selection_rx
+- 540 unit tests + 19 integration tests + 8 doc tests passing
+- Zero clippy warnings, zero compilation warnings

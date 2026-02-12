@@ -109,15 +109,6 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 # Acoustic Echo Cancellation (FDAF adaptive filter)
 fdaf-aec = "0.1"
 
-# HTTP server (OpenAI-compatible LLM endpoint for Pi integration)
-axum = "0.8"
-tower-http = { version = "0.6", features = ["cors"] }
-
-# UUID generation (request IDs for OpenAI-compatible API)
-uuid = { version = "1", features = ["v4"] }
-
-# Async stream combinator (SSE streaming for LLM server)
-async-stream = "0.3"
 
 # WebSocket client (for remote canvas-server)
 tokio-tungstenite = "0.24"
@@ -139,6 +130,10 @@ libc = "0.2"
 # This is equivalent to `--features metal` but happens automatically.
 [target.'cfg(target_os = "macos")'.dependencies]
 mistralrs = { version = "0.7", features = ["metal"] }
+
+[dev-dependencies]
+# Mock HTTP server for API integration tests
+axum = "0.8"
 
 # Local path overrides for development (uncomment to use local saorsa-canvas checkout):
 # [patch.crates-io]

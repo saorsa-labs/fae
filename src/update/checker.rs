@@ -1,11 +1,25 @@
-//! GitHub release checker for Fae and Pi updates.
+//! GitHub release checker for Fae updates.
 //!
 //! Queries the GitHub releases API to detect newer versions, compares using
 //! semver, and caches ETags for efficient conditional requests.
 
 use crate::error::{Result, SpeechError};
-use crate::pi::manager::version_is_newer;
 use std::time::Duration;
+
+/// Compare two semver version strings and return `true` if `remote` is newer than `current`.
+///
+/// Handles versions with or without `v` prefix and up to 3 numeric components.
+fn version_is_newer(current: &str, remote: &str) -> bool {
+    fn parse_parts(v: &str) -> (u64, u64, u64) {
+        let v = v.strip_prefix('v').unwrap_or(v);
+        let mut parts = v.split('.').filter_map(|s| s.parse::<u64>().ok());
+        let major = parts.next().unwrap_or(0);
+        let minor = parts.next().unwrap_or(0);
+        let patch = parts.next().unwrap_or(0);
+        (major, minor, patch)
+    }
+    parse_parts(remote) > parse_parts(current)
+}
 
 /// A release discovered from GitHub.
 #[derive(Debug, Clone)]
@@ -38,14 +52,6 @@ impl UpdateChecker {
         Self {
             repo: "saorsa-labs/fae".to_owned(),
             current_version: env!("CARGO_PKG_VERSION").to_owned(),
-        }
-    }
-
-    /// Create a checker for Pi updates.
-    pub fn for_pi(current_version: &str) -> Self {
-        Self {
-            repo: "badlogic/pi-mono".to_owned(),
-            current_version: current_version.to_owned(),
         }
     }
 
@@ -110,7 +116,7 @@ impl UpdateChecker {
             .into_json()
             .map_err(|e| SpeechError::Update(format!("cannot parse GitHub release JSON: {e}")))?;
 
-        let release = parse_github_release(&body, &self.repo)?;
+        let release = parse_github_release(&body)?;
 
         if version_is_newer(&self.current_version, &release.version) {
             Ok((Some(release), new_etag))
@@ -121,7 +127,7 @@ impl UpdateChecker {
 }
 
 /// Parse a GitHub release JSON object into a [`Release`].
-fn parse_github_release(body: &serde_json::Value, repo: &str) -> Result<Release> {
+fn parse_github_release(body: &serde_json::Value) -> Result<Release> {
     let tag_name = body["tag_name"]
         .as_str()
         .ok_or_else(|| SpeechError::Update("missing tag_name in release JSON".to_owned()))?
@@ -136,12 +142,7 @@ fn parse_github_release(body: &serde_json::Value, repo: &str) -> Result<Release>
         .as_array()
         .ok_or_else(|| SpeechError::Update("missing assets in release JSON".to_owned()))?;
 
-    let (download_url, asset_size) = if repo.contains("fae") {
-        select_fae_platform_asset(assets)
-    } else {
-        select_pi_platform_asset(assets)
-    }
-    .unwrap_or_default();
+    let (download_url, asset_size) = select_fae_platform_asset(assets).unwrap_or_default();
 
     Ok(Release {
         tag_name,
@@ -190,14 +191,6 @@ fn select_fae_platform_asset(assets: &[serde_json::Value]) -> Option<(String, u6
     select_platform_asset(assets, expected)
 }
 
-/// Select the matching Pi asset from a GitHub release assets array.
-///
-/// Pi uses names like `pi-darwin-arm64.tar.gz`, `pi-linux-x64.tar.gz`, etc.
-fn select_pi_platform_asset(assets: &[serde_json::Value]) -> Option<(String, u64)> {
-    let expected = crate::pi::manager::platform_asset_name()?;
-    select_platform_asset(assets, expected)
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -209,13 +202,6 @@ mod tests {
         let checker = UpdateChecker::for_fae();
         assert_eq!(checker.repo(), "saorsa-labs/fae");
         assert_eq!(checker.current_version(), env!("CARGO_PKG_VERSION"));
-    }
-
-    #[test]
-    fn for_pi_uses_correct_repo() {
-        let checker = UpdateChecker::for_pi("0.52.9");
-        assert_eq!(checker.repo(), "badlogic/pi-mono");
-        assert_eq!(checker.current_version(), "0.52.9");
     }
 
     #[test]
@@ -251,7 +237,7 @@ mod tests {
             ]
         });
 
-        let release = parse_github_release(&json, "saorsa-labs/fae").unwrap();
+        let release = parse_github_release(&json).unwrap();
         assert_eq!(release.tag_name, "v0.2.0");
         assert_eq!(release.version, "0.2.0");
         assert_eq!(release.release_notes, "Bug fixes and improvements.");
@@ -266,7 +252,7 @@ mod tests {
             "published_at": "",
             "assets": []
         });
-        let release = parse_github_release(&json, "saorsa-labs/fae").unwrap();
+        let release = parse_github_release(&json).unwrap();
         assert_eq!(release.version, "1.0.0");
     }
 
@@ -278,20 +264,20 @@ mod tests {
             "published_at": "",
             "assets": []
         });
-        let release = parse_github_release(&json, "saorsa-labs/fae").unwrap();
+        let release = parse_github_release(&json).unwrap();
         assert_eq!(release.version, "1.0.0");
     }
 
     #[test]
     fn parse_github_release_missing_tag_errors() {
         let json = serde_json::json!({ "assets": [] });
-        assert!(parse_github_release(&json, "saorsa-labs/fae").is_err());
+        assert!(parse_github_release(&json).is_err());
     }
 
     #[test]
     fn parse_github_release_missing_assets_errors() {
         let json = serde_json::json!({ "tag_name": "v1.0.0" });
-        assert!(parse_github_release(&json, "saorsa-labs/fae").is_err());
+        assert!(parse_github_release(&json).is_err());
     }
 
     #[test]
@@ -318,20 +304,6 @@ mod tests {
     }
 
     #[test]
-    fn select_pi_asset_finds_match() {
-        if let Some(expected_name) = crate::pi::manager::platform_asset_name() {
-            let assets = vec![serde_json::json!({
-                "name": expected_name,
-                "browser_download_url": "https://example.com/pi",
-                "size": 2000
-            })];
-
-            let result = select_pi_platform_asset(&assets);
-            assert!(result.is_some());
-        }
-    }
-
-    #[test]
     fn parse_github_release_with_notes_and_date() {
         let json = serde_json::json!({
             "tag_name": "v0.3.0",
@@ -344,28 +316,10 @@ mod tests {
             }]
         });
 
-        let release = parse_github_release(&json, "saorsa-labs/fae").unwrap();
+        let release = parse_github_release(&json).unwrap();
         assert_eq!(release.version, "0.3.0");
         assert!(release.release_notes.contains("Fixed bugs"));
         assert_eq!(release.published_at, "2026-01-15T12:00:00Z");
-    }
-
-    #[test]
-    fn parse_github_release_pi_repo() {
-        let json = serde_json::json!({
-            "tag_name": "v0.52.10",
-            "body": "Pi update",
-            "published_at": "2026-02-01T00:00:00Z",
-            "assets": [{
-                "name": "pi-darwin-arm64.tar.gz",
-                "browser_download_url": "https://github.com/badlogic/pi-mono/releases/download/v0.52.10/pi-darwin-arm64.tar.gz",
-                "size": 30_000_000
-            }]
-        });
-
-        let release = parse_github_release(&json, "badlogic/pi-mono").unwrap();
-        assert_eq!(release.version, "0.52.10");
-        assert_eq!(release.release_notes, "Pi update");
     }
 
     #[test]
@@ -381,7 +335,7 @@ mod tests {
             }]
         });
 
-        let release = parse_github_release(&json, "saorsa-labs/fae").unwrap();
+        let release = parse_github_release(&json).unwrap();
         // No matching asset for current platform → empty download_url.
         assert_eq!(release.version, "1.0.0");
         // download_url may be empty if no matching asset

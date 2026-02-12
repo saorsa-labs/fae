@@ -279,9 +279,7 @@ pub fn list_models_response(models: &[String], current_idx: usize) -> String {
         return "I don't have any models configured.".to_owned();
     }
     let list = models.join(", ");
-    let current = models
-        .get(current_idx)
-        .map_or("unknown", |s| s.as_str());
+    let current = models.get(current_idx).map_or("unknown", |s| s.as_str());
     format!("I have access to {list}. Currently using {current}.")
 }
 
@@ -292,7 +290,8 @@ pub fn current_model_response(model_name: &str) -> String {
 
 /// Help response listing available model switching commands.
 pub fn help_response() -> String {
-    "You can say: switch to Claude, use the local model, list models, or what model are you using.".to_owned()
+    "You can say: switch to Claude, use the local model, list models, or what model are you using."
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -462,10 +461,7 @@ mod tests {
 
     #[test]
     fn help_me() {
-        assert_eq!(
-            parse_voice_command("help me"),
-            Some(VoiceCommand::Help)
-        );
+        assert_eq!(parse_voice_command("help me"), Some(VoiceCommand::Help));
     }
 
     #[test]
@@ -486,10 +482,7 @@ mod tests {
 
     #[test]
     fn fae_help() {
-        assert_eq!(
-            parse_voice_command("fae, help"),
-            Some(VoiceCommand::Help)
-        );
+        assert_eq!(parse_voice_command("fae, help"), Some(VoiceCommand::Help));
     }
 
     // -----------------------------------------------------------------------
@@ -773,74 +766,5 @@ mod tests {
         assert!(response.contains("local model"));
         assert!(response.contains("list models"));
         assert!(response.contains("what model"));
-    }
-
-    // -----------------------------------------------------------------------
-    // End-to-end integration: parse → resolve → switch/query
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn e2e_switch_to_claude_changes_active_model() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::pi::engine::PiLlm;
-
-        let candidates = vec![
-            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
-            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
-        ];
-        let (mut pi, _rx) = PiLlm::test_instance(candidates);
-
-        // Parse voice input.
-        let cmd = parse_voice_command("switch to claude").expect("should parse");
-        let target = match &cmd {
-            VoiceCommand::SwitchModel { target } => target,
-            _ => panic!("expected SwitchModel"),
-        };
-
-        // Execute switch.
-        let result = pi.switch_model_by_voice(target);
-        assert!(result.is_ok(), "got err: {result:?}");
-        assert_eq!(pi.active_model_index(), 1);
-        assert_eq!(pi.current_model_name(), "anthropic/claude-opus-4");
-    }
-
-    #[test]
-    fn e2e_what_model_produces_current_response() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::pi::engine::PiLlm;
-
-        let candidates = vec![
-            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
-        ];
-        let (pi, _rx) = PiLlm::test_instance(candidates);
-
-        let cmd = parse_voice_command("what model are you using").expect("should parse");
-        assert_eq!(cmd, VoiceCommand::CurrentModel);
-
-        let response = current_model_response(&pi.current_model_name());
-        assert!(response.contains("anthropic/claude-opus-4"), "got: {response}");
-    }
-
-    #[test]
-    fn e2e_list_models_returns_all_candidates() {
-        use crate::model_selection::ProviderModelRef;
-        use crate::pi::engine::PiLlm;
-
-        let candidates = vec![
-            ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 10),
-            ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
-            ProviderModelRef::new("local".into(), "qwen3-4b".into(), 0),
-        ];
-        let (pi, _rx) = PiLlm::test_instance(candidates);
-
-        let cmd = parse_voice_command("list models").expect("should parse");
-        assert_eq!(cmd, VoiceCommand::ListModels);
-
-        let names = pi.list_model_names();
-        let response = list_models_response(&names, pi.active_model_index());
-        assert!(response.contains("anthropic/claude-opus-4"), "got: {response}");
-        assert!(response.contains("openai/gpt-4o"), "got: {response}");
-        assert!(response.contains("local/qwen3-4b"), "got: {response}");
-        assert!(response.contains("Currently using anthropic/claude-opus-4"), "got: {response}");
     }
 }

@@ -1,116 +1,162 @@
-# First-Run Download Experience — Roadmap
+# FAE LLM Module — Roadmap
 
-## Problem Statement
+## Vision
+Replace the PI subprocess dependency with a pure Rust LLM and tool-calling module (`fae_llm`). Multi-provider support (OpenAI, Anthropic, local, z.ai, MiniMax, DeepSeek), FAE-owned TOML config with round-trip safety, agent loop with tool calling, session persistence, local endpoint probing, and structured observability. No TUI dependency.
 
-On first install, Fae downloads ~4.8 GB of AI models (STT 2.4 GB, LLM 2.3 GB, TTS 89 MB). Currently only STT downloads show progress. The LLM and TTS downloads are invisible — users see a frozen "Loading..." screen for 5-10+ minutes with no feedback. Beta testers will abandon the app thinking it's broken.
+## Problem
+- Technical debt: PI subprocess dependency is fragile and adds external binary management
+- Integration gap: Need native Rust LLM module without subprocess RPC overhead
+- Missing functionality: Need multi-provider support beyond what PI provides
 
 ## Success Criteria
-
-- All model downloads show progress with bytes/total, speed, and ETA
-- Users see total download size before starting
-- Disk space is checked before downloading
-- Download failures show clear error messages with retry option
-- Stage indicators distinguish "Downloading" from "Loading"
-- Overall aggregate progress visible across all models
-- Production-ready polish for beta launch
-
-## Technical Decisions
-
-- Error Handling: Dedicated error types via `thiserror` (`SpeechError`)
-- Async Model: Tokio (match existing codebase)
-- Testing: Unit + Integration (TDD, tests first)
-- Task Size: Smallest possible (~50 lines each)
-- HF Hub: Use `repo.info().siblings` for file size queries
-- Download Strategy: Pre-download all models before loading any
+- Production ready: Complete + tested + documented
+- Zero PI references remaining in codebase
+- All providers functional with tool-calling agent loop
+- Config safe for app-menu updates (round-trip TOML)
+- Full observability with tracing/metrics/redaction
 
 ---
 
-## Milestone 1: First-Run Download Experience
+## Milestone 1: PI Removal & Foundation
 
-### Phase 1.1: Extract & Unify Downloads (8 tasks)
+Remove the PI dependency entirely and establish the fae_llm crate with core types, config, and tools.
 
-**Goal:** Move ALL model downloads into the unified startup download phase with progress callbacks. Currently the LLM download is hidden inside `mistralrs::GgufModelBuilder::build()` and TTS downloads are hidden inside `KokoroTts::new()`.
+### Phase 1.1: Remove PI Dependency
+- Delete `src/pi/` directory (engine.rs, manager.rs, session.rs, tool.rs, mod.rs)
+- Delete `src/llm/pi_config.rs` and `src/llm/server.rs` (Pi-only HTTP server)
+- Remove all PI references from config.rs, pipeline/coordinator.rs, agent/mod.rs
+- Remove PI references from voice_command.rs, startup.rs, bin/gui.rs, memory.rs
+- Remove PI-related progress tracking, update logic
+- Clean up unused dependencies from Cargo.toml
+- Ensure project compiles and all remaining tests pass
 
-**Key changes:**
-- Add `DownloadPlan` struct: lists all needed files with sizes, cache status, total bytes
-- Add `query_file_sizes()` to `ModelManager` using `repo.info().siblings`
-- Add `download_with_progress()` calls for LLM GGUF + tokenizer files
-- Add `download_with_progress()` calls for TTS ONNX + tokenizer + voice files
-- Update `KokoroTts::new()` to accept pre-downloaded `KokoroPaths`
-- Update `LocalLlm::new()` to use pre-cached GGUF path
-- Add `DownloadPlanReady` and `AggregateProgress` to `ProgressEvent`
-- Update startup sequence: plan -> download all -> load all
+### Phase 1.2: Create fae_llm Crate Structure
+- Create `fae_llm/` crate with module layout per spec
+- Define core types: EndpointType, ModelRef, RequestOptions, ReasoningLevel
+- Define normalized event model (start, text_delta, tool_call_start, etc.)
+- Define error types with stable codes (ConfigError, AuthError, RequestError, etc.)
+- Define usage/cost structs and stop reasons
 
-**Files:** `src/startup.rs`, `src/models/mod.rs`, `src/progress.rs`, `src/llm/mod.rs`, `src/tts/kokoro/download.rs`, `src/tts/kokoro/engine.rs`
+### Phase 1.3: Config Schema & Persistence
+- Define TOML config schema v1 (providers, models, tools, defaults, runtime)
+- Implement ConfigService with atomic read/write (temp -> fsync -> rename)
+- Implement round-trip TOML editing via toml_edit (preserve comments/unknown fields)
+- Implement secret resolution (none, env, literal, command, keychain)
+- Implement config validation and safe partial update API for app menu
+- Backup last-known-good config
 
-### Phase 1.2: GUI Progress Overhaul (8 tasks)
-
-**Goal:** Show rich download progress in the GUI — aggregate totals, per-model progress, speed, ETA.
-
-**Key changes:**
-- Aggregate progress bar: "1.2 GB / 4.8 GB (25%)" across all models
-- Per-stage download indicators with file name and size
-- Download speed calculation (rolling average MB/s)
-- ETA calculation based on remaining bytes and current speed
-- Indeterminate progress bar fallback when total_bytes unknown
-- Status text: "Downloading model 2/3 — Qwen3-4B (2.3 GB)"
-- Stage pills: "Downloading ears (2.3 GB)" vs "Loading ears"
-- AppStatus enum updates for richer download state
-
-**Files:** `src/bin/gui.rs`, `src/progress.rs`
-
-### Phase 1.3: Pre-flight & Error Resilience (8 tasks)
-
-**Goal:** Inform users before downloading and handle failures gracefully.
-
-**Key changes:**
-- Pre-flight dialog: "First run requires downloading 4.8 GB. Continue?"
-- Disk space check (platform-specific: statvfs on Unix, GetDiskFreeSpaceEx on Windows)
-- Better download error messages: file, size, bytes downloaded, error detail
-- Retry button on failure (skips already-cached files)
-- Network connectivity pre-check
-- Cancel button to abort downloads cleanly
-- Graceful handling of HF Hub API failures (rate limits, 404s)
-- Welcome text explaining what's happening and why
-
-**Files:** `src/bin/gui.rs`, `src/startup.rs`, `src/models/mod.rs`
+### Phase 1.4: Tool Registry & Implementations
+- Define Tool trait and ToolRegistry
+- Implement read tool (file content with offset/limit, bounded output)
+- Implement bash tool (shell command with timeout/cancel, bounded output)
+- Implement edit tool (deterministic text edits)
+- Implement write tool (create/overwrite with path validation)
+- Implement tool mode gating (read_only vs full)
+- Schema validation for tool arguments
 
 ---
 
-## Technical Notes
+## Milestone 2: Provider Implementation
 
-### HF Hub File Size Query
+Build provider adapters for all supported LLM backends.
 
-```rust
-let repo_info = repo.info()?;
-for sibling in &repo_info.siblings {
-    // sibling.rfilename: String, sibling.size: Option<u64>
-}
-```
+### Phase 2.1: OpenAI Adapter
+- Implement ProviderAdapter trait
+- OpenAI Completions request builder + SSE streaming parser
+- OpenAI Responses API support
+- Normalize to shared event model
+- Tool call streaming with partial JSON parsing
 
-### mistralrs GGUF Pre-Download
+### Phase 2.2: Compatibility Profile Engine
+- Implement profile flag system (max_tokens_field, reasoning_mode, etc.)
+- Create profiles for z.ai, MiniMax, DeepSeek, local backends
+- Single OpenAI-compatible adapter + profile resolution
+- Profile-based request/response normalization
 
-Pre-download GGUF through `ModelManager` with progress, then mistralrs finds it in the shared `hf-hub` cache. No mistralrs API changes needed.
+### Phase 2.3: Local Probe Service
+- Implement LocalProbeService (health check, /v1/models, configurable)
+- Typed failures: NotRunning, Timeout, Unhealthy, IncompatibleResponse
+- Bounded backoff retry
+- Status exposure for app menu diagnostics
+- Extension point for future RuntimeManager
 
-### Download Sizes (default config)
-
-| Model | File | Size |
-|-------|------|------|
-| STT encoder | encoder-model.onnx + .data | ~2.3 GB |
-| STT decoder | decoder_joint-model.onnx | ~69 MB |
-| STT vocab | vocab.txt | ~92 KB |
-| LLM | Q4_K_M.gguf | ~2.3 GB |
-| LLM tokenizer | (multiple) | ~16 MB |
-| TTS model | model_quantized.onnx | ~82 MB |
-| TTS tokenizer + voice | tokenizer.json + bf_emma.bin | ~2 MB |
-| **Total** | | **~4.8 GB** |
+### Phase 2.4: Anthropic Adapter
+- Implement Anthropic Messages API adapter
+- Map thinking/tool_use blocks to shared event model
+- Streaming support with content block deltas
 
 ---
 
-## Risks & Mitigations
+## Milestone 3: Agent Loop & Sessions
 
-- **HF Hub API rate limits**: Pre-query file sizes once, cache results for the session
-- **Slow connections**: ETA display manages expectations; cancel button prevents frustration
-- **Partial downloads**: hf-hub uses atomic writes (.part files); retry skips cached files
-- **Disk space**: Check before downloading, not after 4 GB downloaded
-- **mistralrs internal downloads**: Pre-downloading into shared cache avoids the issue entirely
+Build the tool-calling agent loop and session persistence.
+
+### Phase 3.1: Agent Loop Engine
+- Implement agentic loop: prompt -> stream -> tool calls -> execute -> continue
+- Max turn count, max tool calls per turn guards
+- Request and tool timeouts
+- Abort/cancellation propagation
+- Tool argument validation against schemas
+
+### Phase 3.2: Session Persistence & Replay
+- Implement session store (persist every completed message)
+- Session resume with state validation
+- Typed continuation errors
+- Conversation context management
+
+### Phase 3.3: Multi-Provider Hardening
+- Provider switch during resumed conversation
+- Error recovery and retry policies
+- End-to-end multi-turn tool loop tests
+- Mode switching integration (read_only <-> full)
+
+---
+
+## Milestone 4: Observability & Release
+
+Production hardening with observability and comprehensive testing.
+
+### Phase 4.1: Tracing, Metrics & Redaction
+- Structured tracing spans (per request, turn, tool execution)
+- Metrics hooks (latency, retry count, tool success/failure, token usage)
+- Secret redaction (API keys, auth headers, secret refs)
+
+### Phase 4.2: Full Integration Test Matrix
+- OpenAI, Anthropic, local endpoint contract tests
+- z.ai/MiniMax/DeepSeek profile tests
+- E2E: prompt -> tool -> result -> continue
+- Failure injection tests
+- Mode gating tests (read_only rejects mutations)
+
+### Phase 4.3: App Integration & Release
+- App-menu integration tests
+- Config round-trip preservation tests
+- Operator and developer documentation
+- Release candidate validation
+
+---
+
+## Technical Decisions (Locked)
+
+| Decision | Choice |
+|----------|--------|
+| Local mode | probe_only (never start/stop model processes in v1) |
+| Config format | TOML with toml_edit for round-trip safety |
+| Secret modes | none, env, literal (dev), command (off by default), keychain |
+| Tool set | read, bash, edit, write (4 tools, stable names) |
+| Tool modes | read_only, full (2 modes only) |
+| Error handling | thiserror with typed errors + stable codes |
+| Async runtime | tokio (match existing) |
+| Testing | Unit + Integration + Property-based |
+| Streaming | Normalized event model across all providers |
+
+## Providers (v1)
+
+| Provider | Implementation |
+|----------|---------------|
+| OpenAI | Native adapter (Completions + Responses) |
+| Anthropic | Native adapter (Messages API) |
+| z.ai | OpenAI-compatible + profile |
+| MiniMax | OpenAI-compatible + profile |
+| DeepSeek | OpenAI-compatible + profile |
+| Local endpoints | OpenAI-compatible + profile |

@@ -2,8 +2,8 @@
 //!
 //! Supports two inference backends:
 //! - **Local** (default): In-process via `mistralrs` using `ToolingMistralrsProvider`.
-//! - **Cloud**: Any OpenAI-compatible API via `HttpStreamingProvider`, configured
-//!   through Pi's `~/.pi/agent/models.json`.
+//! - **API**: Any OpenAI-compatible API via `HttpStreamingProvider`, configured
+//!   through `api_url`/`api_key`/`api_model` config fields.
 //!
 //! `saorsa-ai` is used only for trait definitions (`Provider`, `StreamingProvider`)
 //! required by `saorsa-agent`. The `mistralrs` feature is disabled.
@@ -15,8 +15,6 @@ use crate::canvas::tools::{CanvasExportTool, CanvasInteractTool, CanvasRenderToo
 use crate::config::{AgentToolMode, LlmConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
-use crate::pi::session::PiSession;
-use crate::pi::tool::PiDelegateTool;
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
 use saorsa_agent::{
@@ -47,51 +45,27 @@ impl SaorsaAgentLlm {
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
-        pi_session: Option<Arc<Mutex<PiSession>>>,
     ) -> Result<Self> {
-        // Decide between local (in-process) inference and cloud provider.
-        let provider: Box<dyn StreamingProvider> = if let Some(ref cloud_name) =
-            config.cloud_provider
+        // Decide between local (in-process) inference and cloud/API provider.
+        let provider: Box<dyn StreamingProvider> = if !config.api_url.is_empty()
+            && config.cloud_provider.is_some()
         {
-            // Cloud: look up provider in Pi's models.json.
-            let pi_path = crate::llm::pi_config::default_pi_models_path().ok_or_else(|| {
-                SpeechError::Config("cannot determine HOME for Pi models.json".to_owned())
-            })?;
-            let pi_config = crate::llm::pi_config::read_pi_config(&pi_path)?;
-            let provider_info = pi_config.find_provider(cloud_name).ok_or_else(|| {
-                SpeechError::Config(format!(
-                    "cloud provider '{cloud_name}' not found in {}",
-                    pi_path.display()
-                ))
-            })?;
-            let base_url = provider_info.base_url.clone().ok_or_else(|| {
-                SpeechError::Config(format!(
-                    "cloud provider '{cloud_name}' missing baseUrl in {}",
-                    pi_path.display()
-                ))
-            })?;
-            let api_key = provider_info.api_key.clone().unwrap_or_default();
+            // Cloud/API: use the configured api_url, api_model, api_key directly.
+            let api_url = config.api_url.clone();
+            let api_key = config.api_key.clone();
             let model_id = config
                 .cloud_model
                 .clone()
-                .or_else(|| {
-                    provider_info
-                        .models
-                        .as_ref()
-                        .and_then(|models| models.first())
-                        .map(|m| m.id.clone())
-                })
                 .unwrap_or_else(|| config.api_model.clone());
 
             tracing::info!(
-                "agent using cloud provider: {} (model={}, url={})",
-                cloud_name,
+                "agent using cloud/API provider (model={}, url={})",
                 model_id,
-                base_url
+                api_url
             );
 
             Box::new(http_provider::HttpStreamingProvider::new(
-                base_url, api_key, model_id,
+                api_url, api_key, model_id,
             ))
         } else {
             // Local: use in-process mistralrs inference, with cloud fallback.
@@ -106,13 +80,24 @@ impl SaorsaAgentLlm {
                     Box::new(ToolingMistralrsProvider::new(model, config.clone()))
                 }
                 Err(local_err) => {
-                    // Fallback: try to find a cloud provider in models.json.
-                    tracing::warn!(
-                        "local model failed to load: {local_err}; checking models.json for fallback"
-                    );
-                    match try_cloud_fallback(config) {
-                        Some(provider) => provider,
-                        None => return Err(local_err),
+                    // Fallback: try using configured API endpoint.
+                    if !config.api_url.is_empty() {
+                        tracing::warn!(
+                            "local model failed to load: {local_err}; falling back to API endpoint"
+                        );
+                        let api_url = config.api_url.clone();
+                        let api_key = config.api_key.clone();
+                        let model_id = config.api_model.clone();
+                        tracing::info!(
+                            "falling back to API provider (model={}, url={})",
+                            model_id,
+                            api_url
+                        );
+                        Box::new(http_provider::HttpStreamingProvider::new(
+                            api_url, api_key, model_id,
+                        ))
+                    } else {
+                        return Err(local_err);
                     }
                 }
             }
@@ -187,19 +172,6 @@ impl SaorsaAgentLlm {
             tools.register(Box::new(CanvasRenderTool::new(registry.clone())));
             tools.register(Box::new(CanvasInteractTool::new(registry.clone())));
             tools.register(Box::new(CanvasExportTool::new(registry)));
-        }
-
-        // Register Pi coding agent delegate tool when a session is available.
-        // Pi has full system access (bash, file writes), so it requires approval
-        // gating and is only available in Full tool mode.
-        if let Some(session) = pi_session
-            && matches!(config.tool_mode, AgentToolMode::Full)
-        {
-            tools.register(Box::new(approval_tool::ApprovalTool::new(
-                Box::new(PiDelegateTool::new(session)),
-                tool_approval_tx.clone(),
-                approval_timeout,
-            )));
         }
 
         let max_tokens_u32 = if config.max_tokens > u32::MAX as usize {
@@ -367,39 +339,4 @@ impl SaorsaAgentLlm {
 
         Ok(false)
     }
-}
-
-/// Try to find a cloud provider in Pi's models.json as a fallback when
-/// the local model fails to load.
-///
-/// Returns `None` if no cloud providers are available, allowing the caller
-/// to propagate the original local-model error.
-fn try_cloud_fallback(config: &LlmConfig) -> Option<Box<dyn StreamingProvider>> {
-    let pi_path = crate::llm::pi_config::default_pi_models_path()?;
-    let pi_config = crate::llm::pi_config::read_pi_config(&pi_path).ok()?;
-    let cloud = pi_config.cloud_providers();
-    let (name, provider) = cloud
-        .iter()
-        .find(|(_, provider)| provider.base_url.is_some())
-        .copied()?;
-    let base_url = provider.base_url.clone()?;
-    let api_key = provider.api_key.clone().unwrap_or_default();
-
-    let model_id = provider
-        .models
-        .as_ref()
-        .and_then(|models| models.first())
-        .map(|m| m.id.clone())
-        .unwrap_or_else(|| config.api_model.clone());
-
-    tracing::info!(
-        "falling back to cloud provider: {} (model={}, url={})",
-        name,
-        model_id,
-        base_url
-    );
-
-    Some(Box::new(http_provider::HttpStreamingProvider::new(
-        base_url, api_key, model_id,
-    )))
 }

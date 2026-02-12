@@ -37,7 +37,6 @@ pub mod model_selection;
 pub mod model_tier;
 pub mod models;
 pub mod personality;
-pub mod pi;
 pub mod pipeline;
 pub mod progress;
 pub mod runtime;

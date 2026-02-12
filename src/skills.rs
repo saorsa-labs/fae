@@ -14,9 +14,6 @@ use std::path::PathBuf;
 /// The built-in canvas skill, compiled from `Skills/canvas.md`.
 pub const CANVAS_SKILL: &str = include_str!("../Skills/canvas.md");
 
-/// The built-in Pi coding agent skill, compiled from `Skills/pi.md`.
-pub const PI_SKILL: &str = include_str!("../Skills/pi.md");
-
 /// Returns the directory where user-created skills are stored.
 ///
 /// Defaults to `~/.fae/skills/`.
@@ -33,7 +30,7 @@ pub fn skills_dir() -> PathBuf {
 /// Always includes `"canvas"` (built-in). Any `.md` files found in
 /// [`skills_dir`] are added by stem name (e.g. `custom.md` → `"custom"`).
 pub fn list_skills() -> Vec<String> {
-    let mut names = vec!["canvas".to_owned(), "pi".to_owned()];
+    let mut names = vec!["canvas".to_owned()];
     let dir = skills_dir();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -42,7 +39,7 @@ pub fn list_skills() -> Vec<String> {
                 && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
             {
                 let name = stem.to_owned();
-                if name != "canvas" && name != "pi" {
+                if name != "canvas" {
                     names.push(name);
                 }
             }
@@ -56,7 +53,7 @@ pub fn list_skills() -> Vec<String> {
 /// Returns the built-in canvas skill followed by the contents of each `.md`
 /// file in [`skills_dir`]. Missing directory is silently ignored.
 pub fn load_all_skills() -> String {
-    let mut parts: Vec<String> = vec![CANVAS_SKILL.to_owned(), PI_SKILL.to_owned()];
+    let mut parts: Vec<String> = vec![CANVAS_SKILL.to_owned()];
     let dir = skills_dir();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         let mut paths: Vec<_> = entries
@@ -96,26 +93,9 @@ mod tests {
     }
 
     #[test]
-    fn pi_skill_is_nonempty() {
-        assert!(!PI_SKILL.is_empty());
-        assert!(PI_SKILL.contains("pi_delegate"));
-    }
-
-    #[test]
-    fn pi_skill_mentions_coding_tasks() {
-        assert!(PI_SKILL.contains("coding"));
-    }
-
-    #[test]
     fn list_includes_canvas_builtin() {
         let names = list_skills();
         assert!(names.contains(&"canvas".to_owned()));
-    }
-
-    #[test]
-    fn list_includes_pi_builtin() {
-        let names = list_skills();
-        assert!(names.contains(&"pi".to_owned()));
     }
 
     #[test]
@@ -123,12 +103,6 @@ mod tests {
         let all = load_all_skills();
         assert!(all.contains("Canvas"));
         assert!(all.contains("Chart"));
-    }
-
-    #[test]
-    fn load_all_includes_pi() {
-        let all = load_all_skills();
-        assert!(all.contains("pi_delegate"));
     }
 
     #[test]

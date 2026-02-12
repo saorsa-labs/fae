@@ -30,16 +30,12 @@ impl std::fmt::Display for AutoUpdatePreference {
     }
 }
 
-/// Persistent update state for Fae and Pi.
+/// Persistent update state for Fae.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpdateState {
     /// Current Fae version (set at startup from `CARGO_PKG_VERSION`).
     pub fae_version: String,
-    /// Current Pi version, if Pi is installed.
-    pub pi_version: Option<String>,
-    /// Whether Pi is managed by Fae (vs user-installed).
-    pub pi_managed: bool,
     /// User preference for automatic updates.
     pub auto_update: AutoUpdatePreference,
     /// ISO 8601 timestamp of the last update check.
@@ -48,21 +44,16 @@ pub struct UpdateState {
     pub dismissed_release: Option<String>,
     /// Cached GitHub ETag for Fae release requests.
     pub etag_fae: Option<String>,
-    /// Cached GitHub ETag for Pi release requests.
-    pub etag_pi: Option<String>,
 }
 
 impl Default for UpdateState {
     fn default() -> Self {
         Self {
             fae_version: env!("CARGO_PKG_VERSION").to_owned(),
-            pi_version: None,
-            pi_managed: false,
             auto_update: AutoUpdatePreference::default(),
             last_check: None,
             dismissed_release: None,
             etag_fae: None,
-            etag_pi: None,
         }
     }
 }
@@ -179,13 +170,10 @@ mod tests {
     fn default_state_has_current_version() {
         let state = UpdateState::default();
         assert_eq!(state.fae_version, env!("CARGO_PKG_VERSION"));
-        assert!(state.pi_version.is_none());
-        assert!(!state.pi_managed);
         assert_eq!(state.auto_update, AutoUpdatePreference::Ask);
         assert!(state.last_check.is_none());
         assert!(state.dismissed_release.is_none());
         assert!(state.etag_fae.is_none());
-        assert!(state.etag_pi.is_none());
     }
 
     #[test]
@@ -204,26 +192,20 @@ mod tests {
     fn state_serialization_round_trip() {
         let state = UpdateState {
             fae_version: "0.1.0".to_owned(),
-            pi_version: Some("0.52.9".to_owned()),
-            pi_managed: true,
             auto_update: AutoUpdatePreference::Always,
             last_check: Some("1706000000".to_owned()),
             dismissed_release: Some("0.2.0".to_owned()),
             etag_fae: Some("abc123".to_owned()),
-            etag_pi: Some("def456".to_owned()),
         };
 
         let json = serde_json::to_string(&state).unwrap();
         let restored: UpdateState = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.fae_version, "0.1.0");
-        assert_eq!(restored.pi_version.as_deref(), Some("0.52.9"));
-        assert!(restored.pi_managed);
         assert_eq!(restored.auto_update, AutoUpdatePreference::Always);
         assert_eq!(restored.last_check.as_deref(), Some("1706000000"));
         assert_eq!(restored.dismissed_release.as_deref(), Some("0.2.0"));
         assert_eq!(restored.etag_fae.as_deref(), Some("abc123"));
-        assert_eq!(restored.etag_pi.as_deref(), Some("def456"));
     }
 
     #[test]
@@ -232,8 +214,6 @@ mod tests {
         let json = r#"{"fae_version":"0.1.0"}"#;
         let state: UpdateState = serde_json::from_str(json).unwrap();
         assert_eq!(state.fae_version, "0.1.0");
-        assert!(state.pi_version.is_none());
-        assert!(!state.pi_managed);
     }
 
     #[test]
@@ -331,14 +311,12 @@ mod tests {
     fn state_preserves_etags() {
         let state = UpdateState {
             etag_fae: Some("W/\"abc123\"".to_owned()),
-            etag_pi: Some("W/\"def456\"".to_owned()),
             ..Default::default()
         };
 
         let json = serde_json::to_string(&state).unwrap();
         let restored: UpdateState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.etag_fae.as_deref(), Some("W/\"abc123\""));
-        assert_eq!(restored.etag_pi.as_deref(), Some("W/\"def456\""));
     }
 
     #[test]

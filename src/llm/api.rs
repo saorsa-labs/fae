@@ -19,9 +19,8 @@ use tracing::info;
 /// Streams responses via Server-Sent Events (SSE) for low-latency
 /// sentence delivery to TTS.
 ///
-/// Connection details (URL, model, API key) can come from either:
-/// - Direct config (`api_url`, `api_model`, `api_key`), or
-/// - Pi's `~/.pi/agent/models.json` when `cloud_provider` is set.
+/// Connection details (URL, model, API key) come from config fields
+/// `api_url`, `api_model`, `api_key`.
 pub struct ApiLlm {
     config: LlmConfig,
     /// Resolved connection details (may come from models.json).
@@ -48,9 +47,8 @@ struct ChatMessage {
 impl ApiLlm {
     /// Create a new API-based LLM instance.
     ///
-    /// When `cloud_provider` is set in config, connection details are
-    /// resolved from Pi's `~/.pi/agent/models.json`. Otherwise, the
-    /// `api_url`, `api_model`, and `api_key` config fields are used directly.
+    /// Connection details are taken from the `api_url`, `api_model`,
+    /// and `api_key` config fields.
     ///
     /// # Errors
     ///
@@ -327,50 +325,16 @@ impl ApiLlm {
     }
 }
 
-/// Resolve API connection details from either `cloud_provider` (models.json)
-/// or direct config fields.
+/// Resolve API connection details from config fields.
 fn resolve_connection(config: &LlmConfig) -> Result<ResolvedConnection> {
-    if let Some(ref cloud_name) = config.cloud_provider {
-        let pi_path = crate::llm::pi_config::default_pi_models_path().ok_or_else(|| {
-            SpeechError::Config("cannot determine HOME for Pi models.json".to_owned())
-        })?;
-        let pi_config = crate::llm::pi_config::read_pi_config(&pi_path)?;
-        let provider = pi_config.find_provider(cloud_name).ok_or_else(|| {
-            SpeechError::Config(format!(
-                "cloud provider '{cloud_name}' not found in {}",
-                pi_path.display()
-            ))
-        })?;
+    let model_id = config
+        .cloud_model
+        .clone()
+        .unwrap_or_else(|| config.api_model.clone());
 
-        let api_url = provider.base_url.clone().ok_or_else(|| {
-            SpeechError::Config(format!(
-                "cloud provider '{cloud_name}' missing baseUrl in {}",
-                pi_path.display()
-            ))
-        })?;
-
-        let model_id = config
-            .cloud_model
-            .clone()
-            .or_else(|| {
-                provider
-                    .models
-                    .as_ref()
-                    .and_then(|models| models.first())
-                    .map(|m| m.id.clone())
-            })
-            .unwrap_or_else(|| config.api_model.clone());
-
-        Ok(ResolvedConnection {
-            api_url,
-            api_model: model_id,
-            api_key: provider.api_key.clone().unwrap_or_default(),
-        })
-    } else {
-        Ok(ResolvedConnection {
-            api_url: config.api_url.clone(),
-            api_model: config.api_model.clone(),
-            api_key: config.api_key.clone(),
-        })
-    }
+    Ok(ResolvedConnection {
+        api_url: config.api_url.clone(),
+        api_model: model_id,
+        api_key: config.api_key.clone(),
+    })
 }

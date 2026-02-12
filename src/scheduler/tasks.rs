@@ -156,8 +156,6 @@ fn now_epoch_secs() -> u64 {
 /// Well-known task IDs for built-in tasks.
 pub const TASK_CHECK_FAE_UPDATE: &str = "check_fae_update";
 
-/// Well-known task ID for the Pi update check.
-pub const TASK_CHECK_PI_UPDATE: &str = "check_pi_update";
 /// Well-known task ID for memory reflection/consolidation.
 pub const TASK_MEMORY_REFLECT: &str = "memory_reflect";
 /// Well-known task ID for memory reindex/health checks.
@@ -188,7 +186,6 @@ pub fn execute_builtin_with_memory_root(
 ) -> TaskResult {
     match task_id {
         TASK_CHECK_FAE_UPDATE => check_fae_update(),
-        TASK_CHECK_PI_UPDATE => check_pi_update(),
         TASK_MEMORY_REFLECT => run_memory_reflect_for_root(memory_root),
         TASK_MEMORY_REINDEX => run_memory_reindex_for_root(memory_root),
         TASK_MEMORY_GC => run_memory_gc_for_root(memory_root, retention_days),
@@ -258,74 +255,6 @@ fn check_fae_update() -> TaskResult {
             TaskResult::Success("Fae is up to date".to_owned())
         }
         Err(e) => TaskResult::Error(format!("Fae update check failed: {e}")),
-    }
-}
-
-/// Check GitHub for a new Pi release.
-///
-/// Loads the update state to determine the current Pi version, runs the
-/// checker, and returns an appropriate [`TaskResult`].
-fn check_pi_update() -> TaskResult {
-    use crate::update::{AutoUpdatePreference, UpdateChecker, UpdateState};
-
-    let mut state = UpdateState::load();
-
-    let pi_version = match &state.pi_version {
-        Some(v) => v.clone(),
-        None => return TaskResult::Success("Pi not installed, skipping update check".to_owned()),
-    };
-
-    let checker = UpdateChecker::for_pi(&pi_version);
-    let etag = state.etag_pi.clone();
-
-    match checker.check(etag.as_deref()) {
-        Ok((Some(release), new_etag)) => {
-            state.etag_pi = new_etag;
-            state.mark_checked();
-            let _ = state.save();
-
-            match state.auto_update {
-                AutoUpdatePreference::Always => TaskResult::NeedsUserAction(UserPrompt {
-                    title: "Pi Update Available".to_owned(),
-                    message: format!(
-                        "Pi {} is available (you have {}). Auto-update enabled.",
-                        release.version, pi_version
-                    ),
-                    actions: vec![PromptAction {
-                        label: "Install Now".to_owned(),
-                        id: "install_pi_update".to_owned(),
-                    }],
-                }),
-                AutoUpdatePreference::Ask => TaskResult::NeedsUserAction(UserPrompt {
-                    title: "Pi Update Available".to_owned(),
-                    message: format!(
-                        "Pi {} is available (you have {}).",
-                        release.version, pi_version
-                    ),
-                    actions: vec![
-                        PromptAction {
-                            label: "Install".to_owned(),
-                            id: "install_pi_update".to_owned(),
-                        },
-                        PromptAction {
-                            label: "Skip".to_owned(),
-                            id: "dismiss_pi_update".to_owned(),
-                        },
-                    ],
-                }),
-                AutoUpdatePreference::Never => TaskResult::Success(format!(
-                    "Pi {} available (auto-update disabled)",
-                    release.version
-                )),
-            }
-        }
-        Ok((None, new_etag)) => {
-            state.etag_pi = new_etag;
-            state.mark_checked();
-            let _ = state.save();
-            TaskResult::Success("Pi is up to date".to_owned())
-        }
-        Err(e) => TaskResult::Error(format!("Pi update check failed: {e}")),
     }
 }
 
@@ -654,21 +583,6 @@ mod tests {
     }
 
     #[test]
-    fn execute_builtin_pi_check_without_pi_returns_success() {
-        // With no Pi installed (pi_version is None in default state),
-        // the check should succeed with a skip message.
-        let result = execute_builtin(TASK_CHECK_PI_UPDATE);
-        match &result {
-            TaskResult::Success(msg) => {
-                assert!(msg.contains("not installed") || msg.contains("up to date"))
-            }
-            TaskResult::Telemetry(_) => {}
-            TaskResult::Error(_) => {} // Network error is acceptable
-            TaskResult::NeedsUserAction(_) => {} // Update available is fine too
-        }
-    }
-
-    #[test]
     fn run_memory_migrate_for_root_emits_migration_telemetry_success() {
         let root = temp_root("migration-success");
         seed_manifest_v0(&root);
@@ -732,6 +646,5 @@ mod tests {
     #[test]
     fn task_id_constants() {
         assert_eq!(TASK_CHECK_FAE_UPDATE, "check_fae_update");
-        assert_eq!(TASK_CHECK_PI_UPDATE, "check_pi_update");
     }
 }

@@ -5,8 +5,6 @@
 //! - **API** (remote): Any OpenAI-compatible server (Ollama, MLX, vLLM, etc.).
 
 pub mod api;
-pub mod pi_config;
-pub mod server;
 
 pub use api::ApiLlm;
 
