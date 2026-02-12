@@ -16,7 +16,9 @@
 //! assert!(cost.usd > 0.0);
 //! ```
 
+use super::error::FaeLlmError;
 use serde::{Deserialize, Serialize};
+use std::ops::AddAssign;
 
 /// Token counts for a single LLM request/response.
 ///
@@ -79,6 +81,12 @@ impl Default for TokenUsage {
     }
 }
 
+impl AddAssign<TokenUsage> for TokenUsage {
+    fn add_assign(&mut self, other: TokenUsage) {
+        self.add(&other);
+    }
+}
+
 /// Pricing rates for token-based billing.
 ///
 /// Prices are expressed in USD per 1 million tokens.
@@ -95,13 +103,56 @@ impl TokenPricing {
     ///
     /// # Arguments
     ///
-    /// * `input_per_1m` — USD cost per 1 million input tokens
-    /// * `output_per_1m` — USD cost per 1 million output tokens
+    /// * `input_per_1m` — USD cost per 1 million input tokens (must be non-negative)
+    /// * `output_per_1m` — USD cost per 1 million output tokens (must be non-negative)
+    ///
+    /// # Panics
+    ///
+    /// Panics if either rate is negative or NaN. Use [`Self::try_new()`] for fallible validation.
     pub fn new(input_per_1m: f64, output_per_1m: f64) -> Self {
+        assert!(
+            input_per_1m >= 0.0 && !input_per_1m.is_nan(),
+            "input_per_1m must be non-negative, got {}",
+            input_per_1m
+        );
+        assert!(
+            output_per_1m >= 0.0 && !output_per_1m.is_nan(),
+            "output_per_1m must be non-negative, got {}",
+            output_per_1m
+        );
         Self {
             input_per_1m,
             output_per_1m,
         }
+    }
+
+    /// Create a new pricing configuration with validation.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_per_1m` — USD cost per 1 million input tokens (must be non-negative)
+    /// * `output_per_1m` — USD cost per 1 million output tokens (must be non-negative)
+    ///
+    /// # Errors
+    ///
+    /// Returns `FaeLlmError::ConfigError` if either rate is negative or NaN.
+    pub fn try_new(input_per_1m: f64, output_per_1m: f64) -> super::error::Result<Self> {
+        if input_per_1m < 0.0 || input_per_1m.is_nan() {
+            return Err(FaeLlmError::ConfigError(format!(
+                "input pricing per 1M tokens must be non-negative, got {}",
+                input_per_1m
+            )));
+        }
+        if output_per_1m < 0.0 || output_per_1m.is_nan() {
+            return Err(FaeLlmError::ConfigError(format!(
+                "output pricing per 1M tokens must be non-negative, got {}",
+                output_per_1m
+            )));
+        }
+        Ok(Self {
+            input_per_1m,
+            output_per_1m,
+        })
     }
 }
 
@@ -229,6 +280,24 @@ mod tests {
         assert_eq!(parsed.unwrap_or_default(), original);
     }
 
+    #[test]
+    fn token_usage_add_assign_operator() {
+        let mut total = TokenUsage::new(100, 50);
+        let turn1 = TokenUsage::new(200, 100).with_reasoning_tokens(10);
+        total += turn1;
+
+        assert_eq!(total.prompt_tokens, 300);
+        assert_eq!(total.completion_tokens, 150);
+        assert_eq!(total.reasoning_tokens, Some(10));
+
+        let turn2 = TokenUsage::new(300, 200).with_reasoning_tokens(20);
+        total += turn2;
+
+        assert_eq!(total.prompt_tokens, 600);
+        assert_eq!(total.completion_tokens, 350);
+        assert_eq!(total.reasoning_tokens, Some(30));
+    }
+
     // ── TokenPricing ──────────────────────────────────────────
 
     #[test]
@@ -248,6 +317,71 @@ mod tests {
         assert!(parsed.is_ok());
         let parsed = parsed.unwrap_or_else(|_| TokenPricing::new(0.0, 0.0));
         assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn token_pricing_try_new_valid() {
+        let pricing = TokenPricing::try_new(3.0, 15.0);
+        assert!(pricing.is_ok());
+        let p = pricing.unwrap_or_else(|_| TokenPricing::new(0.0, 0.0));
+        assert_eq!(p.input_per_1m, 3.0);
+        assert_eq!(p.output_per_1m, 15.0);
+    }
+
+    #[test]
+    fn token_pricing_try_new_zero_is_valid() {
+        let pricing = TokenPricing::try_new(0.0, 0.0);
+        assert!(pricing.is_ok());
+    }
+
+    #[test]
+    fn token_pricing_try_new_negative_input_fails() {
+        let pricing = TokenPricing::try_new(-1.0, 15.0);
+        assert!(pricing.is_err());
+        match pricing {
+            Err(FaeLlmError::ConfigError(msg)) => {
+                assert!(msg.contains("input pricing"));
+                assert!(msg.contains("-1"));
+            }
+            _ => unreachable!("expected ConfigError"),
+        }
+    }
+
+    #[test]
+    fn token_pricing_try_new_negative_output_fails() {
+        let pricing = TokenPricing::try_new(3.0, -5.0);
+        assert!(pricing.is_err());
+        match pricing {
+            Err(FaeLlmError::ConfigError(msg)) => {
+                assert!(msg.contains("output pricing"));
+                assert!(msg.contains("-5"));
+            }
+            _ => unreachable!("expected ConfigError"),
+        }
+    }
+
+    #[test]
+    fn token_pricing_try_new_nan_input_fails() {
+        let pricing = TokenPricing::try_new(f64::NAN, 15.0);
+        assert!(pricing.is_err());
+    }
+
+    #[test]
+    fn token_pricing_try_new_nan_output_fails() {
+        let pricing = TokenPricing::try_new(3.0, f64::NAN);
+        assert!(pricing.is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "input_per_1m must be non-negative")]
+    fn token_pricing_new_negative_input_panics() {
+        let _ = TokenPricing::new(-1.0, 15.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "output_per_1m must be non-negative")]
+    fn token_pricing_new_negative_output_panics() {
+        let _ = TokenPricing::new(3.0, -5.0);
     }
 
     // ── CostEstimate ──────────────────────────────────────────
