@@ -1,94 +1,105 @@
-# Phase 1.1: Model Tier Registry — Task Plan
+# Phase 1.1: Extract & Unify Downloads — Task Plan
 
 ## Goal
-Create an embedded static tier list mapping known model IDs to capability tiers. Pure data + logic module with zero external dependencies.
+Move ALL model downloads into the unified startup download phase with progress callbacks. Currently the LLM download is hidden inside `mistralrs::GgufModelBuilder::build()` and TTS downloads are hidden inside `KokoroTts::new()`. After this phase, all downloads happen before any model loading, with full progress visibility.
 
-## Deliverable
-`src/model_tier.rs` — `ModelTier` enum, `tier_for_model()` lookup, pattern-based matching for model families.
+## Deliverables
+- `DownloadPlan` struct listing all needed files with sizes and cache status
+- Pre-download of LLM GGUF + tokenizer files via `ModelManager`
+- Pre-download of TTS ONNX + tokenizer + voice files via `ModelManager`
+- `KokoroTts::from_paths()` accepting pre-downloaded `KokoroPaths`
+- `LocalLlm` using pre-cached GGUF path
+- New `ProgressEvent` variants: `DownloadPlanReady`, `AggregateProgress`
+- Refactored startup: plan → download all → load all
 
 ---
 
 ## Tasks (TDD Order)
 
-### Task 1: Define `ModelTier` enum, core types, and wire module
-**Files:** `src/model_tier.rs` (new), `src/lib.rs` (add module)
+### Task 1: Add DownloadPlan and AggregateProgress to progress.rs
+**Files:** `src/progress.rs`
 **Description:**
-- Create `src/model_tier.rs` with module-level docs
-- Define `ModelTier` enum: `Flagship`, `Strong`, `Mid`, `Small`, `Unknown`
-  - Derive: `Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash`
-  - `Flagship` < `Strong` < `Mid` < `Small` < `Unknown` (lower = better)
-- Implement `Display` for `ModelTier` (human-readable names)
-- Add `ModelTier::rank(&self) -> u8` method (0 = Flagship, 4 = Unknown)
-- Wire into `lib.rs` as `pub mod model_tier;`
-- Write unit tests for ordering, display, and rank
+- Add `DownloadFile` struct: `{ repo_id: String, filename: String, size_bytes: Option<u64>, cached: bool }`
+- Add `DownloadPlan` struct: `{ files: Vec<DownloadFile>, total_bytes: u64, cached_bytes: u64 }`
+- Add `DownloadPlan::needs_download(&self) -> bool` — true if any file not cached
+- Add `DownloadPlan::download_bytes(&self) -> u64` — total_bytes - cached_bytes
+- Add `ProgressEvent::DownloadPlanReady { plan: DownloadPlan }` variant
+- Add `ProgressEvent::AggregateProgress { bytes_downloaded: u64, total_bytes: u64, files_complete: usize, files_total: usize }` variant
+- Write tests for DownloadPlan methods and new event variant construction
 
-### Task 2: Implement pattern matching engine with tests
-**Files:** `src/model_tier.rs`
+### Task 2: Add query_file_sizes() to ModelManager
+**Files:** `src/models/mod.rs`
 **Description:**
-- Implement `fn matches_pattern(model_id: &str, pattern: &str) -> bool`
-  - Case-insensitive comparison
-  - Support `*` wildcard at end (prefix match) and start (suffix match)
-  - Support `*` in middle (contains match)
-  - Exact match when no wildcard
-- Implement `fn normalize_model_id(id: &str) -> String` — lowercase, trim whitespace
-- Write comprehensive tests for pattern matching:
-  - Exact: "gpt-4o" matches "gpt-4o"
-  - Prefix: "claude-opus-*" matches "claude-opus-4-20250514"
-  - Suffix: "*-instruct" matches "qwen3-4b-instruct"
-  - Case: "GPT-4o" matches "gpt-4o"
-  - No match: "gpt-3.5" does NOT match "gpt-4o"
+- Add `pub fn query_file_sizes(&self, repo_id: &str, filenames: &[&str]) -> Result<Vec<(String, Option<u64>)>>`
+  - Uses `repo.info().siblings` to get file sizes from HF Hub metadata
+  - Returns vec of (filename, size_bytes) pairs
+  - If API call fails, returns None for all sizes (graceful degradation)
+- Add `pub fn is_file_cached(&self, repo_id: &str, filename: &str) -> bool`
+  - Checks `hf_hub::Cache::default().model(repo_id).get(filename)` is Some
+- Write tests with mock/stubbed data for the cache check logic
 
-### Task 3: Build static tier table with known models
-**Files:** `src/model_tier.rs`
+### Task 3: Pre-download LLM GGUF file explicitly
+**Files:** `src/startup.rs`
 **Description:**
-- Define `struct TierEntry { pattern: &'static str, tier: ModelTier }`
-- Create `TIER_TABLE: &[TierEntry]` ordered from most-specific to least-specific:
-  - **Flagship:** claude-opus-*, o1-*, o3-*, gpt-4o (exact), gpt-4-turbo*, gemini-*-pro, deepseek-r1
-  - **Strong:** claude-sonnet-*, gpt-4 (exact), gemini-*-flash*, llama-3*-405b*, qwen3-235b*, command-r-plus*, mistral-large*
-  - **Mid:** claude-haiku-*, gpt-4o-mini*, gpt-3.5*, llama-3*-70b*, qwen3-32b*, qwen3-14b*, mixtral*, command-r, phi-4*
-  - **Small:** llama-3*-8b*, qwen3-4b*, qwen3-1.7b*, phi-3-mini*, gemma-*, mistral-7b*, fae-qwen3
-- IMPORTANT: Order matters — `gpt-4o-mini` must match Mid BEFORE `gpt-4o` matches Flagship
-- Write tests for at least 2 models per tier
+- Add LLM GGUF to the Phase 1 download section in `initialize_models_with_progress()`
+- Download `config.llm.gguf_file` from `config.llm.model_id` repo using `model_manager.download_with_progress()`
+- Only when `use_local_llm` is true
+- mistralrs will find the file in the shared hf-hub cache (no API changes needed)
+- Write a test that the download call is made for local backend config
+- Verify: `just build` passes, no regressions
 
-### Task 4: Implement `tier_for_model()` public API
-**Files:** `src/model_tier.rs`
+### Task 4: Pre-download LLM tokenizer files
+**Files:** `src/startup.rs`, `src/config.rs`
 **Description:**
-- Implement `pub fn tier_for_model(model_id: &str) -> ModelTier`
-  - Normalize the model_id
-  - Walk TIER_TABLE looking for first match
-  - Return `ModelTier::Unknown` if no match
-- Implement `pub fn tier_for_provider_model(provider: &str, model_id: &str) -> ModelTier`
-  - Check `PROVIDER_OVERRIDES` first (provider+model specific entries)
-  - Fall back to `tier_for_model()` for pure ID-based lookup
-- Define `PROVIDER_OVERRIDES: &[(provider, model_pattern, tier)]` for:
-  - ("fae-local", "fae-qwen3", Small) — local fallback always Small
-- Write tests for known models, unknown models, and provider overrides
+- Identify tokenizer files needed: check `config.llm.tokenizer_id` repo
+- If `tokenizer_id` is non-empty, download `tokenizer.json`, `tokenizer_config.json` from that repo
+- Add these to the Phase 1 download section
+- Write test verifying tokenizer download is skipped when tokenizer_id is empty
+- Verify: `just build` passes
 
-### Task 5: Handle tricky edge cases and provider-specific patterns
-**Files:** `src/model_tier.rs`
+### Task 5: Add download_kokoro_assets_with_progress() for TTS
+**Files:** `src/tts/kokoro/download.rs`
 **Description:**
-- Ensure these edge cases are handled correctly (add to TIER_TABLE or PROVIDER_OVERRIDES):
-  - `gpt-4o-mini` → Mid (not Flagship — must come before `gpt-4o` pattern)
-  - `claude-3-5-sonnet-*` → Strong (sonnet family)
-  - `claude-3-5-haiku-*` → Mid (haiku family)
-  - `gemini-2.0-flash-thinking-exp` → Strong (flash family)
-  - `deepseek-v3` → Strong (not r1)
-  - Version suffixes: `claude-sonnet-4-20250514` → Strong
-- Write targeted tests for each edge case
-- Run `just check` to verify zero warnings
+- Add `pub fn download_kokoro_assets_with_progress(variant: &str, voice: &str, model_manager: &ModelManager, callback: Option<&ProgressCallback>) -> Result<KokoroPaths>`
+  - Downloads model ONNX, tokenizer.json, and voice .bin using `model_manager.download_with_progress()` instead of bare `repo.get()`
+  - Each file gets individual progress callbacks
+  - Keep existing `download_kokoro_assets()` as backward-compat wrapper
+- Update constants: extract `REPO_ID` as `pub const` so startup can use it
+- Write test that verifies progress callback receives events for each file
 
-### Task 6: Documentation and final validation
-**Files:** `src/model_tier.rs`, `src/lib.rs`
+### Task 6: Update KokoroTts to accept pre-downloaded paths
+**Files:** `src/tts/kokoro/engine.rs`
 **Description:**
-- Add module-level documentation with overview and usage examples
-- Add doc comments with `/// # Examples` blocks on all public items:
-  - `ModelTier` enum
-  - `tier_for_model()`
-  - `tier_for_provider_model()`
-  - `ModelTier::rank()`
-- Ensure doc examples compile (`cargo test --doc`)
-- Run full validation: `just check`
-- Verify: zero warnings, zero errors, all tests pass, all docs present
+- Add `pub fn from_paths(paths: KokoroPaths, config: &TtsConfig) -> Result<Self>`
+  - Loads ONNX session, tokenizer, phonemizer, voice styles from pre-downloaded paths
+  - No download logic — purely loading from disk
+  - Extract loading logic from `new()` into `from_paths()`
+- Update `new()` to call `download_kokoro_assets()` then `from_paths()`
+- Update startup `load_tts()` to use `from_paths()` (since files are already downloaded in Phase 1)
+- Write test that `from_paths()` works with valid paths (can reuse existing test patterns)
+
+### Task 7: Build DownloadPlan from config
+**Files:** `src/startup.rs`
+**Description:**
+- Add `fn build_download_plan(config: &SpeechConfig, model_manager: &ModelManager) -> Result<DownloadPlan>`
+  - Enumerate all files: STT files, LLM GGUF + tokenizer, TTS model + tokenizer + voice
+  - Check cache status for each file using `model_manager.is_file_cached()`
+  - Query file sizes using `model_manager.query_file_sizes()` (best effort)
+  - Return complete DownloadPlan
+- Emit `ProgressEvent::DownloadPlanReady { plan }` via callback
+- Write tests for plan building with various config combinations (local vs API LLM, Kokoro vs Fish TTS)
+
+### Task 8: Refactor initialize_models_with_progress() — plan → download → load
+**Files:** `src/startup.rs`
+**Description:**
+- Restructure `initialize_models_with_progress()` into 3 clear phases:
+  1. **Plan**: Call `build_download_plan()`, emit DownloadPlanReady
+  2. **Download**: Download ALL files (STT + LLM + TTS) with aggregate progress tracking
+  3. **Load**: Load all models from cache (STT, LLM, TTS)
+- Add aggregate progress tracking: after each file download, emit `AggregateProgress` event
+- Update `load_tts()` to pass `KokoroPaths` to `KokoroTts::from_paths()`
+- Integration test: verify the plan→download→load sequence emits correct event order
+- Verify: `just check` passes (fmt, lint, build, test, doc)
 
 ---
 
@@ -96,11 +107,16 @@ Create an embedded static tier list mapping known model IDs to capability tiers.
 
 | File | Action |
 |------|--------|
-| `src/model_tier.rs` | **NEW** — Core deliverable |
-| `src/lib.rs` | **MODIFY** — Add `pub mod model_tier;` |
+| `src/progress.rs` | **MODIFY** — Add DownloadPlan, DownloadFile, new ProgressEvent variants |
+| `src/models/mod.rs` | **MODIFY** — Add query_file_sizes(), is_file_cached() |
+| `src/startup.rs` | **MODIFY** — Pre-download LLM/TTS, build_download_plan(), refactor init |
+| `src/config.rs` | **MODIFY** — Possibly expose tokenizer file list |
+| `src/tts/kokoro/download.rs` | **MODIFY** — Add download_kokoro_assets_with_progress() |
+| `src/tts/kokoro/engine.rs` | **MODIFY** — Add from_paths(), refactor new() |
 
 ## Quality Gates
 - `just check` passes (fmt, lint, build, test, doc, panic-scan)
 - Zero `.unwrap()` or `.expect()` in production code
-- 100% public API documentation with examples
-- All tests pass
+- All existing tests continue to pass
+- New tests for every task
+- Download plan correctly identifies cached vs needed files

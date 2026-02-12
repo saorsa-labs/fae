@@ -1,38 +1,21 @@
 {
   "version": 1,
-  "project": "model-selection",
+  "project": "first-run-download-ux",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "Runtime Voice Switching"
+    "number": 1,
+    "name": "First-Run Download Experience"
   },
   "phase": {
-    "number": "2.3",
-    "name": "Integration & Polish",
-    "plan": "PLAN-phase-2.3.md",
-    "status": "complete"
+    "number": "1.1",
+    "name": "Extract & Unify Downloads",
+    "plan": "PLAN-phase-1.1.md"
   },
   "progress": {
-    "total_tasks": 0,
+    "total_tasks": 8,
     "completed_tasks": 0,
-    "current_task": 0
+    "current_task": 1
   },
-  "task": {
-    "current": 8,
-    "total": 8,
-    "name": "Documentation - developer guide"
-  },
-  "review": {
-    "status": "passed",
-    "iteration": 0,
-    "last_verdict": "PASS",
-    "findings_count": {
-      "critical": 0,
-      "important": 0,
-      "minor": 1
-    }
-  },
-  "status": "milestone_complete",
-  "last_action": "milestone_2_complete",
-  "last_updated": "2026-02-11T18:21:03Z"
+  "status": "executing",
+  "last_updated": "2026-02-12T12:00:00Z"
 }

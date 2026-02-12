@@ -134,6 +134,9 @@ mod gui {
                 None
             }
             ProgressEvent::Error { message } => Some(AppStatus::Error(message)),
+            // Plan and aggregate events are handled by Phase 1.2 GUI overhaul
+            ProgressEvent::DownloadPlanReady { .. }
+            | ProgressEvent::AggregateProgress { .. } => None,
         }
     }
 
@@ -975,6 +978,8 @@ fn update_stages_from_progress(
             tts.set(StagePhase::Error(msg));
         }
         ProgressEvent::DownloadComplete { .. } | ProgressEvent::Cached { .. } => {}
+        // Plan and aggregate events handled in Phase 1.2 GUI overhaul
+        ProgressEvent::DownloadPlanReady { .. } | ProgressEvent::AggregateProgress { .. } => {}
     }
 }
 
@@ -1219,7 +1224,10 @@ fn app() -> Element {
     let mut update_available = use_signal(|| None::<fae::update::Release>);
     let mut update_banner_dismissed = use_signal(|| false);
     let mut update_check_status = use_signal(String::new);
-    let scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
+    let mut update_installing = use_signal(|| false);
+    let mut update_install_error = use_signal(|| None::<String>);
+    let mut update_restart_needed = use_signal(|| false);
+    let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut pi_inventory = use_signal(load_pi_model_inventory);
     let mut pi_inventory_status = use_signal(String::new);
     let mut active_model = use_signal(|| None::<String>);
@@ -2114,27 +2122,89 @@ fn app() -> Element {
             {
                 let has_update = update_available.read().is_some()
                     && !*update_banner_dismissed.read();
-                if has_update {
+                let installing = *update_installing.read();
+                let restart = *update_restart_needed.read();
+                if restart {
+                    rsx! {
+                        div { class: "update-banner",
+                            span { class: "update-banner-text",
+                                "Update installed. Restart Fae to use the new version."
+                            }
+                        }
+                    }
+                } else if has_update {
                     let ver = update_available.read().as_ref()
                         .map(|r| r.version.clone())
                         .unwrap_or_default();
                     rsx! {
                         div { class: "update-banner",
                             span { class: "update-banner-text",
-                                "Fae v{ver} is available."
+                                if installing {
+                                    "Installing Fae v{ver}..."
+                                } else {
+                                    "Fae v{ver} is available."
+                                }
                             }
-                            button {
-                                class: "update-banner-btn",
-                                onclick: move |_| {
-                                    view.set(MainView::Settings);
-                                },
-                                "View"
+                            if !installing {
+                                button {
+                                    class: "update-banner-btn",
+                                    onclick: move |_| {
+                                        let release = update_available.read().clone();
+                                        if let Some(rel) = release {
+                                            update_installing.set(true);
+                                            update_install_error.set(None);
+                                            let url = rel.download_url.clone();
+                                            spawn(async move {
+                                                let result = tokio::task::spawn_blocking(move || {
+                                                    let current = fae::update::applier::current_exe_path()?;
+                                                    fae::update::applier::apply_update(&url, &current)
+                                                }).await;
+                                                update_installing.set(false);
+                                                match result {
+                                                    Ok(Ok(_apply_result)) => {
+                                                        update_restart_needed.set(true);
+                                                        update_banner_dismissed.set(false);
+                                                    }
+                                                    Ok(Err(e)) => {
+                                                        update_install_error.set(Some(format!("{e}")));
+                                                    }
+                                                    Err(e) => {
+                                                        update_install_error.set(Some(format!("{e}")));
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    },
+                                    "Install Now"
+                                }
+                                button {
+                                    class: "update-banner-dismiss",
+                                    onclick: move |_| {
+                                        update_banner_dismissed.set(true);
+                                        // Persist the dismissal.
+                                        if let Some(rel) = update_available.read().as_ref() {
+                                            update_state.write().dismissed_release =
+                                                Some(rel.version.clone());
+                                        }
+                                        let state = update_state.read().clone();
+                                        spawn(async move {
+                                            let _ = tokio::task::spawn_blocking(move || state.save())
+                                                .await;
+                                        });
+                                    },
+                                    "\u{2715}"
+                                }
                             }
+                        }
+                    }
+                } else if let Some(err) = update_install_error.read().as_ref() {
+                    let err = err.clone();
+                    rsx! {
+                        div { class: "update-banner",
+                            span { class: "update-banner-text", "Update failed: {err}" }
                             button {
                                 class: "update-banner-dismiss",
-                                onclick: move |_| {
-                                    update_banner_dismissed.set(true);
-                                },
+                                onclick: move |_| update_install_error.set(None),
                                 "\u{2715}"
                             }
                         }
@@ -3202,6 +3272,52 @@ fn app() -> Element {
                                     "{update_check_status.read()}"
                                 }
                             }
+                            // "Install Now" button — visible when an update is available.
+                            if update_available.read().is_some() && !*update_restart_needed.read() {
+                                div { class: "settings-row",
+                                    button {
+                                        class: "settings-save",
+                                        disabled: *update_installing.read(),
+                                        onclick: move |_| {
+                                            let release = update_available.read().clone();
+                                            if let Some(rel) = release {
+                                                update_installing.set(true);
+                                                update_install_error.set(None);
+                                                let url = rel.download_url.clone();
+                                                spawn(async move {
+                                                    let result = tokio::task::spawn_blocking(move || {
+                                                        let current = fae::update::applier::current_exe_path()?;
+                                                        fae::update::applier::apply_update(&url, &current)
+                                                    }).await;
+                                                    update_installing.set(false);
+                                                    match result {
+                                                        Ok(Ok(_apply_result)) => {
+                                                            update_restart_needed.set(true);
+                                                            update_check_status.set("Installed! Restart to use the new version.".to_owned());
+                                                        }
+                                                        Ok(Err(e)) => {
+                                                            update_install_error.set(Some(format!("{e}")));
+                                                            update_check_status.set(format!("Install failed: {e}"));
+                                                        }
+                                                        Err(e) => {
+                                                            update_install_error.set(Some(format!("{e}")));
+                                                            update_check_status.set(format!("Install failed: {e}"));
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        },
+                                        if *update_installing.read() { "Installing..." } else { "Install Now" }
+                                    }
+                                }
+                            }
+                            if *update_restart_needed.read() {
+                                div { class: "settings-row",
+                                    p { class: "settings-value",
+                                        "Update installed. Restart Fae to use the new version."
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -3612,6 +3728,103 @@ fn app() -> Element {
                     })
                 }
                 None => rsx!(),
+            }
+        }
+
+        // --- Scheduler notification modal (update prompts) ---
+        {
+            let has_notification = scheduler_notification.read().is_some()
+                && !*update_installing.read()
+                && !*update_restart_needed.read();
+            if has_notification {
+                let prompt = scheduler_notification.read();
+                let title = prompt.as_ref().map(|p| p.title.clone()).unwrap_or_default();
+                let message = prompt.as_ref().map(|p| p.message.clone()).unwrap_or_default();
+                let actions: Vec<(String, String)> = prompt
+                    .as_ref()
+                    .map(|p| {
+                        p.actions
+                            .iter()
+                            .map(|a| (a.id.clone(), a.label.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                drop(prompt);
+                rsx! {
+                    div { class: "modal-overlay",
+                        div { class: "modal",
+                            h2 { class: "modal-title", "{title}" }
+                            p { class: "modal-subtitle", "{message}" }
+                            div { class: "modal-actions",
+                                for (action_id, action_label) in actions {
+                                    button {
+                                        class: if action_id.starts_with("install") { "modal-btn modal-approve" } else { "modal-btn modal-deny" },
+                                        onclick: {
+                                            let action_id = action_id.clone();
+                                            move |_| {
+                                                scheduler_notification.set(None);
+                                                if action_id == "install_fae_update"
+                                                    || action_id == "install_pi_update"
+                                                {
+                                                    let release = update_available.read().clone();
+                                                    if let Some(rel) = release {
+                                                        update_installing.set(true);
+                                                        update_install_error.set(None);
+                                                        let url = rel.download_url.clone();
+                                                        spawn(async move {
+                                                            let result =
+                                                                tokio::task::spawn_blocking(
+                                                                    move || {
+                                                                        let current = fae::update::applier::current_exe_path()?;
+                                                                        fae::update::applier::apply_update(&url, &current)
+                                                                    },
+                                                                )
+                                                                .await;
+                                                            update_installing.set(false);
+                                                            match result {
+                                                                Ok(Ok(_)) => {
+                                                                    update_restart_needed.set(true);
+                                                                }
+                                                                Ok(Err(e)) => {
+                                                                    update_install_error
+                                                                        .set(Some(format!("{e}")));
+                                                                }
+                                                                Err(e) => {
+                                                                    update_install_error
+                                                                        .set(Some(format!("{e}")));
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                } else if action_id == "dismiss_fae_update"
+                                                    || action_id == "dismiss_pi_update"
+                                                {
+                                                    update_banner_dismissed.set(true);
+                                                    if let Some(rel) =
+                                                        update_available.read().as_ref()
+                                                    {
+                                                        update_state.write().dismissed_release =
+                                                            Some(rel.version.clone());
+                                                    }
+                                                    let state = update_state.read().clone();
+                                                    spawn(async move {
+                                                        let _ = tokio::task::spawn_blocking(
+                                                            move || state.save(),
+                                                        )
+                                                        .await;
+                                                    });
+                                                }
+                                            }
+                                        },
+                                        "{action_label}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                rsx! {}
             }
         }
     }
