@@ -2489,19 +2489,26 @@ fn app() -> Element {
         .read()
         .as_ref()
         .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed));
-    let button_label = if !is_running {
-        "Starting..."
-    } else if gate_is_active {
-        "Stop Listening"
-    } else {
-        "Start Listening"
+    let button_label = match &current_status {
+        AppStatus::Running if gate_is_active => "Stop Listening",
+        AppStatus::Running => "Start Listening",
+        AppStatus::PreFlight { .. } => "Continue",
+        AppStatus::Error(_) | AppStatus::DownloadError { .. } => "Retry",
+        AppStatus::Idle => "Start",
+        _ => "Starting...",
     };
     let is_loading = matches!(
         current_status,
         AppStatus::Downloading { .. } | AppStatus::Loading { .. }
     );
-    let is_error = matches!(current_status, AppStatus::Error(_));
-    let settings_enabled = matches!(current_status, AppStatus::Idle | AppStatus::Error(_));
+    let is_error = matches!(
+        current_status,
+        AppStatus::Error(_) | AppStatus::DownloadError { .. }
+    );
+    let settings_enabled = matches!(
+        current_status,
+        AppStatus::Idle | AppStatus::Error(_) | AppStatus::DownloadError { .. }
+    );
     let cfg_backend = config_state.read().llm.backend;
     let cfg_tool_mode = config_state.read().llm.tool_mode;
     let pi_provider_selected = selected_pi_provider(&config_state.read());
@@ -2700,11 +2707,13 @@ fn app() -> Element {
 
     // Button colors
     let button_bg = if is_error {
-        "#a78bfa"
+        "#a78bfa" // purple for retry
+    } else if matches!(current_status, AppStatus::PreFlight { .. }) {
+        "#3b82f6" // blue for continue
     } else if current_status.show_start() {
-        "#22c55e"
+        "#22c55e" // green for start
     } else {
-        "#ef4444"
+        "#ef4444" // red for stop
     };
     let button_opacity = if button_enabled { "1" } else { "0.5" };
 
