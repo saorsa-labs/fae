@@ -466,3 +466,4 @@ All 3 phases delivered:
 - RedactedString wrapper and secret redaction for API keys, auth headers
 - 1,474 tests passing, zero warnings
 Task 1 starting...
+- [x] Task 1: OpenAI provider contract tests (commit: 01796c1)

@@ -36,6 +36,8 @@ use crate::fae_llm::types::{ModelRef, RequestOptions};
 pub struct AnthropicConfig {
     /// Anthropic API key.
     pub api_key: String,
+    /// Base URL for the API (defaults to `https://api.anthropic.com`).
+    pub base_url: String,
     /// Model identifier (e.g. `"claude-sonnet-4-5-20250929"`).
     pub model: String,
     /// API version header value.
@@ -49,10 +51,17 @@ impl AnthropicConfig {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
+            base_url: "https://api.anthropic.com".to_string(),
             model: model.into(),
             api_version: "2023-06-01".to_string(),
             max_tokens: 4096,
         }
+    }
+
+    /// Set the base URL (useful for testing with mock servers).
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
     }
 
     /// Set the API version.
@@ -505,9 +514,10 @@ impl ProviderAdapter for AnthropicAdapter {
 
         tracing::debug!("Sending request to Anthropic");
 
+        let url = format!("{}/v1/messages", self.config.base_url);
         let response = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(&url)
             .header("x-api-key", &self.config.api_key)
             .header("anthropic-version", &self.config.api_version)
             .header("content-type", "application/json")
