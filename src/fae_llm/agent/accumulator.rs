@@ -182,8 +182,12 @@ impl StreamAccumulator {
             .enumerate()
             .map(|(i, id)| (id.as_str(), i))
             .collect();
-        self.completed_tool_calls
-            .sort_by_key(|tc| order_map.get(tc.call_id.as_str()).copied().unwrap_or(usize::MAX));
+        self.completed_tool_calls.sort_by_key(|tc| {
+            order_map
+                .get(tc.call_id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
 
         AccumulatedTurn {
             text: self.text,
@@ -297,7 +301,10 @@ mod tests {
         assert_eq!(turn.tool_calls.len(), 1);
         assert_eq!(turn.tool_calls[0].call_id, "call_1");
         assert_eq!(turn.tool_calls[0].function_name, "read");
-        assert_eq!(turn.tool_calls[0].arguments_json, r#"{"path":"src/main.rs"}"#);
+        assert_eq!(
+            turn.tool_calls[0].arguments_json,
+            r#"{"path":"src/main.rs"}"#
+        );
         assert_eq!(turn.finish_reason, FinishReason::ToolCalls);
     }
 

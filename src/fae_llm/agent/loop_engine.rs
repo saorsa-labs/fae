@@ -153,10 +153,7 @@ impl AgentLoop {
     }
 
     /// The main agent loop implementation.
-    async fn run_loop(
-        &self,
-        mut messages: Vec<Message>,
-    ) -> Result<AgentLoopResult, FaeLlmError> {
+    async fn run_loop(&self, mut messages: Vec<Message>) -> Result<AgentLoopResult, FaeLlmError> {
         let mut turns = Vec::new();
         let total_usage = TokenUsage::default();
         let request_timeout = tokio::time::Duration::from_secs(self.config.request_timeout_secs);
@@ -687,11 +684,7 @@ mod tests {
         // Provider always returns tool calls — loop should stop at max_turns
         let responses: Vec<Vec<LlmEvent>> = (0..10)
             .map(|i| {
-                MockProvider::tool_call_response(
-                    &format!("call_{i}"),
-                    "read",
-                    r#"{"input":"x"}"#,
-                )
+                MockProvider::tool_call_response(&format!("call_{i}"), "read", r#"{"input":"x"}"#)
             })
             .collect();
         let provider = Arc::new(MockProvider::new(responses));
@@ -724,17 +717,23 @@ mod tests {
                 call_id: "c1".into(),
                 function_name: "read".into(),
             },
-            LlmEvent::ToolCallEnd { call_id: "c1".into() },
+            LlmEvent::ToolCallEnd {
+                call_id: "c1".into(),
+            },
             LlmEvent::ToolCallStart {
                 call_id: "c2".into(),
                 function_name: "read".into(),
             },
-            LlmEvent::ToolCallEnd { call_id: "c2".into() },
+            LlmEvent::ToolCallEnd {
+                call_id: "c2".into(),
+            },
             LlmEvent::ToolCallStart {
                 call_id: "c3".into(),
                 function_name: "read".into(),
             },
-            LlmEvent::ToolCallEnd { call_id: "c3".into() },
+            LlmEvent::ToolCallEnd {
+                call_id: "c3".into(),
+            },
             LlmEvent::StreamEnd {
                 finish_reason: FinishReason::ToolCalls,
             },
@@ -759,9 +758,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_loop_cancelled() {
-        let provider = Arc::new(MockProvider::new(vec![MockProvider::text_response(
-            "test",
-        )]));
+        let provider = Arc::new(MockProvider::new(vec![MockProvider::text_response("test")]));
         let registry = make_registry_with_mock();
         let config = AgentConfig::new();
 
@@ -880,7 +877,10 @@ mod tests {
             Ok(r) => r,
             Err(_) => unreachable!("run succeeded"),
         };
-        assert_eq!(result.stop_reason, StopReason::Error("connection lost".into()));
+        assert_eq!(
+            result.stop_reason,
+            StopReason::Error("connection lost".into())
+        );
     }
 
     // ── build_messages_from_result ───────────────────────────
@@ -902,8 +902,14 @@ mod tests {
 
         let messages = build_messages_from_result(&result, Some("Be helpful."));
         assert_eq!(messages.len(), 2); // system + assistant
-        assert_eq!(messages[0].role, crate::fae_llm::providers::message::Role::System);
-        assert_eq!(messages[1].role, crate::fae_llm::providers::message::Role::Assistant);
+        assert_eq!(
+            messages[0].role,
+            crate::fae_llm::providers::message::Role::System
+        );
+        assert_eq!(
+            messages[1].role,
+            crate::fae_llm::providers::message::Role::Assistant
+        );
     }
 
     #[test]

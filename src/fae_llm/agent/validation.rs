@@ -49,9 +49,7 @@ pub fn validate_tool_args(
 ) -> Result<serde_json::Value, FaeLlmError> {
     // Parse JSON
     let value: serde_json::Value = serde_json::from_str(args_json).map_err(|e| {
-        FaeLlmError::ToolError(format!(
-            "tool '{tool_name}': invalid JSON arguments: {e}"
-        ))
+        FaeLlmError::ToolError(format!("tool '{tool_name}': invalid JSON arguments: {e}"))
     })?;
 
     // Schema must describe an object

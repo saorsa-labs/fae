@@ -191,7 +191,10 @@ mod tests {
     fn agent_config_defaults() {
         let config = AgentConfig::new();
         assert_eq!(config.max_turns, DEFAULT_MAX_TURNS);
-        assert_eq!(config.max_tool_calls_per_turn, DEFAULT_MAX_TOOL_CALLS_PER_TURN);
+        assert_eq!(
+            config.max_tool_calls_per_turn,
+            DEFAULT_MAX_TOOL_CALLS_PER_TURN
+        );
         assert_eq!(config.request_timeout_secs, DEFAULT_REQUEST_TIMEOUT_SECS);
         assert_eq!(config.tool_timeout_secs, DEFAULT_TOOL_TIMEOUT_SECS);
         assert!(config.system_prompt.is_none());
@@ -373,14 +376,8 @@ mod tests {
     fn stop_reason_equality() {
         assert_eq!(StopReason::Complete, StopReason::Complete);
         assert_ne!(StopReason::Complete, StopReason::MaxTurns);
-        assert_eq!(
-            StopReason::Error("a".into()),
-            StopReason::Error("a".into())
-        );
-        assert_ne!(
-            StopReason::Error("a".into()),
-            StopReason::Error("b".into())
-        );
+        assert_eq!(StopReason::Error("a".into()), StopReason::Error("a".into()));
+        assert_ne!(StopReason::Error("a".into()), StopReason::Error("b".into()));
     }
 
     #[test]
