@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod observability_integration_tests {
     use crate::fae_llm::observability::metrics::{MetricsCollector, NoopMetrics};
-    use crate::fae_llm::observability::redact::{redact_all, RedactedString};
+    use crate::fae_llm::observability::redact::{RedactedString, redact_all};
     use crate::fae_llm::observability::spans::*;
 
     // ── Tracing Span Tests ─────────────────────────────────────────
@@ -90,8 +90,8 @@ mod observability_integration_tests {
 
     #[test]
     fn custom_metrics_collector_trait_works() {
-        use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
 
         struct TestMetrics {
             request_count: Arc<AtomicU64>,
@@ -218,8 +218,8 @@ mod observability_integration_tests {
 
     #[test]
     fn end_to_end_observability_scenario() {
-        use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
 
         // Simulated end-to-end agent loop scenario with full observability
 

@@ -465,3 +465,4 @@ All 3 phases delivered:
 - MetricsCollector trait with NoopMetrics default, integrated into AgentLoop
 - RedactedString wrapper and secret redaction for API keys, auth headers
 - 1,474 tests passing, zero warnings
+Task 1 starting...

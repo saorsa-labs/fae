@@ -1,114 +1,159 @@
-# Phase 4.2: Documentation & Polish
+# Phase 4.2: Full Integration Test Matrix
 
 ## Overview
-Final phase of the canvas integration project. Update documentation, add canvas
-settings to the GUI, write API docs, create integration tests, and polish.
+Comprehensive integration testing for the fae_llm module covering all providers, compatibility profiles, failure modes, and security boundaries. Builds on Phase 3.3's E2E tests by adding contract tests, profile verification, failure injection, and mode gating.
+
+## Context
+- Phase 3.3 created basic E2E tests for OpenAI and Anthropic providers
+- Phase 4.2 expands coverage with contract tests, profile tests, and edge cases
+- Focus: Provider compatibility, failure resilience, security boundaries
 
 ## Tasks
 
-### Task 1: Update fae README.md with canvas integration docs
-**Files:** `README.md`
+### Task 1: OpenAI provider contract tests
+**Files:** `src/fae_llm/providers/openai/tests.rs` (new)
 
-Add a "Canvas Integration" section to fae's README covering:
-- What the canvas pane does (visual output for charts, images, rich content)
-- How the MCP tools work (canvas_render, canvas_interact, canvas_export)
-- Remote canvas-server connectivity (WebSocket URL setting)
-- Screenshot or architecture diagram reference
+Create contract tests verifying OpenAI adapter behavior:
+- Request format validation (chat completions endpoint)
+- Response parsing (streaming SSE + non-streaming)
+- Tool call formatting (function calling schema)
+- Error response handling (400, 401, 429, 500 status codes)
+- Reasoning mode support (o1-preview extended_thinking parameter)
+- Max tokens field handling (different models use different field names)
 
-**Acceptance:**
-- README mentions canvas features
-- Installation section notes canvas dependencies
-
-### Task 2: Update saorsa-canvas README.md with fae integration examples
-**Files:** `../saorsa-canvas/README.md`
-
-Add a "Usage with Fae" section to saorsa-canvas's root README showing:
-- How fae embeds canvas-core as a dependency
-- The MCP tool flow (agent → tool → scene → render)
-- Link to fae's repo for the full integration example
+Use mock HTTP server (mockito or wiremock) for deterministic testing.
 
 **Acceptance:**
-- saorsa-canvas README mentions fae as a consumer
-- Integration example is accurate
+- Contract tests cover all request/response patterns
+- Mock server validates exact API format
+- Tests pass with zero warnings
 
-### Task 3: Add canvas configuration section to fae GUI settings
-**Files:** `src/bin/gui.rs`, `src/config.rs`
+### Task 2: Anthropic provider contract tests
+**Files:** `src/fae_llm/providers/anthropic/tests.rs` (new)
 
-Add a "Canvas" section to the Settings view showing:
-- Canvas server URL (text input, currently in FaeConfig)
-- Connection status indicator
-- Canvas session info (element count, session ID)
+Create contract tests verifying Anthropic adapter behavior:
+- Request format validation (messages endpoint)
+- Response parsing (streaming + non-streaming)
+- Tool use block handling (tool_use content blocks)
+- Thinking block extraction (extended_thinking parameter)
+- Error response handling (400, 401, 429, 500)
+- Stop reason mapping (end_turn, max_tokens, tool_use)
 
-**Acceptance:**
-- Settings view shows canvas configuration
-- URL is editable and saved to config
-- Connection status is visible
-
-### Task 4: Add canvas server URL setting to config
-**Files:** `src/config.rs`, `src/canvas/remote.rs`
-
-Ensure `FaeConfig` has `canvas_server_url: Option<String>` and it's:
-- Loaded from `~/.fae/config.toml`
-- Passed to `RemoteCanvasSession` at startup
-- Persisted when changed in settings
+Use mock HTTP server for deterministic testing.
 
 **Acceptance:**
-- Config field exists and is serializable
-- Setting is loaded and applied at startup
+- Contract tests cover all request/response patterns
+- Mock server validates exact API format
+- Tests pass with zero warnings
 
-### Task 5: Write API documentation for canvas public types
-**Files:** `src/canvas/*.rs`
+### Task 3: Local endpoint probing tests
+**Files:** `src/fae_llm/providers/openai_compatible/probe_tests.rs` (new)
 
-Add doc comments to all public types, methods, and modules in src/canvas/:
-- `mod.rs` — module-level docs
-- `session.rs` — CanvasSession, CanvasBackend trait
-- `bridge.rs` — CanvasBridge, event mapping
-- `types.rs` — CanvasMessage enum
-- `remote.rs` — RemoteCanvasSession, ConnectionStatus
-- `registry.rs` — CanvasSessionRegistry
-- `tools/*.rs` — MCP tool structs
+Test LocalProbeService with various backend scenarios:
+- Health check success (200 OK with expected response)
+- Health check failure (timeout, connection refused, 500 error)
+- Model list parsing (/v1/models endpoint)
+- Incompatible response detection (non-OpenAI format)
+- Backoff retry logic (verify exponential backoff + max attempts)
+- Concurrent probe safety (multiple probes don't interfere)
 
-**Acceptance:**
-- `cargo doc --no-deps` produces clean docs with zero warnings
-- All public items have doc comments
-
-### Task 6: Create integration test suite
-**Files:** `tests/canvas_integration.rs` (new)
-
-End-to-end tests covering:
-- Create session → push message → verify scene elements
-- Bridge event routing (RuntimeEvent → CanvasMessage → Element)
-- Tool execution (canvas_render with chart data)
-- Session registry management
-- Export tool (local mode returns metadata)
+Use mock HTTP server with configurable delays and responses.
 
 **Acceptance:**
-- Integration tests pass
-- Cover the main user-facing workflows
+- All probe scenarios tested
+- Typed failure modes verified
+- Backoff logic validated
+- Tests pass with zero warnings
 
-### Task 7: Performance profiling notes
-**Files:** `src/canvas/mod.rs` (add perf notes in doc comments)
+### Task 4: Compatibility profile tests (z.ai, MiniMax, DeepSeek)
+**Files:** `src/fae_llm/providers/openai_compatible/profile_tests.rs` (new)
 
-Document performance characteristics:
-- Scene serialization overhead (measure with 100+ elements)
-- HTML rendering cost per update
-- WebSocket sync bandwidth estimate
-- Add `#[cfg(test)]` benchmark-style tests for hot paths
+Test profile flag resolution for OpenAI-compatible providers:
+- z.ai profile (verify request transformations)
+- MiniMax profile (verify field mappings)
+- DeepSeek profile (verify reasoning mode handling)
+- Profile flag application (max_tokens_field, reasoning_mode, etc.)
+- Request normalization based on profile
+- Response normalization based on profile
 
-**Acceptance:**
-- Performance notes documented
-- No regressions detected (tests pass under ~100ms)
-
-### Task 8: Final review and cleanup
-**Files:** All canvas-related files
-
-- Remove any TODO/FIXME comments
-- Ensure consistent error handling patterns
-- Verify all imports are used
-- Run full `just check` equivalent (fmt, clippy, test, doc)
-- Commit and update STATE.json to milestone_complete
+Use CompatibilityProfile test fixtures with mock adapters.
 
 **Acceptance:**
-- Zero warnings across both projects
-- All tests pass
-- Clean git status
+- Each provider profile has dedicated tests
+- Profile flags correctly transform requests
+- Tests pass with zero warnings
+
+### Task 5: E2E multi-turn tool workflow tests
+**Files:** `src/fae_llm/agent/e2e_workflow_tests.rs` (new)
+
+End-to-end tests covering complete agent workflows:
+- Prompt → tool call → execute → continue → final answer
+- Multi-turn conversation (3+ turns with tool use)
+- Mixed tools (read + bash + write in single conversation)
+- Tool argument validation (reject invalid schemas)
+- Max turn limit enforcement (verify loop termination)
+- Max tools per turn limit (verify guard behavior)
+
+Use mock providers to control responses deterministically.
+
+**Acceptance:**
+- E2E workflows cover realistic scenarios
+- Guard limits tested and enforced
+- Tests pass with zero warnings
+
+### Task 6: Failure injection tests
+**Files:** `src/fae_llm/agent/failure_tests.rs` (new)
+
+Test error recovery and resilience:
+- Provider timeout during streaming (partial results recovery)
+- Provider 5xx error (retry with backoff)
+- Provider 429 rate limit (retry with exponential backoff)
+- Tool execution timeout (abort and report)
+- Tool execution failure (non-zero exit, exception)
+- Network interruption mid-stream (reconnect or fail gracefully)
+- Circuit breaker activation (after N consecutive failures)
+
+Use mock providers with controlled failure injection.
+
+**Acceptance:**
+- All failure modes tested
+- Recovery behaviors verified
+- Circuit breaker integration tested
+- Tests pass with zero warnings
+
+### Task 7: Mode gating security tests
+**Files:** `src/fae_llm/tools/mode_gating_tests.rs` (new)
+
+Test tool mode enforcement (read_only vs full):
+- read_only mode allows: read, bash (read-only commands)
+- read_only mode rejects: write, edit, bash (write commands)
+- full mode allows: all tools
+- Mode switching during session (read_only → full → read_only)
+- Tool registry mode validation
+- Error messages for rejected tools (clear security boundary)
+
+Use ToolRegistry with different modes and verify enforcement.
+
+**Acceptance:**
+- All mode gating rules tested
+- Security boundaries enforced
+- Clear error messages on rejection
+- Tests pass with zero warnings
+
+### Task 8: Integration test documentation and cleanup
+**Files:** `src/fae_llm/mod.rs`, `src/fae_llm/providers/*/tests.rs`, `src/fae_llm/agent/*_tests.rs`, `src/fae_llm/tools/*_tests.rs`
+
+Final review and documentation:
+- Add module-level doc comments explaining test structure
+- Document test helpers and mock utilities
+- Ensure consistent naming conventions (test_provider_scenario_expected_behavior)
+- Remove any TODO/FIXME comments from test code
+- Verify no test warnings (unused imports, dead code, etc.)
+- Run full test suite: `just test`
+- Update progress.md with task completion
+
+**Acceptance:**
+- All integration tests documented
+- Zero test warnings
+- Full test suite passes (1,500+ tests)
+- progress.md updated with Phase 4.2 completion
