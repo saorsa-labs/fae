@@ -49,9 +49,11 @@ impl ToolExecutor {
     ///
     /// # Errors
     ///
-    /// Returns [`FaeLlmError::ToolError`] if:
+    /// Returns:
+    /// - [`FaeLlmError::ToolValidationError`] when arguments fail schema validation.
+    /// - [`FaeLlmError::ToolExecutionError`] when execution fails, is cancelled, or the tool is unavailable.
+    /// - [`FaeLlmError::TimeoutError`] when execution exceeds the configured timeout.
     /// - The tool is not found in the registry
-    /// - Argument validation fails
     /// - Execution times out
     /// - The operation is cancelled
     pub async fn execute_tool(
@@ -76,7 +78,7 @@ impl ToolExecutor {
         // Check cancellation before starting
         if cancel.is_cancelled() {
             tracing::warn!(tool_name = %call.function_name, "Tool execution cancelled before start");
-            return Err(FaeLlmError::ToolError(format!(
+            return Err(FaeLlmError::ToolExecutionError(format!(
                 "tool '{}': cancelled before execution",
                 call.function_name
             )));
@@ -86,13 +88,13 @@ impl ToolExecutor {
         let tool = self.registry.get(&call.function_name).ok_or_else(|| {
             if self.registry.is_blocked_by_mode(&call.function_name) {
                 tracing::error!(tool_name = %call.function_name, "Tool blocked by mode");
-                FaeLlmError::ToolError(format!(
+                FaeLlmError::ToolExecutionError(format!(
                     "tool '{}': blocked by current mode (read-only mode does not allow mutation tools)",
                     call.function_name
                 ))
             } else {
                 tracing::error!(tool_name = %call.function_name, "Tool not found in registry");
-                FaeLlmError::ToolError(format!(
+                FaeLlmError::ToolExecutionError(format!(
                     "tool '{}': not found in registry",
                     call.function_name
                 ))
@@ -114,7 +116,7 @@ impl ToolExecutor {
         let result = tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::warn!(tool_name = %call.function_name, "Tool execution cancelled during execution");
-                return Err(FaeLlmError::ToolError(format!(
+                return Err(FaeLlmError::ToolExecutionError(format!(
                     "tool '{}': cancelled during execution",
                     call.function_name
                 )));
@@ -130,7 +132,7 @@ impl ToolExecutor {
                     }
                     Ok(Err(join_err)) => {
                         tracing::error!(tool_name = %call.function_name, error = %join_err, "Tool execution panicked");
-                        return Err(FaeLlmError::ToolError(format!(
+                        return Err(FaeLlmError::ToolExecutionError(format!(
                             "tool '{}': execution panicked: {join_err}",
                             call.function_name
                         )));
@@ -176,7 +178,7 @@ impl ToolExecutor {
 
         for call in calls {
             if cancel.is_cancelled() {
-                results.push(Err(FaeLlmError::ToolError(format!(
+                results.push(Err(FaeLlmError::ToolExecutionError(format!(
                     "tool '{}': cancelled before execution",
                     call.function_name
                 ))));
@@ -306,11 +308,11 @@ mod tests {
         let result = executor.execute_tool(&call, &cancel).await;
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolExecutionError(msg)) => {
                 assert!(msg.contains("not found"));
                 assert!(msg.contains("nonexistent"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolExecutionError"),
         }
     }
 
@@ -327,10 +329,10 @@ mod tests {
         let result = executor.execute_tool(&call, &cancel).await;
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolValidationError(msg)) => {
                 assert!(msg.contains("missing required field"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolValidationError"),
         }
     }
 
@@ -380,10 +382,10 @@ mod tests {
         let result = executor.execute_tool(&call, &cancel).await;
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolExecutionError(msg)) => {
                 assert!(msg.contains("cancelled"));
             }
-            _ => unreachable!("expected ToolError for cancellation"),
+            _ => unreachable!("expected ToolExecutionError for cancellation"),
         }
     }
 
@@ -491,11 +493,11 @@ mod tests {
 
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolExecutionError(msg)) => {
                 assert!(msg.contains("blocked by current mode"));
                 assert!(msg.contains("read-only"));
             }
-            _ => unreachable!("expected ToolError with mode block message"),
+            _ => unreachable!("expected ToolExecutionError with mode block message"),
         }
     }
 
@@ -528,7 +530,7 @@ mod tests {
 
         // Will fail with file not found, but that's OK - we're testing mode enforcement
         // If it was blocked by mode, we'd get a different error
-        if let Err(FaeLlmError::ToolError(msg)) = result {
+        if let Err(FaeLlmError::ToolExecutionError(msg)) = result {
             assert!(!msg.contains("blocked by current mode"));
         }
     }

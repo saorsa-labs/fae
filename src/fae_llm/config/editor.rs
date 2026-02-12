@@ -6,6 +6,7 @@
 use crate::fae_llm::error::FaeLlmError;
 use std::path::Path;
 
+use super::persist::write_toml_text_atomic;
 use super::types::FaeLlmConfig;
 
 /// A config editor that preserves comments and formatting during edits.
@@ -101,13 +102,8 @@ impl ConfigEditor {
         let _config: FaeLlmConfig = toml::from_str(&toml_text)
             .map_err(|e| FaeLlmError::ConfigError(format!("edited config is invalid: {e}")))?;
 
-        // Write via atomic persist (use the raw text, not serialized config,
-        // to preserve comments)
-        let tmp_path = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp_path, toml_text.as_bytes())
-            .map_err(|e| FaeLlmError::ConfigError(format!("failed to write temp file: {e}")))?;
-        std::fs::rename(&tmp_path, &self.path)
-            .map_err(|e| FaeLlmError::ConfigError(format!("failed to rename temp file: {e}")))
+        // Write via atomic persist (raw text keeps comments and formatting).
+        write_toml_text_atomic(&self.path, &toml_text)
     }
 
     /// Save the edited document to a different path.
@@ -115,11 +111,7 @@ impl ConfigEditor {
         let toml_text = self.doc.to_string();
         let _config: FaeLlmConfig = toml::from_str(&toml_text)
             .map_err(|e| FaeLlmError::ConfigError(format!("edited config is invalid: {e}")))?;
-        let tmp_path = path.with_extension("toml.tmp");
-        std::fs::write(&tmp_path, toml_text.as_bytes())
-            .map_err(|e| FaeLlmError::ConfigError(format!("failed to write temp file: {e}")))?;
-        std::fs::rename(&tmp_path, path)
-            .map_err(|e| FaeLlmError::ConfigError(format!("failed to rename temp file: {e}")))
+        write_toml_text_atomic(path, &toml_text)
     }
 
     /// Get the raw TOML text (with comments preserved).

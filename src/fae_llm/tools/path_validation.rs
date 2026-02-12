@@ -54,14 +54,14 @@ pub fn is_system_path(path: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// Returns `FaeLlmError::ToolError` if the path contains traversal sequences.
+/// Returns `FaeLlmError::ToolValidationError` if the path is invalid.
 pub fn validate_read_path(path: &str) -> Result<PathBuf, FaeLlmError> {
     if path.is_empty() {
-        return Err(FaeLlmError::ToolError("path is empty".into()));
+        return Err(FaeLlmError::ToolValidationError("path is empty".into()));
     }
 
     if !is_path_safe(path) {
-        return Err(FaeLlmError::ToolError(format!(
+        return Err(FaeLlmError::ToolValidationError(format!(
             "path contains directory traversal: {path}"
         )));
     }
@@ -75,13 +75,13 @@ pub fn validate_read_path(path: &str) -> Result<PathBuf, FaeLlmError> {
 ///
 /// # Errors
 ///
-/// Returns `FaeLlmError::ToolError` if the path is unsafe for writing.
+/// Returns `FaeLlmError::ToolValidationError` if the path is unsafe for writing.
 pub fn validate_write_path(path: &str) -> Result<PathBuf, FaeLlmError> {
     let path_buf = validate_read_path(path)?;
 
     // For absolute paths, check system directories
     if path_buf.is_absolute() && is_system_path(&path_buf) {
-        return Err(FaeLlmError::ToolError(format!(
+        return Err(FaeLlmError::ToolValidationError(format!(
             "cannot write to system directory: {path}"
         )));
     }

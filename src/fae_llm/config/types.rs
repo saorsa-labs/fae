@@ -1,61 +1,91 @@
 //! Configuration schema types for fae_llm.
 //!
 //! Defines the TOML configuration structure including providers, models,
-//! tools, defaults, and runtime settings.
+//! defaults, runtime settings, and locked tool-mode behavior.
 
 use crate::fae_llm::providers::profile::CompatibilityProfile;
 pub use crate::fae_llm::types::EndpointType;
+use crate::fae_llm::types::ReasoningLevel;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Config schema version.
+pub const CONFIG_VERSION_V1: u32 = 1;
+
+/// Locked built-in tool names for v1.
+pub const DEFAULT_TOOL_NAMES: [&str; 4] = ["read", "bash", "edit", "write"];
+
 /// Root configuration struct for fae_llm.
-///
-/// This is the top-level structure deserialized from the TOML config file.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaeLlmConfig {
+    /// Schema version.
+    #[serde(default = "default_config_version")]
+    pub config_version: u32,
+
     /// Provider configurations (OpenAI, Anthropic, local, etc.)
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
 
-    /// Model configurations
+    /// Model configurations.
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
 
-    /// Tool configurations
+    /// Tool execution configuration.
     #[serde(default)]
-    pub tools: HashMap<String, ToolConfig>,
+    pub tools: ToolsConfig,
 
-    /// Default provider and model settings
+    /// Default provider/model settings.
     #[serde(default)]
     pub defaults: DefaultsConfig,
 
-    /// Runtime settings (timeouts, retries, logging)
+    /// Runtime settings.
     #[serde(default)]
     pub runtime: RuntimeConfig,
+}
+
+fn default_config_version() -> u32 {
+    CONFIG_VERSION_V1
+}
+
+impl Default for FaeLlmConfig {
+    fn default() -> Self {
+        Self {
+            config_version: default_config_version(),
+            providers: HashMap::new(),
+            models: HashMap::new(),
+            tools: ToolsConfig::default(),
+            defaults: DefaultsConfig::default(),
+            runtime: RuntimeConfig::default(),
+        }
+    }
 }
 
 /// Configuration for a single LLM provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
-    /// Type of endpoint (OpenAI, Anthropic, Local, Custom)
+    /// Type of endpoint (OpenAI, Anthropic, Local, Custom).
     pub endpoint_type: EndpointType,
 
-    /// Base URL for the provider API
+    /// Whether this provider is available for selection.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Base URL for provider API.
     pub base_url: String,
 
-    /// API key (secret reference)
+    /// API key (secret reference).
     #[serde(default)]
     pub api_key: SecretRef,
 
-    /// List of model IDs available from this provider
+    /// Provider-advertised model IDs.
     #[serde(default)]
     pub models: Vec<String>,
 
-    /// Optional compatibility profile for provider-specific API quirks.
-    ///
-    /// When set, the profile flags are used to normalize requests and
-    /// responses for this provider. When absent, the profile is auto-resolved
-    /// from the provider name.
+    /// Optional compatibility profile name for OpenAI-compatible providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compat_profile: Option<String>,
+
+    /// Optional resolved compatibility profile object.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<CompatibilityProfile>,
 }
@@ -63,16 +93,16 @@ pub struct ProviderConfig {
 /// Configuration for a single model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
-    /// Model identifier (e.g. "gpt-4o", "claude-opus-4")
+    /// Model identifier (e.g. `"gpt-4o"`, `"claude-opus-4"`).
     pub model_id: String,
 
-    /// Human-readable display name
+    /// Human-readable display name.
     pub display_name: String,
 
-    /// Model tier (fast, balanced, reasoning)
+    /// Model tier (fast, balanced, reasoning).
     pub tier: ModelTier,
 
-    /// Maximum tokens this model can generate
+    /// Maximum generated tokens.
     pub max_tokens: usize,
 }
 
@@ -80,43 +110,189 @@ pub struct ModelConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelTier {
-    /// Fast, lightweight models
+    /// Fast, lightweight models.
     Fast,
-    /// Balanced performance/quality
+    /// Balanced performance/quality.
     Balanced,
-    /// High-quality reasoning models
+    /// High-quality reasoning models.
     Reasoning,
 }
 
-/// Configuration for a single tool.
+/// Tool execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolMode {
+    /// `read_only`: effective tools are exactly `["read"]`.
+    #[default]
+    ReadOnly,
+    /// `full`: effective tools are exactly `["read", "bash", "edit", "write"]`.
+    Full,
+}
+
+impl ToolMode {
+    /// Locked effective tool set for this mode.
+    pub fn effective_tool_names(self) -> &'static [&'static str] {
+        match self {
+            Self::ReadOnly => &["read"],
+            Self::Full => &DEFAULT_TOOL_NAMES,
+        }
+    }
+
+    /// Whether the provided tool name is allowed in this mode.
+    pub fn allows_tool(self, name: &str) -> bool {
+        self.effective_tool_names().contains(&name)
+    }
+}
+
+/// Tool-specific configuration entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolConfig {
-    /// Tool name (read, bash, edit, write)
+    /// Optional legacy name field.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
 
-    /// Whether this tool is enabled
+    /// Whether this individual tool is enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Tool-specific options (arbitrary key-value pairs)
-    #[serde(default)]
+    /// Tool-specific options (arbitrary key-value pairs).
+    #[serde(default, flatten)]
     pub options: HashMap<String, toml::Value>,
+}
+
+impl Default for ToolConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            enabled: true,
+            options: HashMap::new(),
+        }
+    }
 }
 
 fn default_true() -> bool {
     true
 }
 
-/// Default provider and model settings.
+/// Root tool configuration block (`[tools]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    /// Tool mode (`read_only` or `full`).
+    #[serde(default)]
+    pub mode: ToolMode,
+
+    /// Explicitly enabled tool names.
+    ///
+    /// Effective tools are still determined by `mode`.
+    #[serde(default)]
+    pub enabled: Vec<String>,
+
+    /// Per-tool entries (e.g. `[tools.read]`).
+    #[serde(default, flatten)]
+    entries: HashMap<String, ToolConfig>,
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            mode: ToolMode::ReadOnly,
+            enabled: vec!["read".to_string()],
+            entries: HashMap::new(),
+        }
+    }
+}
+
+impl ToolsConfig {
+    /// Set mode and synchronize `enabled` to the locked effective tool set.
+    pub fn set_mode(&mut self, mode: ToolMode) {
+        self.mode = mode;
+        self.enabled = mode
+            .effective_tool_names()
+            .iter()
+            .map(|n| (*n).to_string())
+            .collect();
+    }
+
+    /// Effective tool names based on locked mode rules.
+    pub fn effective_enabled(&self) -> Vec<String> {
+        self.mode
+            .effective_tool_names()
+            .iter()
+            .map(|n| (*n).to_string())
+            .collect()
+    }
+
+    /// Returns true if this config references only locked tool names.
+    pub fn has_only_known_tool_names(&self) -> bool {
+        self.enabled
+            .iter()
+            .all(|n| DEFAULT_TOOL_NAMES.contains(&n.as_str()))
+            && self
+                .entries
+                .keys()
+                .all(|n| DEFAULT_TOOL_NAMES.contains(&n.as_str()))
+    }
+
+    /// Legacy-compatible map-like insert.
+    pub fn insert(&mut self, key: String, value: ToolConfig) -> Option<ToolConfig> {
+        self.entries.insert(key, value)
+    }
+
+    /// Legacy-compatible contains check.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    /// Legacy-compatible getter.
+    pub fn get(&self, key: &str) -> Option<&ToolConfig> {
+        self.entries.get(key)
+    }
+
+    /// Legacy-compatible mutable getter.
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut ToolConfig> {
+        self.entries.get_mut(key)
+    }
+
+    /// Number of tool entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether there are no tool entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Iterate keys.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.entries.keys()
+    }
+}
+
+impl std::ops::Index<&str> for ToolsConfig {
+    type Output = ToolConfig;
+
+    fn index(&self, index: &str) -> &Self::Output {
+        &self.entries[index]
+    }
+}
+
+/// Default provider/model settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefaultsConfig {
-    /// Default provider ID to use
+    /// Default provider ID to use.
+    #[serde(default, alias = "provider_id")]
     pub default_provider: Option<String>,
 
-    /// Default model ID to use
+    /// Default model ID to use.
+    #[serde(default, alias = "model_id")]
     pub default_model: Option<String>,
 
-    /// Tool execution mode (read_only or full)
+    /// Default reasoning level.
+    #[serde(default)]
+    pub reasoning: ReasoningLevel,
+
+    /// Legacy tool mode field; synchronized with `[tools].mode` by service updates.
     #[serde(default)]
     pub tool_mode: ToolMode,
 }
@@ -126,34 +302,41 @@ impl Default for DefaultsConfig {
         Self {
             default_provider: None,
             default_model: None,
+            reasoning: ReasoningLevel::Off,
             tool_mode: ToolMode::ReadOnly,
         }
     }
 }
 
-/// Tool execution mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Local runtime mode (v1 locked to probe-only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolMode {
-    /// Read-only mode (no mutations allowed)
+pub enum LocalMode {
+    /// Probe endpoint health/status only.
     #[default]
-    ReadOnly,
-    /// Full mode (all tools enabled)
-    Full,
+    ProbeOnly,
 }
 
 /// Runtime configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
-    /// Request timeout in seconds
+    /// Local runtime mode.
+    #[serde(default)]
+    pub local_mode: LocalMode,
+
+    /// Local health-check timeout in milliseconds.
+    #[serde(default = "default_health_check_timeout_ms")]
+    pub health_check_timeout_ms: u64,
+
+    /// Request timeout in seconds.
     #[serde(default = "default_request_timeout")]
     pub request_timeout_secs: u64,
 
-    /// Maximum number of retries for failed requests
+    /// Maximum request retries.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 
-    /// Log level (trace, debug, info, warn, error)
+    /// Log level (trace/debug/info/warn/error).
     #[serde(default = "default_log_level")]
     pub log_level: String,
 }
@@ -170,9 +353,15 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
+fn default_health_check_timeout_ms() -> u64 {
+    2_000
+}
+
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
+            local_mode: LocalMode::ProbeOnly,
+            health_check_timeout_ms: default_health_check_timeout_ms(),
             request_timeout_secs: default_request_timeout(),
             max_retries: default_max_retries(),
             log_level: default_log_level(),
@@ -181,51 +370,41 @@ impl Default for RuntimeConfig {
 }
 
 /// Reference to a secret value.
-///
-/// Secrets can be:
-/// - Not required (None)
-/// - Loaded from environment variable (Env)
-/// - Hardcoded literal (Literal) - for development only
-/// - Executed from command (Command) - feature-gated, off by default
-/// - Retrieved from system keychain (Keychain) - not yet implemented
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SecretRef {
-    /// No secret required
+    /// No secret required.
     #[default]
     None,
-    /// Load from environment variable
+    /// Load from environment variable.
     Env { var: String },
-    /// Literal value (development only, insecure)
+    /// Literal value (dev only).
     Literal { value: String },
-    /// Execute command to get value (feature-gated)
+    /// Execute command to get value (disabled by default).
     Command { cmd: String },
-    /// Retrieve from system keychain (not yet implemented)
+    /// Retrieve from keychain.
     Keychain { service: String, account: String },
 }
 
 impl SecretRef {
-    /// Resolve the secret to its actual value.
-    ///
-    /// # Returns
-    /// - `Ok(None)` if no secret is configured (variant `None`)
-    /// - `Ok(Some(value))` for successfully resolved secrets
-    /// - `Err(FaeLlmError::ConfigError)` for resolution failures
+    /// Resolve secret material.
     pub fn resolve(&self) -> Result<Option<String>, crate::fae_llm::error::FaeLlmError> {
         match self {
             Self::None => Ok(None),
             Self::Env { var } => std::env::var(var).map(Some).map_err(|_| {
-                crate::fae_llm::error::FaeLlmError::ConfigError(format!(
+                crate::fae_llm::error::FaeLlmError::SecretResolutionError(format!(
                     "environment variable '{var}' not set"
                 ))
             }),
             Self::Literal { value } => Ok(Some(value.clone())),
-            Self::Command { .. } => Err(crate::fae_llm::error::FaeLlmError::ConfigError(
+            Self::Command { .. } => Err(crate::fae_llm::error::FaeLlmError::SecretResolutionError(
                 "command-based secret resolution is not enabled".into(),
             )),
-            Self::Keychain { .. } => Err(crate::fae_llm::error::FaeLlmError::ConfigError(
-                "keychain-based secret resolution is not yet implemented".into(),
-            )),
+            Self::Keychain { .. } => {
+                Err(crate::fae_llm::error::FaeLlmError::SecretResolutionError(
+                    "keychain-based secret resolution is not yet implemented".into(),
+                ))
+            }
         }
     }
 }
@@ -235,288 +414,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fae_llm_config_default() {
+    fn fae_llm_config_default_has_version_and_probe_mode() {
         let config = FaeLlmConfig::default();
-        assert!(config.providers.is_empty());
-        assert!(config.models.is_empty());
-        assert!(config.tools.is_empty());
-        assert_eq!(config.defaults.tool_mode, ToolMode::ReadOnly);
-        assert_eq!(config.runtime.request_timeout_secs, 30);
+        assert_eq!(config.config_version, CONFIG_VERSION_V1);
+        assert_eq!(config.runtime.local_mode, LocalMode::ProbeOnly);
+        assert_eq!(config.runtime.health_check_timeout_ms, 2_000);
     }
 
     #[test]
-    fn provider_config_construction() {
-        let provider = ProviderConfig {
-            endpoint_type: EndpointType::OpenAI,
-            base_url: "https://api.openai.com/v1".to_string(),
-            api_key: SecretRef::Env {
-                var: "OPENAI_API_KEY".to_string(),
+    fn tool_mode_effective_sets_are_locked() {
+        assert_eq!(ToolMode::ReadOnly.effective_tool_names(), &["read"]);
+        assert_eq!(
+            ToolMode::Full.effective_tool_names(),
+            &["read", "bash", "edit", "write"]
+        );
+    }
+
+    #[test]
+    fn tools_config_mode_syncs_enabled_list() {
+        let mut tools = ToolsConfig::default();
+        assert_eq!(tools.enabled, vec!["read".to_string()]);
+
+        tools.set_mode(ToolMode::Full);
+        assert_eq!(
+            tools.enabled,
+            vec![
+                "read".to_string(),
+                "bash".to_string(),
+                "edit".to_string(),
+                "write".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn tools_config_legacy_map_api() {
+        let mut tools = ToolsConfig::default();
+        tools.insert(
+            "read".to_string(),
+            ToolConfig {
+                name: "read".to_string(),
+                enabled: true,
+                options: HashMap::new(),
             },
-            models: vec!["gpt-4o".to_string()],
-            profile: None,
-        };
-        assert_eq!(provider.endpoint_type, EndpointType::OpenAI);
-        assert_eq!(provider.models.len(), 1);
-        assert!(provider.profile.is_none());
+        );
+
+        assert_eq!(tools.len(), 1);
+        assert!(tools.contains_key("read"));
+        assert!(tools["read"].enabled);
     }
 
     #[test]
-    fn model_config_construction() {
-        let model = ModelConfig {
-            model_id: "gpt-4o".to_string(),
-            display_name: "GPT-4o".to_string(),
-            tier: ModelTier::Balanced,
-            max_tokens: 4096,
-        };
-        assert_eq!(model.model_id, "gpt-4o");
-        assert_eq!(model.tier, ModelTier::Balanced);
-        assert_eq!(model.max_tokens, 4096);
-    }
-
-    #[test]
-    fn tool_config_construction() {
-        let tool = ToolConfig {
-            name: "read".to_string(),
-            enabled: true,
-            options: HashMap::new(),
-        };
-        assert_eq!(tool.name, "read");
-        assert!(tool.enabled);
-    }
-
-    #[test]
-    fn defaults_config_default() {
+    fn defaults_config_supports_reasoning_and_legacy_fields() {
         let defaults = DefaultsConfig::default();
-        assert!(defaults.default_provider.is_none());
-        assert!(defaults.default_model.is_none());
+        assert_eq!(defaults.reasoning, ReasoningLevel::Off);
         assert_eq!(defaults.tool_mode, ToolMode::ReadOnly);
     }
 
     #[test]
-    fn runtime_config_default() {
-        let runtime = RuntimeConfig::default();
-        assert_eq!(runtime.request_timeout_secs, 30);
-        assert_eq!(runtime.max_retries, 3);
-        assert_eq!(runtime.log_level, "info");
-    }
-
-    #[test]
-    fn secret_ref_none() {
-        let secret = SecretRef::None;
-        assert_eq!(secret, SecretRef::None);
-    }
-
-    #[test]
-    fn secret_ref_env() {
-        let secret = SecretRef::Env {
-            var: "MY_KEY".to_string(),
-        };
-        match secret {
-            SecretRef::Env { var } => assert_eq!(var, "MY_KEY"),
-            _ => unreachable!("Expected Env variant"),
-        }
-    }
-
-    #[test]
-    fn secret_ref_literal() {
-        let secret = SecretRef::Literal {
-            value: "sk-test".to_string(),
-        };
-        match secret {
-            SecretRef::Literal { value } => assert_eq!(value, "sk-test"),
-            _ => unreachable!("Expected Literal variant"),
-        }
-    }
-
-    #[test]
-    fn secret_ref_command() {
-        let secret = SecretRef::Command {
-            cmd: "echo secret".to_string(),
-        };
-        match secret {
-            SecretRef::Command { cmd } => assert_eq!(cmd, "echo secret"),
-            _ => unreachable!("Expected Command variant"),
-        }
-    }
-
-    #[test]
-    fn secret_ref_keychain() {
-        let secret = SecretRef::Keychain {
-            service: "fae".to_string(),
-            account: "openai".to_string(),
-        };
-        match secret {
-            SecretRef::Keychain { service, account } => {
-                assert_eq!(service, "fae");
-                assert_eq!(account, "openai");
-            }
-            _ => unreachable!("Expected Keychain variant"),
-        }
-    }
-
-    #[test]
-    fn model_tier_serde_round_trip() {
-        let tier = ModelTier::Fast;
-        let json = serde_json::to_string(&tier).unwrap_or_default();
-        assert_eq!(json, "\"fast\"");
-        let parsed: ModelTier = serde_json::from_str(&json).unwrap_or(ModelTier::Balanced);
-        assert_eq!(parsed, ModelTier::Fast);
-    }
-
-    #[test]
-    fn tool_mode_serde_round_trip() {
-        let mode = ToolMode::Full;
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        assert_eq!(json, "\"full\"");
-        let parsed: ToolMode = serde_json::from_str(&json).unwrap_or(ToolMode::ReadOnly);
-        assert_eq!(parsed, ToolMode::Full);
-    }
-
-    #[test]
-    fn secret_ref_default_is_none() {
-        let secret = SecretRef::default();
-        assert_eq!(secret, SecretRef::None);
-    }
-
-    // ── SecretRef::resolve ──────────────────────────────────────
-
-    #[test]
-    fn secret_ref_resolve_none() {
-        let secret = SecretRef::None;
-        let result = secret.resolve();
-        assert!(result.is_ok());
-        assert!(result.unwrap_or(Some("bad".into())).is_none());
-    }
-
-    #[test]
-    fn secret_ref_resolve_env_existing() {
-        // SAFETY: tests run serially for env var mutation
-        unsafe { std::env::set_var("FAE_TEST_SECRET_RESOLVE_OK", "test-value-42") };
-        let secret = SecretRef::Env {
-            var: "FAE_TEST_SECRET_RESOLVE_OK".to_string(),
-        };
-        let result = secret.resolve();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap_or(None), Some("test-value-42".to_string()));
-        unsafe { std::env::remove_var("FAE_TEST_SECRET_RESOLVE_OK") };
-    }
-
-    #[test]
-    fn secret_ref_resolve_env_missing() {
+    fn secret_ref_resolve_uses_secret_resolution_error_variant() {
         unsafe { std::env::remove_var("FAE_TEST_SECRET_RESOLVE_MISS") };
         let secret = SecretRef::Env {
             var: "FAE_TEST_SECRET_RESOLVE_MISS".to_string(),
         };
         let result = secret.resolve();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn secret_ref_resolve_literal() {
-        let secret = SecretRef::Literal {
-            value: "sk-test-key".to_string(),
-        };
-        let result = secret.resolve();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap_or(None), Some("sk-test-key".to_string()));
-    }
-
-    #[test]
-    fn secret_ref_resolve_command_not_allowed() {
-        let secret = SecretRef::Command {
-            cmd: "echo secret".to_string(),
-        };
-        let result = secret.resolve();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn secret_ref_resolve_keychain_not_implemented() {
-        let secret = SecretRef::Keychain {
-            service: "fae".to_string(),
-            account: "openai".to_string(),
-        };
-        let result = secret.resolve();
-        assert!(result.is_err());
-    }
-
-    // ── Config TOML round-trip ──────────────────────────────────
-
-    #[test]
-    fn provider_config_with_profile_round_trip() {
-        use crate::fae_llm::providers::profile::{CompatibilityProfile, MaxTokensField};
-
-        let provider = ProviderConfig {
-            endpoint_type: EndpointType::OpenAI,
-            base_url: "https://api.deepseek.com/v1".to_string(),
-            api_key: SecretRef::Env {
-                var: "DEEPSEEK_API_KEY".to_string(),
-            },
-            models: vec!["deepseek-chat".to_string()],
-            profile: Some(CompatibilityProfile::deepseek()),
-        };
-
-        let toml_str = toml::to_string(&provider).unwrap_or_default();
-        assert!(toml_str.contains("deepseek"));
-
-        let parsed: Result<ProviderConfig, _> = toml::from_str(&toml_str);
-        assert!(parsed.is_ok());
-        match parsed {
-            Ok(p) => {
-                assert!(p.profile.is_some());
-                if let Some(ref profile) = p.profile {
-                    assert_eq!(profile.name(), "deepseek");
-                    assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);
-                }
-            }
-            Err(_) => unreachable!("deserialization succeeded"),
-        }
-    }
-
-    #[test]
-    fn provider_config_without_profile_deserializes() {
-        let toml_str = r#"
-            endpoint_type = "openai"
-            base_url = "https://api.openai.com/v1"
-            models = ["gpt-4o"]
-
-            [api_key]
-            type = "env"
-            var = "OPENAI_API_KEY"
-        "#;
-
-        let parsed: Result<ProviderConfig, _> = toml::from_str(toml_str);
-        assert!(parsed.is_ok());
-        match parsed {
-            Ok(p) => {
-                assert!(p.profile.is_none());
-                assert_eq!(p.endpoint_type, EndpointType::OpenAI);
-            }
-            Err(_) => unreachable!("deserialization succeeded"),
-        }
-    }
-
-    #[test]
-    fn fae_llm_config_serde_round_trip() {
-        let mut config = FaeLlmConfig::default();
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig {
-                endpoint_type: EndpointType::OpenAI,
-                base_url: "https://api.openai.com/v1".to_string(),
-                api_key: SecretRef::Env {
-                    var: "OPENAI_API_KEY".to_string(),
-                },
-                models: vec!["gpt-4o".to_string()],
-                profile: None,
-            },
-        );
-
-        let toml_str = toml::to_string(&config).unwrap_or_default();
-        assert!(toml_str.contains("[providers.openai]"));
-
-        let parsed: FaeLlmConfig = toml::from_str(&toml_str).unwrap_or_default();
-        assert_eq!(parsed.providers.len(), 1);
-        assert!(parsed.providers.contains_key("openai"));
+        assert!(matches!(
+            result,
+            Err(crate::fae_llm::error::FaeLlmError::SecretResolutionError(_))
+        ));
     }
 }

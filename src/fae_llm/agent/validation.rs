@@ -38,7 +38,7 @@ use crate::fae_llm::error::FaeLlmError;
 ///
 /// # Errors
 ///
-/// Returns [`FaeLlmError::ToolError`] if:
+/// Returns [`FaeLlmError::ToolValidationError`] if:
 /// - `args_json` is not valid JSON
 /// - A required field is missing
 /// - A field has the wrong type
@@ -49,7 +49,7 @@ pub fn validate_tool_args(
 ) -> Result<serde_json::Value, FaeLlmError> {
     // Parse JSON
     let value: serde_json::Value = serde_json::from_str(args_json).map_err(|e| {
-        FaeLlmError::ToolError(format!("tool '{tool_name}': invalid JSON arguments: {e}"))
+        FaeLlmError::ToolValidationError(format!("tool '{tool_name}': invalid JSON arguments: {e}"))
     })?;
 
     // Schema must describe an object
@@ -61,7 +61,7 @@ pub fn validate_tool_args(
 
     // Arguments must be an object
     let obj = value.as_object().ok_or_else(|| {
-        FaeLlmError::ToolError(format!(
+        FaeLlmError::ToolValidationError(format!(
             "tool '{tool_name}': expected object arguments, got {}",
             json_type_name(&value)
         ))
@@ -73,7 +73,7 @@ pub fn validate_tool_args(
             if let Some(field_name) = req_field.as_str()
                 && !obj.contains_key(field_name)
             {
-                return Err(FaeLlmError::ToolError(format!(
+                return Err(FaeLlmError::ToolValidationError(format!(
                     "tool '{tool_name}': missing required field '{field_name}'"
                 )));
             }
@@ -117,7 +117,7 @@ fn validate_field_type(
     };
 
     if !matches {
-        return Err(FaeLlmError::ToolError(format!(
+        return Err(FaeLlmError::ToolValidationError(format!(
             "tool '{tool_name}': field '{field_name}' expected {expected_type}, got {}",
             json_type_name(value)
         )));
@@ -223,11 +223,11 @@ mod tests {
         let result = validate_tool_args("read", "not json at all", &read_schema());
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolValidationError(msg)) => {
                 assert!(msg.contains("invalid JSON"));
                 assert!(msg.contains("read"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolValidationError"),
         }
     }
 
@@ -250,11 +250,11 @@ mod tests {
         let result = validate_tool_args("read", r#"{"offset": 10}"#, &read_schema());
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolValidationError(msg)) => {
                 assert!(msg.contains("missing required field"));
                 assert!(msg.contains("path"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolValidationError"),
         }
     }
 
@@ -271,11 +271,11 @@ mod tests {
         let result = validate_tool_args("read", r#"{"path": 123}"#, &read_schema());
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolValidationError(msg)) => {
                 assert!(msg.contains("expected string"));
                 assert!(msg.contains("path"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolValidationError"),
         }
     }
 
@@ -288,11 +288,11 @@ mod tests {
         );
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolValidationError(msg)) => {
                 assert!(msg.contains("expected integer"));
                 assert!(msg.contains("offset"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolValidationError"),
         }
     }
 
@@ -305,11 +305,11 @@ mod tests {
         );
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolValidationError(msg)) => {
                 assert!(msg.contains("expected number"));
                 assert!(msg.contains("timeout"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolValidationError"),
         }
     }
 
@@ -359,10 +359,10 @@ mod tests {
         let result = validate_tool_args("read", r#"[1, 2, 3]"#, &read_schema());
         assert!(result.is_err());
         match result {
-            Err(FaeLlmError::ToolError(msg)) => {
+            Err(FaeLlmError::ToolValidationError(msg)) => {
                 assert!(msg.contains("expected object"));
             }
-            _ => unreachable!("expected ToolError"),
+            _ => unreachable!("expected ToolValidationError"),
         }
     }
 

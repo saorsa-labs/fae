@@ -47,7 +47,7 @@ use crate::fae_llm::providers::profile::{
     CompatibilityProfile, apply_profile_to_request, normalize_finish_reason, resolve_profile,
 };
 use crate::fae_llm::providers::sse::SseLineParser;
-use crate::fae_llm::types::{ModelRef, RequestOptions};
+use crate::fae_llm::types::{EndpointType, ModelRef, RequestOptions};
 
 // ── Configuration ─────────────────────────────────────────────
 
@@ -732,6 +732,13 @@ impl ProviderAdapter for OpenAiAdapter {
             .unwrap_or("openai")
     }
 
+    fn endpoint_type(&self) -> EndpointType {
+        match self.config.api_mode {
+            OpenAiApiMode::Completions => EndpointType::OpenAiCompletions,
+            OpenAiApiMode::Responses => EndpointType::OpenAiResponses,
+        }
+    }
+
     async fn send(
         &self,
         messages: &[Message],
@@ -985,8 +992,10 @@ mod tests {
         let body = build_completions_request("gpt-4o", &[], &options, &[]);
 
         assert_eq!(body["max_tokens"], 4096);
-        assert_eq!(body["temperature"], 0.3);
-        assert_eq!(body["top_p"], 0.95);
+        let temp = body["temperature"].as_f64().unwrap_or_default();
+        let top_p = body["top_p"].as_f64().unwrap_or_default();
+        assert!((temp - 0.3).abs() < 1e-6);
+        assert!((top_p - 0.95).abs() < 1e-6);
     }
 
     #[test]

@@ -52,9 +52,12 @@ pub use config::{
     default_config, ensure_config_exists, read_config, validate_config, write_config_atomic,
 };
 pub use error::FaeLlmError;
-pub use events::{FinishReason, LlmEvent};
+pub use events::{AssistantEvent, FinishReason, LlmEvent};
 pub use metadata::{RequestMeta, ResponseMeta};
-pub use provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
+pub use provider::{
+    AssistantEventStream, ConversationContext as ProviderConversationContext, LlmError,
+    LlmEventStream, ProviderAdapter, ToolDefinition,
+};
 pub use providers::anthropic::{AnthropicAdapter, AnthropicConfig};
 pub use providers::local_probe::{
     LocalModel, LocalProbeService, ProbeConfig, ProbeResult, ProbeStatus,
@@ -200,7 +203,7 @@ mod integration_tests {
         let json = serde_json::to_string(&opts).unwrap_or_default();
         let parsed: RequestOptions = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(parsed.max_tokens, Some(4096));
-        assert_eq!(parsed.reasoning_level, ReasoningLevel::Medium);
+        assert_eq!(parsed.reasoning, Some(ReasoningLevel::Medium));
 
         // FinishReason
         let reason = FinishReason::ToolCalls;
@@ -1401,7 +1404,8 @@ mod integration_tests {
         assert_eq!(body["model"], "claude-sonnet-4-5");
         assert_eq!(body["max_tokens"], 2048);
         assert!(body["stream"].as_bool().unwrap_or(false));
-        assert_eq!(body["temperature"], 0.7);
+        let temp = body["temperature"].as_f64().unwrap_or_default();
+        assert!((temp - 0.7).abs() < 1e-6);
 
         // System extracted to top-level
         assert_eq!(body["system"], "You are helpful.");

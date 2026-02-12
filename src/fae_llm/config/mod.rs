@@ -95,6 +95,7 @@ mod integration_tests {
         let reloaded = service2.get().unwrap_or_default();
         assert_eq!(reloaded.runtime.request_timeout_secs, 120);
         assert_eq!(reloaded.defaults.tool_mode, ToolMode::Full);
+        assert_eq!(reloaded.tools.mode, ToolMode::Full);
     }
 
     // ── ensure_config_exists lifecycle ───────────────────────────

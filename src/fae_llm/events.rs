@@ -109,6 +109,109 @@ pub enum LlmEvent {
     },
 }
 
+/// Normalized assistant stream event model used by the locked provider contract.
+///
+/// This model intentionally uses stable names:
+/// - `start`
+/// - `text_start`, `text_delta`, `text_end`
+/// - `thinking_start`, `thinking_delta`, `thinking_end`
+/// - `tool_call_start`, `tool_call_delta`, `tool_call_end`
+/// - `done`
+/// - `error`
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssistantEvent {
+    /// Stream has started.
+    Start {
+        /// Provider request identifier.
+        request_id: String,
+        /// Model reference for the request.
+        model: ModelRef,
+    },
+    /// Marks the beginning of a text segment.
+    TextStart,
+    /// A text delta chunk.
+    TextDelta {
+        /// Delta content.
+        text: String,
+    },
+    /// Marks the end of a text segment.
+    TextEnd,
+    /// Marks the beginning of a thinking segment.
+    ThinkingStart,
+    /// A thinking delta chunk.
+    ThinkingDelta {
+        /// Delta content.
+        text: String,
+    },
+    /// Marks the end of a thinking segment.
+    ThinkingEnd,
+    /// Marks the beginning of a tool call.
+    ToolCallStart {
+        /// Unique tool call identifier.
+        call_id: String,
+        /// Tool/function name.
+        function_name: String,
+    },
+    /// Tool-call argument delta.
+    ToolCallDelta {
+        /// Tool call identifier.
+        call_id: String,
+        /// Partial JSON argument fragment.
+        args_fragment: String,
+    },
+    /// Marks the end of a tool call.
+    ToolCallEnd {
+        /// Tool call identifier.
+        call_id: String,
+    },
+    /// Stream finished normally.
+    Done {
+        /// Why the model stopped.
+        finish_reason: FinishReason,
+    },
+    /// Stream finished with an error.
+    Error {
+        /// Human-readable error.
+        error: String,
+    },
+}
+
+impl LlmEvent {
+    /// Convert an internal LLM event into one or more normalized assistant events.
+    pub fn to_assistant_events(self) -> Vec<AssistantEvent> {
+        match self {
+            Self::StreamStart { request_id, model } => {
+                vec![AssistantEvent::Start { request_id, model }]
+            }
+            Self::TextDelta { text } => vec![
+                AssistantEvent::TextStart,
+                AssistantEvent::TextDelta { text },
+                AssistantEvent::TextEnd,
+            ],
+            Self::ThinkingStart => vec![AssistantEvent::ThinkingStart],
+            Self::ThinkingDelta { text } => vec![AssistantEvent::ThinkingDelta { text }],
+            Self::ThinkingEnd => vec![AssistantEvent::ThinkingEnd],
+            Self::ToolCallStart {
+                call_id,
+                function_name,
+            } => vec![AssistantEvent::ToolCallStart {
+                call_id,
+                function_name,
+            }],
+            Self::ToolCallArgsDelta {
+                call_id,
+                args_fragment,
+            } => vec![AssistantEvent::ToolCallDelta {
+                call_id,
+                args_fragment,
+            }],
+            Self::ToolCallEnd { call_id } => vec![AssistantEvent::ToolCallEnd { call_id }],
+            Self::StreamEnd { finish_reason } => vec![AssistantEvent::Done { finish_reason }],
+            Self::StreamError { error } => vec![AssistantEvent::Error { error }],
+        }
+    }
+}
+
 /// The reason the model stopped generating output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

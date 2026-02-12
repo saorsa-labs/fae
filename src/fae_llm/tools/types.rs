@@ -97,7 +97,7 @@ pub trait Tool: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns `FaeLlmError::ToolError` for execution failures.
+    /// Returns `FaeLlmError` for validation/execution failures.
     fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError>;
 
     /// Whether this tool is allowed in the given mode.

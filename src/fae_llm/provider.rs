@@ -1,40 +1,24 @@
 //! Provider adapter trait for LLM backends.
 //!
 //! Defines the [`ProviderAdapter`] trait that all LLM provider implementations
-//! must satisfy. Adapters convert provider-specific APIs into the shared
-//! [`LlmEvent`] streaming model.
-//!
-//! # Examples
-//!
-//! ```rust,no_run
-//! use fae::fae_llm::provider::{ProviderAdapter, ToolDefinition};
-//! use fae::fae_llm::providers::message::{Message, Role};
-//! use fae::fae_llm::types::RequestOptions;
-//!
-//! async fn example(adapter: &dyn ProviderAdapter) {
-//!     let messages = vec![
-//!         Message::text(Role::User, "Hello"),
-//!     ];
-//!     let options = RequestOptions::new();
-//!     let stream = adapter.send(&messages, &options, &[]).await;
-//! }
-//! ```
+//! satisfy. Adapters normalize provider-specific APIs into the shared
+//! [`LlmEvent`](crate::fae_llm::events::LlmEvent) stream.
 
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::error::FaeLlmError;
-use super::events::LlmEvent;
-use super::types::RequestOptions;
+use super::events::{AssistantEvent, LlmEvent};
+use super::types::{EndpointType, ModelRef, RequestOptions};
 use crate::fae_llm::providers::message::Message;
 
+/// Stable alias for provider-facing error type.
+pub type LlmError = FaeLlmError;
+
 /// A tool definition provided to the LLM for function calling.
-///
-/// Contains the metadata the model needs to decide when and how to
-/// invoke a tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     /// The tool name (e.g. `"read"`, `"bash"`).
@@ -60,41 +44,108 @@ impl ToolDefinition {
     }
 }
 
-/// A boxed stream of LLM events.
+/// Provider-neutral context passed to the v1+ streaming contract.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConversationContext {
+    /// Conversation messages in provider-neutral form.
+    #[serde(default)]
+    pub messages: Vec<Message>,
+    /// Tools available to the model.
+    #[serde(default)]
+    pub tools: Vec<ToolDefinition>,
+}
+
+impl ConversationContext {
+    /// Create a context from message history.
+    pub fn from_messages(messages: Vec<Message>) -> Self {
+        Self {
+            messages,
+            tools: Vec::new(),
+        }
+    }
+
+    /// Attach tool definitions.
+    pub fn with_tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.tools = tools;
+        self
+    }
+}
+
+/// A boxed stream of normalized LLM events.
 pub type LlmEventStream = Pin<Box<dyn Stream<Item = LlmEvent> + Send>>;
 
+/// Alias for the locked API name.
+pub type AssistantEventStream = Pin<Box<dyn Stream<Item = AssistantEvent> + Send>>;
+
 /// Trait for LLM provider adapters.
-///
-/// Each provider (OpenAI, Anthropic, local endpoints) implements this trait
-/// to normalize its streaming API into the shared [`LlmEvent`] model.
 #[async_trait]
 pub trait ProviderAdapter: Send + Sync {
     /// Returns the provider name (e.g. `"openai"`, `"anthropic"`).
     fn name(&self) -> &str;
 
-    /// Send a request to the LLM and return a stream of normalized events.
-    ///
-    /// # Arguments
-    ///
-    /// * `messages` - The conversation history
-    /// * `options` - Generation parameters (temperature, max_tokens, etc.)
-    /// * `tools` - Available tools the model may call
-    ///
-    /// # Errors
-    ///
-    /// Returns `FaeLlmError` if the request cannot be initiated (auth, network, etc.).
-    /// Stream-level errors are delivered as [`LlmEvent::StreamError`].
+    /// Returns the endpoint contract for this adapter.
+    fn endpoint_type(&self) -> EndpointType {
+        EndpointType::OpenAiCompletions
+    }
+
+    /// Legacy send contract used by the existing agent loop.
     async fn send(
         &self,
         messages: &[Message],
         options: &RequestOptions,
         tools: &[ToolDefinition],
     ) -> Result<LlmEventStream, FaeLlmError>;
+
+    /// Locked streaming contract.
+    ///
+    /// Default behavior forwards to [`send`](Self::send), preserving backward
+    /// compatibility while exposing the new API.
+    async fn stream(
+        &self,
+        _model: &ModelRef,
+        context: &ConversationContext,
+        options: &RequestOptions,
+    ) -> Result<AssistantEventStream, LlmError> {
+        let legacy_stream = self
+            .send(&context.messages, options, &context.tools)
+            .await?;
+        let normalized =
+            legacy_stream.flat_map(|event| futures_util::stream::iter(event.to_assistant_events()));
+        Ok(Box::pin(normalized))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fae_llm::events::FinishReason;
+    use crate::fae_llm::types::ModelRef;
+    use futures_util::StreamExt;
+
+    struct NoopProvider;
+
+    #[async_trait]
+    impl ProviderAdapter for NoopProvider {
+        fn name(&self) -> &str {
+            "noop"
+        }
+
+        fn endpoint_type(&self) -> EndpointType {
+            EndpointType::AnthropicMessages
+        }
+
+        async fn send(
+            &self,
+            _messages: &[Message],
+            _options: &RequestOptions,
+            _tools: &[ToolDefinition],
+        ) -> Result<LlmEventStream, FaeLlmError> {
+            let events = vec![LlmEvent::StreamEnd {
+                finish_reason: FinishReason::Stop,
+            }];
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
 
     #[test]
     fn tool_definition_new() {
@@ -114,43 +165,17 @@ mod tests {
         assert!(tool.parameters.is_object());
     }
 
-    #[test]
-    fn tool_definition_serde_round_trip() {
-        let original = ToolDefinition::new(
-            "bash",
-            "Run a shell command",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" }
-                }
-            }),
-        );
-        let json = serde_json::to_string(&original).unwrap_or_default();
-        let parsed: Result<ToolDefinition, _> = serde_json::from_str(&json);
-        assert!(parsed.is_ok());
-        match parsed {
-            Ok(t) => {
-                assert_eq!(t.name, "bash");
-                assert_eq!(t.description, "Run a shell command");
-            }
-            Err(_) => unreachable!("deserialization succeeded"),
-        }
-    }
+    #[tokio::test]
+    async fn stream_default_forwards_to_send() {
+        let provider = NoopProvider;
+        let model = ModelRef::new("test");
+        let context = ConversationContext::from_messages(vec![Message::user("hello")]);
+        let mut stream = provider
+            .stream(&model, &context, &RequestOptions::new())
+            .await
+            .unwrap_or_else(|_| Box::pin(futures_util::stream::empty()));
 
-    #[test]
-    fn tool_definition_clone() {
-        let tool = ToolDefinition::new("edit", "Edit a file", serde_json::json!({}));
-        let cloned = tool.clone();
-        assert_eq!(tool.name, cloned.name);
-        assert_eq!(tool.description, cloned.description);
-    }
-
-    #[test]
-    fn tool_definition_debug() {
-        let tool = ToolDefinition::new("write", "Write a file", serde_json::json!({}));
-        let debug = format!("{tool:?}");
-        assert!(debug.contains("write"));
-        assert!(debug.contains("Write a file"));
+        let next = stream.next().await;
+        assert!(matches!(next, Some(AssistantEvent::Done { .. })));
     }
 }

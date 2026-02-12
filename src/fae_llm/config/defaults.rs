@@ -28,11 +28,13 @@ pub fn default_config() -> FaeLlmConfig {
         "openai".to_string(),
         ProviderConfig {
             endpoint_type: EndpointType::OpenAI,
+            enabled: true,
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: SecretRef::Env {
                 var: "OPENAI_API_KEY".to_string(),
             },
             models: vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()],
+            compat_profile: None,
             profile: None,
         },
     );
@@ -42,6 +44,7 @@ pub fn default_config() -> FaeLlmConfig {
         "anthropic".to_string(),
         ProviderConfig {
             endpoint_type: EndpointType::Anthropic,
+            enabled: true,
             base_url: "https://api.anthropic.com".to_string(),
             api_key: SecretRef::Env {
                 var: "ANTHROPIC_API_KEY".to_string(),
@@ -50,6 +53,7 @@ pub fn default_config() -> FaeLlmConfig {
                 "claude-sonnet-4-5-20250929".to_string(),
                 "claude-haiku-4-5-20251001".to_string(),
             ],
+            compat_profile: None,
             profile: None,
         },
     );
@@ -59,9 +63,11 @@ pub fn default_config() -> FaeLlmConfig {
         "local".to_string(),
         ProviderConfig {
             endpoint_type: EndpointType::Local,
+            enabled: true,
             base_url: "http://localhost:8080".to_string(),
             api_key: SecretRef::None,
             models: Vec::new(),
+            compat_profile: None,
             profile: None,
         },
     );
@@ -100,26 +106,24 @@ pub fn default_config() -> FaeLlmConfig {
         config.tools.insert(
             name.to_string(),
             ToolConfig {
-                name: name.to_string(),
+                name: String::new(),
                 enabled: true,
                 options: std::collections::HashMap::new(),
             },
         );
     }
+    config.tools.set_mode(ToolMode::ReadOnly);
 
     // Defaults
     config.defaults = DefaultsConfig {
         default_provider: Some("anthropic".to_string()),
         default_model: Some("claude-sonnet-4-5".to_string()),
         tool_mode: ToolMode::ReadOnly,
+        reasoning: crate::fae_llm::types::ReasoningLevel::Off,
     };
 
     // Runtime
-    config.runtime = RuntimeConfig {
-        request_timeout_secs: 30,
-        max_retries: 3,
-        log_level: "info".to_string(),
-    };
+    config.runtime = RuntimeConfig::default();
 
     config
 }

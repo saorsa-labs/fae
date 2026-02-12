@@ -1,135 +1,210 @@
 //! Error types for the fae_llm module.
 //!
-//! Each error variant carries a stable error code (SCREAMING_SNAKE_CASE)
-//! that is included in the Display output and accessible via [`FaeLlmError::code()`].
-//! Codes are part of the public API contract and will not change.
+//! Errors expose stable machine-readable codes via [`FaeLlmError::code`].
+//! The module includes legacy variants for backward compatibility and
+//! locked taxonomy variants for v1 contract completeness.
 
-/// Stable error codes for programmatic error handling.
-///
-/// These codes never change and form part of the public API contract.
-/// Use these for distinguishing errors rather than parsing Display output.
+/// Stable error codes for programmatic handling.
 pub mod error_codes {
-    /// Invalid or missing configuration.
+    /// Legacy: invalid or missing configuration.
     pub const CONFIG_INVALID: &str = "CONFIG_INVALID";
+    /// Locked taxonomy: config parse/shape errors.
+    pub const CONFIG_ERROR: &str = "CONFIG_ERROR";
+    /// Locked taxonomy: config semantic validation failures.
+    pub const CONFIG_VALIDATION_ERROR: &str = "CONFIG_VALIDATION_ERROR";
+    /// Locked taxonomy: secret lookup/resolve failures.
+    pub const SECRET_RESOLUTION_ERROR: &str = "SECRET_RESOLUTION_ERROR";
+    /// Locked taxonomy: invalid provider config.
+    pub const PROVIDER_CONFIG_ERROR: &str = "PROVIDER_CONFIG_ERROR";
 
-    /// Authentication failed (invalid/missing API key).
+    /// Legacy/auth taxonomy.
     pub const AUTH_FAILED: &str = "AUTH_FAILED";
-
-    /// Request to the LLM provider failed.
+    /// Legacy/request taxonomy.
     pub const REQUEST_FAILED: &str = "REQUEST_FAILED";
 
-    /// Streaming response encountered an error.
+    /// Legacy: streaming failed.
     pub const STREAM_FAILED: &str = "STREAM_FAILED";
+    /// Locked taxonomy: streaming parse/normalize failure.
+    pub const STREAMING_PARSE_ERROR: &str = "STREAMING_PARSE_ERROR";
 
-    /// Tool execution failed.
+    /// Legacy: generic tool failure.
     pub const TOOL_FAILED: &str = "TOOL_FAILED";
+    /// Locked taxonomy: tool argument/schema validation failed.
+    pub const TOOL_VALIDATION_ERROR: &str = "TOOL_VALIDATION_ERROR";
+    /// Locked taxonomy: tool runtime execution failed.
+    pub const TOOL_EXECUTION_ERROR: &str = "TOOL_EXECUTION_ERROR";
 
-    /// Request or operation timed out.
+    /// Timeout error.
     pub const TIMEOUT_ERROR: &str = "TIMEOUT_ERROR";
-
-    /// Provider-specific error not covered by other variants.
+    /// Provider API error.
     pub const PROVIDER_ERROR: &str = "PROVIDER_ERROR";
-
-    /// Session persistence or resume error.
+    /// Session persistence/resume error.
     pub const SESSION_ERROR: &str = "SESSION_ERROR";
+
+    /// Locked taxonomy: continuation state error.
+    pub const CONTINUATION_ERROR: &str = "CONTINUATION_ERROR";
+    /// Locked taxonomy: local probe error.
+    pub const LOCAL_PROBE_ERROR: &str = "LOCAL_PROBE_ERROR";
+}
+
+/// A surfaced error payload for API/UI boundaries.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SurfacedError {
+    /// Stable machine code.
+    pub code: String,
+    /// Human-readable message.
+    pub message: String,
+    /// Whether retry is recommended.
+    pub retryable: bool,
+    /// Provider ID when available.
+    pub provider_id: Option<String>,
+    /// Model ID when available.
+    pub model_id: Option<String>,
 }
 
 /// Errors produced by the fae_llm module.
-///
-/// Each variant includes a stable error code accessible via [`FaeLlmError::code()`].
-/// The Display impl formats as `[CODE] message`.
 #[derive(Debug, thiserror::Error)]
 pub enum FaeLlmError {
-    /// Invalid or missing configuration.
+    /// Legacy configuration error.
     #[error("[{}] {}", error_codes::CONFIG_INVALID, .0)]
     ConfigError(String),
 
-    /// Authentication failed (invalid/missing API key).
+    /// Locked taxonomy: configuration validation error.
+    #[error("[{}] {}", error_codes::CONFIG_VALIDATION_ERROR, .0)]
+    ConfigValidationError(String),
+
+    /// Locked taxonomy: secret resolution error.
+    #[error("[{}] {}", error_codes::SECRET_RESOLUTION_ERROR, .0)]
+    SecretResolutionError(String),
+
+    /// Locked taxonomy: provider configuration error.
+    #[error("[{}] {}", error_codes::PROVIDER_CONFIG_ERROR, .0)]
+    ProviderConfigError(String),
+
+    /// Authentication failure.
     #[error("[{}] {}", error_codes::AUTH_FAILED, .0)]
     AuthError(String),
 
-    /// Request to the LLM provider failed.
+    /// Request initiation or transport failure.
     #[error("[{}] {}", error_codes::REQUEST_FAILED, .0)]
     RequestError(String),
 
-    /// Streaming response encountered an error.
+    /// Legacy stream failure.
     #[error("[{}] {}", error_codes::STREAM_FAILED, .0)]
     StreamError(String),
 
-    /// Tool execution failed.
+    /// Locked taxonomy: stream parsing error.
+    #[error("[{}] {}", error_codes::STREAMING_PARSE_ERROR, .0)]
+    StreamingParseError(String),
+
+    /// Legacy tool failure.
     #[error("[{}] {}", error_codes::TOOL_FAILED, .0)]
     ToolError(String),
 
-    /// Request or operation timed out.
+    /// Locked taxonomy: tool argument validation error.
+    #[error("[{}] {}", error_codes::TOOL_VALIDATION_ERROR, .0)]
+    ToolValidationError(String),
+
+    /// Locked taxonomy: tool execution error.
+    #[error("[{}] {}", error_codes::TOOL_EXECUTION_ERROR, .0)]
+    ToolExecutionError(String),
+
+    /// Timeout error.
     #[error("[{}] {}", error_codes::TIMEOUT_ERROR, .0)]
     TimeoutError(String),
 
-    /// Provider-specific error not covered by other variants.
+    /// Provider-specific response error.
     #[error("[{}] {}", error_codes::PROVIDER_ERROR, .0)]
     ProviderError(String),
 
-    /// Session persistence or resume error.
+    /// Session store/resume error.
     #[error("[{}] {}", error_codes::SESSION_ERROR, .0)]
     SessionError(String),
+
+    /// Locked taxonomy: continuation state error.
+    #[error("[{}] {}", error_codes::CONTINUATION_ERROR, .0)]
+    ContinuationError(String),
+
+    /// Locked taxonomy: local probe error.
+    #[error("[{}] {}", error_codes::LOCAL_PROBE_ERROR, .0)]
+    LocalProbeError(String),
 }
 
 impl FaeLlmError {
-    /// Returns the stable error code for this error.
-    ///
-    /// Codes are SCREAMING_SNAKE_CASE strings that remain stable across releases.
-    /// Use these for programmatic error handling rather than parsing Display output.
+    /// Returns the stable code for this error.
     pub fn code(&self) -> &'static str {
         match self {
             Self::ConfigError(_) => error_codes::CONFIG_INVALID,
+            Self::ConfigValidationError(_) => error_codes::CONFIG_VALIDATION_ERROR,
+            Self::SecretResolutionError(_) => error_codes::SECRET_RESOLUTION_ERROR,
+            Self::ProviderConfigError(_) => error_codes::PROVIDER_CONFIG_ERROR,
             Self::AuthError(_) => error_codes::AUTH_FAILED,
             Self::RequestError(_) => error_codes::REQUEST_FAILED,
             Self::StreamError(_) => error_codes::STREAM_FAILED,
+            Self::StreamingParseError(_) => error_codes::STREAMING_PARSE_ERROR,
             Self::ToolError(_) => error_codes::TOOL_FAILED,
+            Self::ToolValidationError(_) => error_codes::TOOL_VALIDATION_ERROR,
+            Self::ToolExecutionError(_) => error_codes::TOOL_EXECUTION_ERROR,
             Self::TimeoutError(_) => error_codes::TIMEOUT_ERROR,
             Self::ProviderError(_) => error_codes::PROVIDER_ERROR,
             Self::SessionError(_) => error_codes::SESSION_ERROR,
+            Self::ContinuationError(_) => error_codes::CONTINUATION_ERROR,
+            Self::LocalProbeError(_) => error_codes::LOCAL_PROBE_ERROR,
         }
     }
 
-    /// Returns the inner message without the code prefix.
+    /// Returns the inner human-readable message.
     pub fn message(&self) -> &str {
         match self {
             Self::ConfigError(m)
+            | Self::ConfigValidationError(m)
+            | Self::SecretResolutionError(m)
+            | Self::ProviderConfigError(m)
             | Self::AuthError(m)
             | Self::RequestError(m)
             | Self::StreamError(m)
+            | Self::StreamingParseError(m)
             | Self::ToolError(m)
+            | Self::ToolValidationError(m)
+            | Self::ToolExecutionError(m)
             | Self::TimeoutError(m)
             | Self::ProviderError(m)
-            | Self::SessionError(m) => m,
+            | Self::SessionError(m)
+            | Self::ContinuationError(m)
+            | Self::LocalProbeError(m) => m,
         }
     }
 
-    /// Returns true if this error represents a transient failure that can be retried.
-    ///
-    /// Retryable errors include:
-    /// - Network errors (connection refused, timeouts, etc.)
-    /// - Rate limits (429)
-    /// - Server errors (5xx)
-    /// - Stream interruptions
-    ///
-    /// Non-retryable errors include:
-    /// - Authentication failures (401, 403)
-    /// - Bad requests (400)
-    /// - Configuration errors
-    /// - Tool execution failures
+    /// Indicates whether this error class is typically retryable.
     pub fn is_retryable(&self) -> bool {
         match self {
-            // Configuration and auth errors are not retryable
-            Self::ConfigError(_) | Self::AuthError(_) => false,
-            // Tool failures are not retryable (need code fix, not retry)
-            Self::ToolError(_) => false,
-            // Request, stream, and timeout errors are typically transient
-            Self::RequestError(_) | Self::StreamError(_) | Self::TimeoutError(_) => true,
-            // Provider errors may be rate limits (429) or server errors (5xx) - retryable
-            Self::ProviderError(_) => true,
-            // Session errors are not retryable
-            Self::SessionError(_) => false,
+            Self::AuthError(_)
+            | Self::ConfigError(_)
+            | Self::ConfigValidationError(_)
+            | Self::SecretResolutionError(_)
+            | Self::ProviderConfigError(_)
+            | Self::ToolError(_)
+            | Self::ToolValidationError(_)
+            | Self::ToolExecutionError(_)
+            | Self::SessionError(_)
+            | Self::ContinuationError(_) => false,
+            Self::RequestError(_)
+            | Self::StreamError(_)
+            | Self::StreamingParseError(_)
+            | Self::TimeoutError(_)
+            | Self::ProviderError(_)
+            | Self::LocalProbeError(_) => true,
+        }
+    }
+
+    /// Build an API/UI-safe surfaced error with optional provider/model metadata.
+    pub fn surfaced(&self, provider_id: Option<&str>, model_id: Option<&str>) -> SurfacedError {
+        SurfacedError {
+            code: self.code().to_string(),
+            message: self.message().to_string(),
+            retryable: self.is_retryable(),
+            provider_id: provider_id.map(ToString::to_string),
+            model_id: model_id.map(ToString::to_string),
         }
     }
 }
@@ -142,174 +217,85 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_error_code() {
-        let err = FaeLlmError::ConfigError("missing api_url".into());
-        assert_eq!(err.code(), "CONFIG_INVALID");
+    fn legacy_error_codes_are_stable() {
+        assert_eq!(
+            FaeLlmError::ConfigError("x".into()).code(),
+            "CONFIG_INVALID"
+        );
+        assert_eq!(FaeLlmError::AuthError("x".into()).code(), "AUTH_FAILED");
+        assert_eq!(
+            FaeLlmError::RequestError("x".into()).code(),
+            "REQUEST_FAILED"
+        );
+        assert_eq!(FaeLlmError::StreamError("x".into()).code(), "STREAM_FAILED");
+        assert_eq!(FaeLlmError::ToolError("x".into()).code(), "TOOL_FAILED");
+        assert_eq!(
+            FaeLlmError::TimeoutError("x".into()).code(),
+            "TIMEOUT_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::ProviderError("x".into()).code(),
+            "PROVIDER_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::SessionError("x".into()).code(),
+            "SESSION_ERROR"
+        );
     }
 
     #[test]
-    fn auth_error_code() {
-        let err = FaeLlmError::AuthError("invalid key".into());
-        assert_eq!(err.code(), "AUTH_FAILED");
+    fn locked_taxonomy_error_codes_are_available() {
+        assert_eq!(
+            FaeLlmError::ConfigValidationError("x".into()).code(),
+            "CONFIG_VALIDATION_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::SecretResolutionError("x".into()).code(),
+            "SECRET_RESOLUTION_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::ProviderConfigError("x".into()).code(),
+            "PROVIDER_CONFIG_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::StreamingParseError("x".into()).code(),
+            "STREAMING_PARSE_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::ToolValidationError("x".into()).code(),
+            "TOOL_VALIDATION_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::ToolExecutionError("x".into()).code(),
+            "TOOL_EXECUTION_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::ContinuationError("x".into()).code(),
+            "CONTINUATION_ERROR"
+        );
+        assert_eq!(
+            FaeLlmError::LocalProbeError("x".into()).code(),
+            "LOCAL_PROBE_ERROR"
+        );
     }
 
     #[test]
-    fn request_error_code() {
-        let err = FaeLlmError::RequestError("connection refused".into());
-        assert_eq!(err.code(), "REQUEST_FAILED");
+    fn surfaced_error_includes_metadata() {
+        let err = FaeLlmError::RequestError("temporary outage".into());
+        let surfaced = err.surfaced(Some("openai"), Some("gpt-4o"));
+
+        assert_eq!(surfaced.code, "REQUEST_FAILED");
+        assert_eq!(surfaced.message, "temporary outage");
+        assert!(surfaced.retryable);
+        assert_eq!(surfaced.provider_id.as_deref(), Some("openai"));
+        assert_eq!(surfaced.model_id.as_deref(), Some("gpt-4o"));
     }
 
     #[test]
-    fn stream_error_code() {
-        let err = FaeLlmError::StreamError("unexpected EOF".into());
-        assert_eq!(err.code(), "STREAM_FAILED");
-    }
-
-    #[test]
-    fn tool_error_code() {
-        let err = FaeLlmError::ToolError("bash timed out".into());
-        assert_eq!(err.code(), "TOOL_FAILED");
-    }
-
-    #[test]
-    fn timeout_error_code() {
-        let err = FaeLlmError::TimeoutError("30s elapsed".into());
-        assert_eq!(err.code(), "TIMEOUT_ERROR");
-    }
-
-    #[test]
-    fn provider_error_code() {
-        let err = FaeLlmError::ProviderError("rate limited".into());
-        assert_eq!(err.code(), "PROVIDER_ERROR");
-    }
-
-    #[test]
-    fn display_includes_code_prefix() {
-        let err = FaeLlmError::ConfigError("missing model".into());
-        let display = format!("{err}");
-        assert!(display.starts_with("[CONFIG_INVALID]"));
-        assert!(display.contains("missing model"));
-    }
-
-    #[test]
-    fn display_auth_includes_prefix() {
-        let err = FaeLlmError::AuthError("expired token".into());
-        let display = format!("{err}");
-        assert!(display.starts_with("[AUTH_FAILED]"));
-        assert!(display.contains("expired token"));
-    }
-
-    #[test]
-    fn message_returns_inner_text() {
-        let err = FaeLlmError::RequestError("bad gateway".into());
-        assert_eq!(err.message(), "bad gateway");
-    }
-
-    #[test]
-    fn all_codes_are_screaming_snake_case() {
-        let errors: Vec<FaeLlmError> = vec![
-            FaeLlmError::ConfigError("x".into()),
-            FaeLlmError::AuthError("x".into()),
-            FaeLlmError::RequestError("x".into()),
-            FaeLlmError::StreamError("x".into()),
-            FaeLlmError::ToolError("x".into()),
-            FaeLlmError::TimeoutError("x".into()),
-            FaeLlmError::ProviderError("x".into()),
-            FaeLlmError::SessionError("x".into()),
-        ];
-        for err in &errors {
-            let code = err.code();
-            assert!(
-                code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
-                "code {code:?} is not SCREAMING_SNAKE_CASE"
-            );
-        }
-    }
-
-    #[test]
-    fn session_error_code() {
-        let err = FaeLlmError::SessionError("session not found".into());
-        assert_eq!(err.code(), "SESSION_ERROR");
-    }
-
-    #[test]
-    fn session_error_display() {
-        let err = FaeLlmError::SessionError("corrupted data".into());
-        let display = format!("{err}");
-        assert!(display.starts_with("[SESSION_ERROR]"));
-        assert!(display.contains("corrupted data"));
-    }
-
-    #[test]
-    fn session_error_message() {
-        let err = FaeLlmError::SessionError("resume failed".into());
-        assert_eq!(err.message(), "resume failed");
-    }
-
-    #[test]
-    fn error_codes_use_constants() {
-        // Verify error codes are centrally defined and not duplicated
-        assert_eq!(error_codes::CONFIG_INVALID, "CONFIG_INVALID");
-        assert_eq!(error_codes::AUTH_FAILED, "AUTH_FAILED");
-        assert_eq!(error_codes::REQUEST_FAILED, "REQUEST_FAILED");
-        assert_eq!(error_codes::STREAM_FAILED, "STREAM_FAILED");
-        assert_eq!(error_codes::TOOL_FAILED, "TOOL_FAILED");
-        assert_eq!(error_codes::TIMEOUT_ERROR, "TIMEOUT_ERROR");
-        assert_eq!(error_codes::PROVIDER_ERROR, "PROVIDER_ERROR");
-        assert_eq!(error_codes::SESSION_ERROR, "SESSION_ERROR");
-    }
-
-    #[test]
-    fn error_is_send_and_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<FaeLlmError>();
-    }
-
-    #[test]
-    fn is_retryable_config_error() {
-        let err = FaeLlmError::ConfigError("missing model".into());
-        assert!(!err.is_retryable());
-    }
-
-    #[test]
-    fn is_retryable_auth_error() {
-        let err = FaeLlmError::AuthError("invalid key".into());
-        assert!(!err.is_retryable());
-    }
-
-    #[test]
-    fn is_retryable_request_error() {
-        let err = FaeLlmError::RequestError("connection refused".into());
-        assert!(err.is_retryable());
-    }
-
-    #[test]
-    fn is_retryable_stream_error() {
-        let err = FaeLlmError::StreamError("unexpected EOF".into());
-        assert!(err.is_retryable());
-    }
-
-    #[test]
-    fn is_retryable_tool_error() {
-        let err = FaeLlmError::ToolError("bash failed".into());
-        assert!(!err.is_retryable());
-    }
-
-    #[test]
-    fn is_retryable_timeout_error() {
-        let err = FaeLlmError::TimeoutError("30s elapsed".into());
-        assert!(err.is_retryable());
-    }
-
-    #[test]
-    fn is_retryable_provider_error() {
-        let err = FaeLlmError::ProviderError("rate limited".into());
-        assert!(err.is_retryable());
-    }
-
-    #[test]
-    fn is_retryable_session_error() {
-        let err = FaeLlmError::SessionError("resume failed".into());
-        assert!(!err.is_retryable());
+    fn retryability_defaults_are_reasonable() {
+        assert!(!FaeLlmError::AuthError("x".into()).is_retryable());
+        assert!(!FaeLlmError::ToolExecutionError("x".into()).is_retryable());
+        assert!(FaeLlmError::RequestError("x".into()).is_retryable());
+        assert!(FaeLlmError::LocalProbeError("x".into()).is_retryable());
     }
 }

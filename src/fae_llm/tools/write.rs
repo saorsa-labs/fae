@@ -64,15 +64,16 @@ impl Tool for WriteTool {
     }
 
     fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| FaeLlmError::ToolError("missing required argument: path".into()))?;
+        let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            FaeLlmError::ToolValidationError("missing required argument: path".into())
+        })?;
 
         let content = args
             .get("content")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| FaeLlmError::ToolError("missing required argument: content".into()))?;
+            .ok_or_else(|| {
+                FaeLlmError::ToolValidationError("missing required argument: content".into())
+            })?;
 
         let path = validate_write_path(path_str)?;
 

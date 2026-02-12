@@ -70,23 +70,22 @@ impl Tool for EditTool {
     }
 
     fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| FaeLlmError::ToolError("missing required argument: path".into()))?;
+        let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            FaeLlmError::ToolValidationError("missing required argument: path".into())
+        })?;
 
         let old_string = args
             .get("old_string")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                FaeLlmError::ToolError("missing required argument: old_string".into())
+                FaeLlmError::ToolValidationError("missing required argument: old_string".into())
             })?;
 
         let new_string = args
             .get("new_string")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                FaeLlmError::ToolError("missing required argument: new_string".into())
+                FaeLlmError::ToolValidationError("missing required argument: new_string".into())
             })?;
 
         let path = validate_write_path(path_str)?;

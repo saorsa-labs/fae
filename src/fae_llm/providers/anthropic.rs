@@ -27,7 +27,7 @@ use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::message::{Message, MessageContent, Role};
 use crate::fae_llm::providers::sse::SseLineParser;
-use crate::fae_llm::types::{ModelRef, RequestOptions};
+use crate::fae_llm::types::{EndpointType, ModelRef, RequestOptions};
 
 // ── Configuration ──────────────────────────────────────────────
 
@@ -486,6 +486,10 @@ impl ProviderAdapter for AnthropicAdapter {
         "anthropic"
     }
 
+    fn endpoint_type(&self) -> EndpointType {
+        EndpointType::AnthropicMessages
+    }
+
     async fn send(
         &self,
         messages: &[Message],
@@ -672,8 +676,10 @@ mod tests {
         let opts = RequestOptions::new().with_temperature(0.5).with_top_p(0.9);
         let body = build_messages_request("model", &[Message::user("Hi")], &opts, &[]);
 
-        assert_eq!(body["temperature"], 0.5);
-        assert_eq!(body["top_p"], 0.9);
+        let temp = body["temperature"].as_f64().unwrap_or_default();
+        let top_p = body["top_p"].as_f64().unwrap_or_default();
+        assert!((temp - 0.5).abs() < 1e-6);
+        assert!((top_p - 0.9).abs() < 1e-6);
     }
 
     // ── Message Conversion ─────────────────────────────────────

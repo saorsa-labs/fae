@@ -67,10 +67,9 @@ impl Tool for ReadTool {
     }
 
     fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| FaeLlmError::ToolError("missing required argument: path".into()))?;
+        let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            FaeLlmError::ToolValidationError("missing required argument: path".into())
+        })?;
 
         let path = validate_read_path(path_str)?;
 

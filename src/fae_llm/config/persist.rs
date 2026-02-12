@@ -14,15 +14,23 @@ use super::types::FaeLlmConfig;
 /// # Errors
 /// Returns `FaeLlmError::ConfigError` if the file cannot be read or parsed.
 pub fn read_config(path: &Path) -> Result<FaeLlmConfig, FaeLlmError> {
-    let contents = std::fs::read_to_string(path).map_err(|e| {
-        FaeLlmError::ConfigError(format!(
-            "failed to read config file '{}': {e}",
-            path.display()
-        ))
-    })?;
+    let contents = read_config_text(path)?;
     toml::from_str(&contents).map_err(|e| {
         FaeLlmError::ConfigError(format!(
             "failed to parse config file '{}': {e}",
+            path.display()
+        ))
+    })
+}
+
+/// Read raw TOML config text from disk.
+///
+/// # Errors
+/// Returns `FaeLlmError::ConfigError` if the file cannot be read.
+pub fn read_config_text(path: &Path) -> Result<String, FaeLlmError> {
+    std::fs::read_to_string(path).map_err(|e| {
+        FaeLlmError::ConfigError(format!(
+            "failed to read config file '{}': {e}",
             path.display()
         ))
     })
@@ -37,8 +45,23 @@ pub fn read_config(path: &Path) -> Result<FaeLlmConfig, FaeLlmError> {
 pub fn write_config_atomic(path: &Path, config: &FaeLlmConfig) -> Result<(), FaeLlmError> {
     let toml_str = toml::to_string_pretty(config)
         .map_err(|e| FaeLlmError::ConfigError(format!("failed to serialize config: {e}")))?;
+    write_toml_text_atomic(path, &toml_str)
+}
 
+/// Write TOML text atomically (temp file → fsync → rename).
+///
+/// This preserves caller-provided formatting/comments and avoids partial writes.
+pub fn write_toml_text_atomic(path: &Path, toml_text: &str) -> Result<(), FaeLlmError> {
     let tmp_path = path.with_extension("toml.tmp");
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            FaeLlmError::ConfigError(format!(
+                "failed to create config directory '{}': {e}",
+                parent.display()
+            ))
+        })?;
+    }
 
     let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
         FaeLlmError::ConfigError(format!(
@@ -47,7 +70,7 @@ pub fn write_config_atomic(path: &Path, config: &FaeLlmConfig) -> Result<(), Fae
         ))
     })?;
 
-    file.write_all(toml_str.as_bytes())
+    file.write_all(toml_text.as_bytes())
         .map_err(|e| FaeLlmError::ConfigError(format!("failed to write temp file: {e}")))?;
 
     file.sync_all()
@@ -106,11 +129,13 @@ mod tests {
             "openai".to_string(),
             ProviderConfig {
                 endpoint_type: EndpointType::OpenAI,
+                enabled: true,
                 base_url: "https://api.openai.com/v1".to_string(),
                 api_key: SecretRef::Env {
                     var: "OPENAI_API_KEY".to_string(),
                 },
                 models: vec!["gpt-4o".to_string()],
+                compat_profile: None,
                 profile: None,
             },
         );

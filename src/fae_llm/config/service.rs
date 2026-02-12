@@ -9,8 +9,11 @@
 use crate::fae_llm::error::FaeLlmError;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use toml_edit::DocumentMut;
 
-use super::persist::{backup_config, read_config, write_config_atomic};
+use super::persist::{
+    backup_config, read_config, read_config_text, write_config_atomic, write_toml_text_atomic,
+};
 use super::types::{FaeLlmConfig, ToolMode};
 
 /// Thread-safe config service with caching, validation, and persistence.
@@ -81,19 +84,58 @@ impl ConfigService {
     where
         F: FnOnce(&mut FaeLlmConfig),
     {
-        let mut config = self.get()?;
-        f(&mut config);
-        validate_config(&config)?;
+        let old_config = self.get()?;
+        let mut new_config = old_config.clone();
+        f(&mut new_config);
+        validate_config(&new_config)?;
 
-        backup_config(&self.path)?;
-        write_config_atomic(&self.path, &config)?;
+        self.persist_round_trip_update(&old_config, &new_config)?;
 
         let mut cache = self
             .cache
             .write()
             .map_err(|_| FaeLlmError::ConfigError("config cache lock poisoned".into()))?;
-        *cache = config;
+        *cache = new_config;
         Ok(())
+    }
+
+    fn persist_round_trip_update(
+        &self,
+        old_config: &FaeLlmConfig,
+        new_config: &FaeLlmConfig,
+    ) -> Result<(), FaeLlmError> {
+        // If the on-disk file was removed, fall back to full atomic write.
+        if !self.path.exists() {
+            backup_config(&self.path)?;
+            return write_config_atomic(&self.path, new_config);
+        }
+
+        let raw = read_config_text(&self.path)?;
+        let mut doc: DocumentMut = raw.parse().map_err(|e| {
+            FaeLlmError::ConfigError(format!(
+                "failed to parse config file '{}': {e}",
+                self.path.display()
+            ))
+        })?;
+
+        let old_value = toml::Value::try_from(old_config.clone())
+            .map_err(|e| FaeLlmError::ConfigError(format!("failed to convert old config: {e}")))?;
+        let new_value = toml::Value::try_from(new_config.clone())
+            .map_err(|e| FaeLlmError::ConfigError(format!("failed to convert new config: {e}")))?;
+
+        merge_known_tree(doc.as_item_mut(), Some(&old_value), &new_value)?;
+
+        let merged_text = doc.to_string();
+        let merged_config: FaeLlmConfig = toml::from_str(&merged_text).map_err(|e| {
+            FaeLlmError::ConfigError(format!(
+                "merged config is invalid for '{}': {e}",
+                self.path.display()
+            ))
+        })?;
+        validate_config(&merged_config)?;
+
+        backup_config(&self.path)?;
+        write_toml_text_atomic(&self.path, &merged_text)
     }
 
     // ── Partial update methods (Task 6) ──
@@ -133,6 +175,7 @@ impl ConfigService {
     /// Set the tool execution mode.
     pub fn set_tool_mode(&self, mode: ToolMode) -> Result<(), FaeLlmError> {
         self.update(|c| {
+            c.tools.set_mode(mode);
             c.defaults.tool_mode = mode;
         })
     }
@@ -224,7 +267,7 @@ pub fn validate_config(config: &FaeLlmConfig) -> Result<(), FaeLlmError> {
     if let Some(ref provider_id) = config.defaults.default_provider
         && !config.providers.contains_key(provider_id)
     {
-        return Err(FaeLlmError::ConfigError(format!(
+        return Err(FaeLlmError::ConfigValidationError(format!(
             "default_provider '{provider_id}' not found in providers"
         )));
     }
@@ -233,7 +276,7 @@ pub fn validate_config(config: &FaeLlmConfig) -> Result<(), FaeLlmError> {
     if let Some(ref model_id) = config.defaults.default_model
         && !config.models.contains_key(model_id)
     {
-        return Err(FaeLlmError::ConfigError(format!(
+        return Err(FaeLlmError::ConfigValidationError(format!(
             "default_model '{model_id}' not found in models"
         )));
     }
@@ -241,13 +284,64 @@ pub fn validate_config(config: &FaeLlmConfig) -> Result<(), FaeLlmError> {
     // Check provider base_urls are non-empty
     for (name, provider) in &config.providers {
         if provider.base_url.is_empty() {
-            return Err(FaeLlmError::ConfigError(format!(
+            return Err(FaeLlmError::ConfigValidationError(format!(
                 "provider '{name}' has empty base_url"
             )));
         }
     }
 
+    // Check tool names only use the locked v1 set.
+    if !config.tools.has_only_known_tool_names() {
+        return Err(FaeLlmError::ConfigValidationError(
+            "tools config contains unknown tool names; allowed: read, bash, edit, write".into(),
+        ));
+    }
+
     Ok(())
+}
+
+fn merge_known_tree(
+    doc_item: &mut toml_edit::Item,
+    old_value: Option<&toml::Value>,
+    new_value: &toml::Value,
+) -> Result<(), FaeLlmError> {
+    match new_value {
+        toml::Value::Table(new_table) => {
+            if !doc_item.is_table() {
+                *doc_item = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+
+            let table = doc_item.as_table_mut().ok_or_else(|| {
+                FaeLlmError::ConfigError("failed to access TOML table during merge".into())
+            })?;
+            let old_table = old_value.and_then(toml::Value::as_table);
+
+            for (key, new_child) in new_table {
+                let old_child = old_table.and_then(|tbl| tbl.get(key));
+                merge_known_tree(&mut table[key], old_child, new_child)?;
+            }
+
+            if let Some(old_table) = old_table {
+                for key in old_table.keys() {
+                    if !new_table.contains_key(key) {
+                        table.remove(key);
+                    }
+                }
+            }
+        }
+        _ => {
+            *doc_item = toml_value_to_item(new_value)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn toml_value_to_item(value: &toml::Value) -> Result<toml_edit::Item, FaeLlmError> {
+    let parsed: toml_edit::Value = value.to_string().parse().map_err(|e| {
+        FaeLlmError::ConfigError(format!("failed to convert TOML value during merge: {e}"))
+    })?;
+    Ok(toml_edit::Item::Value(parsed))
 }
 
 #[cfg(test)]
@@ -367,6 +461,16 @@ mod tests {
 
         let config = service.get().unwrap_or_default();
         assert_eq!(config.defaults.tool_mode, ToolMode::Full);
+        assert_eq!(config.tools.mode, ToolMode::Full);
+        assert_eq!(
+            config.tools.effective_enabled(),
+            vec![
+                "read".to_string(),
+                "bash".to_string(),
+                "edit".to_string(),
+                "write".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -443,14 +547,25 @@ mod tests {
             "test".to_string(),
             ProviderConfig {
                 endpoint_type: EndpointType::Custom,
+                enabled: true,
                 base_url: "http://localhost".to_string(),
                 api_key: super::super::types::SecretRef::None,
                 models: Vec::new(),
+                compat_profile: None,
                 profile: None,
             },
         );
         // No default_provider or default_model set — should be OK
         let result = validate_config(&config);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_config_rejects_unknown_tool_names() {
+        let mut config = default_config();
+        config.tools.enabled.push("grep".to_string());
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(FaeLlmError::ConfigValidationError(_))));
     }
 }

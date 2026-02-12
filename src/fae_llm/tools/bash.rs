@@ -74,10 +74,14 @@ impl Tool for BashTool {
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| FaeLlmError::ToolError("missing required argument: command".into()))?;
+            .ok_or_else(|| {
+                FaeLlmError::ToolValidationError("missing required argument: command".into())
+            })?;
 
         if command.is_empty() {
-            return Err(FaeLlmError::ToolError("command cannot be empty".into()));
+            return Err(FaeLlmError::ToolValidationError(
+                "command cannot be empty".into(),
+            ));
         }
 
         let timeout_secs = args
