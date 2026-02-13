@@ -18,17 +18,21 @@
 
 pub mod bash;
 pub mod edit;
+pub mod input_sanitize;
 pub mod path_validation;
 pub mod read;
 pub mod registry;
+pub mod sanitize;
 pub mod types;
 pub mod write;
 
 pub use bash::BashTool;
 pub use edit::EditTool;
+pub use input_sanitize::{sanitize_command_input, sanitize_content_input, SanitizedInput};
 pub use path_validation::{validate_read_path, validate_write_path};
 pub use read::ReadTool;
 pub use registry::ToolRegistry;
+pub use sanitize::{SanitizedOutput, sanitize_tool_output};
 pub use types::{Tool, ToolResult, truncate_output};
 pub use write::WriteTool;
 
@@ -39,15 +43,25 @@ mod mode_gating_tests;
 mod integration_tests {
     use super::*;
     use crate::fae_llm::config::types::ToolMode;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
-    fn make_registry(mode: ToolMode) -> ToolRegistry {
+    fn make_registry_with_root(mode: ToolMode, workspace_root: PathBuf) -> ToolRegistry {
         let mut reg = ToolRegistry::new(mode);
-        reg.register(Arc::new(ReadTool::new()));
+        reg.register(Arc::new(ReadTool::with_workspace_root(
+            workspace_root.clone(),
+        )));
         reg.register(Arc::new(BashTool::new()));
-        reg.register(Arc::new(EditTool::new()));
-        reg.register(Arc::new(WriteTool::new()));
+        reg.register(Arc::new(EditTool::with_workspace_root(
+            workspace_root.clone(),
+        )));
+        reg.register(Arc::new(WriteTool::with_workspace_root(workspace_root)));
         reg
+    }
+
+    fn make_registry(mode: ToolMode) -> ToolRegistry {
+        let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        make_registry_with_root(mode, workspace_root)
     }
 
     fn temp_dir() -> tempfile::TempDir {
@@ -162,7 +176,7 @@ mod integration_tests {
         let file_path = dir.path().join("workflow.txt");
         let path_str = file_path.to_str().unwrap_or("/tmp/fae_test_workflow.txt");
 
-        let reg = make_registry(ToolMode::Full);
+        let reg = make_registry_with_root(ToolMode::Full, dir.path().to_path_buf());
 
         // Step 1: Write a file
         let write_tool = reg.get("write");
@@ -259,7 +273,7 @@ mod integration_tests {
             .join("\n");
         std::fs::write(&file_path, &lines).unwrap_or_default();
 
-        let reg = make_registry(ToolMode::Full);
+        let reg = make_registry_with_root(ToolMode::Full, dir.path().to_path_buf());
         let read = match reg.get("read") {
             Some(t) => t,
             None => unreachable!("read should be available"),
