@@ -43,7 +43,7 @@ const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"
 /// Checks cache status and queries file sizes for each file.
 /// The plan is used by the GUI to show total download size before starting.
 pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
-    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Agent);
+    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local);
 
     let mut files = Vec::new();
 
@@ -137,8 +137,8 @@ pub async fn initialize_models_with_progress(
     callback: Option<&ProgressCallback>,
 ) -> Result<InitializedModels> {
     let model_manager = ModelManager::new(&config.models)?;
-    // Local and Agent backends rely on a local model for in-process inference.
-    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Agent);
+    // Only the local backend relies on an in-process model.
+    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local);
 
     if matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Api)
         && !matches!(config.llm.tool_mode, AgentToolMode::Off)

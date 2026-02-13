@@ -3,15 +3,13 @@
 use std::sync::{Arc, Mutex};
 
 use canvas_mcp::tools::{InteractParams, Interaction};
-use saorsa_agent::Tool;
-use saorsa_agent::error::{Result as ToolResult, SaorsaAgentError};
 
 use crate::canvas::registry::CanvasSessionRegistry;
+use crate::fae_llm::config::types::ToolMode;
+use crate::fae_llm::error::FaeLlmError;
+use crate::fae_llm::tools::types::{Tool, ToolResult};
 
 /// Tool that reports user canvas interactions back to the LLM.
-///
-/// The LLM can use this to understand what the user touched, selected,
-/// or spoke about in the canvas context.
 pub struct CanvasInteractTool {
     registry: Arc<Mutex<CanvasSessionRegistry>>,
 }
@@ -23,7 +21,6 @@ impl CanvasInteractTool {
     }
 }
 
-#[async_trait::async_trait]
 impl Tool for CanvasInteractTool {
     fn name(&self) -> &str {
         "canvas_interact"
@@ -34,7 +31,7 @@ impl Tool for CanvasInteractTool {
          Returns an AI-friendly description of what the user interacted with."
     }
 
-    fn input_schema(&self) -> serde_json::Value {
+    fn schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -62,33 +59,42 @@ impl Tool for CanvasInteractTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<String> {
-        let params: InteractParams = serde_json::from_value(input)
-            .map_err(|e| SaorsaAgentError::Tool(format!("invalid canvas_interact params: {e}")))?;
+    fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
+        let params: InteractParams = serde_json::from_value(args).map_err(|e| {
+            FaeLlmError::ToolValidationError(format!("invalid canvas_interact params: {e}"))
+        })?;
 
-        // Verify session exists.
-        let registry = self
-            .registry
-            .lock()
-            .map_err(|_| SaorsaAgentError::Tool("session registry lock poisoned".to_owned()))?;
+        let registry = match self.registry.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Ok(ToolResult::failure(
+                    "session registry lock poisoned".to_string(),
+                ));
+            }
+        };
 
         if registry.get(&params.session_id).is_none() {
-            return Err(SaorsaAgentError::Tool(format!(
+            return Ok(ToolResult::failure(format!(
                 "canvas session '{}' not found",
                 params.session_id
             )));
         }
 
         let interpretation = interpret_interaction(&params.interaction);
-
         let response = serde_json::json!({
             "success": true,
             "session_id": params.session_id,
             "interpretation": interpretation,
         });
+        let response_json = serde_json::to_string(&response).map_err(|e| {
+            FaeLlmError::ToolExecutionError(format!("failed to serialize response: {e}"))
+        })?;
 
-        serde_json::to_string(&response)
-            .map_err(|e| SaorsaAgentError::Tool(format!("failed to serialize response: {e}")))
+        Ok(ToolResult::success(response_json))
+    }
+
+    fn allowed_in_mode(&self, _mode: ToolMode) -> bool {
+        true
     }
 }
 
@@ -135,8 +141,8 @@ mod tests {
         Arc::new(Mutex::new(reg))
     }
 
-    #[tokio::test]
-    async fn test_interact_touch() {
+    #[test]
+    fn test_interact_touch() {
         let reg = setup_registry("test");
         let tool = CanvasInteractTool::new(reg);
 
@@ -148,16 +154,17 @@ mod tests {
             }
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
-        let output: serde_json::Value =
-            serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+        let result = result.unwrap_or_else(|_| unreachable!());
+        assert!(result.success);
+        let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
         assert_eq!(output["success"], true);
         assert_eq!(output["interpretation"]["type"], "touch");
     }
 
-    #[tokio::test]
-    async fn test_interact_voice() {
+    #[test]
+    fn test_interact_voice() {
         let reg = setup_registry("test");
         let tool = CanvasInteractTool::new(reg);
 
@@ -169,10 +176,11 @@ mod tests {
             }
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
-        let output: serde_json::Value =
-            serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+        let result = result.unwrap_or_else(|_| unreachable!());
+        assert!(result.success);
+        let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
         assert_eq!(output["interpretation"]["type"], "voice");
         assert_eq!(
             output["interpretation"]["transcript"],
@@ -180,8 +188,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_interact_select() {
+    #[test]
+    fn test_interact_select() {
         let reg = setup_registry("test");
         let tool = CanvasInteractTool::new(reg);
 
@@ -193,12 +201,13 @@ mod tests {
             }
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
+        assert!(result.unwrap_or_else(|_| unreachable!()).success);
     }
 
-    #[tokio::test]
-    async fn test_interact_missing_session() {
+    #[test]
+    fn test_interact_missing_session() {
         let reg = setup_registry("test");
         let tool = CanvasInteractTool::new(reg);
 
@@ -210,19 +219,18 @@ mod tests {
             }
         });
 
-        let result = tool.execute(input).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found"));
+        let result = tool.execute(input);
+        assert!(result.is_ok());
+        assert!(!result.unwrap_or_else(|_| unreachable!()).success);
     }
 
-    #[tokio::test]
-    async fn test_interact_invalid_json() {
+    #[test]
+    fn test_interact_invalid_json() {
         let reg = setup_registry("test");
         let tool = CanvasInteractTool::new(reg);
 
         let input = serde_json::json!({ "bad": "input" });
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_err());
     }
 

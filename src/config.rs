@@ -153,7 +153,7 @@ pub enum LlmBackend {
     Local,
     /// Remote inference via OpenAI-compatible API (Ollama, MLX, etc.).
     Api,
-    /// Agent loop via `saorsa-agent` + `saorsa-ai` (in-process by default, tool-capable).
+    /// Agent loop via internal fae_llm with tool calling (uses OpenAI/Anthropic providers).
     Agent,
 }
 
@@ -170,6 +170,30 @@ pub enum AgentToolMode {
     ReadWrite,
     /// Full tools (adds shell + web search; highest risk).
     Full,
+}
+
+/// Behaviour when user messages arrive during an active LLM run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmMessageQueueMode {
+    /// Queue each message and replay one-by-one after the active run completes.
+    #[default]
+    Followup,
+    /// Queue messages and replay them as a single combined message.
+    Collect,
+}
+
+/// Drop behaviour when the LLM pending-message queue is full.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmMessageQueueDropPolicy {
+    /// Drop the oldest queued message to keep the newest input.
+    #[default]
+    Oldest,
+    /// Drop the newest queued message before enqueueing the new input.
+    Newest,
+    /// Do not drop queued items; reject incoming messages when full.
+    None,
 }
 
 /// Language model configuration.
@@ -212,6 +236,18 @@ pub struct LlmConfig {
     ///
     /// This bounds context growth over time. Set to 0 to disable trimming.
     pub max_history_messages: usize,
+    /// Behaviour when user input arrives while the assistant is generating.
+    pub message_queue_mode: LlmMessageQueueMode,
+    /// Maximum queued user inputs retained while a run is active.
+    ///
+    /// Set to 0 to disable queueing (new inputs are dropped while active).
+    #[serde(default = "default_llm_message_queue_max_pending")]
+    pub message_queue_max_pending: usize,
+    /// Drop strategy when `message_queue_max_pending` is exceeded.
+    pub message_queue_drop_policy: LlmMessageQueueDropPolicy,
+    /// Whether explicit stop/sleep actions clear queued user inputs.
+    #[serde(default = "default_llm_clear_queue_on_stop")]
+    pub clear_queue_on_stop: bool,
     /// Personality profile name.
     ///
     /// Built-in options: `"fae"` (full identity profile) or `"default"` (core prompt only).
@@ -262,6 +298,10 @@ impl Default for LlmConfig {
             top_p: 0.9,
             repeat_penalty: 1.1,
             max_history_messages: 24,
+            message_queue_mode: LlmMessageQueueMode::default(),
+            message_queue_max_pending: default_llm_message_queue_max_pending(),
+            message_queue_drop_policy: LlmMessageQueueDropPolicy::default(),
+            clear_queue_on_stop: default_llm_clear_queue_on_stop(),
             personality: "fae".to_owned(),
             // User add-on prompt (optional). The fixed base prompt is always applied.
             system_prompt: String::new(),
@@ -294,6 +334,14 @@ pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize
 
 fn default_model_selection_timeout_secs() -> u32 {
     30
+}
+
+fn default_llm_message_queue_max_pending() -> usize {
+    8
+}
+
+fn default_llm_clear_queue_on_stop() -> bool {
+    true
 }
 
 impl LlmConfig {
@@ -397,8 +445,8 @@ Personal context:\n\
             }
         } else {
             match self.backend {
-                LlmBackend::Local | LlmBackend::Agent => format!("local/{}", self.model_id),
-                LlmBackend::Api => {
+                LlmBackend::Local => format!("local/{}", self.model_id),
+                LlmBackend::Agent | LlmBackend::Api => {
                     format!("{}/{}", self.api_url, self.api_model)
                 }
             }
@@ -837,6 +885,13 @@ mod tests {
     fn llm_config_model_selection_timeout_default() {
         let config = LlmConfig::default();
         assert_eq!(config.model_selection_timeout_secs, 30);
+        assert_eq!(config.message_queue_mode, LlmMessageQueueMode::Followup);
+        assert_eq!(config.message_queue_max_pending, 8);
+        assert_eq!(
+            config.message_queue_drop_policy,
+            LlmMessageQueueDropPolicy::Oldest
+        );
+        assert!(config.clear_queue_on_stop);
     }
 
     #[test]
@@ -854,5 +909,66 @@ model_selection_timeout_secs = 60
         let toml_str = "[llm]";
         let config: SpeechConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.llm.model_selection_timeout_secs, 30);
+        assert_eq!(config.llm.message_queue_mode, LlmMessageQueueMode::Followup);
+        assert_eq!(config.llm.message_queue_max_pending, 8);
+        assert_eq!(
+            config.llm.message_queue_drop_policy,
+            LlmMessageQueueDropPolicy::Oldest
+        );
+        assert!(config.llm.clear_queue_on_stop);
+    }
+
+    #[test]
+    fn llm_message_queue_mode_deserializes() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize)]
+        struct Wrapper {
+            mode: LlmMessageQueueMode,
+        }
+
+        let followup: Wrapper = toml::from_str(r#"mode = "followup""#).unwrap();
+        assert_eq!(followup.mode, LlmMessageQueueMode::Followup);
+
+        let collect: Wrapper = toml::from_str(r#"mode = "collect""#).unwrap();
+        assert_eq!(collect.mode, LlmMessageQueueMode::Collect);
+    }
+
+    #[test]
+    fn llm_message_queue_drop_policy_deserializes() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize)]
+        struct Wrapper {
+            policy: LlmMessageQueueDropPolicy,
+        }
+
+        let oldest: Wrapper = toml::from_str(r#"policy = "oldest""#).unwrap();
+        assert_eq!(oldest.policy, LlmMessageQueueDropPolicy::Oldest);
+
+        let newest: Wrapper = toml::from_str(r#"policy = "newest""#).unwrap();
+        assert_eq!(newest.policy, LlmMessageQueueDropPolicy::Newest);
+
+        let none: Wrapper = toml::from_str(r#"policy = "none""#).unwrap();
+        assert_eq!(none.policy, LlmMessageQueueDropPolicy::None);
+    }
+
+    #[test]
+    fn llm_message_queue_config_deserializes() {
+        let toml_str = r#"
+[llm]
+message_queue_mode = "collect"
+message_queue_max_pending = 3
+message_queue_drop_policy = "newest"
+clear_queue_on_stop = false
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.llm.message_queue_mode, LlmMessageQueueMode::Collect);
+        assert_eq!(config.llm.message_queue_max_pending, 3);
+        assert_eq!(
+            config.llm.message_queue_drop_policy,
+            LlmMessageQueueDropPolicy::Newest
+        );
+        assert!(!config.llm.clear_queue_on_stop);
     }
 }

@@ -88,13 +88,13 @@ impl ApiLlm {
     /// Returns an error if the API call or streaming fails.
     pub async fn generate_response(
         &mut self,
-        user_input: &str,
-        tx: &mpsc::Sender<SentenceChunk>,
-        interrupt: &Arc<AtomicBool>,
+        user_input: String,
+        tx: mpsc::Sender<SentenceChunk>,
+        interrupt: Arc<AtomicBool>,
     ) -> Result<bool> {
         self.history.push(ChatMessage {
             role: "user",
-            content: user_input.to_owned(),
+            content: user_input.clone(),
         });
         self.trim_history();
 
@@ -137,7 +137,7 @@ impl ApiLlm {
         // Bridge sync HTTP streaming to async via a channel
         let (token_tx, mut token_rx) = mpsc::channel::<String>(64);
         let agent = self.agent.clone();
-        let interrupt_clone = Arc::clone(interrupt);
+        let interrupt_clone = Arc::clone(&interrupt);
         let api_key = self.conn.api_key.clone();
 
         let http_handle =

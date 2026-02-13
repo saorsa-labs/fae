@@ -2,8 +2,9 @@
 
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
+use std::path::PathBuf;
 
-use super::path_validation::validate_write_path;
+use super::path_validation::{resolve_workspace_root, validate_write_path_in_workspace};
 use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult};
 
 /// Tool that creates or overwrites files.
@@ -15,6 +16,7 @@ use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult};
 /// Only available in `ToolMode::Full`.
 pub struct WriteTool {
     max_bytes: usize,
+    workspace_root: PathBuf,
 }
 
 impl WriteTool {
@@ -22,12 +24,32 @@ impl WriteTool {
     pub fn new() -> Self {
         Self {
             max_bytes: DEFAULT_MAX_BYTES,
+            workspace_root: resolve_workspace_root().unwrap_or_else(|_| PathBuf::from(".")),
         }
     }
 
     /// Create a new WriteTool with a custom max content size.
     pub fn with_max_bytes(max_bytes: usize) -> Self {
-        Self { max_bytes }
+        Self {
+            max_bytes,
+            workspace_root: resolve_workspace_root().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+
+    /// Create a new WriteTool rooted at a specific workspace path.
+    pub fn with_workspace_root(workspace_root: PathBuf) -> Self {
+        Self {
+            max_bytes: DEFAULT_MAX_BYTES,
+            workspace_root,
+        }
+    }
+
+    /// Create a new WriteTool with custom max bytes and workspace root.
+    pub fn with_config(max_bytes: usize, workspace_root: PathBuf) -> Self {
+        Self {
+            max_bytes,
+            workspace_root,
+        }
     }
 }
 
@@ -75,7 +97,7 @@ impl Tool for WriteTool {
                 FaeLlmError::ToolValidationError("missing required argument: content".into())
             })?;
 
-        let path = validate_write_path(path_str)?;
+        let path = validate_write_path_in_workspace(path_str, &self.workspace_root)?;
 
         // Check content size
         if content.len() > self.max_bytes {
@@ -132,7 +154,7 @@ mod tests {
     fn write_new_file() {
         let dir = temp_dir();
         let path = dir.path().join("new_file.txt");
-        let tool = WriteTool::new();
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": path.to_str(),
             "content": "hello world"
@@ -152,7 +174,7 @@ mod tests {
         let path = dir.path().join("existing.txt");
         std::fs::write(&path, "old content").unwrap_or_default();
 
-        let tool = WriteTool::new();
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": path.to_str(),
             "content": "new content"
@@ -170,7 +192,7 @@ mod tests {
     fn write_nonexistent_parent_directory() {
         let dir = temp_dir();
         let path = dir.path().join("nonexistent_dir").join("file.txt");
-        let tool = WriteTool::new();
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": path.to_str(),
             "content": "test"
@@ -192,7 +214,7 @@ mod tests {
     fn write_content_exceeds_max_size() {
         let dir = temp_dir();
         let path = dir.path().join("large.txt");
-        let tool = WriteTool::with_max_bytes(10);
+        let tool = WriteTool::with_config(10, dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": path.to_str(),
             "content": "this content is longer than 10 bytes"
@@ -226,7 +248,8 @@ mod tests {
 
     #[test]
     fn write_path_traversal_rejected() {
-        let tool = WriteTool::new();
+        let dir = temp_dir();
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": "../../../etc/malicious",
             "content": "evil"
@@ -236,7 +259,8 @@ mod tests {
 
     #[test]
     fn write_system_path_rejected() {
-        let tool = WriteTool::new();
+        let dir = temp_dir();
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": "/etc/malicious",
             "content": "evil"
@@ -248,7 +272,7 @@ mod tests {
     fn write_empty_content() {
         let dir = temp_dir();
         let path = dir.path().join("empty.txt");
-        let tool = WriteTool::new();
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": path.to_str(),
             "content": ""
@@ -266,7 +290,7 @@ mod tests {
     fn write_result_includes_byte_count() {
         let dir = temp_dir();
         let path = dir.path().join("count.txt");
-        let tool = WriteTool::new();
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": path.to_str(),
             "content": "12345"

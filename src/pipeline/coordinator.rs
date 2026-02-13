@@ -3,15 +3,16 @@
 use crate::approval::ToolApprovalRequest;
 use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::canvas::registry::CanvasSessionRegistry;
-use crate::config::SpeechConfig;
+use crate::config::{LlmMessageQueueDropPolicy, LlmMessageQueueMode, SpeechConfig};
 use crate::error::Result;
 use crate::memory::{MemoryOrchestrator, MemoryStore, PrimaryUser};
 use crate::pipeline::messages::{
     AudioChunk, ControlEvent, GateCommand, SentenceChunk, SpeechSegment, SynthesizedAudio,
     TextInjection, Transcription,
 };
-use crate::runtime::RuntimeEvent;
+use crate::runtime::{ConversationSnapshotEntry, ConversationSnapshotEntryRole, RuntimeEvent};
 use crate::startup::InitializedModels;
+use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,196 @@ const SYNTH_CHANNEL_SIZE: usize = 16;
 /// Commands sent to the playback stage (e.g., barge-in stop).
 enum PlaybackCommand {
     Stop,
+}
+
+/// Commands sent to the LLM stage for queue control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LlmQueueCommand {
+    ClearQueuedInputs,
+}
+
+/// A user input item pending for the LLM stage.
+#[derive(Debug, Clone)]
+enum QueuedLlmInput {
+    Transcription(Transcription),
+    TextInjection(TextInjection),
+}
+
+impl QueuedLlmInput {
+    fn text(&self) -> &str {
+        match self {
+            Self::Transcription(t) => &t.text,
+            Self::TextInjection(i) => &i.text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueEnqueueAction {
+    Enqueued,
+    DroppedOldest,
+    DroppedNewest,
+    DroppedIncoming,
+}
+
+/// Bounded queue for user inputs received while an LLM run is active.
+struct LlmInputQueue {
+    mode: LlmMessageQueueMode,
+    max_pending: usize,
+    drop_policy: LlmMessageQueueDropPolicy,
+    pending: VecDeque<QueuedLlmInput>,
+}
+
+impl LlmInputQueue {
+    fn new(config: &crate::config::LlmConfig) -> Self {
+        Self {
+            mode: config.message_queue_mode,
+            max_pending: config.message_queue_max_pending,
+            drop_policy: config.message_queue_drop_policy,
+            pending: VecDeque::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    fn clear(&mut self) -> usize {
+        let cleared = self.pending.len();
+        self.pending.clear();
+        cleared
+    }
+
+    fn enqueue(&mut self, input: QueuedLlmInput) -> QueueEnqueueAction {
+        if input.text().trim().is_empty() {
+            return QueueEnqueueAction::DroppedIncoming;
+        }
+
+        if self.max_pending == 0 {
+            return QueueEnqueueAction::DroppedIncoming;
+        }
+
+        if self.pending.len() < self.max_pending {
+            self.pending.push_back(input);
+            return QueueEnqueueAction::Enqueued;
+        }
+
+        match self.drop_policy {
+            LlmMessageQueueDropPolicy::Oldest => {
+                let _ = self.pending.pop_front();
+                self.pending.push_back(input);
+                QueueEnqueueAction::DroppedOldest
+            }
+            LlmMessageQueueDropPolicy::Newest => {
+                let _ = self.pending.pop_back();
+                self.pending.push_back(input);
+                QueueEnqueueAction::DroppedNewest
+            }
+            LlmMessageQueueDropPolicy::None => QueueEnqueueAction::DroppedIncoming,
+        }
+    }
+
+    fn dequeue_next(&mut self) -> Option<QueuedLlmInput> {
+        match self.mode {
+            LlmMessageQueueMode::Followup => self.pending.pop_front(),
+            LlmMessageQueueMode::Collect => self.dequeue_collect_mode(),
+        }
+    }
+
+    fn dequeue_collect_mode(&mut self) -> Option<QueuedLlmInput> {
+        let first = self.pending.pop_front()?;
+        match first {
+            QueuedLlmInput::Transcription(mut merged) => {
+                while let Some(QueuedLlmInput::Transcription(next)) = self.pending.front() {
+                    if next.text.trim().is_empty() {
+                        let _ = self.pending.pop_front();
+                        continue;
+                    }
+                    let Some(QueuedLlmInput::Transcription(next)) = self.pending.pop_front() else {
+                        break;
+                    };
+                    append_collected_text(&mut merged.text, &next.text);
+                    merged.is_final = merged.is_final || next.is_final;
+                    merged.transcribed_at = next.transcribed_at;
+                }
+                Some(QueuedLlmInput::Transcription(merged))
+            }
+            QueuedLlmInput::TextInjection(mut merged) => {
+                if merged.fork_at_keep_count.is_some() {
+                    return Some(QueuedLlmInput::TextInjection(merged));
+                }
+                while let Some(QueuedLlmInput::TextInjection(next)) = self.pending.front() {
+                    if next.fork_at_keep_count.is_some() {
+                        break;
+                    }
+                    if next.text.trim().is_empty() {
+                        let _ = self.pending.pop_front();
+                        continue;
+                    }
+                    let Some(QueuedLlmInput::TextInjection(next)) = self.pending.pop_front() else {
+                        break;
+                    };
+                    append_collected_text(&mut merged.text, &next.text);
+                }
+                Some(QueuedLlmInput::TextInjection(merged))
+            }
+        }
+    }
+}
+
+fn append_collected_text(base: &mut String, next: &str) {
+    let next = next.trim();
+    if next.is_empty() {
+        return;
+    }
+    if !base.trim().is_empty() {
+        base.push_str("\n\n");
+    } else {
+        base.clear();
+    }
+    base.push_str(next);
+}
+
+#[derive(Debug, Clone)]
+struct ConversationTurn {
+    user_text: String,
+    assistant_text: String,
+}
+
+fn append_conversation_turn(
+    turns: &mut Vec<ConversationTurn>,
+    user_text: String,
+    assistant_text: String,
+) {
+    turns.push(ConversationTurn {
+        user_text,
+        assistant_text,
+    });
+}
+
+fn build_conversation_snapshot_entries(
+    turns: &[ConversationTurn],
+) -> Vec<ConversationSnapshotEntry> {
+    let mut entries = Vec::with_capacity(turns.len().saturating_mul(2));
+    for turn in turns {
+        if !turn.user_text.trim().is_empty() {
+            entries.push(ConversationSnapshotEntry {
+                role: ConversationSnapshotEntryRole::User,
+                text: turn.user_text.clone(),
+            });
+        }
+        if !turn.assistant_text.trim().is_empty() {
+            entries.push(ConversationSnapshotEntry {
+                role: ConversationSnapshotEntryRole::Assistant,
+                text: turn.assistant_text.clone(),
+            });
+        }
+    }
+    entries
 }
 
 /// Pipeline operating mode.
@@ -359,6 +550,10 @@ impl PipelineCoordinator {
                 let (playback_cmd_tx, playback_cmd_rx) =
                     mpsc::unbounded_channel::<PlaybackCommand>();
 
+                // Queue-control channel for explicit queued-input cancellation.
+                let (llm_queue_cmd_tx, llm_queue_cmd_rx) =
+                    mpsc::unbounded_channel::<LlmQueueCommand>();
+
                 // Identity/onboarding gate: handles primary user enrollment and best-effort speaker
                 // matching before any wake-word gating.
                 let (ident_tx, ident_rx) =
@@ -392,6 +587,8 @@ impl PipelineCoordinator {
                         assistant_speaking: Arc::clone(&assistant_speaking),
                         assistant_generating: Arc::clone(&assistant_generating),
                         playback_cmd_tx: playback_cmd_tx.clone(),
+                        llm_queue_cmd_tx: Some(llm_queue_cmd_tx.clone()),
+                        clear_queue_on_stop: self.config.llm.clear_queue_on_stop,
                         console_output,
                         cancel: cancel.clone(),
                         wakeword_rx: wakeword_gate_rx,
@@ -457,28 +654,42 @@ impl PipelineCoordinator {
                     let runtime_tx = runtime_tx.clone();
                     let tool_approval_tx = tool_approval_tx.clone();
                     let canvas_registry = canvas_registry.clone();
-                    tokio::spawn(async move {
-                        let ctl = LlmStageControl {
-                            interrupt,
-                            assistant_speaking,
-                            assistant_generating,
-                            playback_cmd_tx,
-                            runtime_tx,
-                            tool_approval_tx,
-                            canvas_registry,
-                            console_output,
-                            cancel,
-                            voice_command_rx: Some(voice_cmd_rx),
+                    tokio::task::spawn_blocking(move || {
+                        let runtime = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(runtime) => runtime,
+                            Err(e) => {
+                                error!("failed to create LLM stage runtime: {e}");
+                                return;
+                            }
                         };
-                        run_llm_stage(
-                            config,
-                            preloaded_llm,
-                            llm_rx,
-                            llm_sentence_tx,
-                            ctl,
-                            text_injection_rx,
-                        )
-                        .await;
+
+                        runtime.block_on(async move {
+                            let ctl = LlmStageControl {
+                                interrupt,
+                                assistant_speaking,
+                                assistant_generating,
+                                playback_cmd_tx,
+                                runtime_tx,
+                                tool_approval_tx,
+                                canvas_registry,
+                                console_output,
+                                cancel,
+                                voice_command_rx: Some(voice_cmd_rx),
+                                queue_cmd_rx: Some(llm_queue_cmd_rx),
+                            };
+                            run_llm_stage(
+                                config,
+                                preloaded_llm,
+                                llm_rx,
+                                llm_sentence_tx,
+                                ctl,
+                                text_injection_rx,
+                            )
+                            .await;
+                        });
                     })
                 };
 
@@ -1028,7 +1239,7 @@ async fn run_identity_gate(
             &tts_tx,
             &mut rx,
             &mut onboarding_seg_rx,
-            &cancel,
+            cancel.clone(),
         )
         .await
     {
@@ -1101,14 +1312,19 @@ async fn run_onboarding(
     tts_tx: &mpsc::Sender<SentenceChunk>,
     rx: &mut mpsc::Receiver<Transcription>,
     onboarding_seg_rx: &mut Option<mpsc::Receiver<SpeechSegment>>,
-    cancel: &CancellationToken,
+    cancel: CancellationToken,
 ) -> crate::error::Result<()> {
-    let _ = speak(tts_tx, "Hello, I am Fae. What is your name?", cancel).await;
+    let _ = speak(
+        tts_tx,
+        "Hello, I am Fae. What is your name?",
+        cancel.clone(),
+    )
+    .await;
 
     // Ask up to 3 times for a usable name.
     let mut name: Option<String> = None;
     for _ in 0..3 {
-        if let Some(t) = recv_transcription(rx, cancel).await
+        if let Some(t) = recv_transcription(rx, cancel.clone()).await
             && let Some(n) = parse_name(&t.text)
         {
             name = Some(n);
@@ -1124,7 +1340,7 @@ async fn run_onboarding(
         let _ = speak(
             tts_tx,
             "Sorry, I didn't catch that. What is your name?",
-            cancel,
+            cancel.clone(),
         )
         .await;
     }
@@ -1136,7 +1352,7 @@ async fn run_onboarding(
         &format!(
             "Nice to meet you, {name}. Please talk about yourself for 10 to 15 seconds so I can learn your voice."
         ),
-        cancel,
+        cancel.clone(),
     )
     .await;
 
@@ -1145,7 +1361,7 @@ async fn run_onboarding(
         while seg_rx.try_recv().is_ok() {}
     }
 
-    let (samples, sample_rate) = collect_voice_samples(onboarding_seg_rx, cancel).await;
+    let (samples, sample_rate) = collect_voice_samples(onboarding_seg_rx, cancel.clone()).await;
     if !samples.is_empty() && sample_rate > 0 {
         let voiceprint = crate::voiceprint::compute_voiceprint(&samples, sample_rate).ok();
 
@@ -1163,13 +1379,18 @@ async fn run_onboarding(
         store.save_primary_user(&user)?;
     }
 
-    let _ = speak(tts_tx, &format!("Thanks, {name}. I'm ready."), cancel).await;
+    let _ = speak(
+        tts_tx,
+        &format!("Thanks, {name}. I'm ready."),
+        cancel.clone(),
+    )
+    .await;
     Ok(())
 }
 
 async fn recv_transcription(
     rx: &mut mpsc::Receiver<Transcription>,
-    cancel: &CancellationToken,
+    cancel: CancellationToken,
 ) -> Option<Transcription> {
     tokio::select! {
         () = cancel.cancelled() => None,
@@ -1180,7 +1401,7 @@ async fn recv_transcription(
 async fn speak(
     tts_tx: &mpsc::Sender<SentenceChunk>,
     text: &str,
-    cancel: &CancellationToken,
+    cancel: CancellationToken,
 ) -> bool {
     let chunk = SentenceChunk {
         text: text.to_owned(),
@@ -1194,7 +1415,7 @@ async fn speak(
 
 async fn collect_voice_samples(
     onboarding_seg_rx: &mut Option<mpsc::Receiver<SpeechSegment>>,
-    cancel: &CancellationToken,
+    cancel: CancellationToken,
 ) -> (Vec<f32>, u32) {
     let Some(seg_rx) = onboarding_seg_rx.as_mut() else {
         return (Vec::new(), 0);
@@ -1358,7 +1579,7 @@ fn clean_name_token(token: &str) -> String {
 enum LlmEngine {
     Local(Box<crate::llm::LocalLlm>),
     Api(Box<crate::llm::ApiLlm>),
-    Agent(Box<crate::agent::SaorsaAgentLlm>),
+    Agent(Box<crate::agent::FaeAgentLlm>),
 }
 
 struct LlmStageControl {
@@ -1372,15 +1593,16 @@ struct LlmStageControl {
     console_output: bool,
     cancel: CancellationToken,
     voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
+    queue_cmd_rx: Option<mpsc::UnboundedReceiver<LlmQueueCommand>>,
 }
 
 impl LlmEngine {
     /// Generate a response using whichever backend is active.
     async fn generate_response(
         &mut self,
-        user_input: &str,
-        tx: &mpsc::Sender<SentenceChunk>,
-        interrupt: &Arc<AtomicBool>,
+        user_input: String,
+        tx: mpsc::Sender<SentenceChunk>,
+        interrupt: Arc<AtomicBool>,
     ) -> crate::error::Result<bool> {
         match self {
             Self::Local(llm) => llm.generate_response(user_input, tx, interrupt).await,
@@ -1408,7 +1630,7 @@ async fn run_llm_stage(
     ctl: LlmStageControl,
     mut text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
 ) {
-    use crate::agent::SaorsaAgentLlm;
+    use crate::agent::FaeAgentLlm;
     use crate::config::LlmBackend;
     use crate::llm::{ApiLlm, LocalLlm};
 
@@ -1434,7 +1656,7 @@ async fn run_llm_stage(
             }
         },
         LlmBackend::Agent => {
-            match SaorsaAgentLlm::new(
+            match FaeAgentLlm::new(
                 &config.llm,
                 preloaded,
                 ctl.runtime_tx.clone(),
@@ -1493,125 +1715,147 @@ async fn run_llm_stage(
         None
     };
 
+    let LlmStageControl {
+        interrupt,
+        assistant_speaking,
+        assistant_generating,
+        playback_cmd_tx,
+        runtime_tx,
+        tool_approval_tx: _,
+        canvas_registry: _,
+        console_output,
+        cancel,
+        voice_command_rx,
+        queue_cmd_rx,
+    } = ctl;
+
     // Voice command receiver (currently unused — was Pi-specific).
-    let mut voice_cmd_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>> =
-        ctl.voice_command_rx;
+    let mut voice_cmd_rx = voice_command_rx;
+    let mut queue_cmd_rx = queue_cmd_rx;
+    let mut pending_inputs = LlmInputQueue::new(&config.llm);
+    let mut transcription_channel_closed = false;
+    let mut conversation_turns: Vec<ConversationTurn> = Vec::new();
 
-    let cancel = ctl.cancel;
+    let cancel = cancel;
     let mut turn_counter: u64 = 0;
-    loop {
-        // Optionally receive from the text injection channel. When no channel
-        // is configured, `recv_injection` will pend forever (never resolve).
-        let recv_injection = async {
-            match text_injection_rx.as_mut() {
-                Some(rx) => rx.recv().await,
-                None => std::future::pending().await,
+    'outer: loop {
+        if cancel.is_cancelled() {
+            let cleared = pending_inputs.clear();
+            if cleared > 0 {
+                info!(
+                    cleared,
+                    "dropping queued LLM inputs during pipeline cancellation"
+                );
             }
-        };
-
-        // Optionally receive voice commands.
-        let recv_voice_cmd = async {
-            match voice_cmd_rx.as_mut() {
-                Some(rx) => rx.recv().await,
-                None => std::future::pending().await,
-            }
-        };
-
-        enum Input {
-            Transcription(Option<Transcription>),
-            TextInjection(Option<TextInjection>),
-            VoiceCommand(Option<crate::voice_command::VoiceCommand>),
+            break;
         }
 
-        let input = tokio::select! {
-            () = cancel.cancelled() => break,
-            t = rx.recv() => Input::Transcription(t),
-            inj = recv_injection => Input::TextInjection(inj),
-            cmd = recv_voice_cmd => Input::VoiceCommand(cmd),
+        let next_input = if let Some(queued) = pending_inputs.dequeue_next() {
+            queued
+        } else {
+            loop {
+                let recv_injection = async {
+                    match text_injection_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                };
+                let recv_voice_cmd = async {
+                    match voice_cmd_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                };
+                let recv_queue_cmd = async {
+                    match queue_cmd_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                };
+
+                enum Input {
+                    Transcription(Option<Transcription>),
+                    TextInjection(Option<TextInjection>),
+                    VoiceCommand(Option<crate::voice_command::VoiceCommand>),
+                    QueueCommand(Option<LlmQueueCommand>),
+                }
+
+                let input = tokio::select! {
+                    () = cancel.cancelled() => break 'outer,
+                    t = rx.recv() => Input::Transcription(t),
+                    inj = recv_injection => Input::TextInjection(inj),
+                    cmd = recv_voice_cmd => Input::VoiceCommand(cmd),
+                    cmd = recv_queue_cmd => Input::QueueCommand(cmd),
+                };
+
+                match input {
+                    Input::Transcription(Some(transcription)) => {
+                        if transcription.text.trim().is_empty() {
+                            continue;
+                        }
+                        break QueuedLlmInput::Transcription(transcription);
+                    }
+                    Input::TextInjection(Some(injection)) => {
+                        if injection.text.trim().is_empty() {
+                            continue;
+                        }
+                        break QueuedLlmInput::TextInjection(injection);
+                    }
+                    Input::VoiceCommand(Some(cmd)) => {
+                        let response = handle_voice_command(&cmd);
+                        if !response.is_empty() {
+                            let _ = tx
+                                .send(SentenceChunk {
+                                    text: response,
+                                    is_final: true,
+                                })
+                                .await;
+                        }
+                    }
+                    Input::VoiceCommand(None) => {
+                        voice_cmd_rx = None;
+                    }
+                    Input::QueueCommand(Some(LlmQueueCommand::ClearQueuedInputs)) => {
+                        let cleared = clear_pending_inputs(
+                            &mut pending_inputs,
+                            &mut rx,
+                            &mut text_injection_rx,
+                            &mut transcription_channel_closed,
+                        );
+                        if cleared > 0 {
+                            info!(cleared, "cleared queued LLM inputs");
+                        }
+                    }
+                    Input::QueueCommand(None) => {
+                        queue_cmd_rx = None;
+                    }
+                    Input::Transcription(None) => {
+                        transcription_channel_closed = true;
+                        if pending_inputs.is_empty() {
+                            break 'outer;
+                        }
+                    }
+                    Input::TextInjection(None) => {
+                        // Text injection channel closed (GUI dropped sender).
+                        // Continue with voice-only mode rather than killing the LLM stage.
+                        text_injection_rx = None;
+                    }
+                }
+            }
         };
 
-        let user_text = match input {
-            Input::Transcription(Some(transcription)) => {
-                if transcription.text.is_empty() {
-                    continue;
-                }
-                if ctl.console_output {
-                    if !config.conversation.enabled {
-                        let latency = transcription
-                            .transcribed_at
-                            .duration_since(transcription.audio_captured_at);
-                        println!(
-                            "\n[You] {} (STT: {:.0}ms)",
-                            transcription.text,
-                            latency.as_millis()
-                        );
-                        print!("[AI] ");
-                    } else {
-                        print!("[{name}] ");
-                    }
-                    let _ = std::io::stdout().flush();
-                }
-                transcription.text
-            }
-            Input::TextInjection(Some(injection)) => {
-                if injection.text.is_empty() {
-                    continue;
-                }
-                // Typed input should interrupt any active generation/playback,
-                // just like voice barge-in.
-                let assistant_active = ctl.assistant_speaking.load(Ordering::Relaxed)
-                    || ctl.assistant_generating.load(Ordering::Relaxed);
-                if assistant_active {
-                    ctl.interrupt.store(true, Ordering::Relaxed);
-                    let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
-                }
-                // Fork: truncate history before injecting the new text.
-                if let Some(keep) = injection.fork_at_keep_count {
-                    engine.truncate_history(keep);
-                    info!("forked conversation history, keeping {keep} entries");
-                }
-                // Emit a transcription event so the GUI sees the typed text.
-                if let Some(rt) = &ctl.runtime_tx {
-                    let now = std::time::Instant::now();
-                    let _ = rt.send(RuntimeEvent::Transcription(Transcription {
-                        text: injection.text.clone(),
-                        is_final: true,
-                        voiceprint: None,
-                        audio_captured_at: now,
-                        transcribed_at: now,
-                    }));
-                }
-                if ctl.console_output {
-                    println!("\n[You] {} (typed)", injection.text);
-                    print!("[{name}] ");
-                    let _ = std::io::stdout().flush();
-                }
-                injection.text
-            }
-            Input::VoiceCommand(Some(cmd)) => {
-                let response = handle_voice_command(&cmd, &mut engine);
-                if !response.is_empty() {
-                    let _ = tx
-                        .send(SentenceChunk {
-                            text: response,
-                            is_final: true,
-                        })
-                        .await;
-                }
-                continue;
-            }
-            Input::VoiceCommand(None) => {
-                // Voice command channel closed; continue without voice commands.
-                voice_cmd_rx = None;
-                continue;
-            }
-            Input::Transcription(None) => break,
-            Input::TextInjection(None) => {
-                // Text injection channel closed (GUI dropped sender).
-                // Continue with voice-only mode rather than killing the LLM stage.
-                text_injection_rx = None;
-                continue;
-            }
+        let user_ctx = UserInputContext {
+            config: &config,
+            name: &name,
+            interrupt: &interrupt,
+            assistant_speaking: &assistant_speaking,
+            assistant_generating: &assistant_generating,
+            playback_cmd_tx: &playback_cmd_tx,
+            runtime_tx: runtime_tx.as_ref(),
+            console_output,
+        };
+        let Some(user_text) = prepare_user_text(next_input, &mut engine, &user_ctx) else {
+            continue;
         };
 
         turn_counter += 1;
@@ -1623,11 +1867,80 @@ async fn run_llm_stage(
                 .as_millis(),
             turn_counter
         );
+
+        if is_hide_conversation_request(&user_text) {
+            let assistant_text = "Okay, I've hidden the conversation canvas.".to_owned();
+            append_conversation_turn(
+                &mut conversation_turns,
+                user_text.clone(),
+                assistant_text.clone(),
+            );
+
+            if let Some(rt) = &runtime_tx {
+                let _ = rt.send(RuntimeEvent::ConversationCanvasVisibility { visible: false });
+            }
+
+            if tx
+                .send(SentenceChunk {
+                    text: assistant_text.clone(),
+                    is_final: true,
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+
+            capture_memory_turn(
+                memory_orchestrator.as_ref(),
+                runtime_tx.as_ref(),
+                &turn_id,
+                &user_text,
+                &assistant_text,
+            );
+            continue;
+        }
+
+        if is_show_conversation_request(&user_text) {
+            let assistant_text = "I've opened the canvas with our full conversation.".to_owned();
+            append_conversation_turn(
+                &mut conversation_turns,
+                user_text.clone(),
+                assistant_text.clone(),
+            );
+
+            if let Some(rt) = &runtime_tx {
+                let _ = rt.send(RuntimeEvent::ConversationCanvasVisibility { visible: true });
+                let entries = build_conversation_snapshot_entries(&conversation_turns);
+                let _ = rt.send(RuntimeEvent::ConversationSnapshot { entries });
+            }
+
+            if tx
+                .send(SentenceChunk {
+                    text: assistant_text.clone(),
+                    is_final: true,
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+
+            capture_memory_turn(
+                memory_orchestrator.as_ref(),
+                runtime_tx.as_ref(),
+                &turn_id,
+                &user_text,
+                &assistant_text,
+            );
+            continue;
+        }
+
         let mut llm_input = user_text.clone();
         if let Some(memory) = &memory_orchestrator
             && let Ok(Some(memory_ctx)) = memory.recall_context(&user_text)
         {
-            if let Some(rt) = &ctl.runtime_tx {
+            if let Some(rt) = &runtime_tx {
                 let hits = memory_ctx.matches("\n- [").count();
                 let _ = rt.send(RuntimeEvent::MemoryRecall {
                     query: user_text.clone(),
@@ -1637,8 +1950,8 @@ async fn run_llm_stage(
             llm_input = format!("{memory_ctx}\n\nUser message:\n{user_text}");
         }
 
-        ctl.assistant_generating.store(true, Ordering::Relaxed);
-        if let Some(rt) = &ctl.runtime_tx {
+        assistant_generating.store(true, Ordering::Relaxed);
+        if let Some(rt) = &runtime_tx {
             let _ = rt.send(RuntimeEvent::AssistantGenerating { active: true });
         }
         // Proxy channel captures assistant text for memory while forwarding to TTS.
@@ -1665,42 +1978,121 @@ async fn run_llm_stage(
             Ok::<String, crate::error::SpeechError>(assistant_text)
         });
 
-        // During generation, voice commands can interrupt and switch models.
-        let recv_voice_during_gen = async {
-            match voice_cmd_rx.as_mut() {
-                Some(rx) => rx.recv().await,
-                None => std::future::pending().await,
-            }
-        };
+        let mut generation = Box::pin(engine.generate_response(
+            llm_input.clone(),
+            proxy_tx.clone(),
+            Arc::clone(&interrupt),
+        ));
+        let gen_result = loop {
+            let recv_voice_during_gen = async {
+                match voice_cmd_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
+            let recv_injection_during_gen = async {
+                match text_injection_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
+            let recv_queue_cmd_during_gen = async {
+                match queue_cmd_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            };
 
-        let gen_result = tokio::select! {
-            result = engine.generate_response(&llm_input, &proxy_tx, &ctl.interrupt) => {
-                drop(proxy_tx);
-                result
-            },
-            cmd = recv_voice_during_gen => {
-                // Voice command arrived mid-generation — interrupt.
-                drop(proxy_tx);
-                ctl.interrupt.store(true, Ordering::Relaxed);
-                let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
-                info!("voice command interrupted active generation");
+            tokio::select! {
+                () = cancel.cancelled() => {
+                    drop(proxy_tx);
+                    let _ = forward_handle.await;
+                    let cleared = clear_pending_inputs(
+                        &mut pending_inputs,
+                        &mut rx,
+                        &mut text_injection_rx,
+                        &mut transcription_channel_closed,
+                    );
+                    if cleared > 0 {
+                        info!(cleared, "dropping queued LLM inputs during pipeline cancellation");
+                    }
+                    assistant_generating.store(false, Ordering::Relaxed);
+                    if let Some(rt) = &runtime_tx {
+                        let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
+                    }
+                    break 'outer;
+                }
+                result = &mut generation => {
+                    drop(proxy_tx);
+                    break result;
+                }
+                cmd = recv_voice_during_gen => {
+                    // Voice command arrived mid-generation - interrupt.
+                    drop(proxy_tx);
+                    interrupt.store(true, Ordering::Relaxed);
+                    let _ = playback_cmd_tx.send(PlaybackCommand::Stop);
+                    info!("voice command interrupted active generation");
 
-                // Handle the voice command.
-                if let Some(cmd) = cmd {
-                    let response = handle_voice_command(&cmd, &mut engine);
-                    if !response.is_empty() {
-                        let _ = tx.send(SentenceChunk { text: response, is_final: true }).await;
+                    if let Some(cmd) = cmd {
+                        let response = handle_voice_command(&cmd);
+                        if !response.is_empty() {
+                            let _ = tx.send(SentenceChunk { text: response, is_final: true }).await;
+                        }
+                    } else {
+                        voice_cmd_rx = None;
+                    }
+
+                    assistant_generating.store(false, Ordering::Relaxed);
+                    if let Some(rt) = &runtime_tx {
+                        let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
+                    }
+                    let _ = forward_handle.await;
+                    continue 'outer;
+                }
+                input = rx.recv() => {
+                    match input {
+                        Some(transcription) => {
+                            enqueue_pending_input(
+                                &mut pending_inputs,
+                                QueuedLlmInput::Transcription(transcription),
+                            );
+                        }
+                        None => {
+                            transcription_channel_closed = true;
+                        }
                     }
                 }
-
-                // Signal generation done — the interrupted generation result is discarded.
-                ctl.assistant_generating.store(false, Ordering::Relaxed);
-                if let Some(rt) = &ctl.runtime_tx {
-                    let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
+                input = recv_injection_during_gen => {
+                    match input {
+                        Some(injection) => {
+                            enqueue_pending_input(
+                                &mut pending_inputs,
+                                QueuedLlmInput::TextInjection(injection),
+                            );
+                        }
+                        None => {
+                            text_injection_rx = None;
+                        }
+                    }
                 }
-                // Wait for the forward task to finish (it will see proxy_tx dropped).
-                let _ = forward_handle.await;
-                continue;
+                queue_cmd = recv_queue_cmd_during_gen => {
+                    match queue_cmd {
+                        Some(LlmQueueCommand::ClearQueuedInputs) => {
+                            let cleared = clear_pending_inputs(
+                                &mut pending_inputs,
+                                &mut rx,
+                                &mut text_injection_rx,
+                                &mut transcription_channel_closed,
+                            );
+                            if cleared > 0 {
+                                info!(cleared, "cleared queued LLM inputs");
+                            }
+                        }
+                        None => {
+                            queue_cmd_rx = None;
+                        }
+                    }
+                }
             }
         };
 
@@ -1718,19 +2110,19 @@ async fn run_llm_stage(
 
         match gen_result {
             Ok(interrupted) => {
-                if ctl.console_output {
+                if console_output {
                     println!();
                 }
                 if interrupted {
                     info!("LLM generation was interrupted");
                 }
-                ctl.assistant_generating.store(false, Ordering::Relaxed);
-                if let Some(rt) = &ctl.runtime_tx {
+                assistant_generating.store(false, Ordering::Relaxed);
+                if let Some(rt) = &runtime_tx {
                     let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
                 }
             }
             Err(e) => {
-                if ctl.console_output {
+                if console_output {
                     println!();
                 }
                 error!("LLM error: {e}");
@@ -1741,44 +2133,213 @@ async fn run_llm_stage(
                         is_final: true,
                     })
                     .await;
-                ctl.assistant_generating.store(false, Ordering::Relaxed);
-                if let Some(rt) = &ctl.runtime_tx {
+                assistant_generating.store(false, Ordering::Relaxed);
+                if let Some(rt) = &runtime_tx {
                     let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
                 }
             }
         }
 
-        if let Some(memory) = &memory_orchestrator {
-            match memory.capture_turn(&turn_id, &user_text, &assistant_text) {
-                Ok(report) => {
-                    if let Some(rt) = &ctl.runtime_tx {
-                        for write in &report.writes {
-                            let _ = rt.send(RuntimeEvent::MemoryWrite {
-                                op: write.op.clone(),
-                                target_id: write.target_id.clone(),
-                            });
-                        }
-                        for conflict in &report.conflicts {
-                            let _ = rt.send(RuntimeEvent::MemoryConflict {
-                                existing_id: conflict.existing_id.clone(),
-                                replacement_id: conflict.replacement_id.clone(),
-                            });
-                        }
-                    }
-                }
-                Err(e) => warn!("memory capture failed: {e}"),
-            }
+        append_conversation_turn(
+            &mut conversation_turns,
+            user_text.clone(),
+            assistant_text.clone(),
+        );
+        capture_memory_turn(
+            memory_orchestrator.as_ref(),
+            runtime_tx.as_ref(),
+            &turn_id,
+            &user_text,
+            &assistant_text,
+        );
+
+        if transcription_channel_closed && pending_inputs.is_empty() {
+            break;
         }
     }
 }
 
-/// Handle a voice command by dispatching to the appropriate engine method.
+struct UserInputContext<'a> {
+    config: &'a SpeechConfig,
+    name: &'a str,
+    interrupt: &'a Arc<AtomicBool>,
+    assistant_speaking: &'a Arc<AtomicBool>,
+    assistant_generating: &'a Arc<AtomicBool>,
+    playback_cmd_tx: &'a mpsc::UnboundedSender<PlaybackCommand>,
+    runtime_tx: Option<&'a broadcast::Sender<RuntimeEvent>>,
+    console_output: bool,
+}
+
+fn prepare_user_text(
+    input: QueuedLlmInput,
+    engine: &mut LlmEngine,
+    ctx: &UserInputContext<'_>,
+) -> Option<String> {
+    match input {
+        QueuedLlmInput::Transcription(transcription) => {
+            if transcription.text.trim().is_empty() {
+                return None;
+            }
+            if ctx.console_output {
+                if !ctx.config.conversation.enabled {
+                    let latency = transcription
+                        .transcribed_at
+                        .duration_since(transcription.audio_captured_at);
+                    println!(
+                        "\n[You] {} (STT: {:.0}ms)",
+                        transcription.text,
+                        latency.as_millis()
+                    );
+                    print!("[AI] ");
+                } else {
+                    print!("[{}] ", ctx.name);
+                }
+                let _ = std::io::stdout().flush();
+            }
+            Some(transcription.text)
+        }
+        QueuedLlmInput::TextInjection(injection) => {
+            if injection.text.trim().is_empty() {
+                return None;
+            }
+
+            // Typed input should interrupt any active generation/playback,
+            // just like voice barge-in.
+            let assistant_active = ctx.assistant_speaking.load(Ordering::Relaxed)
+                || ctx.assistant_generating.load(Ordering::Relaxed);
+            if assistant_active {
+                ctx.interrupt.store(true, Ordering::Relaxed);
+                let _ = ctx.playback_cmd_tx.send(PlaybackCommand::Stop);
+            }
+
+            if let Some(keep) = injection.fork_at_keep_count {
+                engine.truncate_history(keep);
+                info!("forked conversation history, keeping {keep} entries");
+            }
+
+            if let Some(rt) = ctx.runtime_tx {
+                let now = std::time::Instant::now();
+                let _ = rt.send(RuntimeEvent::Transcription(Transcription {
+                    text: injection.text.clone(),
+                    is_final: true,
+                    voiceprint: None,
+                    audio_captured_at: now,
+                    transcribed_at: now,
+                }));
+            }
+
+            if ctx.console_output {
+                println!("\n[You] {} (typed)", injection.text);
+                print!("[{}] ", ctx.name);
+                let _ = std::io::stdout().flush();
+            }
+            Some(injection.text)
+        }
+    }
+}
+
+fn enqueue_pending_input(queue: &mut LlmInputQueue, input: QueuedLlmInput) {
+    let action = queue.enqueue(input);
+    match action {
+        QueueEnqueueAction::Enqueued => {}
+        QueueEnqueueAction::DroppedOldest => {
+            warn!(
+                pending = queue.len(),
+                "LLM pending-input queue full, dropped oldest entry"
+            );
+        }
+        QueueEnqueueAction::DroppedNewest => {
+            warn!(
+                pending = queue.len(),
+                "LLM pending-input queue full, dropped newest queued entry"
+            );
+        }
+        QueueEnqueueAction::DroppedIncoming => {
+            warn!(
+                pending = queue.len(),
+                "LLM pending-input queue full, dropped incoming entry"
+            );
+        }
+    }
+}
+
+fn clear_pending_inputs(
+    queue: &mut LlmInputQueue,
+    rx: &mut mpsc::Receiver<Transcription>,
+    text_injection_rx: &mut Option<mpsc::UnboundedReceiver<TextInjection>>,
+    transcription_channel_closed: &mut bool,
+) -> usize {
+    let mut cleared = queue.clear();
+
+    loop {
+        match rx.try_recv() {
+            Ok(t) => {
+                if !t.text.trim().is_empty() {
+                    cleared += 1;
+                }
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                *transcription_channel_closed = true;
+                break;
+            }
+        }
+    }
+
+    if let Some(injection_rx) = text_injection_rx.as_mut() {
+        loop {
+            match injection_rx.try_recv() {
+                Ok(injection) => {
+                    if !injection.text.trim().is_empty() {
+                        cleared += 1;
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    *text_injection_rx = None;
+                    break;
+                }
+            }
+        }
+    }
+
+    cleared
+}
+
+fn capture_memory_turn(
+    memory_orchestrator: Option<&MemoryOrchestrator>,
+    runtime_tx: Option<&broadcast::Sender<RuntimeEvent>>,
+    turn_id: &str,
+    user_text: &str,
+    assistant_text: &str,
+) {
+    if let Some(memory) = memory_orchestrator {
+        match memory.capture_turn(turn_id, user_text, assistant_text) {
+            Ok(report) => {
+                if let Some(rt) = runtime_tx {
+                    for write in &report.writes {
+                        let _ = rt.send(RuntimeEvent::MemoryWrite {
+                            op: write.op.clone(),
+                            target_id: write.target_id.clone(),
+                        });
+                    }
+                    for conflict in &report.conflicts {
+                        let _ = rt.send(RuntimeEvent::MemoryConflict {
+                            existing_id: conflict.existing_id.clone(),
+                            replacement_id: conflict.replacement_id.clone(),
+                        });
+                    }
+                }
+            }
+            Err(e) => warn!("memory capture failed: {e}"),
+        }
+    }
+}
+
+/// Handle a voice command.
 ///
 /// Returns a human-readable response string for TTS.
-fn handle_voice_command(
-    cmd: &crate::voice_command::VoiceCommand,
-    _engine: &mut LlmEngine,
-) -> String {
+fn handle_voice_command(cmd: &crate::voice_command::VoiceCommand) -> String {
     use crate::voice_command::VoiceCommand;
 
     match cmd {
@@ -2090,12 +2651,39 @@ fn expand_contractions(text: &str) -> String {
         .replace("shouldn't", "should not")
 }
 
+/// Whether the user is asking to open the full conversation in canvas.
+fn is_show_conversation_request(text: &str) -> bool {
+    let normalized = strip_punctuation(&text.to_lowercase());
+    let has_show_verb = normalized.contains("show")
+        || normalized.contains("open")
+        || normalized.contains("bring up");
+    let asks_for_conversation = normalized.contains("conversation")
+        || normalized.contains("chat history")
+        || normalized.contains("chat log")
+        || normalized.contains("conversation history");
+    has_show_verb && asks_for_conversation
+}
+
+/// Whether the user is asking to hide/close the conversation canvas.
+fn is_hide_conversation_request(text: &str) -> bool {
+    let normalized = strip_punctuation(&text.to_lowercase());
+    let has_hide_verb = normalized.contains("hide") || normalized.contains("close");
+    let asks_for_conversation = normalized.contains("conversation")
+        || normalized.contains("chat history")
+        || normalized.contains("chat log")
+        || normalized.contains("conversation history")
+        || normalized.contains("canvas");
+    has_hide_verb && asks_for_conversation
+}
+
 /// Bundled control state for the conversation gate.
 struct ConversationGateControl {
     interrupt: Arc<AtomicBool>,
     assistant_speaking: Arc<AtomicBool>,
     assistant_generating: Arc<AtomicBool>,
     playback_cmd_tx: mpsc::UnboundedSender<PlaybackCommand>,
+    llm_queue_cmd_tx: Option<mpsc::UnboundedSender<LlmQueueCommand>>,
+    clear_queue_on_stop: bool,
     console_output: bool,
     cancel: CancellationToken,
     /// Optional channel for MFCC+DTW wake word detections from the spotter stage.
@@ -2176,6 +2764,11 @@ async fn run_conversation_gate(
                     GateCommand::Sleep if state == GateState::Active => {
                         ctl.interrupt.store(true, Ordering::Relaxed);
                         let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
+                        if ctl.clear_queue_on_stop
+                            && let Some(tx) = &ctl.llm_queue_cmd_tx
+                        {
+                            let _ = tx.send(LlmQueueCommand::ClearQueuedInputs);
+                        }
                         state = GateState::Idle;
                         gate_active.store(false, Ordering::Relaxed);
                         if ctl.console_output {
@@ -2276,6 +2869,11 @@ async fn run_conversation_gate(
                                 if clean.contains(&stop_phrase) {
                                     ctl.interrupt.store(true, Ordering::Relaxed);
                                     let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
+                                    if ctl.clear_queue_on_stop
+                                        && let Some(tx) = &ctl.llm_queue_cmd_tx
+                                    {
+                                        let _ = tx.send(LlmQueueCommand::ClearQueuedInputs);
+                                    }
                                     state = GateState::Idle;
                                     gate_active.store(false, Ordering::Relaxed);
                                     if ctl.console_output {
@@ -3491,6 +4089,38 @@ mod tests {
         assert!(clean.contains(stop_phrase));
     }
 
+    #[test]
+    fn show_conversation_request_detected() {
+        assert!(is_show_conversation_request("Fae show me the conversation"));
+        assert!(is_show_conversation_request("open conversation history"));
+        assert!(is_show_conversation_request("bring up chat history"));
+    }
+
+    #[test]
+    fn show_conversation_request_rejects_unrelated_history() {
+        assert!(!is_show_conversation_request(
+            "show me the history of scotland"
+        ));
+        assert!(!is_show_conversation_request(
+            "what is our conversation about"
+        ));
+    }
+
+    #[test]
+    fn hide_conversation_request_detected() {
+        assert!(is_hide_conversation_request("hide the conversation"));
+        assert!(is_hide_conversation_request("close chat history"));
+        assert!(is_hide_conversation_request("close the canvas"));
+    }
+
+    #[test]
+    fn hide_conversation_request_rejects_unrelated_close() {
+        assert!(!is_hide_conversation_request("close the door"));
+        assert!(!is_hide_conversation_request(
+            "hide the history of scotland"
+        ));
+    }
+
     // ── parse_name ──────────────────────────────────────────────────
 
     #[test]
@@ -3611,6 +4241,7 @@ mod tests {
     struct MockApiState {
         requests: Arc<StdMutex<Vec<serde_json::Value>>>,
         responses: Arc<StdMutex<VecDeque<String>>>,
+        response_delays_ms: Arc<StdMutex<VecDeque<u64>>>,
     }
 
     struct MockApiServer {
@@ -3624,6 +4255,15 @@ mod tests {
         Json(payload): Json<serde_json::Value>,
     ) -> impl axum::response::IntoResponse {
         state.requests.lock().expect("lock requests").push(payload);
+        let delay_ms = state
+            .response_delays_ms
+            .lock()
+            .expect("lock response delays")
+            .pop_front()
+            .unwrap_or(0);
+        if delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        }
         let text = state
             .responses
             .lock()
@@ -3651,7 +4291,10 @@ mod tests {
         )
     }
 
-    async fn start_mock_api_server(responses: &[&str]) -> MockApiServer {
+    async fn start_mock_api_server_with_delays(
+        responses: &[&str],
+        delays_ms: &[u64],
+    ) -> MockApiServer {
         let requests = Arc::new(StdMutex::new(Vec::new()));
         let responses = Arc::new(StdMutex::new(
             responses
@@ -3659,9 +4302,13 @@ mod tests {
                 .map(|s| (*s).to_owned())
                 .collect::<VecDeque<_>>(),
         ));
+        let response_delays_ms = Arc::new(StdMutex::new(
+            delays_ms.iter().copied().collect::<VecDeque<_>>(),
+        ));
         let state = MockApiState {
             requests: Arc::clone(&requests),
             responses,
+            response_delays_ms,
         };
 
         let app = Router::new()
@@ -3685,7 +4332,16 @@ mod tests {
         }
     }
 
+    async fn start_mock_api_server(responses: &[&str]) -> MockApiServer {
+        let delays = vec![0_u64; responses.len()];
+        start_mock_api_server_with_delays(responses, &delays).await
+    }
+
     impl MockApiServer {
+        fn request_count(&self) -> usize {
+            self.requests.lock().expect("lock requests").len()
+        }
+
         fn request_user_inputs(&self) -> Vec<String> {
             let requests = self.requests.lock().expect("lock requests");
             requests
@@ -3698,6 +4354,19 @@ mod tests {
             self.handle.abort();
             let _ = self.handle.await;
         }
+    }
+
+    async fn wait_for_mock_requests(server: &MockApiServer, min_count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server.request_count() >= min_count {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("wait for mock API requests");
     }
 
     fn extract_last_user_message(payload: &serde_json::Value) -> Option<String> {
@@ -3745,6 +4414,13 @@ mod tests {
     fn make_llm_stage_control(
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     ) -> LlmStageControl {
+        make_llm_stage_control_with_queue(runtime_tx, None)
+    }
+
+    fn make_llm_stage_control_with_queue(
+        runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+        queue_cmd_rx: Option<mpsc::UnboundedReceiver<LlmQueueCommand>>,
+    ) -> LlmStageControl {
         let (playback_cmd_tx, _playback_cmd_rx) = mpsc::unbounded_channel();
         LlmStageControl {
             interrupt: Arc::new(AtomicBool::new(false)),
@@ -3757,7 +4433,25 @@ mod tests {
             console_output: false,
             cancel: CancellationToken::new(),
             voice_command_rx: None,
+            queue_cmd_rx,
         }
+    }
+
+    fn spawn_llm_stage_for_test(
+        config: SpeechConfig,
+        input_rx: mpsc::Receiver<Transcription>,
+        sentence_tx: mpsc::Sender<SentenceChunk>,
+        ctl: LlmStageControl,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::task::spawn_blocking(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build test runtime for llm stage");
+            runtime.block_on(async move {
+                run_llm_stage(config, None, input_rx, sentence_tx, ctl, None).await;
+            });
+        })
     }
 
     fn collect_runtime_events(rx: &mut broadcast::Receiver<RuntimeEvent>) -> Vec<RuntimeEvent> {
@@ -3787,14 +4481,7 @@ mod tests {
         let (runtime_tx, mut runtime_rx) = broadcast::channel(64);
         let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
 
-        let stage = tokio::spawn(run_llm_stage(
-            config,
-            None,
-            input_rx,
-            sentence_tx,
-            ctl,
-            None,
-        ));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
 
         input_tx
             .send(make_transcription("What is my name?"))
@@ -3834,14 +4521,7 @@ mod tests {
         let (sentence_tx, _sentence_rx) = mpsc::channel(32);
         let ctl = make_llm_stage_control(None);
 
-        let stage = tokio::spawn(run_llm_stage(
-            config,
-            None,
-            input_rx,
-            sentence_tx,
-            ctl,
-            None,
-        ));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
 
         input_tx
             .send(make_transcription("I prefer tea."))
@@ -3881,14 +4561,7 @@ mod tests {
         let (runtime_tx, mut runtime_rx) = broadcast::channel(128);
         let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
 
-        let stage = tokio::spawn(run_llm_stage(
-            config,
-            None,
-            input_rx,
-            sentence_tx,
-            ctl,
-            None,
-        ));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
 
         input_tx
             .send(make_transcription("My name is Alice."))
@@ -3949,14 +4622,7 @@ mod tests {
         let (runtime_tx, mut runtime_rx) = broadcast::channel(64);
         let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
 
-        let stage = tokio::spawn(run_llm_stage(
-            config,
-            None,
-            input_rx,
-            sentence_tx,
-            ctl,
-            None,
-        ));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
 
         drop(input_tx);
 
@@ -3989,14 +4655,7 @@ mod tests {
         let (runtime_tx, mut runtime_rx) = broadcast::channel(64);
         let ctl = make_llm_stage_control(Some(runtime_tx.clone()));
 
-        let stage = tokio::spawn(run_llm_stage(
-            config,
-            None,
-            input_rx,
-            sentence_tx,
-            ctl,
-            None,
-        ));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
 
         drop(input_tx);
 
@@ -4018,5 +4677,366 @@ mod tests {
 
         server.shutdown().await;
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_queue_followup_replays_each_pending_message() {
+        let root = temp_root("queue-followup");
+        let server = start_mock_api_server_with_delays(
+            &["First reply.", "Second reply.", "Third reply."],
+            &[300, 0, 0],
+        )
+        .await;
+        let mut config = api_test_config(&root, server.url.clone());
+        config.llm.message_queue_mode = LlmMessageQueueMode::Followup;
+        config.llm.message_queue_max_pending = 8;
+        config.llm.message_queue_drop_policy = LlmMessageQueueDropPolicy::Oldest;
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(32);
+        let ctl = make_llm_stage_control(None);
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
+
+        input_tx
+            .send(make_transcription("first"))
+            .await
+            .expect("send first transcription");
+        wait_for_mock_requests(&server, 1).await;
+        input_tx
+            .send(make_transcription("second"))
+            .await
+            .expect("send second transcription");
+        input_tx
+            .send(make_transcription("third"))
+            .await
+            .expect("send third transcription");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(8), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let user_inputs = server.request_user_inputs();
+        assert_eq!(
+            user_inputs,
+            vec!["first".to_owned(), "second".to_owned(), "third".to_owned(),]
+        );
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_queue_collect_merges_pending_messages() {
+        let root = temp_root("queue-collect");
+        let server =
+            start_mock_api_server_with_delays(&["First reply.", "Collected reply."], &[300, 0])
+                .await;
+        let mut config = api_test_config(&root, server.url.clone());
+        config.llm.message_queue_mode = LlmMessageQueueMode::Collect;
+        config.llm.message_queue_max_pending = 8;
+        config.llm.message_queue_drop_policy = LlmMessageQueueDropPolicy::Oldest;
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(32);
+        let ctl = make_llm_stage_control(None);
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
+
+        input_tx
+            .send(make_transcription("first"))
+            .await
+            .expect("send first transcription");
+        wait_for_mock_requests(&server, 1).await;
+        input_tx
+            .send(make_transcription("second"))
+            .await
+            .expect("send second transcription");
+        input_tx
+            .send(make_transcription("third"))
+            .await
+            .expect("send third transcription");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(8), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let user_inputs = server.request_user_inputs();
+        assert_eq!(user_inputs.len(), 2);
+        assert_eq!(user_inputs[0], "first");
+        assert_eq!(user_inputs[1], "second\n\nthird");
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_queue_drop_oldest_keeps_latest_when_full() {
+        let root = temp_root("queue-drop-oldest");
+        let server =
+            start_mock_api_server_with_delays(&["First reply.", "Latest reply."], &[300, 0]).await;
+        let mut config = api_test_config(&root, server.url.clone());
+        config.llm.message_queue_mode = LlmMessageQueueMode::Followup;
+        config.llm.message_queue_max_pending = 1;
+        config.llm.message_queue_drop_policy = LlmMessageQueueDropPolicy::Oldest;
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(32);
+        let ctl = make_llm_stage_control(None);
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
+
+        input_tx
+            .send(make_transcription("first"))
+            .await
+            .expect("send first transcription");
+        wait_for_mock_requests(&server, 1).await;
+        input_tx
+            .send(make_transcription("second"))
+            .await
+            .expect("send second transcription");
+        input_tx
+            .send(make_transcription("third"))
+            .await
+            .expect("send third transcription");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(8), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let user_inputs = server.request_user_inputs();
+        assert_eq!(user_inputs, vec!["first".to_owned(), "third".to_owned()]);
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_clear_queued_command_drops_pending_inputs() {
+        let root = temp_root("queue-clear-command");
+        let server =
+            start_mock_api_server_with_delays(&["First reply.", "Should not run."], &[300, 0])
+                .await;
+        let mut config = api_test_config(&root, server.url.clone());
+        config.llm.message_queue_mode = LlmMessageQueueMode::Followup;
+        config.llm.message_queue_max_pending = 8;
+        config.llm.message_queue_drop_policy = LlmMessageQueueDropPolicy::Oldest;
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, _sentence_rx) = mpsc::channel(32);
+        let (queue_cmd_tx, queue_cmd_rx) = mpsc::unbounded_channel::<LlmQueueCommand>();
+        let ctl = make_llm_stage_control_with_queue(None, Some(queue_cmd_rx));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
+
+        input_tx
+            .send(make_transcription("first"))
+            .await
+            .expect("send first transcription");
+        wait_for_mock_requests(&server, 1).await;
+        input_tx
+            .send(make_transcription("second"))
+            .await
+            .expect("send second transcription");
+        queue_cmd_tx
+            .send(LlmQueueCommand::ClearQueuedInputs)
+            .expect("send clear queued command");
+        drop(input_tx);
+        drop(queue_cmd_tx);
+
+        tokio::time::timeout(Duration::from_secs(8), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        let user_inputs = server.request_user_inputs();
+        assert_eq!(user_inputs, vec!["first".to_owned()]);
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_show_conversation_command_emits_snapshot_and_uses_full_history() {
+        let root = temp_root("show-conversation-canvas");
+        let server = start_mock_api_server(&["Hello there."]).await;
+        let mut config = api_test_config(&root, server.url.clone());
+        config.llm.message_queue_mode = LlmMessageQueueMode::Followup;
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, mut sentence_rx) = mpsc::channel(32);
+        let (runtime_tx, mut runtime_rx) = broadcast::channel(128);
+        let ctl = make_llm_stage_control(Some(runtime_tx));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
+
+        input_tx
+            .send(make_transcription("hello fae"))
+            .await
+            .expect("send first transcription");
+        wait_for_mock_requests(&server, 1).await;
+        input_tx
+            .send(make_transcription("show me the conversation"))
+            .await
+            .expect("send show conversation command");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(8), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        // Only the first user message should hit the model.
+        assert_eq!(server.request_count(), 1);
+
+        let events = collect_runtime_events(&mut runtime_rx);
+        let snapshot = events.iter().find_map(|event| match event {
+            RuntimeEvent::ConversationSnapshot { entries } => Some(entries),
+            _ => None,
+        });
+        let Some(snapshot) = snapshot else {
+            unreachable!("expected conversation snapshot runtime event");
+        };
+        assert!(snapshot.iter().any(|entry| {
+            entry.role == ConversationSnapshotEntryRole::User && entry.text == "hello fae"
+        }));
+        assert!(snapshot.iter().any(|entry| {
+            entry.role == ConversationSnapshotEntryRole::Assistant
+                && entry.text.contains("Hello there.")
+        }));
+        assert!(snapshot.iter().any(|entry| {
+            entry.role == ConversationSnapshotEntryRole::User
+                && entry.text.contains("show me the conversation")
+        }));
+        assert!(snapshot.iter().any(|entry| {
+            entry.role == ConversationSnapshotEntryRole::Assistant
+                && entry
+                    .text
+                    .contains("opened the canvas with our full conversation")
+        }));
+
+        // Assistant should acknowledge opening canvas from the command path.
+        let mut saw_canvas_ack = false;
+        while let Ok(chunk) = sentence_rx.try_recv() {
+            if chunk
+                .text
+                .to_ascii_lowercase()
+                .contains("opened the canvas with our full conversation")
+            {
+                saw_canvas_ack = true;
+                break;
+            }
+        }
+        assert!(saw_canvas_ack);
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn llm_stage_hide_conversation_command_emits_visibility_and_skips_model() {
+        let root = temp_root("hide-conversation-canvas");
+        let server = start_mock_api_server(&["Hello there."]).await;
+        let mut config = api_test_config(&root, server.url.clone());
+        config.llm.message_queue_mode = LlmMessageQueueMode::Followup;
+
+        let (input_tx, input_rx) = mpsc::channel(8);
+        let (sentence_tx, mut sentence_rx) = mpsc::channel(32);
+        let (runtime_tx, mut runtime_rx) = broadcast::channel(128);
+        let ctl = make_llm_stage_control(Some(runtime_tx));
+        let stage = spawn_llm_stage_for_test(config, input_rx, sentence_tx, ctl);
+
+        input_tx
+            .send(make_transcription("hello fae"))
+            .await
+            .expect("send first transcription");
+        wait_for_mock_requests(&server, 1).await;
+        input_tx
+            .send(make_transcription("hide the conversation"))
+            .await
+            .expect("send hide conversation command");
+        drop(input_tx);
+
+        tokio::time::timeout(Duration::from_secs(8), stage)
+            .await
+            .expect("llm stage timeout")
+            .expect("llm stage join");
+
+        // Only the first user message should hit the model.
+        assert_eq!(server.request_count(), 1);
+
+        let events = collect_runtime_events(&mut runtime_rx);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::ConversationCanvasVisibility { visible } if !visible
+        )));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::ConversationSnapshot { .. }))
+        );
+
+        // Assistant should acknowledge hiding the canvas from the command path.
+        let mut saw_canvas_ack = false;
+        while let Ok(chunk) = sentence_rx.try_recv() {
+            if chunk
+                .text
+                .to_ascii_lowercase()
+                .contains("hidden the conversation canvas")
+            {
+                saw_canvas_ack = true;
+                break;
+            }
+        }
+        assert!(saw_canvas_ack);
+
+        server.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn conversation_gate_sleep_emits_clear_queued_command() {
+        let config = SpeechConfig::default();
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, _llm_rx) = mpsc::channel(8);
+        let (playback_cmd_tx, _playback_cmd_rx) = mpsc::unbounded_channel();
+        let (gate_cmd_tx, gate_cmd_rx) = mpsc::unbounded_channel();
+        let (llm_queue_cmd_tx, mut llm_queue_cmd_rx) = mpsc::unbounded_channel::<LlmQueueCommand>();
+        let cancel = CancellationToken::new();
+
+        let ctl = ConversationGateControl {
+            interrupt: Arc::new(AtomicBool::new(false)),
+            assistant_speaking: Arc::new(AtomicBool::new(false)),
+            assistant_generating: Arc::new(AtomicBool::new(false)),
+            playback_cmd_tx,
+            llm_queue_cmd_tx: Some(llm_queue_cmd_tx),
+            clear_queue_on_stop: true,
+            console_output: false,
+            cancel: cancel.clone(),
+            wakeword_rx: None,
+            gate_cmd_rx: Some(gate_cmd_rx),
+            gate_active: Arc::new(AtomicBool::new(false)),
+        };
+
+        let handle = tokio::spawn(async move {
+            run_conversation_gate(config, stt_rx, llm_tx, ctl).await;
+        });
+
+        gate_cmd_tx
+            .send(GateCommand::Wake)
+            .expect("send wake command");
+        gate_cmd_tx
+            .send(GateCommand::Sleep)
+            .expect("send sleep command");
+
+        let cmd = tokio::time::timeout(Duration::from_secs(2), llm_queue_cmd_rx.recv())
+            .await
+            .expect("wait for queue clear command");
+        assert_eq!(cmd, Some(LlmQueueCommand::ClearQueuedInputs));
+
+        cancel.cancel();
+        drop(stt_tx);
+        let _ = handle.await;
     }
 }

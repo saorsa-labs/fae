@@ -2,8 +2,9 @@
 
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
+use std::path::PathBuf;
 
-use super::path_validation::validate_read_path;
+use super::path_validation::{resolve_workspace_root, validate_read_path_in_workspace};
 use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult, truncate_output};
 
 /// Tool that reads file contents with optional line-based pagination.
@@ -14,6 +15,7 @@ use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult, truncate_output};
 /// - `limit` (integer, optional) — maximum number of lines to return
 pub struct ReadTool {
     max_bytes: usize,
+    workspace_root: PathBuf,
 }
 
 impl ReadTool {
@@ -21,12 +23,32 @@ impl ReadTool {
     pub fn new() -> Self {
         Self {
             max_bytes: DEFAULT_MAX_BYTES,
+            workspace_root: resolve_workspace_root().unwrap_or_else(|_| PathBuf::from(".")),
         }
     }
 
     /// Create a new ReadTool with a custom max output size.
     pub fn with_max_bytes(max_bytes: usize) -> Self {
-        Self { max_bytes }
+        Self {
+            max_bytes,
+            workspace_root: resolve_workspace_root().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+
+    /// Create a new ReadTool rooted at a specific workspace path.
+    pub fn with_workspace_root(workspace_root: PathBuf) -> Self {
+        Self {
+            max_bytes: DEFAULT_MAX_BYTES,
+            workspace_root,
+        }
+    }
+
+    /// Create a new ReadTool with custom max bytes and workspace root.
+    pub fn with_config(max_bytes: usize, workspace_root: PathBuf) -> Self {
+        Self {
+            max_bytes,
+            workspace_root,
+        }
     }
 }
 
@@ -71,7 +93,7 @@ impl Tool for ReadTool {
             FaeLlmError::ToolValidationError("missing required argument: path".into())
         })?;
 
-        let path = validate_read_path(path_str)?;
+        let path = validate_read_path_in_workspace(path_str, &self.workspace_root)?;
 
         let offset = args
             .get("offset")
@@ -126,23 +148,24 @@ impl Tool for ReadTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
-    fn make_test_file(content: &str) -> tempfile::NamedTempFile {
+    fn make_workspace_file(content: &str) -> (tempfile::TempDir, PathBuf) {
         use std::io::Write;
-        let mut file = match tempfile::NamedTempFile::new() {
-            Ok(f) => f,
-            Err(_) => unreachable!("tempfile creation should not fail"),
-        };
+        let workspace = tempfile::tempdir()
+            .unwrap_or_else(|_| unreachable!("tempdir creation should not fail"));
+        let file_path = workspace.path().join("test.txt");
+        let mut file = std::fs::File::create(&file_path)
+            .unwrap_or_else(|_| unreachable!("file creation should not fail"));
         let _ = file.write_all(content.as_bytes());
-        let _ = file.flush();
-        file
+        (workspace, file_path)
     }
 
     #[test]
     fn read_entire_file() {
-        let file = make_test_file("line 1\nline 2\nline 3");
-        let tool = ReadTool::new();
-        let result = tool.execute(serde_json::json!({"path": file.path().to_str()}));
+        let (workspace, file) = make_workspace_file("line 1\nline 2\nline 3");
+        let tool = ReadTool::with_workspace_root(workspace.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({"path": file.to_str()}));
         assert!(result.is_ok());
         let result = match result {
             Ok(r) => r,
@@ -155,9 +178,9 @@ mod tests {
 
     #[test]
     fn read_with_offset() {
-        let file = make_test_file("line 1\nline 2\nline 3\nline 4");
-        let tool = ReadTool::new();
-        let result = tool.execute(serde_json::json!({"path": file.path().to_str(), "offset": 2}));
+        let (workspace, file) = make_workspace_file("line 1\nline 2\nline 3\nline 4");
+        let tool = ReadTool::with_workspace_root(workspace.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({"path": file.to_str(), "offset": 2}));
         let result = match result {
             Ok(r) => r,
             Err(_) => unreachable!("read should succeed"),
@@ -168,10 +191,10 @@ mod tests {
 
     #[test]
     fn read_with_offset_and_limit() {
-        let file = make_test_file("line 1\nline 2\nline 3\nline 4\nline 5");
-        let tool = ReadTool::new();
-        let result = tool
-            .execute(serde_json::json!({"path": file.path().to_str(), "offset": 2, "limit": 2}));
+        let (workspace, file) = make_workspace_file("line 1\nline 2\nline 3\nline 4\nline 5");
+        let tool = ReadTool::with_workspace_root(workspace.path().to_path_buf());
+        let result =
+            tool.execute(serde_json::json!({"path": file.to_str(), "offset": 2, "limit": 2}));
         let result = match result {
             Ok(r) => r,
             Err(_) => unreachable!("read should succeed"),
@@ -182,9 +205,9 @@ mod tests {
 
     #[test]
     fn read_offset_beyond_end() {
-        let file = make_test_file("line 1\nline 2");
-        let tool = ReadTool::new();
-        let result = tool.execute(serde_json::json!({"path": file.path().to_str(), "offset": 100}));
+        let (workspace, file) = make_workspace_file("line 1\nline 2");
+        let tool = ReadTool::with_workspace_root(workspace.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({"path": file.to_str(), "offset": 100}));
         let result = match result {
             Ok(r) => r,
             Err(_) => unreachable!("read should succeed"),
@@ -195,9 +218,11 @@ mod tests {
 
     #[test]
     fn read_nonexistent_file() {
-        let tool = ReadTool::new();
-        let result =
-            tool.execute(serde_json::json!({"path": "/tmp/nonexistent_fae_test_file.txt"}));
+        let workspace = tempfile::tempdir()
+            .unwrap_or_else(|_| unreachable!("tempdir creation should not fail"));
+        let tool = ReadTool::with_workspace_root(workspace.path().to_path_buf());
+        let missing = workspace.path().join("nonexistent.txt");
+        let result = tool.execute(serde_json::json!({"path": missing.to_str()}));
         let result = match result {
             Ok(r) => r,
             Err(_) => unreachable!("read should return ToolResult, not Err"),
@@ -216,9 +241,9 @@ mod tests {
     #[test]
     fn read_truncates_large_output() {
         let large_content = "x".repeat(200);
-        let file = make_test_file(&large_content);
-        let tool = ReadTool::with_max_bytes(50);
-        let result = tool.execute(serde_json::json!({"path": file.path().to_str()}));
+        let (workspace, file) = make_workspace_file(&large_content);
+        let tool = ReadTool::with_config(50, workspace.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({"path": file.to_str()}));
         let result = match result {
             Ok(r) => r,
             Err(_) => unreachable!("read should succeed"),

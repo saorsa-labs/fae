@@ -1,4 +1,4 @@
-//! Canvas MCP tools implementing the `saorsa_agent::Tool` trait.
+//! Canvas MCP tools implementing the `fae_llm::tools::Tool` trait.
 //!
 //! These tools let the LLM push rich content to the canvas:
 //! - [`CanvasRenderTool`] — render charts, images, text to a session

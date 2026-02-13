@@ -4,15 +4,13 @@ use std::sync::{Arc, Mutex};
 
 use canvas_core::{Element, ElementKind, ImageFormat, Transform};
 use canvas_mcp::tools::{RenderContent, RenderParams};
-use saorsa_agent::Tool;
-use saorsa_agent::error::{Result as ToolResult, SaorsaAgentError};
 
 use crate::canvas::registry::CanvasSessionRegistry;
+use crate::fae_llm::config::types::ToolMode;
+use crate::fae_llm::error::FaeLlmError;
+use crate::fae_llm::tools::types::{Tool, ToolResult};
 
 /// Tool that renders content to a canvas session.
-///
-/// The LLM calls this to push charts, images, 3D models, or text annotations
-/// into the active canvas.
 pub struct CanvasRenderTool {
     registry: Arc<Mutex<CanvasSessionRegistry>>,
 }
@@ -24,7 +22,6 @@ impl CanvasRenderTool {
     }
 }
 
-#[async_trait::async_trait]
 impl Tool for CanvasRenderTool {
     fn name(&self) -> &str {
         "canvas_render"
@@ -35,7 +32,7 @@ impl Tool for CanvasRenderTool {
          Returns the element ID of the rendered content."
     }
 
-    fn input_schema(&self) -> serde_json::Value {
+    fn schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -74,35 +71,49 @@ impl Tool for CanvasRenderTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<String> {
-        let params: RenderParams = serde_json::from_value(input)
-            .map_err(|e| SaorsaAgentError::Tool(format!("invalid canvas_render params: {e}")))?;
+    fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
+        let params: RenderParams = serde_json::from_value(args).map_err(|e| {
+            FaeLlmError::ToolValidationError(format!("invalid canvas_render params: {e}"))
+        })?;
 
         let element = render_content_to_element(&params);
 
-        let registry = self
-            .registry
-            .lock()
-            .map_err(|_| SaorsaAgentError::Tool("session registry lock poisoned".to_owned()))?;
+        let registry = match self.registry.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Ok(ToolResult::failure(
+                    "session registry lock poisoned".to_string(),
+                ));
+            }
+        };
 
-        let session_arc = registry.get(&params.session_id).ok_or_else(|| {
-            SaorsaAgentError::Tool(format!("canvas session '{}' not found", params.session_id))
-        })?;
+        let Some(session_arc) = registry.get(&params.session_id) else {
+            return Ok(ToolResult::failure(format!(
+                "canvas session '{}' not found",
+                params.session_id
+            )));
+        };
 
-        let mut session = session_arc
-            .lock()
-            .map_err(|_| SaorsaAgentError::Tool("session lock poisoned".to_owned()))?;
+        let mut session = match session_arc.lock() {
+            Ok(guard) => guard,
+            Err(_) => return Ok(ToolResult::failure("session lock poisoned".to_string())),
+        };
 
         let element_id = session.add_element(element);
-
         let response = serde_json::json!({
             "success": true,
             "session_id": params.session_id,
             "element_id": element_id.to_string(),
         });
 
-        serde_json::to_string(&response)
-            .map_err(|e| SaorsaAgentError::Tool(format!("failed to serialize response: {e}")))
+        let response_json = serde_json::to_string(&response).map_err(|e| {
+            FaeLlmError::ToolExecutionError(format!("failed to serialize response: {e}"))
+        })?;
+        Ok(ToolResult::success(response_json))
+    }
+
+    fn allowed_in_mode(&self, _mode: ToolMode) -> bool {
+        true
     }
 }
 
@@ -160,8 +171,8 @@ mod tests {
         Arc::new(Mutex::new(reg))
     }
 
-    #[tokio::test]
-    async fn test_render_text() {
+    #[test]
+    fn test_render_text() {
         let reg = setup_registry("test");
         let tool = CanvasRenderTool::new(reg.clone());
 
@@ -176,16 +187,17 @@ mod tests {
             }
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
-        let output: serde_json::Value =
-            serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+        let result = result.unwrap_or_else(|_| unreachable!("execution should succeed"));
+        assert!(result.success);
+        let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
         assert_eq!(output["success"], true);
         assert!(output["element_id"].is_string());
     }
 
-    #[tokio::test]
-    async fn test_render_chart() {
+    #[test]
+    fn test_render_chart() {
         let reg = setup_registry("test");
         let tool = CanvasRenderTool::new(reg);
 
@@ -202,12 +214,13 @@ mod tests {
             "position": { "x": 10.0, "y": 20.0, "width": 400.0, "height": 300.0 }
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
+        assert!(result.unwrap_or_else(|_| unreachable!()).success);
     }
 
-    #[tokio::test]
-    async fn test_render_image() {
+    #[test]
+    fn test_render_image() {
         let reg = setup_registry("test");
         let tool = CanvasRenderTool::new(reg);
 
@@ -222,12 +235,13 @@ mod tests {
             }
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
+        assert!(result.unwrap_or_else(|_| unreachable!()).success);
     }
 
-    #[tokio::test]
-    async fn test_render_missing_session() {
+    #[test]
+    fn test_render_missing_session() {
         let reg = setup_registry("test");
         let tool = CanvasRenderTool::new(reg);
 
@@ -239,19 +253,18 @@ mod tests {
             }
         });
 
-        let result = tool.execute(input).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found"));
+        let result = tool.execute(input);
+        assert!(result.is_ok());
+        assert!(!result.unwrap_or_else(|_| unreachable!()).success);
     }
 
-    #[tokio::test]
-    async fn test_render_invalid_json() {
+    #[test]
+    fn test_render_invalid_json() {
         let reg = setup_registry("test");
         let tool = CanvasRenderTool::new(reg);
 
         let input = serde_json::json!({ "bad": "input" });
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_err());
     }
 
@@ -261,6 +274,6 @@ mod tests {
         let tool = CanvasRenderTool::new(reg);
         assert_eq!(tool.name(), "canvas_render");
         assert!(!tool.description().is_empty());
-        assert!(tool.input_schema()["properties"]["session_id"].is_object());
+        assert!(tool.schema()["properties"]["session_id"].is_object());
     }
 }

@@ -41,6 +41,9 @@ pub const DEFAULT_CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
 /// Default cooldown period in seconds before attempting recovery.
 pub const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_SECS: u64 = 60;
 
+/// Default max parallel tool calls when parallel execution is enabled.
+pub const DEFAULT_MAX_PARALLEL_TOOL_CALLS: usize = 4;
+
 /// Retry policy for handling transient failures.
 ///
 /// Implements exponential backoff with jitter for retrying failed requests.
@@ -330,6 +333,22 @@ pub struct AgentConfig {
     pub tool_timeout_secs: u64,
     /// Optional system prompt prepended to every conversation.
     pub system_prompt: Option<String>,
+    /// Retry policy for transient provider failures.
+    #[serde(default)]
+    pub retry_policy: RetryPolicy,
+    /// Circuit breaker settings for repeated provider failures.
+    #[serde(default)]
+    pub circuit_breaker: CircuitBreaker,
+    /// Whether tool calls within a turn may execute in parallel.
+    #[serde(default)]
+    pub parallel_tool_calls: bool,
+    /// Maximum number of concurrent tool executions when parallel mode is on.
+    #[serde(default = "default_max_parallel_tool_calls")]
+    pub max_parallel_tool_calls: usize,
+}
+
+fn default_max_parallel_tool_calls() -> usize {
+    DEFAULT_MAX_PARALLEL_TOOL_CALLS
 }
 
 impl Default for AgentConfig {
@@ -340,6 +359,10 @@ impl Default for AgentConfig {
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             tool_timeout_secs: DEFAULT_TOOL_TIMEOUT_SECS,
             system_prompt: None,
+            retry_policy: RetryPolicy::default(),
+            circuit_breaker: CircuitBreaker::default(),
+            parallel_tool_calls: false,
+            max_parallel_tool_calls: default_max_parallel_tool_calls(),
         }
     }
 }
@@ -377,6 +400,30 @@ impl AgentConfig {
     /// Set the system prompt.
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// Set the retry policy.
+    pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
+        self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Set the circuit breaker policy.
+    pub fn with_circuit_breaker(mut self, circuit_breaker: CircuitBreaker) -> Self {
+        self.circuit_breaker = circuit_breaker;
+        self
+    }
+
+    /// Enable or disable parallel tool execution.
+    pub fn with_parallel_tool_calls(mut self, parallel_tool_calls: bool) -> Self {
+        self.parallel_tool_calls = parallel_tool_calls;
+        self
+    }
+
+    /// Set the max number of concurrent tool calls when parallel execution is enabled.
+    pub fn with_max_parallel_tool_calls(mut self, max_parallel_tool_calls: usize) -> Self {
+        self.max_parallel_tool_calls = max_parallel_tool_calls.max(1);
         self
     }
 }
@@ -477,6 +524,16 @@ mod tests {
         assert_eq!(config.request_timeout_secs, DEFAULT_REQUEST_TIMEOUT_SECS);
         assert_eq!(config.tool_timeout_secs, DEFAULT_TOOL_TIMEOUT_SECS);
         assert!(config.system_prompt.is_none());
+        assert_eq!(config.retry_policy.max_attempts, DEFAULT_MAX_RETRY_ATTEMPTS);
+        assert_eq!(
+            config.circuit_breaker.failure_threshold,
+            DEFAULT_CIRCUIT_BREAKER_THRESHOLD
+        );
+        assert!(!config.parallel_tool_calls);
+        assert_eq!(
+            config.max_parallel_tool_calls,
+            DEFAULT_MAX_PARALLEL_TOOL_CALLS
+        );
     }
 
     #[test]
@@ -486,12 +543,20 @@ mod tests {
             .with_max_tool_calls_per_turn(5)
             .with_request_timeout_secs(60)
             .with_tool_timeout_secs(15)
-            .with_system_prompt("You are helpful.");
+            .with_system_prompt("You are helpful.")
+            .with_retry_policy(RetryPolicy::new().with_max_attempts(5))
+            .with_circuit_breaker(CircuitBreaker::new().with_failure_threshold(7))
+            .with_parallel_tool_calls(true)
+            .with_max_parallel_tool_calls(8);
         assert_eq!(config.max_turns, 10);
         assert_eq!(config.max_tool_calls_per_turn, 5);
         assert_eq!(config.request_timeout_secs, 60);
         assert_eq!(config.tool_timeout_secs, 15);
         assert_eq!(config.system_prompt.as_deref(), Some("You are helpful."));
+        assert_eq!(config.retry_policy.max_attempts, 5);
+        assert_eq!(config.circuit_breaker.failure_threshold, 7);
+        assert!(config.parallel_tool_calls);
+        assert_eq!(config.max_parallel_tool_calls, 8);
     }
 
     #[test]

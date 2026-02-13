@@ -69,8 +69,9 @@ pub fn resolve_workspace_root() -> Result<PathBuf, FaeLlmError> {
     let cwd = std::env::current_dir().map_err(|_e| {
         FaeLlmError::ToolValidationError("failed to resolve working directory".into())
     })?;
-    cwd.canonicalize()
-        .map_err(|_e| FaeLlmError::ToolValidationError("failed to canonicalize working directory".into()))
+    cwd.canonicalize().map_err(|_e| {
+        FaeLlmError::ToolValidationError("failed to canonicalize working directory".into())
+    })
 }
 
 /// Validate a path is safe for reading within the workspace root.
@@ -85,13 +86,17 @@ pub fn validate_read_path_in_workspace(
     }
 
     if !is_path_safe(path) {
-        return Err(FaeLlmError::ToolValidationError("path contains directory traversal".into()));
+        return Err(FaeLlmError::ToolValidationError(
+            "path contains directory traversal".into(),
+        ));
     }
 
     let root = match workspace_root.canonicalize() {
         Ok(r) => r,
         Err(_) => {
-            return Err(FaeLlmError::ToolValidationError("invalid workspace root".into()));
+            return Err(FaeLlmError::ToolValidationError(
+                "invalid workspace root".into(),
+            ));
         }
     };
 
@@ -112,16 +117,17 @@ pub fn validate_read_path_in_workspace(
         return Ok(canonical);
     }
 
-    let parent = absolute.parent().ok_or_else(|| {
-        FaeLlmError::ToolValidationError("path has no parent directory".into())
-    })?;
-    let existing_ancestor = first_existing_ancestor(parent).ok_or_else(|| {
-        FaeLlmError::ToolValidationError("path parent does not exist".into())
-    })?;
+    let parent = absolute
+        .parent()
+        .ok_or_else(|| FaeLlmError::ToolValidationError("path has no parent directory".into()))?;
+    let existing_ancestor = first_existing_ancestor(parent)
+        .ok_or_else(|| FaeLlmError::ToolValidationError("path parent does not exist".into()))?;
     let canonical_ancestor = match existing_ancestor.canonicalize() {
         Ok(c) => c,
         Err(_) => {
-            return Err(FaeLlmError::ToolValidationError("failed to resolve path parent".into()));
+            return Err(FaeLlmError::ToolValidationError(
+                "failed to resolve path parent".into(),
+            ));
         }
     };
     if !canonical_ancestor.starts_with(&root) {
@@ -146,13 +152,17 @@ pub fn validate_write_path_in_workspace(
     }
 
     if !is_path_safe(path) {
-        return Err(FaeLlmError::ToolValidationError("path contains directory traversal".into()));
+        return Err(FaeLlmError::ToolValidationError(
+            "path contains directory traversal".into(),
+        ));
     }
 
     let root = match workspace_root.canonicalize() {
         Ok(r) => r,
         Err(_) => {
-            return Err(FaeLlmError::ToolValidationError("invalid workspace root".into()));
+            return Err(FaeLlmError::ToolValidationError(
+                "invalid workspace root".into(),
+            ));
         }
     };
 
@@ -164,7 +174,9 @@ pub fn validate_write_path_in_workspace(
     };
 
     if absolute.is_absolute() && is_system_path(&absolute) {
-        return Err(FaeLlmError::ToolValidationError("cannot write to system directory".into()));
+        return Err(FaeLlmError::ToolValidationError(
+            "cannot write to system directory".into(),
+        ));
     }
 
     if let Some(existing_target) = canonical_if_exists(&absolute)?
@@ -176,17 +188,18 @@ pub fn validate_write_path_in_workspace(
         )));
     }
 
-    let parent = absolute.parent().ok_or_else(|| {
-        FaeLlmError::ToolValidationError("path has no parent directory".into())
-    })?;
+    let parent = absolute
+        .parent()
+        .ok_or_else(|| FaeLlmError::ToolValidationError("path has no parent directory".into()))?;
 
-    let existing_ancestor = first_existing_ancestor(parent).ok_or_else(|| {
-        FaeLlmError::ToolValidationError("path parent does not exist".into())
-    })?;
+    let existing_ancestor = first_existing_ancestor(parent)
+        .ok_or_else(|| FaeLlmError::ToolValidationError("path parent does not exist".into()))?;
     let canonical_ancestor = match existing_ancestor.canonicalize() {
         Ok(c) => c,
         Err(_) => {
-            return Err(FaeLlmError::ToolValidationError("failed to resolve path parent".into()));
+            return Err(FaeLlmError::ToolValidationError(
+                "failed to resolve path parent".into(),
+            ));
         }
     };
     if !canonical_ancestor.starts_with(&root) {

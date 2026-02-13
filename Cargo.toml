@@ -72,6 +72,13 @@ tokio-util = { version = "0.7", features = ["rt"] }
 thiserror = "2"
 anyhow = "1"
 
+# UUID for request IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Async stream utilities
+async-stream = "0.3"
+tokio-stream = "0.1"
+
 # CLI
 # GUI-only app (no CLI/TUI binaries).
 
@@ -95,10 +102,6 @@ dioxus = { version = "0.6", features = ["desktop"], optional = true }
 
 # TUI (saorsa-tui terminal UI framework, published on crates.io)
 # (removed)
-
-# Agent runtime + multi-provider LLM API (saorsa ecosystem)
-saorsa-agent = "0.4"
-saorsa-ai = { version = "0.4", default-features = false }
 
 # Canvas visual output (saorsa-canvas scene graph)
 canvas-core = "0.2"

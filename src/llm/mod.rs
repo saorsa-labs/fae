@@ -36,6 +36,11 @@ pub struct LocalLlm {
 }
 
 impl LocalLlm {
+    /// Get the underlying mistralrs model for use in provider adapters.
+    pub fn shared_model(&self) -> Arc<Model> {
+        Arc::clone(&self.model)
+    }
+
     pub(crate) async fn load_local_model(config: &LlmConfig) -> Result<Arc<Model>> {
         info!(
             "loading local LLM: {} / {}",
@@ -65,10 +70,6 @@ impl LocalLlm {
 
         info!("local LLM loaded successfully");
         Ok(Arc::new(model))
-    }
-
-    pub(crate) fn shared_model(&self) -> Arc<Model> {
-        Arc::clone(&self.model)
     }
 
     /// Build a new local LLM from the given configuration.
@@ -105,13 +106,13 @@ impl LocalLlm {
     /// Returns an error if generation fails.
     pub async fn generate_response(
         &mut self,
-        user_input: &str,
-        tx: &mpsc::Sender<SentenceChunk>,
-        interrupt: &Arc<AtomicBool>,
+        user_input: String,
+        tx: mpsc::Sender<SentenceChunk>,
+        interrupt: Arc<AtomicBool>,
     ) -> Result<bool> {
         // Add user message to history
         self.history
-            .push((TextMessageRole::User, user_input.to_owned()));
+            .push((TextMessageRole::User, user_input.clone()));
         self.trim_history();
 
         // Clear interrupt flag at the start of each generation
@@ -134,8 +135,8 @@ impl LocalLlm {
 
         // Start streaming
         info!("sending stream request to mistralrs engine");
-        let mut stream = self
-            .model
+        let model = Arc::clone(&self.model);
+        let mut stream = model
             .stream_chat_request(request)
             .await
             .map_err(|e| SpeechError::Llm(format!("stream request failed: {e}")))?;

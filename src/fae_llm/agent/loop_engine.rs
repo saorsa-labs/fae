@@ -19,6 +19,8 @@ use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::provider::{ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::message::{AssistantToolCall, Message};
 use crate::fae_llm::tools::registry::ToolRegistry;
+use crate::fae_llm::tools::sanitize::sanitize_tool_output;
+use crate::fae_llm::tools::types::DEFAULT_MAX_BYTES;
 use crate::fae_llm::types::RequestOptions;
 use crate::fae_llm::usage::TokenUsage;
 
@@ -86,7 +88,12 @@ impl AgentLoop {
             })
             .collect();
 
-        let tool_executor = ToolExecutor::new(registry, config.tool_timeout_secs);
+        let tool_executor = ToolExecutor::with_parallelism(
+            registry,
+            config.tool_timeout_secs,
+            config.parallel_tool_calls,
+            config.max_parallel_tool_calls,
+        );
 
         Self {
             config,
@@ -180,6 +187,7 @@ impl AgentLoop {
         let request_timeout = tokio::time::Duration::from_secs(self.config.request_timeout_secs);
         let options = RequestOptions::new().with_stream(true);
         let loop_start = std::time::Instant::now();
+        let mut circuit_breaker = self.config.circuit_breaker.clone();
 
         for _turn_idx in 0..self.config.max_turns {
             let turn_number = _turn_idx + 1;
@@ -209,42 +217,28 @@ impl AgentLoop {
                 });
             }
 
-            // Send to provider with timeout
-            let stream = tokio::select! {
-                _ = self.cancel.cancelled() => {
+            // Send to provider with retry/circuit-breaker protection.
+            if self.cancel.is_cancelled() {
+                return Ok(AgentLoopResult {
+                    final_text: last_text(&turns),
+                    turns,
+                    total_usage,
+                    stop_reason: StopReason::Cancelled,
+                });
+            }
+
+            let stream = match self
+                .send_with_retry(&messages, &options, request_timeout, &mut circuit_breaker)
+                .await
+            {
+                Ok(stream) => stream,
+                Err(e) => {
                     return Ok(AgentLoopResult {
                         final_text: last_text(&turns),
                         turns,
                         total_usage,
-                        stop_reason: StopReason::Cancelled,
+                        stop_reason: StopReason::Error(format!("{e}")),
                     });
-                }
-                result = tokio::time::timeout(
-                    request_timeout,
-                    self.provider.send(&messages, &options, &self.tool_definitions)
-                ) => {
-                    match result {
-                        Ok(Ok(stream)) => stream,
-                        Ok(Err(e)) => {
-                            return Ok(AgentLoopResult {
-                                final_text: last_text(&turns),
-                                turns,
-                                total_usage,
-                                stop_reason: StopReason::Error(format!("{e}")),
-                            });
-                        }
-                        Err(_elapsed) => {
-                            return Ok(AgentLoopResult {
-                                final_text: last_text(&turns),
-                                turns,
-                                total_usage,
-                                stop_reason: StopReason::Error(format!(
-                                    "request timed out after {}s",
-                                    self.config.request_timeout_secs
-                                )),
-                            });
-                        }
-                    }
                 }
             };
 
@@ -253,29 +247,29 @@ impl AgentLoop {
             let mut stream = stream;
 
             loop {
-                tokio::select! {
-                    _ = self.cancel.cancelled() => {
-                        let turn = acc.finish();
-                        turns.push(TurnResult {
-                            text: turn.text,
-                            thinking: turn.thinking,
-                            tool_calls: Vec::new(),
-                            finish_reason: FinishReason::Cancelled,
-                            usage: None,
-                        });
-                        return Ok(AgentLoopResult {
-                            final_text: last_text(&turns),
-                            turns,
-                            total_usage,
-                            stop_reason: StopReason::Cancelled,
-                        });
-                    }
-                    event = stream.next() => {
-                        match event {
-                            Some(e) => acc.push(e),
-                            None => break,
-                        }
-                    }
+                if self.cancel.is_cancelled() {
+                    let turn = acc.finish();
+                    turns.push(TurnResult {
+                        text: turn.text,
+                        thinking: turn.thinking,
+                        tool_calls: Vec::new(),
+                        finish_reason: FinishReason::Cancelled,
+                        usage: None,
+                    });
+                    return Ok(AgentLoopResult {
+                        final_text: last_text(&turns),
+                        turns,
+                        total_usage,
+                        stop_reason: StopReason::Cancelled,
+                    });
+                }
+
+                match tokio::time::timeout(tokio::time::Duration::from_millis(25), stream.next())
+                    .await
+                {
+                    Ok(Some(event)) => acc.push(event),
+                    Ok(None) => break,
+                    Err(_) => continue,
                 }
             }
 
@@ -354,7 +348,8 @@ impl AgentLoop {
                                     .clone()
                                     .unwrap_or_else(|| "tool execution failed".to_string())
                             };
-                            messages.push(Message::tool_result(&exec.call_id, content));
+                            let sanitized = sanitize_tool_output(&content, DEFAULT_MAX_BYTES);
+                            messages.push(Message::tool_result(&exec.call_id, sanitized.content));
 
                             executed_calls.push(exec);
                         }
@@ -370,7 +365,8 @@ impl AgentLoop {
                                 function_name: acc_call.function_name.clone(),
                                 arguments: acc_call.arguments_json.clone(),
                             });
-                            messages.push(Message::tool_result(&call_id, &error_msg));
+                            let sanitized = sanitize_tool_output(&error_msg, DEFAULT_MAX_BYTES);
+                            messages.push(Message::tool_result(&call_id, sanitized.content));
 
                             executed_calls.push(ExecutedToolCall {
                                 call_id,
@@ -457,6 +453,78 @@ impl AgentLoop {
             stop_reason: StopReason::MaxTurns,
         })
     }
+
+    async fn send_with_retry(
+        &self,
+        messages: &[Message],
+        options: &RequestOptions,
+        request_timeout: tokio::time::Duration,
+        circuit_breaker: &mut crate::fae_llm::agent::types::CircuitBreaker,
+    ) -> Result<crate::fae_llm::provider::LlmEventStream, FaeLlmError> {
+        let mut retry_attempt = 0u32;
+
+        loop {
+            if self.cancel.is_cancelled() {
+                return Err(FaeLlmError::RequestError(
+                    "request cancelled before provider send".to_string(),
+                ));
+            }
+
+            if !circuit_breaker.is_request_allowed() {
+                return Err(FaeLlmError::ProviderError(format!(
+                    "circuit breaker open: {}",
+                    circuit_breaker.state
+                )));
+            }
+
+            let provider_result = tokio::time::timeout(
+                request_timeout,
+                self.provider
+                    .send(messages, options, &self.tool_definitions),
+            )
+            .await;
+
+            match provider_result {
+                Ok(Ok(stream)) => {
+                    circuit_breaker.record_success();
+                    return Ok(stream);
+                }
+                Ok(Err(error)) => {
+                    circuit_breaker.record_failure();
+                    let retryable = error.is_retryable();
+
+                    if !retryable
+                        || retry_attempt >= self.config.retry_policy.max_attempts
+                        || !circuit_breaker.is_request_allowed()
+                    {
+                        return Err(error);
+                    }
+                }
+                Err(_) => {
+                    let error = FaeLlmError::TimeoutError(format!(
+                        "request timed out after {}s",
+                        self.config.request_timeout_secs
+                    ));
+                    circuit_breaker.record_failure();
+
+                    if retry_attempt >= self.config.retry_policy.max_attempts
+                        || !circuit_breaker.is_request_allowed()
+                    {
+                        return Err(error);
+                    }
+                }
+            }
+
+            retry_attempt = retry_attempt.saturating_add(1);
+            let delay = self.config.retry_policy.delay_for_attempt(retry_attempt);
+            tokio::time::sleep(delay).await;
+            if self.cancel.is_cancelled() {
+                return Err(FaeLlmError::RequestError(
+                    "request cancelled during retry backoff".to_string(),
+                ));
+            }
+        }
+    }
 }
 
 /// Extract the text from the last turn, or empty if no turns.
@@ -510,7 +578,8 @@ pub fn build_messages_from_result(
                         .clone()
                         .unwrap_or_else(|| "tool execution failed".to_string())
                 };
-                messages.push(Message::tool_result(&tc.call_id, content));
+                let sanitized = sanitize_tool_output(&content, DEFAULT_MAX_BYTES);
+                messages.push(Message::tool_result(&tc.call_id, sanitized.content));
             }
         } else if !turn.text.is_empty() {
             // Text-only assistant message
@@ -532,6 +601,7 @@ mod tests {
 
     use async_trait::async_trait;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     // ── Mock Provider ────────────────────────────────────────
 
@@ -616,6 +686,56 @@ mod tests {
                     responses.remove(0)
                 }
             };
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    /// Provider that fails N times before succeeding with one text response.
+    struct FlakyProvider {
+        failures_remaining: Mutex<u32>,
+        call_count: Arc<AtomicU32>,
+        success_text: String,
+    }
+
+    impl FlakyProvider {
+        fn new(
+            failures_before_success: u32,
+            call_count: Arc<AtomicU32>,
+            success_text: &str,
+        ) -> Self {
+            Self {
+                failures_remaining: Mutex::new(failures_before_success),
+                call_count,
+                success_text: success_text.to_string(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for FlakyProvider {
+        fn name(&self) -> &str {
+            "flaky"
+        }
+
+        async fn send(
+            &self,
+            _messages: &[Message],
+            _options: &RequestOptions,
+            _tools: &[ToolDefinition],
+        ) -> Result<LlmEventStream, FaeLlmError> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            let mut failures = self
+                .failures_remaining
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if *failures > 0 {
+                *failures -= 1;
+                return Err(FaeLlmError::RequestError(
+                    "transient provider failure".to_string(),
+                ));
+            }
+
+            let events = MockProvider::text_response(&self.success_text);
             Ok(Box::pin(futures_util::stream::iter(events)))
         }
     }
@@ -864,6 +984,60 @@ mod tests {
         assert_eq!(result.turns.len(), 2);
         assert!(!result.turns[0].tool_calls[0].result.success);
         assert_eq!(result.stop_reason, StopReason::Complete);
+    }
+
+    // ── Retry + Circuit Breaker ─────────────────────────────
+
+    #[tokio::test]
+    async fn agent_loop_retries_transient_provider_failure() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let provider = Arc::new(FlakyProvider::new(
+            1,
+            call_count.clone(),
+            "Recovered response.",
+        ));
+        let registry = make_registry_with_mock();
+        let config = AgentConfig::new().with_retry_policy(
+            crate::fae_llm::agent::types::RetryPolicy::new()
+                .with_max_attempts(3)
+                .with_base_delay_ms(1)
+                .with_max_delay_ms(5),
+        );
+
+        let agent = AgentLoop::new(config, provider, registry);
+        let result = agent.run("retry please").await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap_or_else(|_| unreachable!());
+        assert_eq!(result.stop_reason, StopReason::Complete);
+        assert_eq!(result.final_text, "Recovered response.");
+        assert!(call_count.load(Ordering::Relaxed) >= 2);
+    }
+
+    #[tokio::test]
+    async fn agent_loop_circuit_breaker_short_circuits_retries() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let provider = Arc::new(FlakyProvider::new(10, call_count.clone(), "unreachable"));
+        let registry = make_registry_with_mock();
+        let config = AgentConfig::new()
+            .with_retry_policy(
+                crate::fae_llm::agent::types::RetryPolicy::new()
+                    .with_max_attempts(8)
+                    .with_base_delay_ms(1)
+                    .with_max_delay_ms(5),
+            )
+            .with_circuit_breaker(
+                crate::fae_llm::agent::types::CircuitBreaker::new().with_failure_threshold(2),
+            );
+
+        let agent = AgentLoop::new(config, provider, registry);
+        let result = agent.run("will fail").await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap_or_else(|_| unreachable!());
+        assert!(matches!(result.stop_reason, StopReason::Error(_)));
+        // Failure threshold is 2, so retries should be short-circuited quickly.
+        assert!(call_count.load(Ordering::Relaxed) <= 2);
     }
 
     // ── System prompt ────────────────────────────────────────

@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use futures_util::stream::{self, StreamExt};
 use tokio_util::sync::CancellationToken;
 
 use super::accumulator::AccumulatedToolCall;
@@ -26,6 +27,8 @@ use crate::fae_llm::tools::registry::ToolRegistry;
 pub struct ToolExecutor {
     registry: Arc<ToolRegistry>,
     tool_timeout_secs: u64,
+    parallel_tool_calls: bool,
+    max_parallel_tool_calls: usize,
 }
 
 impl ToolExecutor {
@@ -39,6 +42,23 @@ impl ToolExecutor {
         Self {
             registry,
             tool_timeout_secs,
+            parallel_tool_calls: false,
+            max_parallel_tool_calls: 1,
+        }
+    }
+
+    /// Create a new tool executor with parallelism configuration.
+    pub fn with_parallelism(
+        registry: Arc<ToolRegistry>,
+        tool_timeout_secs: u64,
+        parallel_tool_calls: bool,
+        max_parallel_tool_calls: usize,
+    ) -> Self {
+        Self {
+            registry,
+            tool_timeout_secs,
+            parallel_tool_calls,
+            max_parallel_tool_calls: max_parallel_tool_calls.max(1),
         }
     }
 
@@ -162,18 +182,29 @@ impl ToolExecutor {
         })
     }
 
-    /// Execute multiple tool calls sequentially.
+    /// Execute multiple tool calls.
     ///
-    /// Stops on cancellation. Each call is executed one at a time
-    /// (no parallel execution in v1 for safety).
-    ///
-    /// Returns results in the same order as the input calls.
-    /// Individual failures are captured as `Err` entries.
+    /// By default calls execute sequentially. When `parallel_tool_calls` is
+    /// enabled, calls execute concurrently up to `max_parallel_tool_calls`,
+    /// while preserving input order in the returned vector.
     pub async fn execute_tools(
         &self,
         calls: &[AccumulatedToolCall],
         cancel: &CancellationToken,
     ) -> Vec<Result<ExecutedToolCall, FaeLlmError>> {
+        if self.parallel_tool_calls && calls.len() > 1 {
+            let unordered: Vec<(usize, Result<ExecutedToolCall, FaeLlmError>)> =
+                stream::iter(calls.iter().enumerate())
+                    .map(|(idx, call)| async move { (idx, self.execute_tool(call, cancel).await) })
+                    .buffer_unordered(self.max_parallel_tool_calls)
+                    .collect()
+                    .await;
+
+            let mut ordered = unordered;
+            ordered.sort_by_key(|(idx, _)| *idx);
+            return ordered.into_iter().map(|(_, result)| result).collect();
+        }
+
         let mut results = Vec::with_capacity(calls.len());
 
         for call in calls {
@@ -269,6 +300,14 @@ mod tests {
     fn make_call(name: &str, args: &str) -> AccumulatedToolCall {
         AccumulatedToolCall {
             call_id: format!("call_{name}"),
+            function_name: name.to_string(),
+            arguments_json: args.to_string(),
+        }
+    }
+
+    fn make_call_with_id(call_id: &str, name: &str, args: &str) -> AccumulatedToolCall {
+        AccumulatedToolCall {
+            call_id: call_id.to_string(),
             function_name: name.to_string(),
             arguments_json: args.to_string(),
         }
@@ -423,6 +462,31 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].is_ok());
         assert!(results[1].is_ok());
+    }
+
+    #[tokio::test]
+    async fn execute_tools_parallel_preserves_order() {
+        let registry = make_registry_with_slow(250);
+        let executor = ToolExecutor::with_parallelism(registry, 30, true, 2);
+        let cancel = CancellationToken::new();
+        let calls = vec![
+            make_call_with_id("slow_1", "slow", r#"{}"#),
+            make_call_with_id("slow_2", "slow", r#"{}"#),
+        ];
+
+        let start = std::time::Instant::now();
+        let results = executor.execute_tools(&calls, &cancel).await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+
+        let first = results[0].as_ref().unwrap_or_else(|_| unreachable!());
+        let second = results[1].as_ref().unwrap_or_else(|_| unreachable!());
+        assert_eq!(first.call_id, "slow_1");
+        assert_eq!(second.call_id, "slow_2");
+        assert!(elapsed < std::time::Duration::from_millis(450));
     }
 
     #[tokio::test]

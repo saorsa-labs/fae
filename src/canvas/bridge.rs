@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::pipeline::messages::ControlEvent;
-use crate::runtime::RuntimeEvent;
+use crate::runtime::{ConversationSnapshotEntryRole, RuntimeEvent};
 
 use super::backend::CanvasBackend;
 use super::session::CanvasSession;
@@ -84,6 +84,10 @@ impl CanvasBridge {
     /// Process a pipeline runtime event, updating the canvas session.
     pub fn on_event(&mut self, event: &RuntimeEvent) {
         match event {
+            RuntimeEvent::ConversationSnapshot { entries } => {
+                self.reset_with_conversation_snapshot(entries);
+            }
+
             RuntimeEvent::Transcription(t) if t.is_final => {
                 self.push(MessageRole::User, &t.text);
             }
@@ -198,7 +202,30 @@ impl CanvasBridge {
             | RuntimeEvent::ModelSelectionPrompt { .. }
             | RuntimeEvent::ModelSelected { .. }
             | RuntimeEvent::VoiceCommandDetected { .. }
-            | RuntimeEvent::ModelSwitchRequested { .. } => {}
+            | RuntimeEvent::ModelSwitchRequested { .. }
+            | RuntimeEvent::ConversationCanvasVisibility { .. } => {}
+        }
+    }
+
+    fn reset_with_conversation_snapshot(
+        &mut self,
+        entries: &[crate::runtime::ConversationSnapshotEntry],
+    ) {
+        self.session.clear();
+        self.pending_assistant_text.clear();
+        self.generating = false;
+        self.last_role = None;
+        self.group_count = 0;
+        self.next_ts = 0;
+        self.pending_tool_inputs.clear();
+        self.suppressed_memory_writes = 0;
+
+        for entry in entries {
+            let role = match entry.role {
+                ConversationSnapshotEntryRole::User => MessageRole::User,
+                ConversationSnapshotEntryRole::Assistant => MessageRole::Assistant,
+            };
+            self.push(role, &entry.text);
         }
     }
 
@@ -661,5 +688,32 @@ mod tests {
             success: true,
         });
         assert_eq!(b.session().message_count(), 0);
+    }
+
+    #[test]
+    fn test_conversation_snapshot_replaces_canvas_messages() {
+        let mut b = CanvasBridge::new("t", 800.0, 600.0);
+        b.on_event(&make_transcription("old user message", true));
+        b.on_event(&make_sentence("old assistant message", true));
+        assert_eq!(b.session().message_count(), 2);
+
+        let entries = vec![
+            crate::runtime::ConversationSnapshotEntry {
+                role: crate::runtime::ConversationSnapshotEntryRole::User,
+                text: "new user".to_owned(),
+            },
+            crate::runtime::ConversationSnapshotEntry {
+                role: crate::runtime::ConversationSnapshotEntryRole::Assistant,
+                text: "new assistant".to_owned(),
+            },
+        ];
+        b.on_event(&RuntimeEvent::ConversationSnapshot { entries });
+
+        let html = b.session().to_html();
+        assert_eq!(b.session().message_count(), 2);
+        assert!(html.contains("new user"));
+        assert!(html.contains("new assistant"));
+        assert!(!html.contains("old user message"));
+        assert!(!html.contains("old assistant message"));
     }
 }

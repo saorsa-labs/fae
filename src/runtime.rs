@@ -5,6 +5,20 @@
 
 use crate::pipeline::messages::{ControlEvent, SentenceChunk, Transcription};
 
+/// Role used in conversation snapshot entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationSnapshotEntryRole {
+    User,
+    Assistant,
+}
+
+/// A single message entry in a conversation snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationSnapshotEntry {
+    pub role: ConversationSnapshotEntryRole,
+    pub text: String,
+}
+
 /// Events that describe what the pipeline is doing "right now".
 #[derive(Debug, Clone)]
 pub enum RuntimeEvent {
@@ -85,4 +99,15 @@ pub enum RuntimeEvent {
         /// Target model description (e.g. "anthropic" or "local").
         target: String,
     },
+    /// Full conversation transcript snapshot for canvas rendering.
+    ///
+    /// This event is emitted when the user asks to view the conversation.
+    /// The GUI canvas should display these entries as a chat transcript.
+    ConversationSnapshot {
+        entries: Vec<ConversationSnapshotEntry>,
+    },
+    /// Explicit canvas panel visibility command for conversation UX.
+    ///
+    /// This is emitted when the user asks to show/hide conversation canvas.
+    ConversationCanvasVisibility { visible: bool },
 }

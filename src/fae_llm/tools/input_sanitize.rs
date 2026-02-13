@@ -6,29 +6,27 @@
 
 /// Characters that enable shell injection when unquoted.
 const SHELL_METACHARACTERS: &[char] = &[
-    '\n',  // Command injection via newlines
-    '\r',  // Carriage return
-    '>',   // Output redirection
-    '<',   // Input redirection
-    '|',   // Pipe
-    ';',   // Command separator
-    '&',   // Background execution
-    '$',   // Variable substitution
-    '`',   // Command substitution
-    '\\',  // Escape character
+    '\n',   // Command injection via newlines
+    '\r',   // Carriage return
+    '>',    // Output redirection
+    '<',    // Input redirection
+    '|',    // Pipe
+    ';',    // Command separator
+    '&',    // Background execution
+    '$',    // Variable substitution
+    '`',    // Command substitution
+    '\\',   // Escape character
     '\x1b', // ESC (terminal control)
 ];
 
 /// Control characters that should be blocked in commands.
 const CONTROL_CHARS: &[char] = &[
     '\x00', // Null
-    '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07',
-    '\x08', // Backspace
+    '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07', '\x08', // Backspace
     '\x0b', // Vertical tab
     '\x0c', // Form feed
-    '\x0e', '\x0f',
-    '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
-    '\x18', '\x19', '\x1a', // Substitute
+    '\x0e', '\x0f', '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17', '\x18', '\x19',
+    '\x1a', // Substitute
     '\x1c', '\x1d', '\x1e', '\x1f',
 ];
 
@@ -120,9 +118,9 @@ pub fn sanitize_content_input(input: &str) -> SanitizedInput {
 
 /// Check if a string contains shell metacharacters without modifying it.
 pub fn contains_shell_metacharacters(input: &str) -> bool {
-    input.chars().any(|ch| {
-        SHELL_METACHARACTERS.contains(&ch) || CONTROL_CHARS.contains(&ch)
-    })
+    input
+        .chars()
+        .any(|ch| SHELL_METACHARACTERS.contains(&ch) || CONTROL_CHARS.contains(&ch))
 }
 
 #[cfg(test)]
@@ -201,7 +199,12 @@ mod tests {
         let input = "echo $HOME\nls";
         let result = sanitize_command_input(input);
         assert!(result.modified);
-        assert!(result.removed_categories.iter().any(|c| c == "shell_metacharacters"));
+        assert!(
+            result
+                .removed_categories
+                .iter()
+                .any(|c| c == "shell_metacharacters")
+        );
     }
 
     // ── Relaxed sanitization (content input) ───────────────────

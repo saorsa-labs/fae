@@ -28,7 +28,7 @@ pub mod write;
 
 pub use bash::BashTool;
 pub use edit::EditTool;
-pub use input_sanitize::{sanitize_command_input, sanitize_content_input, SanitizedInput};
+pub use input_sanitize::{SanitizedInput, sanitize_command_input, sanitize_content_input};
 pub use path_validation::{validate_read_path, validate_write_path};
 pub use read::ReadTool;
 pub use registry::ToolRegistry;

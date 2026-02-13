@@ -9,17 +9,14 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use canvas_mcp::tools::{ExportFormat, ExportParams};
-use saorsa_agent::Tool;
-use saorsa_agent::error::{Result as ToolResult, SaorsaAgentError};
 
 use crate::canvas::backend::ConnectionStatus;
 use crate::canvas::registry::CanvasSessionRegistry;
+use crate::fae_llm::config::types::ToolMode;
+use crate::fae_llm::error::FaeLlmError;
+use crate::fae_llm::tools::types::{Tool, ToolResult};
 
 /// Tool that exports a canvas session to an image or document format.
-///
-/// Remote sessions export via HTTP POST to the canvas-server `/api/export`
-/// endpoint. Local sessions return scene metadata until the `canvas-renderer`
-/// export feature is available.
 pub struct CanvasExportTool {
     registry: Arc<Mutex<CanvasSessionRegistry>>,
     /// Base URL for the canvas-server (e.g. `http://localhost:9473`).
@@ -42,11 +39,9 @@ impl CanvasExportTool {
     }
 
     /// Export via the canvas-server HTTP API.
-    fn export_remote(&self, params: &ExportParams) -> ToolResult<Vec<u8>> {
+    fn export_remote(&self, params: &ExportParams) -> std::result::Result<Vec<u8>, String> {
         let base_url = self.server_url.as_deref().ok_or_else(|| {
-            SaorsaAgentError::Tool(
-                "remote export requested but no canvas-server URL configured".to_owned(),
-            )
+            "remote export requested but no canvas-server URL configured".to_string()
         })?;
 
         let url = format!("{base_url}/api/export");
@@ -58,27 +53,24 @@ impl CanvasExportTool {
 
         let response = ureq::post(&url)
             .send_json(body)
-            .map_err(|e| SaorsaAgentError::Tool(format!("export HTTP request failed: {e}")))?;
+            .map_err(|e| format!("export HTTP request failed: {e}"))?;
 
         if response.status() >= 400 {
             let status = response.status();
             let body_text = response.into_string().unwrap_or_default();
-            return Err(SaorsaAgentError::Tool(format!(
-                "export failed with status {status}: {body_text}"
-            )));
+            return Err(format!("export failed with status {status}: {body_text}"));
         }
 
         let mut bytes = Vec::new();
         response
             .into_reader()
             .read_to_end(&mut bytes)
-            .map_err(|e| SaorsaAgentError::Tool(format!("failed to read export response: {e}")))?;
+            .map_err(|e| format!("failed to read export response: {e}"))?;
 
         Ok(bytes)
     }
 }
 
-#[async_trait::async_trait]
 impl Tool for CanvasExportTool {
     fn name(&self) -> &str {
         "canvas_export"
@@ -89,7 +81,7 @@ impl Tool for CanvasExportTool {
          Returns base64-encoded data for remote sessions."
     }
 
-    fn input_schema(&self) -> serde_json::Value {
+    fn schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -113,53 +105,61 @@ impl Tool for CanvasExportTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<String> {
-        let params: ExportParams = serde_json::from_value(input)
-            .map_err(|e| SaorsaAgentError::Tool(format!("invalid canvas_export params: {e}")))?;
-
-        // Get session from registry.
-        let registry = self
-            .registry
-            .lock()
-            .map_err(|_| SaorsaAgentError::Tool("session registry lock poisoned".to_owned()))?;
-
-        let session_arc = registry.get(&params.session_id).ok_or_else(|| {
-            SaorsaAgentError::Tool(format!("canvas session '{}' not found", params.session_id))
+    fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
+        let params: ExportParams = serde_json::from_value(args).map_err(|e| {
+            FaeLlmError::ToolValidationError(format!("invalid canvas_export params: {e}"))
         })?;
 
-        let session = session_arc
-            .lock()
-            .map_err(|_| SaorsaAgentError::Tool("session lock poisoned".to_owned()))?;
+        // Get session from registry.
+        let registry = match self.registry.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Ok(ToolResult::failure(
+                    "session registry lock poisoned".to_string(),
+                ));
+            }
+        };
+
+        let Some(session_arc) = registry.get(&params.session_id) else {
+            return Ok(ToolResult::failure(format!(
+                "canvas session '{}' not found",
+                params.session_id
+            )));
+        };
+
+        let session = match session_arc.lock() {
+            Ok(guard) => guard,
+            Err(_) => return Ok(ToolResult::failure("session lock poisoned".to_string())),
+        };
 
         let status = session.connection_status();
         let element_count = session.element_count();
         let mime = format_mime_type(params.format);
 
-        match status {
+        let response = match status {
             ConnectionStatus::Connected | ConnectionStatus::Reconnecting { .. } => {
                 // Drop locks before making HTTP call.
                 drop(session);
                 drop(registry);
 
-                let data = self.export_remote(&params)?;
+                let data = match self.export_remote(&params) {
+                    Ok(bytes) => bytes,
+                    Err(e) => return Ok(ToolResult::failure(e)),
+                };
                 let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
 
-                let response = serde_json::json!({
+                serde_json::json!({
                     "success": true,
                     "session_id": params.session_id,
                     "format": mime,
                     "size_bytes": data.len(),
                     "element_count": element_count,
                     "data": encoded,
-                });
-
-                serde_json::to_string(&response)
-                    .map_err(|e| SaorsaAgentError::Tool(format!("serialize error: {e}")))
+                })
             }
             _ => {
                 // Local session — no server available for export rendering.
-                // Return metadata so the caller knows the session exists.
-                let response = serde_json::json!({
+                serde_json::json!({
                     "success": true,
                     "session_id": params.session_id,
                     "format": mime,
@@ -167,12 +167,17 @@ impl Tool for CanvasExportTool {
                     "element_count": element_count,
                     "note": "Local export via canvas-server not available. \
                              Connect to a canvas-server for image export.",
-                });
-
-                serde_json::to_string(&response)
-                    .map_err(|e| SaorsaAgentError::Tool(format!("serialize error: {e}")))
+                })
             }
-        }
+        };
+
+        let response_json = serde_json::to_string(&response)
+            .map_err(|e| FaeLlmError::ToolExecutionError(format!("serialize error: {e}")))?;
+        Ok(ToolResult::success(response_json))
+    }
+
+    fn allowed_in_mode(&self, _mode: ToolMode) -> bool {
+        true
     }
 }
 
@@ -212,8 +217,8 @@ mod tests {
         Arc::new(Mutex::new(reg))
     }
 
-    #[tokio::test]
-    async fn test_export_local_returns_metadata() {
+    #[test]
+    fn test_export_local_returns_metadata() {
         let reg = setup_registry("test");
         let tool = CanvasExportTool::new(reg);
 
@@ -223,14 +228,14 @@ mod tests {
             "quality": 95
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
-        let output: serde_json::Value =
-            serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+        let result = result.unwrap_or_else(|_| unreachable!());
+        assert!(result.success);
+        let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
         assert_eq!(output["success"], true);
         assert_eq!(output["format"], "image/png");
         assert_eq!(output["quality"], 95);
-        // Local sessions return metadata with a note.
         assert!(
             output["note"]
                 .as_str()
@@ -239,8 +244,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_export_svg_metadata() {
+    #[test]
+    fn test_export_svg_metadata() {
         let reg = setup_registry("test");
         let tool = CanvasExportTool::new(reg);
 
@@ -249,15 +254,16 @@ mod tests {
             "format": "svg"
         });
 
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_ok());
-        let output: serde_json::Value =
-            serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+        let result = result.unwrap_or_else(|_| unreachable!());
+        assert!(result.success);
+        let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
         assert_eq!(output["format"], "image/svg+xml");
     }
 
-    #[tokio::test]
-    async fn test_export_missing_session() {
+    #[test]
+    fn test_export_missing_session() {
         let reg = setup_registry("test");
         let tool = CanvasExportTool::new(reg);
 
@@ -266,19 +272,18 @@ mod tests {
             "format": "png"
         });
 
-        let result = tool.execute(input).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found"));
+        let result = tool.execute(input);
+        assert!(result.is_ok());
+        assert!(!result.unwrap_or_else(|_| unreachable!()).success);
     }
 
-    #[tokio::test]
-    async fn test_export_invalid_json() {
+    #[test]
+    fn test_export_invalid_json() {
         let reg = setup_registry("test");
         let tool = CanvasExportTool::new(reg);
 
         let input = serde_json::json!({ "bad": true });
-        let result = tool.execute(input).await;
+        let result = tool.execute(input);
         assert!(result.is_err());
     }
 
@@ -320,13 +325,12 @@ mod tests {
         let reg = Arc::new(Mutex::new(CanvasSessionRegistry::new()));
         let tool = CanvasExportTool::new(reg);
         let params = ExportParams {
-            session_id: "test".into(),
+            session_id: "x".to_string(),
             format: ExportFormat::Png,
             quality: 90,
         };
+
         let result = tool.export_remote(&params);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("no canvas-server URL"));
     }
 }

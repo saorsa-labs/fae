@@ -2,8 +2,9 @@
 
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
+use std::path::PathBuf;
 
-use super::path_validation::validate_write_path;
+use super::path_validation::{resolve_workspace_root, validate_write_path_in_workspace};
 use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult};
 
 /// Tool that performs deterministic text edits by replacing `old_string`
@@ -17,6 +18,7 @@ use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult};
 /// Only available in `ToolMode::Full`.
 pub struct EditTool {
     max_bytes: usize,
+    workspace_root: PathBuf,
 }
 
 impl EditTool {
@@ -24,12 +26,32 @@ impl EditTool {
     pub fn new() -> Self {
         Self {
             max_bytes: DEFAULT_MAX_BYTES,
+            workspace_root: resolve_workspace_root().unwrap_or_else(|_| PathBuf::from(".")),
         }
     }
 
     /// Create a new EditTool with a custom max file size.
     pub fn with_max_bytes(max_bytes: usize) -> Self {
-        Self { max_bytes }
+        Self {
+            max_bytes,
+            workspace_root: resolve_workspace_root().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+
+    /// Create a new EditTool rooted at a specific workspace path.
+    pub fn with_workspace_root(workspace_root: PathBuf) -> Self {
+        Self {
+            max_bytes: DEFAULT_MAX_BYTES,
+            workspace_root,
+        }
+    }
+
+    /// Create a new EditTool with custom max bytes and workspace root.
+    pub fn with_config(max_bytes: usize, workspace_root: PathBuf) -> Self {
+        Self {
+            max_bytes,
+            workspace_root,
+        }
     }
 }
 
@@ -88,7 +110,7 @@ impl Tool for EditTool {
                 FaeLlmError::ToolValidationError("missing required argument: new_string".into())
             })?;
 
-        let path = validate_write_path(path_str)?;
+        let path = validate_write_path_in_workspace(path_str, &self.workspace_root)?;
 
         // Read existing file
         let content = match std::fs::read_to_string(&path) {
@@ -154,22 +176,23 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn make_test_file(content: &str) -> tempfile::NamedTempFile {
-        let mut file = match tempfile::NamedTempFile::new() {
-            Ok(f) => f,
-            Err(_) => unreachable!("tempfile creation should not fail"),
-        };
+    fn make_test_file(content: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir()
+            .unwrap_or_else(|_| unreachable!("tempdir creation should not fail"));
+        let path = dir.path().join("test_edit.txt");
+        let mut file = std::fs::File::create(&path)
+            .unwrap_or_else(|_| unreachable!("file creation should not fail"));
         let _ = file.write_all(content.as_bytes());
         let _ = file.flush();
-        file
+        (dir, path)
     }
 
     #[test]
     fn edit_replace_text() {
-        let file = make_test_file("hello world");
-        let tool = EditTool::new();
+        let (workspace, file) = make_test_file("hello world");
+        let tool = EditTool::with_workspace_root(workspace.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
-            "path": file.path().to_str(),
+            "path": file.to_str(),
             "old_string": "world",
             "new_string": "rust"
         }));
@@ -178,16 +201,16 @@ mod tests {
             Err(_) => unreachable!("edit should succeed"),
         };
         assert!(result.success);
-        let content = std::fs::read_to_string(file.path()).unwrap_or_default();
+        let content = std::fs::read_to_string(file).unwrap_or_default();
         assert_eq!(content, "hello rust");
     }
 
     #[test]
     fn edit_multiline_replacement() {
-        let file = make_test_file("line 1\nline 2\nline 3\n");
-        let tool = EditTool::new();
+        let (workspace, file) = make_test_file("line 1\nline 2\nline 3\n");
+        let tool = EditTool::with_workspace_root(workspace.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
-            "path": file.path().to_str(),
+            "path": file.to_str(),
             "old_string": "line 2",
             "new_string": "replaced line"
         }));
@@ -196,16 +219,16 @@ mod tests {
             Err(_) => unreachable!("edit should succeed"),
         };
         assert!(result.success);
-        let content = std::fs::read_to_string(file.path()).unwrap_or_default();
+        let content = std::fs::read_to_string(file).unwrap_or_default();
         assert_eq!(content, "line 1\nreplaced line\nline 3\n");
     }
 
     #[test]
     fn edit_old_string_not_found() {
-        let file = make_test_file("hello world");
-        let tool = EditTool::new();
+        let (workspace, file) = make_test_file("hello world");
+        let tool = EditTool::with_workspace_root(workspace.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
-            "path": file.path().to_str(),
+            "path": file.to_str(),
             "old_string": "nonexistent",
             "new_string": "replacement"
         }));
@@ -224,10 +247,10 @@ mod tests {
 
     #[test]
     fn edit_multiple_matches_rejected() {
-        let file = make_test_file("foo bar foo baz");
-        let tool = EditTool::new();
+        let (workspace, file) = make_test_file("foo bar foo baz");
+        let tool = EditTool::with_workspace_root(workspace.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
-            "path": file.path().to_str(),
+            "path": file.to_str(),
             "old_string": "foo",
             "new_string": "qux"
         }));
@@ -246,9 +269,12 @@ mod tests {
 
     #[test]
     fn edit_nonexistent_file() {
-        let tool = EditTool::new();
+        let workspace = tempfile::tempdir()
+            .unwrap_or_else(|_| unreachable!("tempdir creation should not fail"));
+        let tool = EditTool::with_workspace_root(workspace.path().to_path_buf());
+        let missing = workspace.path().join("missing.txt");
         let result = tool.execute(serde_json::json!({
-            "path": "/tmp/nonexistent_fae_edit_test.txt",
+            "path": missing.to_str(),
             "old_string": "x",
             "new_string": "y"
         }));
@@ -262,10 +288,10 @@ mod tests {
     #[test]
     fn edit_file_exceeds_max_size() {
         let large = "x".repeat(200);
-        let file = make_test_file(&large);
-        let tool = EditTool::with_max_bytes(100);
+        let (workspace, file) = make_test_file(&large);
+        let tool = EditTool::with_config(100, workspace.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
-            "path": file.path().to_str(),
+            "path": file.to_str(),
             "old_string": "x",
             "new_string": "y"
         }));
@@ -302,7 +328,9 @@ mod tests {
 
     #[test]
     fn edit_path_traversal_rejected() {
-        let tool = EditTool::new();
+        let workspace = tempfile::tempdir()
+            .unwrap_or_else(|_| unreachable!("tempdir creation should not fail"));
+        let tool = EditTool::with_workspace_root(workspace.path().to_path_buf());
         let result = tool.execute(serde_json::json!({
             "path": "../../../etc/passwd",
             "old_string": "x",

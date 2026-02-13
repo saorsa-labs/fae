@@ -2264,6 +2264,12 @@ fn app() -> Element {
                                                         fae::RuntimeEvent::ModelSwitchRequested { .. } => {
                                                             // TODO: Phase 2.3 will show model switch transition in GUI
                                                         }
+                                                        fae::RuntimeEvent::ConversationSnapshot { .. } => {
+                                                            canvas_visible.set(true);
+                                                        }
+                                                        fae::RuntimeEvent::ConversationCanvasVisibility { visible } => {
+                                                            canvas_visible.set(*visible);
+                                                        }
                                                         other if gui::suppress_main_screen_runtime_event(other) => {}
                                                         _ => {}
                                                     }
@@ -2716,6 +2722,19 @@ fn app() -> Element {
                         move |_| open()
                     },
                     "Models"
+                }
+                button {
+                    class: "topbar-btn",
+                    title: if *canvas_visible.read() { "Hide conversation canvas" } else { "Show conversation canvas" },
+                    onclick: move |_| {
+                        let next = !*canvas_visible.read();
+                        canvas_visible.set(next);
+                    },
+                    if *canvas_visible.read() {
+                        "Hide Conversation"
+                    } else {
+                        "Show Conversation"
+                    }
                 }
             }
 

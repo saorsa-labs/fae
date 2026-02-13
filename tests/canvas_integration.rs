@@ -13,7 +13,7 @@ use fae::canvas::session::CanvasSession;
 use fae::canvas::tools::{CanvasExportTool, CanvasInteractTool, CanvasRenderTool};
 use fae::canvas::types::{CanvasMessage, MessageRole};
 
-use saorsa_agent::Tool;
+use fae::fae_llm::Tool;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -143,11 +143,12 @@ async fn render_tool_adds_element_to_session() {
         "position": { "x": 0.0, "y": 0.0, "width": 400.0, "height": 300.0 }
     });
 
-    let result = tool.execute(input).await;
+    let result = tool.execute(input);
     assert!(result.is_ok());
 
-    let output: serde_json::Value =
-        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+    let result = result.unwrap_or_else(|_| unreachable!("canvas_render should succeed"));
+    assert!(result.success);
+    let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     assert_eq!(output["success"], true);
 
     // Session now has 1 element.
@@ -178,7 +179,7 @@ async fn render_tool_text_content() {
         }
     });
 
-    let result = tool.execute(input).await;
+    let result = tool.execute(input);
     assert!(result.is_ok());
 }
 
@@ -199,11 +200,12 @@ async fn interact_tool_touch_returns_interpretation() {
         }
     });
 
-    let result = tool.execute(input).await;
+    let result = tool.execute(input);
     assert!(result.is_ok());
 
-    let output: serde_json::Value =
-        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+    let result = result.unwrap_or_else(|_| unreachable!("canvas_interact should succeed"));
+    assert!(result.success);
+    let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     assert_eq!(output["success"], true);
     assert_eq!(output["interpretation"]["type"], "touch");
     assert_eq!(output["interpretation"]["element"], "chart-1");
@@ -225,10 +227,11 @@ async fn interact_tool_voice_with_context() {
         }
     });
 
-    let result = tool.execute(input).await;
+    let result = tool.execute(input);
     assert!(result.is_ok());
-    let output: serde_json::Value =
-        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+    let result = result.unwrap_or_else(|_| unreachable!("canvas_interact should succeed"));
+    assert!(result.success);
+    let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     assert_eq!(output["interpretation"]["transcript"], "Make this bar red");
     assert_eq!(output["interpretation"]["context_element"], "bar-2");
 }
@@ -257,11 +260,12 @@ async fn export_tool_local_returns_metadata() {
         "quality": 90
     });
 
-    let result = tool.execute(input).await;
+    let result = tool.execute(input);
     assert!(result.is_ok());
 
-    let output: serde_json::Value =
-        serde_json::from_str(&result.unwrap_or_default()).unwrap_or_default();
+    let result = result.unwrap_or_else(|_| unreachable!("canvas_export should succeed"));
+    assert!(result.success);
+    let output: serde_json::Value = serde_json::from_str(&result.content).unwrap_or_default();
     assert_eq!(output["success"], true);
     assert_eq!(output["format"], "image/png");
     assert_eq!(output["element_count"], 1);
@@ -416,7 +420,7 @@ async fn end_to_end_conversation_with_tools() {
             }
         }
     });
-    let render_result = render_tool.execute(chart_input).await;
+    let render_result = render_tool.execute(chart_input);
     assert!(render_result.is_ok());
 
     // Session now has 1 message + 1 tool element = 2 elements total.
@@ -437,11 +441,13 @@ async fn end_to_end_conversation_with_tools() {
         "format": "png",
         "quality": 95
     });
-    let export_result = export_tool.execute(export_input).await;
+    let export_result = export_tool.execute(export_input);
     assert!(export_result.is_ok());
 
+    let export_result = export_result.unwrap_or_else(|_| unreachable!("export should succeed"));
+    assert!(export_result.success);
     let output: serde_json::Value =
-        serde_json::from_str(&export_result.unwrap_or_default()).unwrap_or_default();
+        serde_json::from_str(&export_result.content).unwrap_or_default();
     assert_eq!(output["success"], true);
     assert_eq!(output["element_count"], 2);
 }
