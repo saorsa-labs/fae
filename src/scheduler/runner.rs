@@ -67,12 +67,12 @@ impl Scheduler {
         self
     }
 
-    /// Register built-in Fae update check task (daily).
+    /// Register built-in Fae update check task (every 6 hours + on startup).
     pub fn with_update_checks(&mut self) {
         let fae_task = ScheduledTask::new(
             "check_fae_update",
             "Check for Fae updates",
-            Schedule::Daily { hour: 9, min: 0 },
+            Schedule::Interval { secs: 6 * 3600 },
         );
 
         self.add_task_if_missing(fae_task);
