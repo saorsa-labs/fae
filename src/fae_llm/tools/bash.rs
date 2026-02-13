@@ -2,6 +2,7 @@
 
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
+use crate::fae_llm::tools::input_sanitize::sanitize_command_input;
 
 use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult, truncate_output};
 
@@ -83,6 +84,16 @@ impl Tool for BashTool {
                 "command cannot be empty".into(),
             ));
         }
+
+        // Sanitize command input to prevent shell injection
+        let sanitized = sanitize_command_input(command);
+        if sanitized.modified {
+            tracing::debug!(
+                removed = ?sanitized.removed_categories,
+                "command input sanitized"
+            );
+        }
+        let command = sanitized.content;
 
         let timeout_secs = args
             .get("timeout")
