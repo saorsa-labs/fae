@@ -3161,6 +3161,7 @@ name = "fae-search"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "moka",
  "rand 0.8.5",
  "reqwest 0.12.28",
  "scraper 0.22.0",
@@ -5863,6 +5864,26 @@ dependencies = [
  "candle-core",
  "image 0.25.9",
  "rayon",
+]
+
+[[package]]
+name = "moka"
+version = "0.12.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ac832c50ced444ef6be0767a008b02c106a909ba79d1d830501e94b96f6b7e"
+dependencies = [
+ "async-lock",
+ "crossbeam-channel",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "equivalent",
+ "event-listener",
+ "futures-util",
+ "parking_lot",
+ "portable-atomic",
+ "smallvec 1.15.1",
+ "tagptr",
+ "uuid 1.20.0",
 ]
 
 [[package]]
@@ -9684,6 +9705,12 @@ dependencies = [
  "toml 0.8.2",
  "version-compare",
 ]
+
+[[package]]
+name = "tagptr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tao"

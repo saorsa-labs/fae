@@ -21,6 +21,7 @@
 //! - Search queries are logged only at trace level
 //! - Result snippets are sanitised before returning
 
+pub mod cache;
 pub mod config;
 pub mod engine;
 pub mod engines;
@@ -60,7 +61,27 @@ pub use types::{PageContent, SearchEngine, SearchResult};
 /// ```
 pub async fn search(query: &str, config: &SearchConfig) -> Result<Vec<SearchResult>> {
     config.validate()?;
-    orchestrator::search::orchestrate_search(query, config).await
+
+    // Skip cache when TTL is zero (disabled).
+    if config.cache_ttl_seconds == 0 {
+        tracing::trace!("cache disabled (ttl=0), querying engines directly");
+        return orchestrator::search::orchestrate_search(query, config).await;
+    }
+
+    // Check cache.
+    let cache_key = cache::CacheKey::new(query, &config.engines);
+    if let Some(cached) = cache::get(&cache_key, config.cache_ttl_seconds).await {
+        tracing::trace!(query, results = cached.len(), "cache hit");
+        return Ok(cached);
+    }
+
+    tracing::trace!(query, "cache miss, querying engines");
+    let results = orchestrator::search::orchestrate_search(query, config).await?;
+
+    // Cache the results.
+    cache::insert(cache_key, results.clone(), config.cache_ttl_seconds).await;
+
+    Ok(results)
 }
 
 /// Search the web with sensible default configuration.

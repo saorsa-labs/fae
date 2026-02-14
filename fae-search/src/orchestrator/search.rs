@@ -35,15 +35,29 @@ pub async fn orchestrate_search(
     query: &str,
     config: &SearchConfig,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    // 1. Fan out to all engines concurrently.
+    // 1. Fan out to all engines concurrently, with staggered jitter delays.
+    let (delay_min, delay_max) = config.request_delay_ms;
     let futures: Vec<_> = config
         .engines
         .iter()
-        .map(|engine| {
+        .enumerate()
+        .map(|(idx, engine)| {
             let q = query.to_string();
             let cfg = config.clone();
             let eng = *engine;
             async move {
+                // Apply jitter delay for all engines except the first.
+                if idx > 0 && delay_min < delay_max {
+                    let delay_ms = rand::Rng::gen_range(
+                        &mut rand::thread_rng(),
+                        delay_min..=delay_max,
+                    );
+                    tracing::trace!(%eng, delay_ms, "applying request jitter");
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                } else if idx > 0 && delay_min == delay_max && delay_min > 0 {
+                    tracing::trace!(%eng, delay_ms = delay_min, "applying fixed request delay");
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_min)).await;
+                }
                 let result = query_engine(eng, &q, &cfg).await;
                 (eng, result)
             }
