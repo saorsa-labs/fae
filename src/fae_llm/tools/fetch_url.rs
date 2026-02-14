@@ -192,24 +192,7 @@ mod tests {
     }
 
     // Note: execute() with real URLs requires a tokio runtime and network.
-    // The stub currently returns an error, which is tested below.
-
-    #[tokio::test]
-    async fn execute_handles_stub_error_gracefully() {
-        // fetch_page_content is currently a stub that returns an error.
-        // The tool should return ToolResult::failure, not panic.
-        let tool = FetchUrlTool::new();
-        let result = tool.execute(serde_json::json!({"url": "https://example.com"}));
-        // Should succeed (Ok) with a failure ToolResult, not Err.
-        let result = match result {
-            Ok(r) => r,
-            Err(_) => unreachable!("stub error should produce ToolResult::failure, not Err"),
-        };
-        assert!(!result.success);
-        assert!(result.error.is_some());
-        let error_msg = result.error.as_deref().unwrap_or("");
-        assert!(error_msg.contains("not yet implemented"));
-    }
+    // Content extraction logic is tested in fae-search::content::tests.
 
     #[tokio::test]
     async fn execute_in_tokio_context_missing_url() {

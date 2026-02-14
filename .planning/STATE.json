@@ -7,20 +7,20 @@
     "name": "Fae Integration"
   },
   "phase": {
-    "number": "2.2",
-    "name": "Registry Wiring & Feature Flag",
-    "plan": ".planning/PLAN-phase-2.2.md"
+    "number": "2.3",
+    "name": "Content Extraction",
+    "plan": ".planning/PLAN-phase-2.3.md"
   },
   "progress": {
     "total_tasks": 3,
-    "completed_tasks": 3,
-    "current_task": null
+    "completed_tasks": 0,
+    "current_task": 1
   },
   "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "PASS"
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
   },
-  "status": "phase_transition",
-  "last_updated": "2026-02-14T17:30:00Z"
+  "status": "executing",
+  "last_updated": "2026-02-14T18:00:00Z"
 }

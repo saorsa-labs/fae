@@ -23,6 +23,7 @@
 
 pub mod cache;
 pub mod config;
+pub mod content;
 pub mod engine;
 pub mod engines;
 pub mod error;
@@ -129,10 +130,26 @@ pub async fn search_default(query: &str) -> Result<Vec<SearchResult>> {
 /// # }
 /// ```
 pub async fn fetch_page_content(url: &str) -> Result<PageContent> {
-    let _ = url;
-    Err(SearchError::Http(
-        "content extraction not yet implemented".into(),
-    ))
+    let config = SearchConfig::default();
+    let client = http::build_client(&config)?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| SearchError::Http(format!("failed to fetch {url}: {e}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(SearchError::Http(format!("HTTP {status} fetching {url}")));
+    }
+
+    let html = response
+        .text()
+        .await
+        .map_err(|e| SearchError::Http(format!("failed to read response body: {e}")))?;
+
+    content::extract_content(&html, url)
 }
 
 #[cfg(test)]
@@ -172,11 +189,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("timeout"));
     }
 
-    #[tokio::test]
-    async fn fetch_page_content_returns_error_for_stub() {
-        let result = fetch_page_content("https://example.com").await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
-    }
+    // Note: fetch_page_content() now makes real HTTP requests.
+    // Live tests are in integration tests (marked #[ignore]).
+    // Content extraction logic is tested in content::tests.
 }
