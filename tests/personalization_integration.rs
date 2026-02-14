@@ -34,22 +34,6 @@ fn personality_profile_with_addon_appends_cleanly() {
     }
 }
 
-#[test]
-fn identity_reference_is_distinct_from_profile() {
-    let profile = personality::FAE_PERSONALITY;
-    let reference = personality::FAE_IDENTITY_REFERENCE;
-    // Both should be non-empty.
-    assert!(!profile.is_empty());
-    assert!(!reference.is_empty());
-    // The full reference is longer than the voice-optimized profile.
-    assert!(
-        reference.len() > profile.len(),
-        "full reference ({} bytes) should be longer than voice-optimized profile ({} bytes)",
-        reference.len(),
-        profile.len()
-    );
-}
-
 // ---------------------------------------------------------------------------
 // TTS backend config integration
 // ---------------------------------------------------------------------------

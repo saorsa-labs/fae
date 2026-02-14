@@ -1,143 +1,100 @@
-//! Personality profile loading for Fae.
+//! Prompt assembly and user-editable prompt assets for Fae.
 //!
-//! The system prompt is assembled from four layers:
+//! Runtime prompt stack:
+//! 1. Core system prompt (`Prompts/system_prompt.md`)
+//! 2. User-editable SOUL contract (`~/.fae/SOUL.md`, with repo fallback)
+//! 3. Optional user add-on text from config
 //!
-//! 1. **Core prompt** ([`CORE_PROMPT`]) — minimal voice-assistant output rules.
-//! 2. **Personality** — character definition loaded by name (see [`load_personality`]).
-//! 3. **Skills** — behavioural guides for tool usage (see [`crate::skills`]).
-//! 4. **User add-on** — optional free-text instructions from the user's config.
-//!
-//! Two built-in personalities ship with the binary:
-//!
-//! - `"default"` — core prompt only, no character overlay.
-//! - `"fae"` — the full Fae identity profile ([`FAE_PERSONALITY`]).
-//!
-//! Additional profiles can be placed as `.md` files in `~/.fae/personalities/`.
+//! Onboarding checklist text is loaded separately and injected only while
+//! onboarding is incomplete (see memory orchestrator).
 
-use std::path::PathBuf;
+use crate::error::Result;
+use std::path::{Path, PathBuf};
 
-/// Minimal voice-assistant behaviour rules.
-///
-/// This is always prepended to the assembled system prompt regardless of which
-/// personality is selected.
-pub const CORE_PROMPT: &str = "\
-You are a voice assistant. Respond in 1-3 short sentences.\n\
-Speak naturally. Do not use emojis, action descriptions, roleplay narration, or stage directions.\n\
-Do not narrate your reasoning. If unsure, ask one focused question.\n\
-If you do not know the answer, say so briefly.\n\
-\n\
-## Tools\n\
-Depending on configuration, you may have tools such as: read, write, edit, bash (shell commands), and canvas tools.\n\
-When you want to use a tool, tell the user what you want to do and ASK PERMISSION first.\n\
-Example: \"May I check your desktop?\" — wait for yes, then USE THE TOOL.\n\
-\n\
-IMPORTANT: After the user says yes/go ahead, actually call the tool and report the result.\n\
-\n\
-## Tool Feedback\n\
-When you use tools, give meaningful feedback:\n\
-- For file listings: summarize, do not just list\n\
-- For file contents: explain what it is in plain language\n\
-- For commands: report the outcome\n\
-- Use canvas for visual content when helpful\n\
-Never dump raw output - always interpret for the user.\n\
-\n\
-## Important\n\
-- Always ask before using tools\n\
-- Wait for approval before acting\n\
-- Report results after using tools in plain language\n\
-- If asked to delete files or run dangerous commands, refuse and explain why\n\
-";
+/// Core system prompt (small, operational instructions).
+pub const CORE_PROMPT: &str = include_str!("../Prompts/system_prompt.md");
 
-/// The voice-optimized Fae identity profile, compiled into the binary from
-/// `Personality/fae-identity-profile.md`.
-///
-/// This is the concise version used in the system prompt for voice assistant
-/// interactions (78 lines, ~3000 chars).
-pub const FAE_PERSONALITY: &str = include_str!("../Personality/system_prompt.md");
+/// Default SOUL contract installed to `~/.fae/SOUL.md`.
+pub const DEFAULT_SOUL: &str = include_str!("../SOUL.md");
 
-/// The full Fae identity reference document, compiled into the binary from
-/// `Personality/fae-identity-full.md`.
-///
-/// This 291-line character bible contains the complete backstory, abilities,
-/// vulnerabilities, and personality details. It is available for future use
-/// (e.g. RAG, detailed character queries) but is **not** included in the
-/// system prompt to keep token usage manageable.
-pub const FAE_IDENTITY_REFERENCE: &str = include_str!("../Personality/fae-identity-full.md");
+/// Default onboarding checklist installed to `~/.fae/onboarding.md`.
+pub const DEFAULT_ONBOARDING_CHECKLIST: &str = include_str!("../Prompts/onboarding.md");
 
-/// Returns the directory where user-created personality profiles are stored.
-///
-/// Defaults to `~/.fae/personalities/`.
-pub fn personalities_dir() -> PathBuf {
+/// Returns `~/.fae` (or `/tmp/.fae` fallback).
+#[must_use]
+pub fn fae_home_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae").join("personalities")
+        PathBuf::from(home).join(".fae")
     } else {
-        PathBuf::from("/tmp/.fae/personalities")
+        PathBuf::from("/tmp/.fae")
     }
 }
 
-/// Lists all available personality names.
-///
-/// Always includes `"default"` and `"fae"`. Any `.md` files found in
-/// [`personalities_dir`] are added by stem name (e.g. `pirate.md` → `"pirate"`).
-pub fn list_personalities() -> Vec<String> {
-    let mut names = vec!["default".to_owned(), "fae".to_owned()];
-    let dir = personalities_dir();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("md")
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-            {
-                let name = stem.to_owned();
-                if name != "default" && name != "fae" {
-                    names.push(name);
-                }
-            }
-        }
-    }
-    names
+/// Returns the user SOUL file path (`~/.fae/SOUL.md`).
+#[must_use]
+pub fn soul_path() -> PathBuf {
+    fae_home_dir().join("SOUL.md")
 }
 
-/// Loads the personality text for the given name.
-///
-/// - `"default"` returns an empty string (core prompt only).
-/// - `"fae"` returns [`FAE_PERSONALITY`].
-/// - Anything else looks up `~/.fae/personalities/{name}.md`.
-///   If the file does not exist, falls back to `"fae"`.
-pub fn load_personality(name: &str) -> String {
-    match name {
-        "default" => String::new(),
-        "fae" => FAE_PERSONALITY.to_owned(),
-        other => {
-            let path = personalities_dir().join(format!("{other}.md"));
-            std::fs::read_to_string(&path).unwrap_or_else(|_| FAE_PERSONALITY.to_owned())
-        }
-    }
+/// Returns the user onboarding checklist path (`~/.fae/onboarding.md`).
+#[must_use]
+pub fn onboarding_path() -> PathBuf {
+    fae_home_dir().join("onboarding.md")
 }
 
-/// Assembles the full system prompt from core prompt, personality, skills,
-/// and user add-on.
+/// Ensure user-editable prompt assets exist in `~/.fae/`.
 ///
-/// Empty sections are skipped so the result never contains double blank lines
-/// between layers.
-pub fn assemble_prompt(personality_name: &str, user_add_on: &str) -> String {
-    let personality = load_personality(personality_name);
-    let skills = crate::skills::load_all_skills();
+/// Existing files are never overwritten.
+pub fn ensure_prompt_assets() -> Result<()> {
+    ensure_file_exists(&soul_path(), DEFAULT_SOUL)?;
+    ensure_file_exists(&onboarding_path(), DEFAULT_ONBOARDING_CHECKLIST)?;
+    Ok(())
+}
+
+fn ensure_file_exists(path: &Path, default_content: &str) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, default_content)?;
+    Ok(())
+}
+
+/// Load SOUL text from user file, falling back to repository default.
+#[must_use]
+pub fn load_soul() -> String {
+    std::fs::read_to_string(soul_path()).unwrap_or_else(|_| DEFAULT_SOUL.to_owned())
+}
+
+/// Load onboarding checklist from user file, falling back to repository default.
+#[must_use]
+pub fn load_onboarding_checklist() -> String {
+    std::fs::read_to_string(onboarding_path())
+        .unwrap_or_else(|_| DEFAULT_ONBOARDING_CHECKLIST.to_owned())
+}
+
+/// Assemble the active system prompt.
+///
+/// `personality_name` is ignored and retained only for backward compatibility.
+#[must_use]
+pub fn assemble_prompt(_personality_name: &str, user_add_on: &str) -> String {
+    let soul = load_soul();
     let add_on = user_add_on.trim();
 
-    let mut parts: Vec<&str> = Vec::with_capacity(4);
-    parts.push(CORE_PROMPT);
-    let personality_trimmed = personality.trim();
-    if !personality_trimmed.is_empty() {
-        parts.push(personality_trimmed);
+    let mut parts: Vec<&str> = Vec::with_capacity(3);
+    parts.push(CORE_PROMPT.trim());
+
+    let soul_trimmed = soul.trim();
+    if !soul_trimmed.is_empty() {
+        parts.push(soul_trimmed);
     }
-    let skills_trimmed = skills.trim();
-    if !skills_trimmed.is_empty() {
-        parts.push(skills_trimmed);
-    }
+
     if !add_on.is_empty() {
         parts.push(add_on);
     }
+
     parts.join("\n\n")
 }
 
@@ -148,156 +105,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn core_prompt_is_nonempty() {
-        assert!(!CORE_PROMPT.is_empty());
+    fn core_prompt_nonempty() {
+        assert!(!CORE_PROMPT.trim().is_empty());
     }
 
     #[test]
-    fn fae_personality_is_nonempty() {
-        assert!(!FAE_PERSONALITY.is_empty());
-        assert!(FAE_PERSONALITY.contains("Fae"));
+    fn defaults_nonempty() {
+        assert!(!DEFAULT_SOUL.trim().is_empty());
+        assert!(!DEFAULT_ONBOARDING_CHECKLIST.trim().is_empty());
     }
 
     #[test]
-    fn list_includes_builtins() {
-        let names = list_personalities();
-        assert!(names.contains(&"default".to_owned()));
-        assert!(names.contains(&"fae".to_owned()));
-    }
-
-    #[test]
-    fn load_default_returns_empty() {
-        assert!(load_personality("default").is_empty());
-    }
-
-    #[test]
-    fn load_fae_returns_identity() {
-        let text = load_personality("fae");
-        assert!(!text.is_empty());
-        assert!(text.contains("Fae"));
-    }
-
-    #[test]
-    fn load_missing_falls_back_to_fae() {
-        let text = load_personality("nonexistent_profile_xyz");
-        assert_eq!(text, FAE_PERSONALITY);
-    }
-
-    #[test]
-    fn assemble_core_only() {
-        let prompt = assemble_prompt("default", "");
-        // Core + skills (no personality for "default")
-        assert!(prompt.starts_with(CORE_PROMPT));
-        assert!(prompt.contains("Canvas"));
-    }
-
-    #[test]
-    fn assemble_fae_no_addon() {
+    fn assemble_includes_core_and_soul() {
         let prompt = assemble_prompt("fae", "");
-        assert!(prompt.starts_with(CORE_PROMPT));
-        assert!(prompt.contains("Fae"));
-        // Skills appear after personality
-        assert!(prompt.contains("Canvas"));
+        assert!(prompt.contains("You are Fae"));
+        assert!(prompt.starts_with(CORE_PROMPT.trim()));
     }
 
     #[test]
-    fn assemble_with_addon() {
-        let prompt = assemble_prompt("default", "Be formal.");
-        assert!(prompt.starts_with(CORE_PROMPT));
-        assert!(prompt.contains("Canvas"));
-        assert!(prompt.ends_with("Be formal."));
-    }
-
-    #[test]
-    fn assemble_fae_with_addon() {
-        let prompt = assemble_prompt("fae", "  Be formal.  ");
-        assert!(prompt.starts_with(CORE_PROMPT));
-        assert!(prompt.contains("Fae"));
-        assert!(prompt.contains("Canvas"));
-        assert!(prompt.ends_with("Be formal."));
-    }
-
-    #[test]
-    fn assemble_whitespace_addon_is_skipped() {
-        let prompt = assemble_prompt("fae", "   ");
-        // Should be same as no add-on
-        let no_addon = assemble_prompt("fae", "");
-        assert_eq!(prompt, no_addon);
-    }
-
-    #[test]
-    fn assemble_skills_between_personality_and_addon() {
-        let prompt = assemble_prompt("fae", "Be formal.");
-        // Verify ordering: personality before skills, skills before add-on
-        let fae_pos = prompt.find("Fae");
-        let canvas_pos = prompt.find("Canvas");
-        let addon_pos = prompt.find("Be formal.");
-        assert!(fae_pos.is_some());
-        assert!(canvas_pos.is_some());
-        assert!(addon_pos.is_some());
-        assert!(fae_pos < canvas_pos);
-        assert!(canvas_pos < addon_pos);
-    }
-
-    #[test]
-    fn personalities_dir_is_under_fae() {
-        let dir = personalities_dir();
-        let dir_str = dir.to_string_lossy();
-        assert!(dir_str.contains(".fae"));
-        assert!(dir_str.ends_with("personalities"));
-    }
-
-    // --- Personality Enhancement Tests ---
-
-    #[test]
-    fn fae_personality_contains_identity() {
-        let prompt = assemble_prompt("fae", "");
-        assert!(prompt.contains("Fae"), "prompt should mention Fae identity");
-        assert!(
-            prompt.contains("AI assistant"),
-            "prompt should mention AI assistant"
-        );
-    }
-
-    #[test]
-    fn fae_personality_contains_tool_instructions() {
-        let prompt = assemble_prompt("fae", "");
-        assert!(prompt.contains("bash"), "prompt should mention bash tool");
-        assert!(
-            prompt.contains("read") || prompt.contains("Read"),
-            "prompt should mention read tool"
-        );
-    }
-
-    #[test]
-    fn fae_personality_has_response_style() {
-        let prompt = assemble_prompt("fae", "");
-        assert!(
-            prompt.contains("1-3 sentences") || prompt.contains("short"),
-            "prompt should specify short responses"
-        );
-    }
-
-    #[test]
-    fn fae_identity_reference_is_nonempty() {
-        assert!(
-            !FAE_IDENTITY_REFERENCE.is_empty(),
-            "full identity reference should not be empty"
-        );
-        assert!(
-            FAE_IDENTITY_REFERENCE.len() > FAE_PERSONALITY.len(),
-            "full reference ({} bytes) should be longer than voice-optimized profile ({} bytes)",
-            FAE_IDENTITY_REFERENCE.len(),
-            FAE_PERSONALITY.len()
-        );
-    }
-
-    #[test]
-    fn fae_personality_is_voice_optimized() {
-        assert!(
-            FAE_PERSONALITY.len() < 5000,
-            "voice-optimized profile should be under 5000 chars, got {}",
-            FAE_PERSONALITY.len()
-        );
+    fn assemble_appends_user_add_on() {
+        let prompt = assemble_prompt("any", "Be extra concise.");
+        assert!(prompt.ends_with("Be extra concise."));
     }
 }

@@ -30,7 +30,17 @@ const PROFILE_NAME_CONFIDENCE: f32 = 0.98;
 const PROFILE_PREFERENCE_CONFIDENCE: f32 = 0.86;
 const FACT_REMEMBER_CONFIDENCE: f32 = 0.80;
 const FACT_CONVERSATIONAL_CONFIDENCE: f32 = 0.75;
+const CODING_ASSISTANT_PERMISSION_CONFIDENCE: f32 = 0.92;
+const CODING_ASSISTANT_PERMISSION_PENDING_CONFIDENCE: f32 = 0.55;
+const ONBOARDING_COMPLETION_CONFIDENCE: f32 = 0.95;
 const TRUNCATION_SUFFIX: &str = " [truncated]";
+const ONBOARDING_REQUIRED_FIELDS: &[(&str, &str)] = &[
+    ("onboarding:name", "name / preferred form of address"),
+    ("onboarding:address", "location or home context"),
+    ("onboarding:family", "family or household context"),
+    ("onboarding:interests", "interests or hobbies"),
+    ("onboarding:job", "job or work context"),
+];
 
 /// Maximum length (in bytes) of record text. Prevents unbounded growth from
 /// excessively long LLM outputs or user input.
@@ -932,6 +942,95 @@ impl MemoryOrchestrator {
         CURRENT_SCHEMA_VERSION
     }
 
+    /// Returns the remembered permission for using local Claude/Codex tools.
+    ///
+    /// - `Some(true)`: user allowed use for coding tasks
+    /// - `Some(false)`: user denied use
+    /// - `None`: not decided yet
+    pub fn coding_assistant_permission(&self) -> Result<Option<bool>> {
+        if !self.config.enabled {
+            return Ok(None);
+        }
+        self.ensure_ready()?;
+        let records = self
+            .repo
+            .find_active_by_tag("coding_assistant_permission")?;
+        let Some(record) = records.first() else {
+            return Ok(None);
+        };
+
+        if record
+            .tags
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("allowed"))
+        {
+            return Ok(Some(true));
+        }
+        if record.tags.iter().any(|t| t.eq_ignore_ascii_case("denied")) {
+            return Ok(Some(false));
+        }
+
+        let lower = record.text.to_ascii_lowercase();
+        if lower.contains("allow") || lower.contains("permitted") {
+            return Ok(Some(true));
+        }
+        if lower.contains("deny") || lower.contains("do not allow") || lower.contains("not allow") {
+            return Ok(Some(false));
+        }
+        Ok(None)
+    }
+
+    /// Returns `true` when onboarding is complete.
+    pub fn is_onboarding_complete(&self) -> Result<bool> {
+        if !self.config.enabled {
+            return Ok(true);
+        }
+        self.ensure_ready()?;
+        if !self
+            .repo
+            .find_active_by_tag("onboarding_complete")?
+            .is_empty()
+        {
+            return Ok(true);
+        }
+        Ok(self.onboarding_missing_fields()?.is_empty())
+    }
+
+    /// Build onboarding context when onboarding is still in progress.
+    pub fn onboarding_context(&self) -> Result<Option<String>> {
+        if !self.config.enabled {
+            return Ok(None);
+        }
+        self.ensure_ready()?;
+        let missing = self.onboarding_missing_fields()?;
+        if missing.is_empty() {
+            return Ok(None);
+        }
+
+        let checklist = crate::personality::load_onboarding_checklist();
+        let trimmed = checklist.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+
+        let mut missing_lines = String::new();
+        for field in &missing {
+            missing_lines.push_str("- ");
+            missing_lines.push_str(field);
+            missing_lines.push('\n');
+        }
+
+        Ok(Some(format!(
+            "<onboarding_context>\n\
+status: incomplete\n\
+missing_fields:\n\
+{missing_lines}\
+checklist:\n\
+{trimmed}\n\
+</onboarding_context>"
+        )))
+    }
+
     pub fn recall_context(&self, query: &str) -> Result<Option<String>> {
         if !self.config.enabled || !self.config.auto_recall {
             return Ok(None);
@@ -1088,6 +1187,11 @@ impl MemoryOrchestrator {
         if let Some(name) = parse_name_statement(user_trimmed) {
             let profile = truncate_record_text(&format!("Primary user name is {name}."));
             if self.meets_profile_threshold(PROFILE_NAME_CONFIDENCE) {
+                let name_tags = vec![
+                    "name".to_owned(),
+                    "identity".to_owned(),
+                    "onboarding:name".to_owned(),
+                ];
                 let existing = self.repo.find_active_by_tag("name")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
@@ -1096,7 +1200,7 @@ impl MemoryOrchestrator {
                             &profile,
                             PROFILE_NAME_CONFIDENCE,
                             Some(turn_id),
-                            vec!["name".to_owned(), "identity".to_owned()],
+                            name_tags.clone(),
                             "name updated from user statement",
                         )?;
                         report.profile_updates = report.profile_updates.saturating_add(1);
@@ -1116,7 +1220,7 @@ impl MemoryOrchestrator {
                         &profile,
                         PROFILE_NAME_CONFIDENCE,
                         Some(turn_id),
-                        vec!["name".to_owned(), "identity".to_owned()],
+                        name_tags,
                     )?;
                     report.profile_updates = report.profile_updates.saturating_add(1);
                     report.writes.push(MemoryWriteSummary {
@@ -1130,6 +1234,10 @@ impl MemoryOrchestrator {
         if let Some(pref) = parse_preference_statement(user_trimmed) {
             let profile = truncate_record_text(&format!("User preference: {pref}"));
             if self.meets_profile_threshold(PROFILE_PREFERENCE_CONFIDENCE) {
+                let mut preference_tags = vec!["preference".to_owned()];
+                if is_interest_preference(&pref) {
+                    preference_tags.push("onboarding:interests".to_owned());
+                }
                 let existing = self.repo.find_active_by_tag("preference")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
@@ -1138,7 +1246,7 @@ impl MemoryOrchestrator {
                             &profile,
                             PROFILE_PREFERENCE_CONFIDENCE,
                             Some(turn_id),
-                            vec!["preference".to_owned()],
+                            preference_tags.clone(),
                             "preference updated from user statement",
                         )?;
                         report.profile_updates = report.profile_updates.saturating_add(1);
@@ -1158,7 +1266,143 @@ impl MemoryOrchestrator {
                         &profile,
                         PROFILE_PREFERENCE_CONFIDENCE,
                         Some(turn_id),
-                        vec!["preference".to_owned()],
+                        preference_tags,
+                    )?;
+                    report.profile_updates = report.profile_updates.saturating_add(1);
+                    report.writes.push(MemoryWriteSummary {
+                        op: "update_profile".to_owned(),
+                        target_id: Some(new_record.id.clone()),
+                    });
+                }
+            }
+        }
+
+        let assistant_asked_for_coding_permission =
+            assistant_asked_about_local_coding_tools(assistant_text);
+        if assistant_asked_for_coding_permission && self.coding_assistant_permission()?.is_none() {
+            let pending = self
+                .repo
+                .find_active_by_tag("coding_assistant_permission_pending")?;
+            if pending.is_empty() {
+                let pending_marker = self.repo.insert_record(
+                    MemoryKind::Profile,
+                    "Awaiting user decision on local Claude/Codex use for coding tasks.",
+                    CODING_ASSISTANT_PERMISSION_PENDING_CONFIDENCE,
+                    Some(turn_id),
+                    vec!["coding_assistant_permission_pending".to_owned()],
+                )?;
+                report.profile_updates = report.profile_updates.saturating_add(1);
+                report.writes.push(MemoryWriteSummary {
+                    op: "update_profile".to_owned(),
+                    target_id: Some(pending_marker.id),
+                });
+            }
+        }
+
+        let pending_permission = !self
+            .repo
+            .find_active_by_tag("coding_assistant_permission_pending")?
+            .is_empty();
+        if let Some(allowed) = parse_coding_assistant_permission(user_trimmed, pending_permission) {
+            let profile = if allowed {
+                "User allows Fae to use local Claude/Codex tools for coding tasks."
+            } else {
+                "User does not allow Fae to use local Claude/Codex tools for coding tasks."
+            };
+            let permission_tags = vec![
+                "coding_assistant_permission".to_owned(),
+                if allowed {
+                    "allowed".to_owned()
+                } else {
+                    "denied".to_owned()
+                },
+            ];
+            let existing = self
+                .repo
+                .find_active_by_tag("coding_assistant_permission")?;
+            if let Some(previous) = existing.first() {
+                if !previous.text.eq_ignore_ascii_case(profile) {
+                    let new_record = self.repo.supersede_record(
+                        &previous.id,
+                        profile,
+                        CODING_ASSISTANT_PERMISSION_CONFIDENCE,
+                        Some(turn_id),
+                        permission_tags.clone(),
+                        "user updated local coding assistant permission",
+                    )?;
+                    report.profile_updates = report.profile_updates.saturating_add(1);
+                    report.conflicts_resolved = report.conflicts_resolved.saturating_add(1);
+                    report.writes.push(MemoryWriteSummary {
+                        op: "update_profile".to_owned(),
+                        target_id: Some(new_record.id.clone()),
+                    });
+                    report.conflicts.push(MemoryConflictSummary {
+                        existing_id: previous.id.clone(),
+                        replacement_id: Some(new_record.id.clone()),
+                    });
+                }
+            } else {
+                let new_record = self.repo.insert_record(
+                    MemoryKind::Profile,
+                    profile,
+                    CODING_ASSISTANT_PERMISSION_CONFIDENCE,
+                    Some(turn_id),
+                    permission_tags,
+                )?;
+                report.profile_updates = report.profile_updates.saturating_add(1);
+                report.writes.push(MemoryWriteSummary {
+                    op: "update_profile".to_owned(),
+                    target_id: Some(new_record.id.clone()),
+                });
+            }
+
+            let pending_records = self
+                .repo
+                .find_active_by_tag("coding_assistant_permission_pending")?;
+            for pending in pending_records {
+                self.repo.invalidate_record(
+                    &pending.id,
+                    "coding assistant permission response captured",
+                )?;
+                report.writes.push(MemoryWriteSummary {
+                    op: "invalidate_profile".to_owned(),
+                    target_id: Some(pending.id),
+                });
+            }
+        }
+
+        if let Some(job) = parse_profession_statement(user_trimmed) {
+            let profile = truncate_record_text(&format!("User job: {job}"));
+            if self.meets_profile_threshold(FACT_CONVERSATIONAL_CONFIDENCE) {
+                let existing = self.repo.find_active_by_tag("onboarding:job")?;
+                if let Some(previous) = existing.first() {
+                    if !previous.text.eq_ignore_ascii_case(&profile) {
+                        let new_record = self.repo.supersede_record(
+                            &previous.id,
+                            &profile,
+                            FACT_CONVERSATIONAL_CONFIDENCE,
+                            Some(turn_id),
+                            vec!["onboarding:job".to_owned(), "personal".to_owned()],
+                            "job updated from user statement",
+                        )?;
+                        report.profile_updates = report.profile_updates.saturating_add(1);
+                        report.conflicts_resolved = report.conflicts_resolved.saturating_add(1);
+                        report.writes.push(MemoryWriteSummary {
+                            op: "update_profile".to_owned(),
+                            target_id: Some(new_record.id.clone()),
+                        });
+                        report.conflicts.push(MemoryConflictSummary {
+                            existing_id: previous.id.clone(),
+                            replacement_id: Some(new_record.id.clone()),
+                        });
+                    }
+                } else if !self.is_duplicate_memory(&profile)? {
+                    let new_record = self.repo.insert_record(
+                        MemoryKind::Profile,
+                        &profile,
+                        FACT_CONVERSATIONAL_CONFIDENCE,
+                        Some(turn_id),
+                        vec!["onboarding:job".to_owned(), "personal".to_owned()],
                     )?;
                     report.profile_updates = report.profile_updates.saturating_add(1);
                     report.writes.push(MemoryWriteSummary {
@@ -1177,12 +1421,18 @@ impl MemoryOrchestrator {
                 && self.meets_profile_threshold(FACT_CONVERSATIONAL_CONFIDENCE)
                 && !self.is_duplicate_memory(&fact)?
             {
+                let mut tags = vec!["personal".to_owned()];
+                for onboarding_tag in onboarding_tags_for_personal_fact(&fact) {
+                    if !tags.iter().any(|existing| existing == &onboarding_tag) {
+                        tags.push(onboarding_tag);
+                    }
+                }
                 let record = self.repo.insert_record(
                     MemoryKind::Fact,
                     &fact,
                     FACT_CONVERSATIONAL_CONFIDENCE,
                     Some(turn_id),
-                    vec!["personal".to_owned()],
+                    tags,
                 )?;
                 report.facts_written = report.facts_written.saturating_add(1);
                 report.writes.push(MemoryWriteSummary {
@@ -1191,6 +1441,8 @@ impl MemoryOrchestrator {
                 });
             }
         }
+
+        self.maybe_mark_onboarding_complete(turn_id, &mut report)?;
 
         if self.config.retention_days > 0 {
             let _changed = self
@@ -1220,6 +1472,50 @@ impl MemoryOrchestrator {
 
     fn meets_profile_threshold(&self, confidence: f32) -> bool {
         confidence >= self.min_profile_confidence()
+    }
+
+    fn onboarding_missing_fields(&self) -> Result<Vec<&'static str>> {
+        let mut missing: Vec<&'static str> = Vec::new();
+        for (tag, label) in ONBOARDING_REQUIRED_FIELDS {
+            if self.repo.find_active_by_tag(tag)?.is_empty() {
+                missing.push(*label);
+            }
+        }
+        Ok(missing)
+    }
+
+    fn maybe_mark_onboarding_complete(
+        &self,
+        turn_id: &str,
+        report: &mut MemoryCaptureReport,
+    ) -> Result<()> {
+        if !self
+            .repo
+            .find_active_by_tag("onboarding_complete")?
+            .is_empty()
+        {
+            return Ok(());
+        }
+        for (tag, _) in ONBOARDING_REQUIRED_FIELDS {
+            if self.repo.find_active_by_tag(tag)?.is_empty() {
+                return Ok(());
+            }
+        }
+
+        let record = self.repo.insert_record(
+            MemoryKind::Profile,
+            "Onboarding checklist is complete.",
+            ONBOARDING_COMPLETION_CONFIDENCE,
+            Some(turn_id),
+            vec!["onboarding_complete".to_owned(), "onboarding".to_owned()],
+        )?;
+        report.profile_updates = report.profile_updates.saturating_add(1);
+        report.writes.push(MemoryWriteSummary {
+            op: "update_profile".to_owned(),
+            target_id: Some(record.id),
+        });
+
+        Ok(())
     }
 }
 
@@ -1528,6 +1824,10 @@ fn parse_preference_statement(text: &str) -> Option<String> {
         "i prefer ",
         "i like ",
         "i love ",
+        "i enjoy ",
+        "i'm interested in ",
+        "i am interested in ",
+        "my interests are ",
         "i don't like ",
         "i do not like ",
         "i hate ",
@@ -1548,11 +1848,198 @@ fn parse_preference_statement(text: &str) -> Option<String> {
             if rest.is_empty() {
                 continue;
             }
-            return Some(format!("{}{}", pat.trim(), rest));
+            return Some(format!("{} {}", pat.trim(), rest));
         }
     }
 
     None
+}
+
+fn is_interest_preference(preference: &str) -> bool {
+    let lower = preference.to_ascii_lowercase();
+    lower.starts_with("i like ")
+        || lower.starts_with("i love ")
+        || lower.starts_with("i enjoy ")
+        || lower.starts_with("i'm interested in ")
+        || lower.starts_with("i am interested in ")
+        || lower.starts_with("my interests are ")
+}
+
+fn parse_profession_statement(text: &str) -> Option<String> {
+    let raw = text.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let lower = raw.to_ascii_lowercase();
+
+    for prefix in ["i am a ", "i am an ", "i'm a ", "i'm an "] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let rest_raw = raw[prefix.len()..]
+                .trim()
+                .trim_end_matches(['.', '!', '?'])
+                .trim();
+            if !rest_raw.is_empty() && contains_profession_token(rest) {
+                return Some(rest_raw.to_owned());
+            }
+        }
+    }
+
+    for prefix in ["i work as ", "my job is "] {
+        if let Some(idx) = lower.find(prefix) {
+            let start = idx + prefix.len();
+            if start < raw.len() {
+                let rest = raw[start..].trim().trim_end_matches(['.', '!', '?']).trim();
+                if !rest.is_empty() {
+                    return Some(rest.to_owned());
+                }
+            }
+        }
+    }
+
+    for prefix in ["i am retired", "i'm retired"] {
+        if lower == prefix
+            || lower
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(' '))
+        {
+            return Some("retired".to_owned());
+        }
+    }
+
+    None
+}
+
+fn contains_profession_token(phrase: &str) -> bool {
+    phrase.split_whitespace().take(6).any(|token| {
+        let clean = token.trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '-' && c != '\'');
+        is_known_profession_word(clean)
+    })
+}
+
+fn is_known_profession_word(token: &str) -> bool {
+    matches!(
+        token,
+        "developer"
+            | "engineer"
+            | "architect"
+            | "teacher"
+            | "student"
+            | "doctor"
+            | "nurse"
+            | "lawyer"
+            | "accountant"
+            | "programmer"
+            | "designer"
+            | "writer"
+            | "artist"
+            | "musician"
+            | "manager"
+            | "founder"
+            | "consultant"
+            | "researcher"
+            | "scientist"
+            | "analyst"
+            | "entrepreneur"
+            | "marketer"
+            | "salesperson"
+            | "chef"
+            | "mechanic"
+            | "electrician"
+            | "plumber"
+            | "carpenter"
+            | "pilot"
+            | "owner"
+            | "retired"
+    )
+}
+
+fn assistant_asked_about_local_coding_tools(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let mentions_tools = lower.contains("local claude")
+        || lower.contains("local codex")
+        || (lower.contains("claude") && lower.contains("codex"))
+        || lower.contains("local coding assistant");
+    mentions_tools
+        && (lower.contains("coding")
+            || lower.contains("code")
+            || lower.contains("task")
+            || lower.contains("use"))
+}
+
+fn user_mentions_local_coding_tools(user_text: &str) -> bool {
+    user_text.contains("local claude")
+        || user_text.contains("local codex")
+        || (user_text.contains("claude") && user_text.contains("codex"))
+        || user_text.contains("coding assistant")
+}
+
+fn parse_coding_assistant_permission(user_text: &str, pending_question: bool) -> Option<bool> {
+    let user_lower = user_text.trim().to_ascii_lowercase();
+    if user_lower.is_empty() {
+        return None;
+    }
+
+    let mentions_tools = user_mentions_local_coding_tools(&user_lower);
+    if !pending_question && !mentions_tools {
+        return None;
+    }
+
+    if is_affirmative_response(&user_lower) {
+        return Some(true);
+    }
+    if is_negative_response(&user_lower) {
+        return Some(false);
+    }
+
+    if mentions_tools {
+        if user_lower.contains("do not use")
+            || user_lower.contains("don't use")
+            || user_lower.contains("not use")
+            || user_lower.contains("not allowed")
+            || user_lower.contains("forbid")
+        {
+            return Some(false);
+        }
+
+        if user_lower.contains("you can use")
+            || user_lower.contains("allowed")
+            || user_lower.contains("permit")
+            || user_lower.contains("fine to use")
+        {
+            return Some(true);
+        }
+    }
+
+    None
+}
+
+fn is_affirmative_response(text: &str) -> bool {
+    matches!(
+        text,
+        "yes"
+            | "y"
+            | "yeah"
+            | "yep"
+            | "sure"
+            | "ok"
+            | "okay"
+            | "go ahead"
+            | "please do"
+            | "do it"
+            | "fine"
+            | "absolutely"
+            | "of course"
+    ) || text.starts_with("yes ")
+        || text.starts_with("sure ")
+}
+
+fn is_negative_response(text: &str) -> bool {
+    matches!(
+        text,
+        "no" | "n" | "nope" | "never" | "don't" | "do not" | "not now" | "stop"
+    ) || text.starts_with("no ")
+        || text.starts_with("don't ")
+        || text.starts_with("do not ")
 }
 
 /// Extract personal facts from statements like "I live in X", "I have a dog called Y",
@@ -1579,6 +2066,9 @@ fn parse_personal_facts(text: &str) -> Vec<String> {
         "i have an ",
         "i have ",
         "i also have ",
+        "i enjoy ",
+        "i'm interested in ",
+        "i am interested in ",
         "i own a ",
         "i own an ",
         "i own ",
@@ -1590,6 +2080,10 @@ fn parse_personal_facts(text: &str) -> Vec<String> {
         "my wife is ",
         "my husband is ",
         "my partner is ",
+        "my family is ",
+        "my children are ",
+        "my son is ",
+        "my daughter is ",
     ];
 
     for pat in fact_patterns {
@@ -1645,6 +2139,53 @@ fn parse_personal_facts(text: &str) -> Vec<String> {
     }
 
     facts
+}
+
+fn onboarding_tags_for_personal_fact(fact: &str) -> Vec<String> {
+    let lower = fact.to_ascii_lowercase();
+    let mut tags = Vec::new();
+
+    if lower.starts_with("i live ")
+        || lower.starts_with("my house is ")
+        || lower.starts_with("my home is ")
+    {
+        tags.push("onboarding:address".to_owned());
+    }
+
+    if lower.starts_with("i work ")
+        || lower.starts_with("my job is ")
+        || lower.starts_with("i work as ")
+    {
+        tags.push("onboarding:job".to_owned());
+    }
+
+    if lower.contains("wife")
+        || lower.contains("husband")
+        || lower.contains("partner")
+        || lower.contains("child")
+        || lower.contains("children")
+        || lower.contains("son")
+        || lower.contains("daughter")
+        || lower.contains("mother")
+        || lower.contains("father")
+        || lower.contains("brother")
+        || lower.contains("sister")
+        || lower.contains("my dog")
+        || lower.contains("my cat")
+    {
+        tags.push("onboarding:family".to_owned());
+    }
+
+    if lower.starts_with("i like ")
+        || lower.starts_with("i love ")
+        || lower.starts_with("i enjoy ")
+        || lower.contains("interested in ")
+        || lower.starts_with("my interests are ")
+    {
+        tags.push("onboarding:interests".to_owned());
+    }
+
+    tags
 }
 
 fn is_filler_word(token: &str) -> bool {
@@ -2207,6 +2748,48 @@ mod tests {
     }
 
     #[test]
+    fn parse_coding_assistant_permission_yes_no() {
+        assert_eq!(parse_coding_assistant_permission("yes", true), Some(true));
+        assert_eq!(
+            parse_coding_assistant_permission("no thanks", true),
+            Some(false)
+        );
+        assert_eq!(parse_coding_assistant_permission("maybe later", true), None);
+        assert_eq!(parse_coding_assistant_permission("yes", false), None);
+        assert_eq!(
+            parse_coding_assistant_permission("you can use local codex tools for coding", false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn parse_profession_statement_handles_multi_word_jobs() {
+        assert_eq!(
+            parse_profession_statement("I'm a software engineer."),
+            Some("software engineer".to_owned())
+        );
+        assert_eq!(
+            parse_profession_statement("I am a big fan of hiking."),
+            None
+        );
+    }
+
+    #[test]
+    fn onboarding_tags_classify_personal_facts() {
+        let address = onboarding_tags_for_personal_fact("I live in Glasgow");
+        assert!(address.contains(&"onboarding:address".to_owned()));
+
+        let family = onboarding_tags_for_personal_fact("My wife is Anna");
+        assert!(family.contains(&"onboarding:family".to_owned()));
+
+        let interests = onboarding_tags_for_personal_fact("I enjoy hill walking");
+        assert!(interests.contains(&"onboarding:interests".to_owned()));
+
+        let job = onboarding_tags_for_personal_fact("I work at Acme");
+        assert!(job.contains(&"onboarding:job".to_owned()));
+    }
+
+    #[test]
     fn orchestrator_captures_personal_facts_from_conversation() {
         let root = test_root("orchestrator-personal-facts");
         let cfg = test_cfg(&root);
@@ -2231,6 +2814,84 @@ mod tests {
             .expect("find personal facts");
         assert!(!personal.is_empty(), "should have personal fact records");
         assert!(personal[0].text.contains("Barskeg"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn orchestrator_marks_onboarding_complete_when_required_fields_exist() {
+        let root = test_root("onboarding-complete");
+        let cfg = test_cfg(&root);
+        let orchestrator = MemoryOrchestrator::new(&cfg);
+
+        orchestrator
+            .capture_turn("turn-1", "My name is Alice.", "Noted.")
+            .expect("capture name");
+        orchestrator
+            .capture_turn("turn-2", "I live in Edinburgh.", "Noted.")
+            .expect("capture address");
+        orchestrator
+            .capture_turn("turn-3", "My wife is Anna.", "Noted.")
+            .expect("capture family");
+        orchestrator
+            .capture_turn("turn-4", "I enjoy woodworking.", "Noted.")
+            .expect("capture interests");
+        orchestrator
+            .capture_turn("turn-5", "I work at Acme.", "Noted.")
+            .expect("capture job");
+
+        assert!(
+            orchestrator
+                .is_onboarding_complete()
+                .expect("onboarding state should load")
+        );
+
+        let repo = MemoryRepository::new(&root);
+        let completion = repo
+            .find_active_by_tag("onboarding_complete")
+            .expect("completion tag query");
+        assert!(!completion.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn orchestrator_captures_coding_assistant_permission_across_turns() {
+        let root = test_root("coding-assistant-permission");
+        let cfg = test_cfg(&root);
+        let orchestrator = MemoryOrchestrator::new(&cfg);
+
+        orchestrator
+            .capture_turn(
+                "turn-1",
+                "Can you help me with coding?",
+                "Is it okay if I use local Claude/Codex tools for coding tasks when helpful?",
+            )
+            .expect("capture permission prompt");
+
+        assert_eq!(
+            orchestrator
+                .coding_assistant_permission()
+                .expect("permission state"),
+            None
+        );
+
+        orchestrator
+            .capture_turn("turn-2", "yes", "Great, I will use them when helpful.")
+            .expect("capture permission response");
+
+        assert_eq!(
+            orchestrator
+                .coding_assistant_permission()
+                .expect("permission state"),
+            Some(true)
+        );
+
+        let repo = MemoryRepository::new(&root);
+        let pending = repo
+            .find_active_by_tag("coding_assistant_permission_pending")
+            .expect("query pending permission markers");
+        assert!(pending.is_empty(), "pending marker should be cleared");
 
         let _ = std::fs::remove_dir_all(root);
     }

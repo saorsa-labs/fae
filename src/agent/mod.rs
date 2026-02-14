@@ -253,12 +253,16 @@ fn build_provider(
     config: &LlmConfig,
     preloaded_llm: Option<&LocalLlm>,
 ) -> Arc<dyn ProviderAdapter> {
-    // Use local mistralrs directly when:
-    //  - The backend is explicitly Local, OR
-    //  - No remote provider is configured (no API key, no cloud provider)
-    // … and we have a preloaded local model.
-    let use_local_only = config.backend == crate::config::LlmBackend::Local
-        || !has_remote_provider_configured(config);
+    // All runtime paths use the agent loop; backend selects which provider
+    // the agent should use as its "brain":
+    // - Local: local mistralrs only
+    // - Api: remote provider only (with optional local fallback)
+    // - Agent: compatibility auto mode (local when remote isn't configured)
+    let use_local_only = match config.backend {
+        crate::config::LlmBackend::Local => true,
+        crate::config::LlmBackend::Api => false,
+        crate::config::LlmBackend::Agent => !has_remote_provider_configured(config),
+    };
 
     if use_local_only {
         if let Some(local_llm) = preloaded_llm {

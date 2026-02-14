@@ -147,13 +147,14 @@ impl Default for SttConfig {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmBackend {
-    /// Local inference via mistral.rs (GGUF models with Metal GPU support).
+    /// Agent runtime with a local mistralrs brain (GGUF + Metal where available).
     #[default]
     #[serde(alias = "candle")]
     Local,
-    /// Remote inference via OpenAI-compatible API (Ollama, MLX, etc.).
+    /// Agent runtime with an API brain (OpenAI-compatible/Anthropic provider).
     Api,
-    /// Agent loop via internal fae_llm with tool calling (uses OpenAI/Anthropic providers).
+    /// Compatibility auto-mode for older configs:
+    /// local brain when remote credentials are absent, otherwise API brain.
     Agent,
 }
 
@@ -250,14 +251,13 @@ pub struct LlmConfig {
     /// Whether explicit stop/sleep actions clear queued user inputs.
     #[serde(default = "default_llm_clear_queue_on_stop")]
     pub clear_queue_on_stop: bool,
-    /// Personality profile name.
+    /// Legacy personality profile name (deprecated).
     ///
-    /// Built-in options: `"fae"` (full identity profile) or `"default"` (core prompt only).
-    /// Custom profiles are loaded from `~/.fae/personalities/{name}.md`.
+    /// Prompt assembly now uses: core prompt + `~/.fae/SOUL.md` + optional
+    /// add-on prompt. This field is retained for backward compatibility.
     pub personality: String,
-    /// User add-on prompt (optional free-text appended after personality).
+    /// User add-on prompt appended after core prompt + SOUL.
     ///
-    /// This is appended to the core prompt + personality profile.
     /// Keep this short and specific.
     pub system_prompt: String,
     /// Cloud provider name for remote model selection.
@@ -312,7 +312,7 @@ impl Default for LlmConfig {
             message_queue_max_pending: default_llm_message_queue_max_pending(),
             message_queue_drop_policy: LlmMessageQueueDropPolicy::default(),
             clear_queue_on_stop: default_llm_clear_queue_on_stop(),
-            personality: "fae".to_owned(),
+            personality: "system".to_owned(),
             // User add-on prompt (optional). The fixed base prompt is always applied.
             system_prompt: String::new(),
             cloud_provider: None,
@@ -461,8 +461,15 @@ Personal context:\n\
         } else {
             match self.backend {
                 LlmBackend::Local => format!("local/{}", self.model_id),
-                LlmBackend::Agent | LlmBackend::Api => {
+                LlmBackend::Api => {
                     format!("{}/{}", self.api_url, self.api_model)
+                }
+                LlmBackend::Agent => {
+                    if self.api_key.trim().is_empty() && self.cloud_provider.is_none() {
+                        format!("local/{} (agent-auto)", self.model_id)
+                    } else {
+                        format!("{}/{} (agent-auto)", self.api_url, self.api_model)
+                    }
                 }
             }
         }
@@ -470,9 +477,10 @@ Personal context:\n\
 
     /// Returns the fully assembled system prompt.
     ///
-    /// Combines [`crate::personality::CORE_PROMPT`], the selected personality
-    /// profile, and the user's optional add-on text. Legacy prompts stored in
-    /// `system_prompt` are detected and treated as empty add-ons.
+    /// Combines core prompt + SOUL + optional user add-on text.
+    ///
+    /// Legacy prompts stored in `system_prompt` are detected and treated as
+    /// empty add-ons.
     pub fn effective_system_prompt(&self) -> String {
         let add_on = self.system_prompt.trim();
         let is_legacy = Self::LEGACY_PROMPTS

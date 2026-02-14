@@ -14,7 +14,14 @@ Non-negotiables:
 - Keep memory edits auditable.
 - Keep mutation paths panic-free and unwrap/expect-free in non-test code.
 
-Primary implementation:
+Behavioral truth sources:
+
+- `Prompts/system_prompt.md`
+- `SOUL.md`
+- `~/.fae/memory/`
+- `docs/Memory.md`
+
+Implementation touchpoints (not behavioral truth):
 
 - `src/memory.rs`
 - `src/pipeline/coordinator.rs`

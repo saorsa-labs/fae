@@ -5,7 +5,7 @@ use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::canvas::registry::CanvasSessionRegistry;
 use crate::config::{LlmMessageQueueDropPolicy, LlmMessageQueueMode, SpeechConfig};
 use crate::error::Result;
-use crate::memory::{MemoryOrchestrator, MemoryStore, PrimaryUser};
+use crate::memory::{MemoryOrchestrator, MemoryStore};
 use crate::pipeline::messages::{
     AudioChunk, ControlEvent, GateCommand, SentenceChunk, SpeechSegment, SynthesizedAudio,
     TextInjection, Transcription,
@@ -362,22 +362,13 @@ impl PipelineCoordinator {
     pub async fn run(mut self) -> Result<()> {
         info!("initializing speech pipeline (mode: {:?})", self.mode);
 
-        // Ensure persistent memory roots exist early, and decide whether we need onboarding.
+        // Ensure persistent memory roots exist early.
         let memory_root = self.config.memory.root_dir.clone();
         let store = MemoryStore::new(&memory_root);
         let _ = store.ensure_dirs();
         let _ = MemoryStore::ensure_voice_dirs(&memory_root);
-        let primary_exists = store.load_primary_user().ok().flatten().is_some();
-        let onboarding_needed = !primary_exists && matches!(self.mode, PipelineMode::Conversation);
-
-        // If onboarding is needed, tee VAD speech segments to the identity gate so we can record a
-        // voice sample WAV for the primary user.
-        let (onboarding_seg_tx, onboarding_seg_rx) = if onboarding_needed {
-            let (tx, rx) = mpsc::channel::<SpeechSegment>(SPEECH_CHANNEL_SIZE);
-            (Some(tx), Some(rx))
-        } else {
-            (None, None)
-        };
+        let onboarding_seg_tx: Option<mpsc::Sender<SpeechSegment>> = None;
+        let onboarding_seg_rx: Option<mpsc::Receiver<SpeechSegment>> = None;
 
         // Split pre-loaded models (if any) into per-stage pieces.
         let (preloaded_stt, preloaded_llm, preloaded_tts) = match self.models.take() {
@@ -556,8 +547,8 @@ impl PipelineCoordinator {
                 let (llm_queue_cmd_tx, llm_queue_cmd_rx) =
                     mpsc::unbounded_channel::<LlmQueueCommand>();
 
-                // Identity/onboarding gate: handles primary user enrollment and best-effort speaker
-                // matching before any wake-word gating.
+                // Identity gate before wake-word gating.
+                // Onboarding now happens conversationally via prompt + memory.
                 let (ident_tx, ident_rx) =
                     mpsc::channel::<Transcription>(TRANSCRIPTION_CHANNEL_SIZE);
                 let identity_handle = {
@@ -1258,7 +1249,7 @@ async fn run_identity_gate(
     tx: mpsc::Sender<Transcription>,
     tts_tx: mpsc::Sender<SentenceChunk>,
     memory_root: std::path::PathBuf,
-    mut onboarding_seg_rx: Option<mpsc::Receiver<SpeechSegment>>,
+    _onboarding_seg_rx: Option<mpsc::Receiver<SpeechSegment>>,
     cancel: CancellationToken,
 ) {
     let store = MemoryStore::new(&memory_root);
@@ -1277,19 +1268,13 @@ async fn run_identity_gate(
         }
     };
 
-    // One-shot onboarding if missing.
-    if !has_primary
-        && let Err(e) = run_onboarding(
-            &store,
-            &memory_root,
+    if !has_primary {
+        let _ = speak(
             &tts_tx,
-            &mut rx,
-            &mut onboarding_seg_rx,
+            "Hello, I am Fae. We can get to know each other naturally as we chat.",
             cancel.clone(),
         )
-        .await
-    {
-        error!("onboarding failed: {e}");
+        .await;
     }
 
     loop {
@@ -1352,98 +1337,6 @@ async fn run_voice_command_filter(
     }
 }
 
-async fn run_onboarding(
-    store: &MemoryStore,
-    memory_root: &std::path::Path,
-    tts_tx: &mpsc::Sender<SentenceChunk>,
-    rx: &mut mpsc::Receiver<Transcription>,
-    onboarding_seg_rx: &mut Option<mpsc::Receiver<SpeechSegment>>,
-    cancel: CancellationToken,
-) -> crate::error::Result<()> {
-    let _ = speak(
-        tts_tx,
-        "Hello, I am Fae. What is your name?",
-        cancel.clone(),
-    )
-    .await;
-
-    // Ask up to 3 times for a usable name.
-    let mut name: Option<String> = None;
-    for _ in 0..3 {
-        if let Some(t) = recv_transcription(rx, cancel.clone()).await
-            && let Some(n) = parse_name(&t.text)
-        {
-            name = Some(n);
-            // Save an initial primary user right away using the first voiceprint we saw.
-            let user = PrimaryUser {
-                name: name.clone().unwrap_or_else(|| "Friend".to_owned()),
-                voiceprint: t.voiceprint.clone(),
-                voice_sample_wav: Some("voices/primary_user.wav".to_owned()),
-            };
-            store.save_primary_user(&user)?;
-            break;
-        }
-        let _ = speak(
-            tts_tx,
-            "Sorry, I didn't catch that. What is your name?",
-            cancel.clone(),
-        )
-        .await;
-    }
-    let name = name.unwrap_or_else(|| "Friend".to_owned());
-
-    // Ask for a longer sample.
-    let _ = speak(
-        tts_tx,
-        &format!(
-            "Nice to meet you, {name}. Please talk about yourself for 10 to 15 seconds so I can learn your voice."
-        ),
-        cancel.clone(),
-    )
-    .await;
-
-    // Drain any old segments before capture.
-    if let Some(seg_rx) = onboarding_seg_rx.as_mut() {
-        while seg_rx.try_recv().is_ok() {}
-    }
-
-    let (samples, sample_rate) = collect_voice_samples(onboarding_seg_rx, cancel.clone()).await;
-    if !samples.is_empty() && sample_rate > 0 {
-        let voiceprint = crate::voiceprint::compute_voiceprint(&samples, sample_rate).ok();
-
-        let voices_dir = MemoryStore::voices_dir(memory_root);
-        let wav_path = voices_dir.join("primary_user.wav");
-        if let Err(e) = write_wav_i16(&wav_path, &samples, sample_rate) {
-            error!("failed to write primary voice WAV: {e}");
-        }
-
-        let user = PrimaryUser {
-            name: name.clone(),
-            voiceprint,
-            voice_sample_wav: Some("voices/primary_user.wav".to_owned()),
-        };
-        store.save_primary_user(&user)?;
-    }
-
-    let _ = speak(
-        tts_tx,
-        &format!("Thanks, {name}. I'm ready."),
-        cancel.clone(),
-    )
-    .await;
-    Ok(())
-}
-
-async fn recv_transcription(
-    rx: &mut mpsc::Receiver<Transcription>,
-    cancel: CancellationToken,
-) -> Option<Transcription> {
-    tokio::select! {
-        () = cancel.cancelled() => None,
-        t = rx.recv() => t,
-    }
-}
-
 async fn speak(
     tts_tx: &mpsc::Sender<SentenceChunk>,
     text: &str,
@@ -1459,70 +1352,7 @@ async fn speak(
     }
 }
 
-async fn collect_voice_samples(
-    onboarding_seg_rx: &mut Option<mpsc::Receiver<SpeechSegment>>,
-    cancel: CancellationToken,
-) -> (Vec<f32>, u32) {
-    let Some(seg_rx) = onboarding_seg_rx.as_mut() else {
-        return (Vec::new(), 0);
-    };
-
-    // Target: 10-15 seconds of *speech segments* (not wall-clock).
-    let target_ms: u32 = 10_000;
-    let hard_limit_ms: u32 = 18_000;
-    let mut total_ms: u32 = 0;
-    let mut all: Vec<f32> = Vec::new();
-    let mut sr: u32 = 0;
-
-    while total_ms < target_ms {
-        let seg_opt = tokio::select! {
-            () = cancel.cancelled() => None,
-            seg = seg_rx.recv() => seg,
-        };
-        let Some(seg) = seg_opt else { break };
-        if sr == 0 {
-            sr = seg.sample_rate;
-        }
-        if seg.sample_rate != sr || sr == 0 {
-            continue;
-        }
-
-        let ms = ((seg.samples.len() as u64) * 1000 / (sr as u64)) as u32;
-        total_ms = total_ms.saturating_add(ms);
-        all.extend_from_slice(&seg.samples);
-
-        if total_ms >= hard_limit_ms {
-            break;
-        }
-    }
-
-    (all, sr)
-}
-
-fn write_wav_i16(
-    path: &std::path::Path,
-    samples: &[f32],
-    sample_rate: u32,
-) -> std::result::Result<(), String> {
-    if sample_rate == 0 {
-        return Err("invalid sample rate".to_owned());
-    }
-
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
-    for s in samples {
-        let x = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        writer.write_sample(x).map_err(|e| e.to_string())?;
-    }
-    writer.finalize().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
+#[cfg(test)]
 fn parse_name(text: &str) -> Option<String> {
     let raw = text.trim();
     if raw.is_empty() {
@@ -1570,6 +1400,7 @@ fn parse_name(text: &str) -> Option<String> {
 
 /// Returns `true` for common greetings, filler words, articles, nationalities,
 /// and identity words that are not plausible names.
+#[cfg(test)]
 fn is_filler_word(token: &str) -> bool {
     matches!(
         token,
@@ -1670,6 +1501,7 @@ fn is_filler_word(token: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 fn clean_name_token(token: &str) -> String {
     token
         .trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '-' && c != '\'')
@@ -1679,10 +1511,74 @@ fn clean_name_token(token: &str) -> String {
         .collect()
 }
 
-/// Internal engine wrapper for either local or API-based LLM.
+#[derive(Debug, Clone, Copy)]
+struct LocalCodingAssistants {
+    codex_installed: bool,
+    claude_installed: bool,
+}
+
+impl LocalCodingAssistants {
+    fn detect() -> Self {
+        Self {
+            codex_installed: is_command_available("codex"),
+            claude_installed: is_command_available("claude"),
+        }
+    }
+
+    fn any(self) -> bool {
+        self.codex_installed || self.claude_installed
+    }
+}
+
+fn is_command_available(command: &str) -> bool {
+    let Some(path_os) = std::env::var_os("PATH") else {
+        return false;
+    };
+    for dir in std::env::split_paths(&path_os) {
+        let candidate = dir.join(command);
+        if !candidate.is_file() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&candidate)
+                && meta.permissions().mode() & 0o111 != 0
+            {
+                return true;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn build_local_coding_assistants_context(
+    assistants: LocalCodingAssistants,
+    permission: Option<bool>,
+) -> String {
+    let permission_status = match permission {
+        Some(true) => "allowed",
+        Some(false) => "denied",
+        None => "unknown",
+    };
+
+    format!(
+        "<local_coding_assistants>\n\
+- claude_cli_installed: {}\n\
+- codex_cli_installed: {}\n\
+- user_permission_for_coding_tasks: {}\n\
+- policy: If coding help is needed and local Claude/Codex is installed, ask once when permission is unknown, remember the answer, and follow it.\n\
+</local_coding_assistants>",
+        assistants.claude_installed, assistants.codex_installed, permission_status
+    )
+}
+
+/// Internal engine wrapper for the agent LLM.
 enum LlmEngine {
-    Local(Box<crate::llm::LocalLlm>),
-    Api(Box<crate::llm::ApiLlm>),
     Agent(Box<crate::agent::FaeAgentLlm>),
 }
 
@@ -1709,8 +1605,6 @@ impl LlmEngine {
         interrupt: Arc<AtomicBool>,
     ) -> crate::error::Result<bool> {
         match self {
-            Self::Local(llm) => llm.generate_response(user_input, tx, interrupt).await,
-            Self::Api(llm) => llm.generate_response(user_input, tx, interrupt).await,
             Self::Agent(llm) => llm.generate_response(user_input, tx, interrupt).await,
         }
     }
@@ -1719,8 +1613,6 @@ impl LlmEngine {
     /// the first `keep_count` messages after it. Used for conversation forking.
     fn truncate_history(&mut self, keep_count: usize) {
         match self {
-            Self::Local(llm) => llm.truncate_history(keep_count),
-            Self::Api(llm) => llm.truncate_history(keep_count),
             Self::Agent(llm) => llm.truncate_history(keep_count),
         }
     }
@@ -1735,48 +1627,28 @@ async fn run_llm_stage(
     mut text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
 ) {
     use crate::agent::FaeAgentLlm;
-    use crate::config::LlmBackend;
-    use crate::llm::{ApiLlm, LocalLlm};
 
-    let mut engine = match config.llm.backend {
-        LlmBackend::Local => {
-            let llm = match preloaded {
-                Some(l) => l,
-                None => match LocalLlm::new(&config.llm).await {
-                    Ok(l) => l,
-                    Err(e) => {
-                        error!("failed to init LLM: {e}");
-                        return;
-                    }
-                },
-            };
-            LlmEngine::Local(Box::new(llm))
-        }
-        LlmBackend::Api => match ApiLlm::new(&config.llm) {
-            Ok(l) => LlmEngine::Api(Box::new(l)),
-            Err(e) => {
-                error!("failed to init API LLM: {e}");
-                return;
-            }
-        },
-        LlmBackend::Agent => {
-            match FaeAgentLlm::new(
-                &config.llm,
-                preloaded,
-                ctl.runtime_tx.clone(),
-                ctl.tool_approval_tx.clone(),
-                ctl.canvas_registry.clone(),
-            )
-            .await
-            {
-                Ok(l) => LlmEngine::Agent(Box::new(l)),
-                Err(e) => {
-                    error!("failed to init agent LLM: {e}");
-                    return;
-                }
-            }
+    if let Err(e) = crate::personality::ensure_prompt_assets() {
+        warn!("failed to ensure prompt assets in ~/.fae: {e}");
+    }
+
+    let mut engine = match FaeAgentLlm::new(
+        &config.llm,
+        preloaded,
+        ctl.runtime_tx.clone(),
+        ctl.tool_approval_tx.clone(),
+        ctl.canvas_registry.clone(),
+    )
+    .await
+    {
+        Ok(l) => LlmEngine::Agent(Box::new(l)),
+        Err(e) => {
+            error!("failed to init agent LLM: {e}");
+            return;
         }
     };
+
+    let local_coding_assistants = LocalCodingAssistants::detect();
 
     let name = "Fae".to_owned();
     let memory_orchestrator = if config.memory.enabled {
@@ -2057,18 +1929,31 @@ async fn run_llm_stage(
             continue;
         }
 
-        let mut llm_input = user_text.clone();
-        if let Some(memory) = &memory_orchestrator
-            && let Ok(Some(memory_ctx)) = memory.recall_context(&user_text)
-        {
-            if let Some(rt) = &runtime_tx {
-                let hits = memory_ctx.matches("\n- [").count();
-                let _ = rt.send(RuntimeEvent::MemoryRecall {
-                    query: user_text.clone(),
-                    hits,
-                });
+        let mut llm_input = format!("User message:\n{user_text}");
+        if let Some(memory) = &memory_orchestrator {
+            if let Ok(Some(memory_ctx)) = memory.recall_context(&user_text) {
+                if let Some(rt) = &runtime_tx {
+                    let hits = memory_ctx.matches("\n- [").count();
+                    let _ = rt.send(RuntimeEvent::MemoryRecall {
+                        query: user_text.clone(),
+                        hits,
+                    });
+                }
+                llm_input = format!("{memory_ctx}\n\n{llm_input}");
             }
-            llm_input = format!("{memory_ctx}\n\nUser message:\n{user_text}");
+
+            if let Ok(Some(onboarding_ctx)) = memory.onboarding_context() {
+                llm_input = format!("{onboarding_ctx}\n\n{llm_input}");
+            }
+        }
+
+        if local_coding_assistants.any() {
+            let permission = memory_orchestrator
+                .as_ref()
+                .and_then(|memory| memory.coding_assistant_permission().ok().flatten());
+            let local_coding_ctx =
+                build_local_coding_assistants_context(local_coding_assistants, permission);
+            llm_input = format!("{local_coding_ctx}\n\n{llm_input}");
         }
 
         assistant_generating.store(true, Ordering::Relaxed);
@@ -3350,6 +3235,7 @@ fn within_assistant_holdoff(last_start: &Option<Instant>, holdoff_ms: u32) -> bo
     Instant::now().duration_since(t0) < Duration::from_millis(holdoff_ms as u64)
 }
 
+#[cfg(test)]
 fn capitalize_first(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -4494,6 +4380,16 @@ mod tests {
                 .collect()
         }
 
+        /// Returns the full (enriched) user message content from each API request,
+        /// including any prepended context (memory, onboarding, coding assistants).
+        fn request_raw_user_inputs(&self) -> Vec<String> {
+            let requests = self.requests.lock().expect("lock requests");
+            requests
+                .iter()
+                .filter_map(extract_raw_last_user_message)
+                .collect()
+        }
+
         async fn shutdown(self) {
             self.handle.abort();
             let _ = self.handle.await;
@@ -4514,6 +4410,27 @@ mod tests {
     }
 
     fn extract_last_user_message(payload: &serde_json::Value) -> Option<String> {
+        let messages = payload.get("messages")?.as_array()?;
+        messages.iter().rev().find_map(|m| {
+            if m.get("role")?.as_str()? == "user" {
+                let content = m.get("content")?.as_str()?;
+                // Strip enrichment context (local_coding_assistants, onboarding_context)
+                // that gets prepended to user messages. The original user text follows
+                // the "User message:\n" marker.
+                if let Some(idx) = content.rfind("User message:\n") {
+                    Some(content[idx + "User message:\n".len()..].to_owned())
+                } else {
+                    Some(content.to_owned())
+                }
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Returns the full raw content of the last user message without stripping
+    /// enrichment context. Used to verify memory/onboarding context injection.
+    fn extract_raw_last_user_message(payload: &serde_json::Value) -> Option<String> {
         let messages = payload.get("messages")?.as_array()?;
         messages.iter().rev().find_map(|m| {
             if m.get("role")?.as_str()? == "user" {
@@ -4638,7 +4555,7 @@ mod tests {
             .expect("llm stage timeout")
             .expect("llm stage join");
 
-        let user_inputs = server.request_user_inputs();
+        let user_inputs = server.request_raw_user_inputs();
         assert_eq!(user_inputs.len(), 1);
         assert!(user_inputs[0].contains("<memory_context>"));
         assert!(user_inputs[0].contains("Primary user name is Alice."));
