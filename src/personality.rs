@@ -250,41 +250,37 @@ mod tests {
     // --- Personality Enhancement Tests ---
 
     #[test]
-    fn fae_personality_contains_scottish_identity() {
+    fn fae_personality_contains_identity() {
         let prompt = assemble_prompt("fae", "");
         assert!(
-            prompt.contains("Scottish nature spirit"),
-            "prompt should mention Scottish nature spirit"
+            prompt.contains("Fae"),
+            "prompt should mention Fae identity"
         );
         assert!(
-            prompt.contains("Highland"),
-            "prompt should mention Highland"
+            prompt.contains("AI assistant"),
+            "prompt should mention AI assistant"
         );
     }
 
     #[test]
-    fn fae_personality_contains_speech_examples() {
+    fn fae_personality_contains_tool_instructions() {
         let prompt = assemble_prompt("fae", "");
         assert!(
-            prompt.contains("Right then"),
-            "prompt should contain 'Right then' example phrase"
+            prompt.contains("bash"),
+            "prompt should mention bash tool"
         );
         assert!(
-            prompt.contains("What drives you"),
-            "prompt should contain 'What drives you' example phrase"
+            prompt.contains("read") || prompt.contains("Read"),
+            "prompt should mention read tool"
         );
     }
 
     #[test]
-    fn fae_personality_has_voice_constraints() {
+    fn fae_personality_has_response_style() {
         let prompt = assemble_prompt("fae", "");
         assert!(
-            prompt.contains("1-3 short"),
-            "prompt should specify 1-3 short sentences"
-        );
-        assert!(
-            prompt.contains("No emojis"),
-            "prompt should prohibit emojis"
+            prompt.contains("1-3 sentences") || prompt.contains("short"),
+            "prompt should specify short responses"
         );
     }
 
