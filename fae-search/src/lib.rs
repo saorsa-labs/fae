@@ -60,10 +60,7 @@ pub use types::{PageContent, SearchEngine, SearchResult};
 /// ```
 pub async fn search(query: &str, config: &SearchConfig) -> Result<Vec<SearchResult>> {
     config.validate()?;
-    let _ = query;
-    Err(SearchError::AllEnginesFailed(
-        "search orchestrator not yet implemented".into(),
-    ))
+    orchestrator::search::orchestrate_search(query, config).await
 }
 
 /// Search the web with sensible default configuration.
@@ -122,16 +119,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn search_returns_error_for_stub() {
-        let config = SearchConfig::default();
-        let result = search("test query", &config).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
-    }
-
-    #[tokio::test]
-    async fn search_validates_config() {
+    async fn search_validates_config_zero_max_results() {
         let config = SearchConfig {
             max_results: 0,
             ..Default::default()
@@ -142,11 +130,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_default_returns_error_for_stub() {
-        let result = search_default("test query").await;
+    async fn search_validates_config_empty_engines() {
+        let config = SearchConfig {
+            engines: vec![],
+            ..Default::default()
+        };
+        let result = search("test", &config).await;
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
+        assert!(result.unwrap_err().to_string().contains("engine"));
+    }
+
+    #[tokio::test]
+    async fn search_validates_config_zero_timeout() {
+        let config = SearchConfig {
+            timeout_seconds: 0,
+            ..Default::default()
+        };
+        let result = search("test", &config).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timeout"));
     }
 
     #[tokio::test]

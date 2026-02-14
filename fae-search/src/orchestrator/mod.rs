@@ -6,4 +6,5 @@
 
 pub mod dedup;
 pub mod scoring;
+pub mod search;
 pub mod url_normalize;
