@@ -16,6 +16,7 @@ use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::provider::ProviderAdapter;
 use crate::fae_llm::providers::anthropic::{AnthropicAdapter, AnthropicConfig};
+use crate::fae_llm::providers::fallback::FallbackProvider;
 use crate::fae_llm::providers::local::{LocalMistralrsAdapter, LocalMistralrsConfig};
 use crate::fae_llm::providers::message::{Message, Role};
 use crate::fae_llm::providers::openai::{OpenAiAdapter, OpenAiConfig};
@@ -241,12 +242,25 @@ impl FaeAgentLlm {
     }
 }
 
+/// Returns `true` when the config has a remote API explicitly configured
+/// (non-empty API key or a cloud provider set). When neither is present,
+/// there is no remote LLM to talk to and we should use local inference only.
+fn has_remote_provider_configured(config: &LlmConfig) -> bool {
+    !config.api_key.trim().is_empty() || config.cloud_provider.is_some()
+}
+
 fn build_provider(
     config: &LlmConfig,
     preloaded_llm: Option<&LocalLlm>,
 ) -> Arc<dyn ProviderAdapter> {
-    // Use local mistralrs when backend is Local and we have a preloaded model
-    if config.backend == crate::config::LlmBackend::Local {
+    // Use local mistralrs directly when:
+    //  - The backend is explicitly Local, OR
+    //  - No remote provider is configured (no API key, no cloud provider)
+    // … and we have a preloaded local model.
+    let use_local_only = config.backend == crate::config::LlmBackend::Local
+        || !has_remote_provider_configured(config);
+
+    if use_local_only {
         if let Some(local_llm) = preloaded_llm {
             tracing::info!(
                 "agent using local mistralrs provider (model={})",
@@ -258,13 +272,41 @@ fn build_provider(
                     .with_top_p(config.top_p as f32)
                     .with_max_tokens(config.max_tokens);
             return Arc::new(LocalMistralrsAdapter::new(provider_cfg));
-        } else {
-            tracing::warn!("Local backend selected but no local model available");
         }
+        tracing::warn!(
+            "no remote provider configured and no local model available — agent will not function"
+        );
     }
 
-    // For Api backend or fallback, use remote provider
-    // If no API URL configured, warn but continue (will fail gracefully at runtime)
+    // Build the remote provider (only reached when a remote API is configured)
+    let remote = build_remote_provider(config);
+
+    // Wrap with local fallback when enabled and a local model is available
+    if config.enable_local_fallback {
+        if let Some(local_llm) = preloaded_llm {
+            tracing::info!(
+                "local fallback enabled: {} + local/{}",
+                config.effective_provider_name(),
+                config.model_id
+            );
+            let local_cfg =
+                LocalMistralrsConfig::new(local_llm.shared_model(), config.model_id.clone())
+                    .with_temperature(config.temperature as f32)
+                    .with_top_p(config.top_p as f32)
+                    .with_max_tokens(config.max_tokens);
+            let local: Arc<dyn ProviderAdapter> = Arc::new(LocalMistralrsAdapter::new(local_cfg));
+            return Arc::new(FallbackProvider::new(remote, local));
+        }
+        tracing::warn!(
+            "enable_local_fallback=true but no local model available; fallback disabled"
+        );
+    }
+
+    remote
+}
+
+/// Build the remote (API) provider from config.
+fn build_remote_provider(config: &LlmConfig) -> Arc<dyn ProviderAdapter> {
     if config.api_url.trim().is_empty() {
         tracing::warn!("no API URL configured - agent will not function without an LLM provider");
     }
@@ -315,7 +357,9 @@ fn build_registry(
 ) -> Arc<ToolRegistry> {
     let mode = match config.tool_mode {
         AgentToolMode::Off | AgentToolMode::ReadOnly => ToolMode::ReadOnly,
-        AgentToolMode::ReadWrite | AgentToolMode::Full => ToolMode::Full,
+        AgentToolMode::ReadWrite | AgentToolMode::Full | AgentToolMode::FullNoApproval => {
+            ToolMode::Full
+        }
     };
     let mut registry = ToolRegistry::new(mode);
 
@@ -354,6 +398,13 @@ fn build_registry(
                 tool_approval_tx,
                 APPROVAL_TIMEOUT,
             )));
+        }
+        AgentToolMode::FullNoApproval => {
+            // No approval needed - register tools directly
+            registry.register(Arc::new(BashTool::new()));
+            registry.register(Arc::new(ReadTool::new()));
+            registry.register(Arc::new(WriteTool::new()));
+            registry.register(Arc::new(EditTool::new()));
         }
     }
 
@@ -504,6 +555,7 @@ impl Tool for ApprovalTool {
 
     fn execute(&self, args: serde_json::Value) -> std::result::Result<ToolResult, FaeLlmError> {
         let Some(approval_tx) = &self.approval_tx else {
+            tracing::info!("no approval channel, executing tool directly");
             return self.inner.execute(args);
         };
 
@@ -519,6 +571,8 @@ impl Tool for ApprovalTool {
             respond_to,
         );
 
+        tracing::info!("requesting tool approval for: {}", self.inner.name());
+
         if approval_tx.send(request).is_err() {
             return Err(FaeLlmError::ToolExecutionError(
                 "tool approval handler is unavailable".to_string(),
@@ -528,16 +582,21 @@ impl Tool for ApprovalTool {
         let start = Instant::now();
         loop {
             match response_rx.try_recv() {
-                Ok(ToolApprovalResponse::Approved(true)) => return self.inner.execute(args),
+                Ok(ToolApprovalResponse::Approved(true)) => {
+                    tracing::info!("tool approved, executing: {}", self.inner.name());
+                    return self.inner.execute(args);
+                }
                 Ok(ToolApprovalResponse::Approved(false))
                 | Ok(ToolApprovalResponse::Cancelled)
                 | Ok(ToolApprovalResponse::Value(_)) => {
+                    tracing::warn!("tool denied by user: {}", self.inner.name());
                     return Err(FaeLlmError::ToolExecutionError(
                         "tool call denied by user".to_string(),
                     ));
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
                     if start.elapsed() >= self.timeout {
+                        tracing::error!("tool approval timed out after {:?}", self.timeout);
                         return Err(FaeLlmError::ToolExecutionError(
                             "tool approval timed out".to_string(),
                         ));

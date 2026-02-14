@@ -148,7 +148,8 @@ impl StreamingProvider for ToolingMistralrsProvider {
         let req = RequestBuilder::from(messages)
             .set_sampler_temperature(self.cfg.temperature)
             .set_sampler_topp(self.cfg.top_p)
-            .set_sampler_max_len(request.max_tokens as usize);
+            .set_sampler_max_len(request.max_tokens as usize)
+            .enable_thinking(false);
 
         let (tx, rx) = tokio::sync::mpsc::channel::<SaorsaResult<StreamEvent>>(64);
         let model_name = request.model.clone();
@@ -186,8 +187,17 @@ impl StreamingProvider for ToolingMistralrsProvider {
 
             while let Some(resp) = stream.next().await {
                 let chunk = match resp {
-                    Response::Chunk(c) => c,
-                    Response::Done(_) => break,
+                    Response::Chunk(c) => Some(c),
+                    Response::Done(done) => {
+                        // Some models only surface final text in the terminal Done response.
+                        if let Some(choice) = done.choices.first()
+                            && let Some(content) = choice.message.content.as_deref()
+                            && !content.is_empty()
+                        {
+                            buffer.push_str(content);
+                        }
+                        None
+                    }
                     Response::ModelError(msg, _) => {
                         let _ = tx
                             .send(Err(SaorsaAiError::Streaming(format!("model error: {msg}"))))
@@ -212,6 +222,7 @@ impl StreamingProvider for ToolingMistralrsProvider {
                     }
                     _ => continue,
                 };
+                let Some(chunk) = chunk else { break };
 
                 let Some(choice) = chunk.choices.first() else {
                     continue;

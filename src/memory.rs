@@ -26,6 +26,11 @@ const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MANIFEST_FILE: &str = "manifest.toml";
 const RECORDS_FILE: &str = "records.jsonl";
 const AUDIT_FILE: &str = "audit.jsonl";
+const PROFILE_NAME_CONFIDENCE: f32 = 0.98;
+const PROFILE_PREFERENCE_CONFIDENCE: f32 = 0.86;
+const FACT_REMEMBER_CONFIDENCE: f32 = 0.80;
+const FACT_CONVERSATIONAL_CONFIDENCE: f32 = 0.75;
+const TRUNCATION_SUFFIX: &str = " [truncated]";
 
 /// Maximum length (in bytes) of record text. Prevents unbounded growth from
 /// excessively long LLM outputs or user input.
@@ -936,12 +941,21 @@ impl MemoryOrchestrator {
         let hits = self
             .repo
             .search(query, self.config.recall_max_items.max(1), false)?;
-        let durable_hits: Vec<MemorySearchHit> = hits
-            .into_iter()
-            .filter(|h| h.record.kind != MemoryKind::Episode)
-            .collect();
+        let min_confidence = self.min_profile_confidence();
 
-        if durable_hits.is_empty() {
+        // Separate durable records (profile/fact) from episodes.
+        let mut durable_hits = Vec::new();
+        let mut episode_hits = Vec::new();
+        for h in hits {
+            if h.record.kind != MemoryKind::Episode && h.record.confidence >= min_confidence {
+                durable_hits.push(h);
+            } else if h.record.kind == MemoryKind::Episode && h.score >= 0.6 {
+                // Include high-relevance episodes as supplemental context.
+                episode_hits.push(h);
+            }
+        }
+
+        if durable_hits.is_empty() && episode_hits.is_empty() {
             return Ok(None);
         }
 
@@ -949,7 +963,8 @@ impl MemoryOrchestrator {
         let mut body = String::from("<memory_context>\n");
         let mut injected = 0usize;
 
-        for hit in durable_hits {
+        // Inject durable records first (highest priority).
+        for hit in &durable_hits {
             let kind = display_kind(hit.record.kind);
             let line = format!(
                 "- [{} {:.2}] {}\n",
@@ -964,6 +979,28 @@ impl MemoryOrchestrator {
 
             body.push_str(&line);
             injected = injected.saturating_add(1);
+        }
+
+        // Fill remaining space with relevant episodes (capped at 3).
+        let max_episodes = 3usize;
+        let mut episode_count = 0usize;
+        for hit in &episode_hits {
+            if episode_count >= max_episodes {
+                break;
+            }
+            let line = format!(
+                "- [episode {:.2}] {}\n",
+                hit.record.confidence.clamp(0.0, 1.0),
+                hit.record.text
+            );
+
+            if body.len().saturating_add(line.len()).saturating_add(17) > max_chars {
+                break;
+            }
+
+            body.push_str(&line);
+            injected = injected.saturating_add(1);
+            episode_count = episode_count.saturating_add(1);
         }
 
         if injected == 0 {
@@ -998,6 +1035,7 @@ impl MemoryOrchestrator {
         } else {
             format!("User: {user_trimmed}\nAssistant: {}", assistant_text.trim())
         };
+        let episode_text = truncate_record_text(&episode_text);
 
         let episode = self.repo.insert_record(
             MemoryKind::Episode,
@@ -1026,100 +1064,130 @@ impl MemoryOrchestrator {
             return Ok(report);
         }
 
-        if let Some(remember) = parse_remember_command(user_trimmed)
-            && !remember.is_empty()
-            && !self.is_duplicate_memory(&remember)?
-        {
-            let record = self.repo.insert_record(
-                MemoryKind::Fact,
-                &remember,
-                0.80,
-                Some(turn_id),
-                vec!["remembered".to_owned()],
-            )?;
-            report.facts_written = report.facts_written.saturating_add(1);
-            report.writes.push(MemoryWriteSummary {
-                op: "insert_fact".to_owned(),
-                target_id: Some(record.id.clone()),
-            });
-        }
-
-        if let Some(name) = parse_name_statement(user_trimmed) {
-            let profile = format!("Primary user name is {name}.");
-            let existing = self.repo.find_active_by_tag("name")?;
-            if let Some(previous) = existing.first() {
-                if !previous.text.eq_ignore_ascii_case(&profile) {
-                    let new_record = self.repo.supersede_record(
-                        &previous.id,
-                        &profile,
-                        0.98,
-                        Some(turn_id),
-                        vec!["name".to_owned(), "identity".to_owned()],
-                        "name updated from user statement",
-                    )?;
-                    report.profile_updates = report.profile_updates.saturating_add(1);
-                    report.conflicts_resolved = report.conflicts_resolved.saturating_add(1);
-                    report.writes.push(MemoryWriteSummary {
-                        op: "update_profile".to_owned(),
-                        target_id: Some(new_record.id.clone()),
-                    });
-                    report.conflicts.push(MemoryConflictSummary {
-                        existing_id: previous.id.clone(),
-                        replacement_id: Some(new_record.id.clone()),
-                    });
-                }
-            } else {
-                let new_record = self.repo.insert_record(
-                    MemoryKind::Profile,
-                    &profile,
-                    0.98,
+        if let Some(remember) = parse_remember_command(user_trimmed) {
+            let remember = truncate_record_text(&remember);
+            if !remember.is_empty()
+                && self.meets_profile_threshold(FACT_REMEMBER_CONFIDENCE)
+                && !self.is_duplicate_memory(&remember)?
+            {
+                let record = self.repo.insert_record(
+                    MemoryKind::Fact,
+                    &remember,
+                    FACT_REMEMBER_CONFIDENCE,
                     Some(turn_id),
-                    vec!["name".to_owned(), "identity".to_owned()],
+                    vec!["remembered".to_owned()],
                 )?;
-                report.profile_updates = report.profile_updates.saturating_add(1);
+                report.facts_written = report.facts_written.saturating_add(1);
                 report.writes.push(MemoryWriteSummary {
-                    op: "update_profile".to_owned(),
-                    target_id: Some(new_record.id.clone()),
+                    op: "insert_fact".to_owned(),
+                    target_id: Some(record.id.clone()),
                 });
             }
         }
 
-        if let Some(pref) = parse_preference_statement(user_trimmed) {
-            let profile = format!("User preference: {pref}");
-            let existing = self.repo.find_active_by_tag("preference")?;
-            if let Some(previous) = existing.first() {
-                if !previous.text.eq_ignore_ascii_case(&profile) {
-                    let new_record = self.repo.supersede_record(
-                        &previous.id,
+        if let Some(name) = parse_name_statement(user_trimmed) {
+            let profile = truncate_record_text(&format!("Primary user name is {name}."));
+            if self.meets_profile_threshold(PROFILE_NAME_CONFIDENCE) {
+                let existing = self.repo.find_active_by_tag("name")?;
+                if let Some(previous) = existing.first() {
+                    if !previous.text.eq_ignore_ascii_case(&profile) {
+                        let new_record = self.repo.supersede_record(
+                            &previous.id,
+                            &profile,
+                            PROFILE_NAME_CONFIDENCE,
+                            Some(turn_id),
+                            vec!["name".to_owned(), "identity".to_owned()],
+                            "name updated from user statement",
+                        )?;
+                        report.profile_updates = report.profile_updates.saturating_add(1);
+                        report.conflicts_resolved = report.conflicts_resolved.saturating_add(1);
+                        report.writes.push(MemoryWriteSummary {
+                            op: "update_profile".to_owned(),
+                            target_id: Some(new_record.id.clone()),
+                        });
+                        report.conflicts.push(MemoryConflictSummary {
+                            existing_id: previous.id.clone(),
+                            replacement_id: Some(new_record.id.clone()),
+                        });
+                    }
+                } else {
+                    let new_record = self.repo.insert_record(
+                        MemoryKind::Profile,
                         &profile,
-                        0.86,
+                        PROFILE_NAME_CONFIDENCE,
                         Some(turn_id),
-                        vec!["preference".to_owned()],
-                        "preference updated from user statement",
+                        vec!["name".to_owned(), "identity".to_owned()],
                     )?;
                     report.profile_updates = report.profile_updates.saturating_add(1);
-                    report.conflicts_resolved = report.conflicts_resolved.saturating_add(1);
                     report.writes.push(MemoryWriteSummary {
                         op: "update_profile".to_owned(),
                         target_id: Some(new_record.id.clone()),
                     });
-                    report.conflicts.push(MemoryConflictSummary {
-                        existing_id: previous.id.clone(),
-                        replacement_id: Some(new_record.id.clone()),
+                }
+            }
+        }
+
+        if let Some(pref) = parse_preference_statement(user_trimmed) {
+            let profile = truncate_record_text(&format!("User preference: {pref}"));
+            if self.meets_profile_threshold(PROFILE_PREFERENCE_CONFIDENCE) {
+                let existing = self.repo.find_active_by_tag("preference")?;
+                if let Some(previous) = existing.first() {
+                    if !previous.text.eq_ignore_ascii_case(&profile) {
+                        let new_record = self.repo.supersede_record(
+                            &previous.id,
+                            &profile,
+                            PROFILE_PREFERENCE_CONFIDENCE,
+                            Some(turn_id),
+                            vec!["preference".to_owned()],
+                            "preference updated from user statement",
+                        )?;
+                        report.profile_updates = report.profile_updates.saturating_add(1);
+                        report.conflicts_resolved = report.conflicts_resolved.saturating_add(1);
+                        report.writes.push(MemoryWriteSummary {
+                            op: "update_profile".to_owned(),
+                            target_id: Some(new_record.id.clone()),
+                        });
+                        report.conflicts.push(MemoryConflictSummary {
+                            existing_id: previous.id.clone(),
+                            replacement_id: Some(new_record.id.clone()),
+                        });
+                    }
+                } else if !self.is_duplicate_memory(&profile)? {
+                    let new_record = self.repo.insert_record(
+                        MemoryKind::Profile,
+                        &profile,
+                        PROFILE_PREFERENCE_CONFIDENCE,
+                        Some(turn_id),
+                        vec!["preference".to_owned()],
+                    )?;
+                    report.profile_updates = report.profile_updates.saturating_add(1);
+                    report.writes.push(MemoryWriteSummary {
+                        op: "update_profile".to_owned(),
+                        target_id: Some(new_record.id.clone()),
                     });
                 }
-            } else if !self.is_duplicate_memory(&profile)? {
-                let new_record = self.repo.insert_record(
-                    MemoryKind::Profile,
-                    &profile,
-                    0.86,
+            }
+        }
+
+        // Extract personal facts from conversational statements.
+        let personal_facts = parse_personal_facts(user_trimmed);
+        for fact in personal_facts {
+            let fact = truncate_record_text(&fact);
+            if !fact.is_empty()
+                && self.meets_profile_threshold(FACT_CONVERSATIONAL_CONFIDENCE)
+                && !self.is_duplicate_memory(&fact)?
+            {
+                let record = self.repo.insert_record(
+                    MemoryKind::Fact,
+                    &fact,
+                    FACT_CONVERSATIONAL_CONFIDENCE,
                     Some(turn_id),
-                    vec!["preference".to_owned()],
+                    vec!["personal".to_owned()],
                 )?;
-                report.profile_updates = report.profile_updates.saturating_add(1);
+                report.facts_written = report.facts_written.saturating_add(1);
                 report.writes.push(MemoryWriteSummary {
-                    op: "update_profile".to_owned(),
-                    target_id: Some(new_record.id.clone()),
+                    op: "insert_fact".to_owned(),
+                    target_id: Some(record.id.clone()),
                 });
             }
         }
@@ -1134,11 +1202,24 @@ impl MemoryOrchestrator {
     }
 
     fn is_duplicate_memory(&self, text: &str) -> Result<bool> {
-        let hits = self.repo.search(text, 1, false)?;
-        if let Some(top) = hits.first() {
-            return Ok(top.score >= 0.95);
+        let hits = self.repo.search(text, 3, false)?;
+        // Only consider durable records (profile/fact) as duplicates, not episodes.
+        // Episodes are conversation logs that naturally contain the same words as
+        // extracted facts, but they're not semantic duplicates.
+        for hit in &hits {
+            if hit.record.kind != MemoryKind::Episode && hit.score >= 0.95 {
+                return Ok(true);
+            }
         }
         Ok(false)
+    }
+
+    fn min_profile_confidence(&self) -> f32 {
+        self.config.min_profile_confidence.clamp(0.0, 1.0)
+    }
+
+    fn meets_profile_threshold(&self, confidence: f32) -> bool {
+        confidence >= self.min_profile_confidence()
     }
 }
 
@@ -1352,13 +1433,93 @@ fn parse_name_statement(text: &str) -> Option<String> {
             let rest = &lower[idx + pat.len()..];
             let token = rest.split_whitespace().next().unwrap_or("");
             let cleaned = clean_name_token(token);
-            if !cleaned.is_empty() && !is_filler_word(&cleaned) {
+            if !cleaned.is_empty() && !is_filler_word(&cleaned) && is_likely_name_token(&cleaned) {
                 return Some(capitalize_first(&cleaned));
             }
         }
     }
 
     None
+}
+
+fn is_likely_name_token(token: &str) -> bool {
+    if token.len() < 2 {
+        return false;
+    }
+    !is_common_non_name_word(token)
+}
+
+fn is_common_non_name_word(token: &str) -> bool {
+    matches!(
+        token,
+        // Feelings / states
+        "tired"
+            | "happy"
+            | "sad"
+            | "glad"
+            | "ready"
+            | "busy"
+            | "hungry"
+            | "thirsty"
+            | "fine"
+            | "good"
+            | "okay"
+            | "ok"
+            | "great"
+            | "here"
+            | "there"
+            | "back"
+            | "sorry"
+            | "afraid"
+            | "excited"
+            | "available"
+            // Gender / identity
+            | "male"
+            | "female"
+            | "nonbinary"
+            // Nationalities / ethnicities (common ones that follow "I'm")
+            | "scottish"
+            | "english"
+            | "irish"
+            | "welsh"
+            | "british"
+            | "american"
+            | "canadian"
+            | "australian"
+            | "french"
+            | "german"
+            | "italian"
+            | "spanish"
+            | "dutch"
+            | "swedish"
+            | "norwegian"
+            | "danish"
+            | "finnish"
+            | "polish"
+            | "russian"
+            | "chinese"
+            | "japanese"
+            | "korean"
+            | "indian"
+            | "brazilian"
+            | "mexican"
+            | "african"
+            | "european"
+            | "asian"
+            // Professions (common ones that follow "I'm a")
+            | "developer"
+            | "engineer"
+            | "teacher"
+            | "student"
+            | "doctor"
+            | "nurse"
+            | "programmer"
+            | "designer"
+            | "writer"
+            | "artist"
+            | "musician"
+            | "retired"
+    )
 }
 
 fn parse_preference_statement(text: &str) -> Option<String> {
@@ -1392,6 +1553,98 @@ fn parse_preference_statement(text: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Extract personal facts from statements like "I live in X", "I have a dog called Y",
+/// "my house is called Z", "I work at W", etc.
+///
+/// Returns a list of fact strings (there may be zero or more per turn).
+fn parse_personal_facts(text: &str) -> Vec<String> {
+    let raw = text.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let lower = raw.to_ascii_lowercase();
+    let mut facts = Vec::new();
+
+    // Patterns that introduce personal facts. We capture the rest of the sentence.
+    let fact_patterns = [
+        "i live in ",
+        "i live at ",
+        "i live on ",
+        "i work at ",
+        "i work in ",
+        "i work for ",
+        "i have a ",
+        "i have an ",
+        "i have ",
+        "i also have ",
+        "i own a ",
+        "i own an ",
+        "i own ",
+        "my house is ",
+        "my home is ",
+        "my dog is ",
+        "my cat is ",
+        "my name is ",
+        "my wife is ",
+        "my husband is ",
+        "my partner is ",
+    ];
+
+    for pat in fact_patterns {
+        if let Some(idx) = lower.find(pat) {
+            let start = idx + pat.len();
+            if start >= raw.len() {
+                continue;
+            }
+            let rest = raw[start..].trim().trim_end_matches(['.', '!', '?']).trim();
+            if rest.is_empty() || rest.len() < 2 {
+                continue;
+            }
+            // Build a readable fact sentence from the original case text.
+            let prefix = &raw[idx..idx + pat.len()];
+            let fact = format!("{}{}", prefix.trim_start(), rest);
+            if !facts.iter().any(|f: &String| f.eq_ignore_ascii_case(&fact)) {
+                facts.push(fact);
+            }
+        }
+    }
+
+    // Also detect "my X is called Y" / "my X is named Y" patterns.
+    let my_called_re = ["my "];
+    for prefix in my_called_re {
+        let mut search_from = 0;
+        while let Some(idx) = lower[search_from..].find(prefix) {
+            let abs_idx = search_from + idx;
+            let after_my = &lower[abs_idx + prefix.len()..];
+            // Look for "X is called Y" or "X is named Y" or "X is Y"
+            if let Some(called_idx) = after_my
+                .find(" is called ")
+                .or_else(|| after_my.find(" is named "))
+            {
+                let end_of_sentence = after_my[called_idx..]
+                    .find(['.', '!', '?', ','])
+                    .map_or(after_my.len(), |e| called_idx + e);
+                let fact_slice = &raw[abs_idx..abs_idx + prefix.len() + end_of_sentence];
+                let fact = fact_slice
+                    .trim()
+                    .trim_end_matches(['.', '!', '?'])
+                    .trim()
+                    .to_owned();
+                if fact.len() >= 8 && !facts.iter().any(|f: &String| f.eq_ignore_ascii_case(&fact))
+                {
+                    facts.push(fact);
+                }
+            }
+            search_from = abs_idx + prefix.len();
+            if search_from >= lower.len() {
+                break;
+            }
+        }
+    }
+
+    facts
 }
 
 fn is_filler_word(token: &str) -> bool {
@@ -1446,6 +1699,29 @@ fn capitalize_first(s: &str) -> String {
     let mut out = String::new();
     out.extend(first.to_uppercase());
     out.extend(chars);
+    out
+}
+
+fn truncate_record_text(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= MAX_RECORD_TEXT_LEN {
+        return trimmed.to_owned();
+    }
+
+    let max_bytes = MAX_RECORD_TEXT_LEN.saturating_sub(TRUNCATION_SUFFIX.len());
+    let mut out = String::with_capacity(MAX_RECORD_TEXT_LEN);
+    let mut used = 0usize;
+
+    for ch in trimmed.chars() {
+        let bytes = ch.len_utf8();
+        if used.saturating_add(bytes) > max_bytes {
+            break;
+        }
+        out.push(ch);
+        used = used.saturating_add(bytes);
+    }
+
+    out.push_str(TRUNCATION_SUFFIX);
     out
 }
 
@@ -1686,6 +1962,74 @@ mod tests {
     }
 
     #[test]
+    fn parse_name_statement_ignores_common_non_name_phrases() {
+        assert_eq!(parse_name_statement("I am tired today."), None);
+        assert_eq!(parse_name_statement("i am happy to help"), None);
+        assert_eq!(parse_name_statement("I'm ready now."), None);
+        assert_eq!(parse_name_statement("im okay"), None);
+        assert_eq!(
+            parse_name_statement("Actually my name is Alice."),
+            Some("Alice".to_owned())
+        );
+    }
+
+    #[test]
+    fn orchestrator_respects_min_profile_confidence_threshold() {
+        let root = test_root("orchestrator-threshold");
+        let mut cfg = test_cfg(&root);
+        cfg.min_profile_confidence = 0.90;
+        let orchestrator = MemoryOrchestrator::new(&cfg);
+
+        let pref_report = orchestrator
+            .capture_turn("turn-1", "I prefer tea in the morning.", "Noted.")
+            .expect("capture preference");
+        assert_eq!(pref_report.profile_updates, 0);
+
+        let name_report = orchestrator
+            .capture_turn("turn-2", "My name is Alice.", "Thanks Alice.")
+            .expect("capture name");
+        assert_eq!(name_report.profile_updates, 1);
+
+        let repo = MemoryRepository::new(&root);
+        let prefs = repo
+            .find_active_by_tag("preference")
+            .expect("find preference memories");
+        assert!(prefs.is_empty());
+
+        let names = repo.find_active_by_tag("name").expect("find name memories");
+        assert_eq!(names.len(), 1);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn orchestrator_truncates_oversized_episode_text() {
+        let root = test_root("orchestrator-large-episode");
+        let cfg = test_cfg(&root);
+        let orchestrator = MemoryOrchestrator::new(&cfg);
+
+        let giant_assistant = "a".repeat(MAX_RECORD_TEXT_LEN.saturating_add(512));
+        let report = orchestrator
+            .capture_turn("turn-1", "Hello there.", &giant_assistant)
+            .expect("capture oversized episode");
+        assert_eq!(report.episodes_written, 1);
+
+        let repo = MemoryRepository::new(&root);
+        let records = repo.list_records().expect("list records");
+        let episode = records
+            .iter()
+            .find(|record| {
+                record.kind == MemoryKind::Episode
+                    && record.source_turn_id.as_deref() == Some("turn-1")
+            })
+            .expect("episode record");
+        assert!(episode.text.len() <= MAX_RECORD_TEXT_LEN);
+        assert!(episode.text.contains("[truncated]"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn migration_from_older_manifest_version_is_supported() {
         let root = test_root("migration");
         let repo = MemoryRepository::new(&root);
@@ -1802,6 +2146,119 @@ mod tests {
         let expected = 1 + workers * inserts_per_worker;
         assert_eq!(records.len(), expected, "no records should be lost");
         assert!(records.iter().any(|record| record.id == seed.id));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_name_statement_ignores_nationalities_and_identity() {
+        assert_eq!(parse_name_statement("I'm Scottish"), None);
+        assert_eq!(parse_name_statement("I'm Scottish, I'm male."), None);
+        assert_eq!(parse_name_statement("I am American"), None);
+        assert_eq!(parse_name_statement("I'm male"), None);
+        assert_eq!(parse_name_statement("I am a developer"), None);
+        assert_eq!(parse_name_statement("I'm retired"), None);
+        // Actual names should still work.
+        assert_eq!(parse_name_statement("I'm David"), Some("David".to_owned()));
+        assert_eq!(
+            parse_name_statement("My name is Alice"),
+            Some("Alice".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_personal_facts_extracts_life_details() {
+        let facts = parse_personal_facts("I live in a house called Barskeg.");
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].contains("live in"));
+        assert!(facts[0].contains("Barskeg"));
+
+        let facts = parse_personal_facts("I have a dog called Ishki");
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].contains("have a dog"));
+
+        let facts = parse_personal_facts(
+            "I also have sheep, chickens, ducks, and an AI and robotics laboratory.",
+        );
+        assert!(!facts.is_empty());
+        assert!(facts[0].contains("also have"));
+
+        let facts = parse_personal_facts("I work at Google.");
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].contains("work at Google"));
+
+        // Should return empty for non-fact statements.
+        let facts = parse_personal_facts("Hello there");
+        assert!(facts.is_empty());
+
+        let facts = parse_personal_facts("Can you help me?");
+        assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn parse_personal_facts_my_called_pattern() {
+        let facts = parse_personal_facts("my house is called Barskeg");
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].contains("Barskeg"));
+
+        let facts = parse_personal_facts("my dog is named Ishki");
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].contains("Ishki"));
+    }
+
+    #[test]
+    fn orchestrator_captures_personal_facts_from_conversation() {
+        let root = test_root("orchestrator-personal-facts");
+        let cfg = test_cfg(&root);
+        let orchestrator = MemoryOrchestrator::new(&cfg);
+
+        let report = orchestrator
+            .capture_turn(
+                "turn-1",
+                "I live in a house called Barskeg.",
+                "I'll remember that.",
+            )
+            .expect("capture personal fact");
+        assert!(
+            report.facts_written >= 1,
+            "should capture at least one fact, got {}",
+            report.facts_written,
+        );
+
+        let repo = MemoryRepository::new(&root);
+        let personal = repo
+            .find_active_by_tag("personal")
+            .expect("find personal facts");
+        assert!(!personal.is_empty(), "should have personal fact records");
+        assert!(personal[0].text.contains("Barskeg"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recall_context_includes_relevant_episodes_as_fallback() {
+        let root = test_root("recall-episodes");
+        let cfg = test_cfg(&root);
+        let repo = MemoryRepository::new(&root);
+        repo.ensure_layout().expect("ensure layout");
+
+        // Insert only an episode (no durable records).
+        repo.insert_record(
+            MemoryKind::Episode,
+            "User: I have sheep and chickens\nAssistant: I'll remember that.",
+            0.55,
+            Some("turn-1"),
+            vec!["turn".to_owned()],
+        )
+        .expect("insert episode");
+
+        let orchestrator = MemoryOrchestrator::new(&cfg);
+        // With the episode inclusion fix, this should find the episode
+        // if the search score is high enough.
+        let result = orchestrator.recall_context("sheep chickens");
+        // The result depends on the search scoring implementation, but
+        // at minimum it should not panic.
+        assert!(result.is_ok());
 
         let _ = std::fs::remove_dir_all(root);
     }

@@ -49,6 +49,7 @@ pub mod system_profile;
 pub mod tts;
 pub mod update;
 pub mod vad;
+pub mod viseme;
 pub mod voice_clone;
 pub mod voice_command;
 pub mod voiceprint;

@@ -296,6 +296,16 @@ impl AgentLoop {
             if accumulated.finish_reason == FinishReason::ToolCalls
                 && !accumulated.tool_calls.is_empty()
             {
+                tracing::info!(
+                    "model requested {} tool calls: {:?}",
+                    accumulated.tool_calls.len(),
+                    accumulated
+                        .tool_calls
+                        .iter()
+                        .map(|t| &t.function_name)
+                        .collect::<Vec<_>>()
+                );
+
                 // Check max tool calls per turn
                 if accumulated.tool_calls.len() as u32 > self.config.max_tool_calls_per_turn {
                     turns.push(TurnResult {

@@ -210,7 +210,7 @@ jobs:
             <key>CFBundleExecutable</key>
             <string>fae</string>
             <key>CFBundleIdentifier</key>
-            <string>com.saorsa.fae</string>
+            <string>com.saorsalabs.fae</string>
             <key>CFBundleName</key>
             <string>Fae</string>
             <key>CFBundlePackageType</key>
@@ -221,6 +221,20 @@ jobs:
             <string>${VERSION}</string>
             <key>LSMinimumSystemVersion</key>
             <string>13.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+            <key>NSSupportsAutomaticGraphicsSwitching</key>
+            <true/>
+            <key>NSMicrophoneUsageDescription</key>
+            <string>Fae needs microphone access to hear your voice commands.</string>
+            <key>NSDesktopFolderUsageDescription</key>
+            <string>Fae needs access to your Desktop to help manage files when you ask.</string>
+            <key>NSDocumentsFolderUsageDescription</key>
+            <string>Fae needs access to your Documents to help manage files when you ask.</string>
+            <key>NSDownloadsFolderUsageDescription</key>
+            <string>Fae needs access to your Downloads to help manage files when you ask.</string>
+            <key>NSSpeechRecognitionUsageDescription</key>
+            <string>Fae uses speech recognition to understand your voice commands.</string>
           </dict>
           </plist>
           EOF

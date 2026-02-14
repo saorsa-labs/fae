@@ -2,6 +2,6 @@
 
 pub mod download;
 mod engine;
-mod phonemize;
+pub mod phonemize;
 
 pub use engine::KokoroTts;

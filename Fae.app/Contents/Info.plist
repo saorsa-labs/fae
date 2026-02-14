@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Fae</string>
+    <key>CFBundleDisplayName</key>
+    <string>Fae</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.saorsalabs.fae</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>fae</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    
+    <!-- Microphone access for voice input -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Fae needs microphone access to hear your voice commands.</string>
+    
+    <!-- Folder access descriptions - triggers permission dialogs -->
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Fae needs access to your Desktop to help manage files when you ask.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Fae needs access to your Documents to help manage files when you ask.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Fae needs access to your Downloads to help manage files when you ask.</string>
+    
+    <!-- Speech recognition -->
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Fae uses speech recognition to understand your voice commands.</string>
+</dict>
+</plist>

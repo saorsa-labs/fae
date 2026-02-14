@@ -19,10 +19,81 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Minimum allowed local context size.
 const MIN_CONTEXT_SIZE_TOKENS: usize = 1024;
+/// Abort generation when a model emits only reasoning deltas for too long.
+///
+/// This keeps conversational latency bounded for models that ignore no-think
+/// controls and never surface visible content.
+const REASONING_ONLY_EVENT_LIMIT: usize = 96;
+const REASONING_ONLY_DURATION_LIMIT: Duration = Duration::from_secs(12);
+
+/// Incrementally strips `<think>...</think>` blocks across streaming chunks.
+#[derive(Debug, Default)]
+struct ThinkTagStripper {
+    in_think_block: bool,
+    carry: String,
+}
+
+impl ThinkTagStripper {
+    const OPEN: &'static str = "<think>";
+    const CLOSE: &'static str = "</think>";
+
+    /// Feed one fragment and return newly-visible text (outside think blocks).
+    fn push(&mut self, fragment: &str) -> String {
+        if fragment.is_empty() {
+            return String::new();
+        }
+        self.carry.push_str(fragment);
+
+        let mut visible = String::new();
+        loop {
+            if self.in_think_block {
+                if let Some(end) = self.carry.find(Self::CLOSE) {
+                    self.carry.drain(..end + Self::CLOSE.len());
+                    self.in_think_block = false;
+                    continue;
+                }
+                // Keep only the minimal suffix needed to detect `</think>` across chunks.
+                let keep = Self::CLOSE.len().saturating_sub(1);
+                if self.carry.len() > keep {
+                    let drain = self.carry.len() - keep;
+                    self.carry.drain(..drain);
+                }
+                break;
+            }
+
+            if let Some(start) = self.carry.find(Self::OPEN) {
+                visible.push_str(&self.carry[..start]);
+                self.carry.drain(..start + Self::OPEN.len());
+                self.in_think_block = true;
+                continue;
+            }
+
+            // Keep only a small suffix in case the next chunk starts with the rest of a tag.
+            let keep = Self::OPEN.len().max(Self::CLOSE.len()).saturating_sub(1);
+            if self.carry.len() > keep {
+                let emit = self.carry.len() - keep;
+                visible.push_str(&self.carry[..emit]);
+                self.carry.drain(..emit);
+            }
+            break;
+        }
+
+        visible
+    }
+
+    /// Flush any remaining visible tail.
+    fn finish(&mut self) -> String {
+        if self.in_think_block {
+            self.carry.clear();
+            return String::new();
+        }
+        std::mem::take(&mut self.carry)
+    }
+}
 
 /// Language model for generating conversational responses.
 ///
@@ -131,7 +202,8 @@ impl LocalLlm {
         let request = RequestBuilder::from(messages)
             .set_sampler_temperature(self.config.temperature)
             .set_sampler_topp(self.config.top_p)
-            .set_sampler_max_len(self.config.max_tokens);
+            .set_sampler_max_len(self.config.max_tokens)
+            .enable_thinking(false);
 
         // Start streaming
         info!("sending stream request to mistralrs engine");
@@ -145,8 +217,10 @@ impl LocalLlm {
         let mut generated_text = String::new();
         let mut sentence_buffer = String::new();
         let mut token_count: usize = 0;
+        let mut reasoning_only_events: usize = 0;
+        let mut has_visible_output = false;
         let mut was_interrupted = false;
-        let mut in_think_block = false;
+        let mut think_stripper = ThinkTagStripper::default();
         let mut first_token_received = false;
 
         /// Maximum time to wait for the first token before giving up.
@@ -186,13 +260,16 @@ impl LocalLlm {
 
             match response {
                 Response::Chunk(chunk) => {
-                    if let Some(choice) = chunk.choices.first()
-                        && let Some(ref content) = choice.delta.content
-                    {
-                        if content.is_empty() {
+                    if let Some(choice) = chunk.choices.first() {
+                        let content = choice.delta.content.as_deref().unwrap_or_default();
+                        let reasoning = choice
+                            .delta
+                            .reasoning_content
+                            .as_deref()
+                            .unwrap_or_default();
+                        if content.is_empty() && reasoning.is_empty() {
                             continue;
                         }
-
                         if !first_token_received {
                             first_token_received = true;
                             let ttft = gen_start.elapsed();
@@ -200,43 +277,62 @@ impl LocalLlm {
                         }
 
                         token_count += 1;
-
-                        // Filter <think>...</think> blocks (Qwen3 thinking mode).
-                        // These reasoning tokens should not reach TTS.
-                        if content.contains("<think>") {
-                            in_think_block = true;
-                            debug!("entered <think> block at token {token_count}");
-                            continue;
-                        }
-                        if content.contains("</think>") {
-                            in_think_block = false;
-                            debug!("exited </think> block at token {token_count}");
-                            continue;
-                        }
-                        if in_think_block {
-                            continue;
-                        }
-
-                        generated_text.push_str(content);
-                        sentence_buffer.push_str(content);
-
-                        // Check for clause/sentence boundaries for streaming TTS
-                        if let Some(pos) = find_clause_boundary(&sentence_buffer) {
-                            let sentence = sentence_buffer[..=pos].trim().to_owned();
-                            if !sentence.is_empty() {
-                                let sentence_chunk = SentenceChunk {
-                                    text: sentence,
-                                    is_final: false,
-                                };
-                                tx.send(sentence_chunk).await.map_err(|e| {
-                                    SpeechError::Channel(format!("LLM output channel closed: {e}"))
-                                })?;
+                        if content.is_empty() && !reasoning.is_empty() {
+                            reasoning_only_events += 1;
+                            if should_abort_reasoning_only(
+                                reasoning_only_events,
+                                has_visible_output,
+                                gen_start.elapsed(),
+                            ) {
+                                warn!(
+                                    "aborting generation after {reasoning_only_events} \
+                                     reasoning-only events in {:.1}s (no visible output)",
+                                    gen_start.elapsed().as_secs_f64()
+                                );
+                                return Err(SpeechError::Llm(
+                                    "model produced reasoning-only output for too long".to_owned(),
+                                ));
                             }
-                            sentence_buffer = sentence_buffer[pos + 1..].to_owned();
+                            continue;
                         }
+
+                        let visible = think_stripper.push(content);
+                        if !visible.is_empty() {
+                            has_visible_output = true;
+                        }
+                        append_visible_text(
+                            &visible,
+                            &mut generated_text,
+                            &mut sentence_buffer,
+                            &tx,
+                        )
+                        .await?;
                     }
                 }
-                Response::Done(_) => break,
+                Response::Done(done) => {
+                    if let Some(choice) = done.choices.first() {
+                        let content = choice.message.content.as_deref().unwrap_or_default();
+                        let reasoning = choice
+                            .message
+                            .reasoning_content
+                            .as_deref()
+                            .unwrap_or_default();
+                        if content.is_empty() && !reasoning.is_empty() {
+                            reasoning_only_events += 1;
+                        }
+                        if !content.is_empty() {
+                            let visible = think_stripper.push(content);
+                            append_visible_text(
+                                &visible,
+                                &mut generated_text,
+                                &mut sentence_buffer,
+                                &tx,
+                            )
+                            .await?;
+                        }
+                    }
+                    break;
+                }
                 Response::ModelError(msg, _) => {
                     return Err(SpeechError::Llm(format!("model error: {msg}")));
                 }
@@ -248,6 +344,12 @@ impl LocalLlm {
                 }
                 _ => {}
             }
+        }
+
+        // Flush any non-think tail left in the incremental parser.
+        let tail = think_stripper.finish();
+        if !tail.is_empty() {
+            append_visible_text(&tail, &mut generated_text, &mut sentence_buffer, &tx).await?;
         }
 
         // Send any remaining text as the final sentence
@@ -275,6 +377,11 @@ impl LocalLlm {
         let final_text = generated_text.trim().to_owned();
         if !final_text.is_empty() {
             self.history.push((TextMessageRole::Assistant, final_text));
+        } else if reasoning_only_events > 0 {
+            warn!(
+                "local model produced {reasoning_only_events} reasoning-only events \
+                 without visible content"
+            );
         }
         self.trim_history();
 
@@ -320,6 +427,47 @@ impl LocalLlm {
             }
         }
     }
+}
+
+async fn append_visible_text(
+    text: &str,
+    generated_text: &mut String,
+    sentence_buffer: &mut String,
+    tx: &mpsc::Sender<SentenceChunk>,
+) -> Result<()> {
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    generated_text.push_str(text);
+    sentence_buffer.push_str(text);
+
+    // Check for clause/sentence boundaries for streaming TTS.
+    if let Some(pos) = find_clause_boundary(sentence_buffer) {
+        let sentence = sentence_buffer[..=pos].trim().to_owned();
+        if !sentence.is_empty() {
+            let sentence_chunk = SentenceChunk {
+                text: sentence,
+                is_final: false,
+            };
+            tx.send(sentence_chunk)
+                .await
+                .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
+        }
+        *sentence_buffer = sentence_buffer[pos + 1..].to_owned();
+    }
+
+    Ok(())
+}
+
+fn should_abort_reasoning_only(
+    reasoning_only_events: usize,
+    has_visible_output: bool,
+    elapsed: Duration,
+) -> bool {
+    !has_visible_output
+        && reasoning_only_events >= REASONING_ONLY_EVENT_LIMIT
+        && elapsed >= REASONING_ONLY_DURATION_LIMIT
 }
 
 pub(crate) fn effective_context_size_tokens(config: &LlmConfig) -> usize {
@@ -414,5 +562,60 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(effective_context_size_tokens(&cfg), MIN_CONTEXT_SIZE_TOKENS);
+    }
+
+    #[test]
+    fn think_stripper_passes_plain_text() {
+        let mut s = ThinkTagStripper::default();
+        let out = s.push("hello world");
+        assert_eq!(out, "hell");
+        let tail = s.finish();
+        assert_eq!(tail, "o world");
+    }
+
+    #[test]
+    fn think_stripper_removes_inline_block() {
+        let mut s = ThinkTagStripper::default();
+        let out = s.push("hi <think>hidden</think> there");
+        let tail = s.finish();
+        assert_eq!(format!("{out}{tail}"), "hi  there");
+    }
+
+    #[test]
+    fn think_stripper_handles_split_tags() {
+        let mut s = ThinkTagStripper::default();
+        let a = s.push("pre<thi");
+        let b = s.push("nk>hide");
+        let c = s.push("n</thin");
+        let d = s.push("k>post");
+        let tail = s.finish();
+        assert_eq!(format!("{a}{b}{c}{d}{tail}"), "prepost");
+    }
+
+    #[test]
+    fn reasoning_only_cutoff_triggers_without_visible_output() {
+        assert!(should_abort_reasoning_only(
+            REASONING_ONLY_EVENT_LIMIT,
+            false,
+            REASONING_ONLY_DURATION_LIMIT
+        ));
+    }
+
+    #[test]
+    fn reasoning_only_cutoff_does_not_trigger_with_visible_output() {
+        assert!(!should_abort_reasoning_only(
+            REASONING_ONLY_EVENT_LIMIT * 2,
+            true,
+            REASONING_ONLY_DURATION_LIMIT * 2
+        ));
+    }
+
+    #[test]
+    fn reasoning_only_cutoff_does_not_trigger_before_time_limit() {
+        assert!(!should_abort_reasoning_only(
+            REASONING_ONLY_EVENT_LIMIT * 2,
+            false,
+            REASONING_ONLY_DURATION_LIMIT.saturating_sub(Duration::from_secs(1))
+        ));
     }
 }

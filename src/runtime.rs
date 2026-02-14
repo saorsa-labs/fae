@@ -50,6 +50,14 @@ pub enum RuntimeEvent {
     ///
     /// Intended for driving simple avatar animation (mouth open/close).
     AssistantAudioLevel { rms: f32 },
+    /// Viseme events for lip-sync animation.
+    ///
+    /// Contains the mouth shape to display and timing information.
+    /// This provides accurate lip-sync compared to RMS-based animation.
+    AssistantViseme {
+        /// The viseme/mouth shape to display.
+        mouth_png: String,
+    },
     /// Memory recall summary for the current turn.
     MemoryRecall { query: String, hits: usize },
     /// Memory write/edit operation summary.
@@ -90,6 +98,11 @@ pub enum RuntimeEvent {
         /// Human-readable description of the detected command.
         command: String,
     },
+    /// Permissions were changed (granted or revoked).
+    PermissionsChanged {
+        /// Whether permissions are now granted.
+        granted: bool,
+    },
     /// A model switch was requested via voice command.
     ///
     /// Emitted after a `SwitchModel` voice command is parsed and before
@@ -110,4 +123,15 @@ pub enum RuntimeEvent {
     ///
     /// This is emitted when the user asks to show/hide conversation canvas.
     ConversationCanvasVisibility { visible: bool },
+    /// The primary LLM provider failed and the request was retried against the
+    /// local fallback model.
+    ///
+    /// Emitted by the fallback provider adapter so the GUI can show a
+    /// non-intrusive notification (e.g. "Using local model — network issue").
+    ProviderFallback {
+        /// Name of the primary provider that failed.
+        primary: String,
+        /// Error message from the primary provider.
+        error: String,
+    },
 }

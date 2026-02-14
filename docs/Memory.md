@@ -1,81 +1,128 @@
 # Fae Memory
 
-This document explains how memory works in Fae in plain language.
+This is the human-readable guide to how Fae memory works today.
 
 ## What Fae remembers
 
-Fae keeps several kinds of memory:
+Fae stores three memory kinds:
 
-- Profile memory: long-term preferences and stable personal details.
-- Episodic memory: important moments from conversations.
-- Knowledge memory: facts learned over time from repeated evidence.
+- `profile`: durable personal context (name, stable preferences, identity details)
+- `fact`: durable remembered facts
+- `episode`: turn-level conversation snapshots for traceability
+
+Only durable memories (`profile`, `fact`) are injected into prompts during recall.
 
 ## Where memory lives
 
-Fae stores memory under `~/.fae/memory/`.
+Memory root is `~/.fae/`.
 
-Important files:
+Runtime memory files:
 
-- `manifest.toml`: memory schema and version info.
-- `records.jsonl`: core memory entries.
-- `audit.jsonl`: history of memory edits.
-- `primary_user.md` and `people.md`: identity and known person data.
+- `~/.fae/memory/manifest.toml` — schema metadata/version
+- `~/.fae/memory/records.jsonl` — canonical records
+- `~/.fae/memory/audit.jsonl` — operation log
 
-## How memory is created
+Compatibility files:
 
-Memory is automatic. During conversation, Fae:
+- `~/.fae/memory/primary_user.md`
+- `~/.fae/memory/people.md`
 
-1. Recalls relevant memories before responding.
-2. Captures important details after each turn.
-3. Updates memory confidence and links to source turns.
+Voice samples:
 
-No manual buttons are required for normal operation.
+- `~/.fae/voices/`
+
+## Automatic lifecycle (no manual buttons)
+
+Per completed turn:
+
+1. **Recall** (before generation)
+- query memory using user text
+- rank by lexical overlap + confidence + freshness + kind bonus
+- inject bounded `<memory_context>` into prompt
+
+2. **Capture** (after generation)
+- write an `episode` record for the turn
+- parse durable candidates from user statements
+- apply conflict resolution (supersede lineage)
+- apply retention policy for old episodic entries
+
+3. **Telemetry**
+- emit runtime events for recall, writes, conflicts, and migrations
+- memory telemetry is intentionally suppressed from the main subtitle/event surface and routed to non-primary UI surfaces
 
 ## How memory is edited
 
-Fae supports structured memory edits:
+Memory supports explicit operations:
 
-- Add new memory.
-- Correct existing memory.
-- Replace old facts with newer confirmed facts.
-- Mark memories invalid.
-- Forget memories (soft or hard).
+- `insert`
+- `patch`
+- `supersede`
+- `invalidate`
+- `forget_soft`
+- `forget_hard`
 
-When memories conflict, Fae keeps history and marks older entries as superseded instead of silently deleting them.
+Conversation-driven edit patterns currently include:
 
-## How upgrades are handled
+- remember commands: `remember ...`
+- forget commands: `forget ...` (soft-forgets matching active memories)
+- name statements: `my name is ...`, `call me ...`, etc.
+- preference statements: `i prefer ...`, `i like ...`, etc.
 
-When Fae is upgraded:
+Conflict policy:
 
-1. Memory schema version is checked on startup.
-2. If needed, migrations run automatically.
-3. A backup is created before migration.
-4. If migration fails, rollback restores the previous state.
+- older contradictory records are marked `superseded`
+- new active record links to predecessor via `supersedes`
+- history remains auditable
 
-## Privacy and safety
+## Upgrade and migration behavior
 
-- Sensitive entries can be tagged for restricted recall.
-- Hard delete is supported for permanent removal.
-- An audit trail is kept for normal memory operations.
+On startup:
 
-## Reliability
+1. read manifest schema version
+2. if auto-migrate is enabled and version is behind target:
+- create snapshot backup
+- run sequential migration steps
+- validate and update manifest
+3. on failure:
+- rollback from snapshot backup
+- preserve previous consistent state
 
-Fae uses scheduled background jobs for:
+Migrations and outcomes are recorded in audit/runtime events.
 
-- reflection and consolidation
-- index maintenance
-- retention cleanup
-- migration retries
+## Safety and quality controls
 
-## Development and quality
+- max record text length is enforced
+- oversized captured content is truncated safely instead of failing the whole capture
+- confidence threshold (`memory.min_profile_confidence`) gates durable promotion and durable recall
+- basic false-positive guards are applied to name extraction
+- strict tests cover capture, recall, supersession, migration, rollback, and concurrency
 
-Memory features are built with test-driven development:
+## Operational knobs
 
-1. Write failing tests first.
-2. Implement behavior.
-3. Run formatting, clippy, and tests.
-4. Iterate until stable and regression-safe.
+In `~/.config/fae/config.toml`:
 
-For full technical detail, see:
+```toml
+[memory]
+enabled = true
+auto_capture = true
+auto_recall = true
+recall_max_items = 6
+recall_max_chars = 1200
+min_profile_confidence = 0.70
+retention_days = 365
+schema_auto_migrate = true
+```
+
+## Background maintenance
+
+Scheduler tasks keep memory healthy:
+
+- `memory_migrate`
+- `memory_reflect`
+- `memory_reindex`
+- `memory_gc`
+
+## Related docs
+
 - `docs/memory-architecture-plan.md`
-
+- `SOUL.md`

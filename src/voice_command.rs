@@ -28,6 +28,10 @@ pub enum VoiceCommand {
     CurrentModel,
     /// Request help with model switching commands.
     Help,
+    /// Grant all tool permissions for this session.
+    GrantPermissions,
+    /// Revoke all granted tool permissions.
+    RevokePermissions,
 }
 
 /// Target specification for a model switch command.
@@ -118,6 +122,40 @@ pub fn parse_voice_command(text: &str) -> Option<VoiceCommand> {
     if let Some(target_str) = extract_switch_target(stripped) {
         let target = parse_model_target(target_str);
         return Some(VoiceCommand::SwitchModel { target });
+    }
+
+    // --- Grant permissions ---
+    if matches_any(
+        stripped,
+        &[
+            "grant permissions",
+            "give permissions",
+            "allow tools",
+            "enable tools",
+            "you have permission",
+            "permission granted",
+            "go ahead",
+            "proceed",
+        ],
+    ) {
+        return Some(VoiceCommand::GrantPermissions);
+    }
+
+    // --- Revoke permissions ---
+    if matches_any(
+        stripped,
+        &[
+            "revoke permissions",
+            "revoke all",
+            "take back permissions",
+            "deny permissions",
+            "stop permissions",
+            "revoke access",
+            "that's enough",
+            "that will do",
+        ],
+    ) {
+        return Some(VoiceCommand::RevokePermissions);
     }
 
     None

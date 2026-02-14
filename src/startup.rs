@@ -43,7 +43,8 @@ const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"
 /// Checks cache status and queries file sizes for each file.
 /// The plan is used by the GUI to show total download size before starting.
 pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
-    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local);
+    let needs_local_model =
+        matches!(config.llm.backend, LlmBackend::Local) || config.llm.enable_local_fallback;
 
     let mut files = Vec::new();
 
@@ -58,8 +59,8 @@ pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
         });
     }
 
-    // LLM GGUF
-    if use_local_llm {
+    // LLM GGUF (needed for local backend or local fallback)
+    if needs_local_model {
         let llm_sizes =
             ModelManager::query_file_sizes(&config.llm.model_id, &[config.llm.gguf_file.as_str()]);
         for (filename, size_bytes) in llm_sizes {
@@ -137,8 +138,9 @@ pub async fn initialize_models_with_progress(
     callback: Option<&ProgressCallback>,
 ) -> Result<InitializedModels> {
     let model_manager = ModelManager::new(&config.models)?;
-    // Only the local backend relies on an in-process model.
-    let use_local_llm = matches!(config.llm.backend, LlmBackend::Local);
+    // Load local model for Local backend or when fallback is enabled.
+    let use_local_llm =
+        matches!(config.llm.backend, LlmBackend::Local) || config.llm.enable_local_fallback;
 
     if matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Api)
         && !matches!(config.llm.tool_mode, AgentToolMode::Off)
@@ -252,6 +254,12 @@ pub async fn initialize_models_with_progress(
 
     let stt = load_stt(config, callback)?;
     let llm = if use_local_llm {
+        if !matches!(config.llm.backend, LlmBackend::Local) {
+            println!(
+                "  LLM: using API backend ({} @ {}) with local fallback",
+                config.llm.api_model, config.llm.api_url
+            );
+        }
         Some(load_llm(config, callback).await?)
     } else {
         println!(

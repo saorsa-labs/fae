@@ -183,8 +183,8 @@ mod tests {
         let config = default_config();
         assert_eq!(config.tools.len(), 4);
         for name in &["read", "bash", "edit", "write"] {
-            assert!(config.tools.contains_key(*name));
-            let tool = &config.tools[*name];
+            assert!(config.tools.contains_key(name));
+            let tool = &config.tools[name];
             assert!(tool.enabled);
         }
     }

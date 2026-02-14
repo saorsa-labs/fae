@@ -170,6 +170,8 @@ pub enum AgentToolMode {
     ReadWrite,
     /// Full tools (adds shell + web search; highest risk).
     Full,
+    /// Full tools without approval (LLM uses tools freely).
+    FullNoApproval,
 }
 
 /// Behaviour when user messages arrive during an active LLM run.
@@ -269,6 +271,14 @@ pub struct LlmConfig {
     /// When set, overrides `api_model` for the cloud provider.
     #[serde(default)]
     pub cloud_model: Option<String>,
+    /// Whether to fall back to the local model when a remote provider fails.
+    ///
+    /// When enabled and the backend is `Agent` or `Api`, the local Qwen model
+    /// is pre-loaded alongside the remote provider. If the remote provider
+    /// returns a retryable error (network outage, timeout, rate limit), the
+    /// request is transparently retried against the local model.
+    #[serde(default = "default_enable_local_fallback")]
+    pub enable_local_fallback: bool,
     /// Timeout in seconds for the interactive model selection prompt.
     ///
     /// When multiple top-tier models are available and the user is prompted to
@@ -307,6 +317,7 @@ impl Default for LlmConfig {
             system_prompt: String::new(),
             cloud_provider: None,
             cloud_model: None,
+            enable_local_fallback: default_enable_local_fallback(),
             model_selection_timeout_secs: default_model_selection_timeout_secs(),
         }
     }
@@ -330,6 +341,10 @@ pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize
         Some(_) => 65_536,
         None => 32_768,
     }
+}
+
+fn default_enable_local_fallback() -> bool {
+    true
 }
 
 fn default_model_selection_timeout_secs() -> u32 {
@@ -540,7 +555,7 @@ impl Default for ConversationConfig {
             wake_word: "hi fae".to_owned(),
             stop_phrase: "that will do fae".to_owned(),
             enabled: true,
-            idle_timeout_s: 30,
+            idle_timeout_s: 60,
         }
     }
 }
@@ -702,6 +717,8 @@ pub struct CanvasConfig {
     /// (e.g., `ws://localhost:9473/ws/sync`). When `None`, a local-only
     /// canvas session is used.
     pub server_url: Option<String>,
+    /// Auth token for canvas-server (if required).
+    pub auth_token: Option<String>,
 }
 
 fn default_memory_root_dir() -> PathBuf {
@@ -970,5 +987,28 @@ clear_queue_on_stop = false
             LlmMessageQueueDropPolicy::Newest
         );
         assert!(!config.llm.clear_queue_on_stop);
+    }
+
+    #[test]
+    fn llm_config_enable_local_fallback_default_is_true() {
+        let config = LlmConfig::default();
+        assert!(config.enable_local_fallback);
+    }
+
+    #[test]
+    fn llm_config_enable_local_fallback_deserializes() {
+        let toml_str = r#"
+[llm]
+enable_local_fallback = false
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.llm.enable_local_fallback);
+    }
+
+    #[test]
+    fn llm_config_enable_local_fallback_missing_uses_default() {
+        let toml_str = "[llm]";
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.llm.enable_local_fallback);
     }
 }

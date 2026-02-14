@@ -14,6 +14,7 @@
 //! - [`local_probe`] — Health-check and model discovery for local endpoints
 
 pub mod anthropic;
+pub mod fallback;
 pub mod local;
 pub mod local_probe;
 pub mod message;
@@ -21,6 +22,7 @@ pub mod openai;
 pub mod profile;
 pub mod sse;
 
+pub use fallback::FallbackProvider;
 pub use local::{LocalMistralrsAdapter, LocalMistralrsConfig};
 
 #[cfg(test)]

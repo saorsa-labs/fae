@@ -27,8 +27,8 @@ fn main() {
             Config::new().with_window(
                 WindowBuilder::new()
                     .with_title("Fae")
-                    .with_inner_size(LogicalSize::new(480.0, 700.0))
-                    .with_min_inner_size(LogicalSize::new(400.0, 560.0))
+                    .with_inner_size(LogicalSize::new(480.0, 800.0))
+                    .with_min_inner_size(LogicalSize::new(400.0, 600.0))
                     .with_resizable(true),
             ),
         )
@@ -254,17 +254,25 @@ mod gui {
             ProgressEvent::LoadStarted { model_name } => Some(AppStatus::Loading { model_name }),
             ProgressEvent::LoadComplete { .. } => None,
             ProgressEvent::Error { message } => Some(AppStatus::Error(message)),
-            ProgressEvent::DownloadPlanReady { plan } => Some(AppStatus::Downloading {
-                current_file: "Preparing downloads...".into(),
-                bytes_downloaded: 0,
-                total_bytes: None,
-                files_complete: 0,
-                files_total: plan.files_to_download(),
-                aggregate_bytes: 0,
-                aggregate_total: plan.download_bytes(),
-                speed_bps: 0.0,
-                eta_secs: None,
-            }),
+            ProgressEvent::DownloadPlanReady { plan } => {
+                // Only show downloading status if there are files to download
+                if plan.files_to_download() > 0 {
+                    Some(AppStatus::Downloading {
+                        current_file: "Preparing downloads...".into(),
+                        bytes_downloaded: 0,
+                        total_bytes: None,
+                        files_complete: 0,
+                        files_total: plan.files_to_download(),
+                        aggregate_bytes: 0,
+                        aggregate_total: plan.download_bytes(),
+                        speed_bps: 0.0,
+                        eta_secs: None,
+                    })
+                } else {
+                    // All files cached - don't change status
+                    None
+                }
+            }
             ProgressEvent::AggregateProgress {
                 bytes_downloaded,
                 total_bytes,
@@ -988,6 +996,10 @@ use gui::{AppStatus, SharedState};
 use std::path::Path;
 #[cfg(feature = "gui")]
 use std::sync::OnceLock;
+
+/// Fae version from Cargo.toml
+#[cfg(feature = "gui")]
+const FAE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A subtitle bubble that auto-expires after a timeout.
 #[cfg(feature = "gui")]
@@ -1726,6 +1738,10 @@ fn app() -> Element {
     let mut approval_queue =
         use_signal(std::collections::VecDeque::<fae::ToolApprovalRequest>::new);
     let mut approval_input_value = use_signal(String::new);
+    // Session-level "always allow" patterns for tools
+    let mut always_allowed_tools = use_signal(std::collections::HashSet::<String>::new);
+    // Track if voice permissions are currently granted
+    let mut voice_permissions_granted = use_signal(|| false);
     let mut config_state = use_signal(read_config_or_default);
     let mut config_save_status = use_signal(String::new);
 
@@ -2174,7 +2190,21 @@ fn app() -> Element {
                                                     break;
                                                 }
                                                 Some(req) = approval_rx.recv() => {
-                                                    if pending_approval.read().is_none() {
+                                                    // Check if this tool is "always allowed"
+                                                    let tool_name = req.name.clone();
+                                                    let is_always_allowed = always_allowed_tools.read().contains(&tool_name);
+
+                                                    if is_always_allowed {
+                                                        // Auto-approve tools that are always allowed
+                                                        let preview = parse_approval_preview(&req);
+                                                        let _ = req.respond(true);
+                                                        push_approval_decision_to_canvas(
+                                                            &mut canvas_bridge.write(),
+                                                            &preview,
+                                                            true,
+                                                        );
+                                                    } else if pending_approval.read().is_none() {
+                                                        // Show approval modal
                                                         push_approval_request_to_canvas(&mut canvas_bridge.write(), &req);
                                                         let preview = parse_approval_preview(&req);
                                                         approval_input_value.set(preview.initial_value.clone());
@@ -2260,6 +2290,18 @@ fn app() -> Element {
                                                         }
                                                         fae::RuntimeEvent::VoiceCommandDetected { .. } => {
                                                             // TODO: Phase 2.3 will show voice command feedback in GUI
+                                                        }
+                                                        fae::RuntimeEvent::PermissionsChanged { granted } => {
+                                                            if *granted {
+                                                                always_allowed_tools.write().insert("read".to_string());
+                                                                always_allowed_tools.write().insert("write".to_string());
+                                                                always_allowed_tools.write().insert("edit".to_string());
+                                                                always_allowed_tools.write().insert("bash".to_string());
+                                                                voice_permissions_granted.set(true);
+                                                            } else {
+                                                                always_allowed_tools.write().clear();
+                                                                voice_permissions_granted.set(false);
+                                                            }
                                                         }
                                                         fae::RuntimeEvent::ModelSwitchRequested { .. } => {
                                                             // TODO: Phase 2.3 will show model switch transition in GUI
@@ -2433,6 +2475,7 @@ fn app() -> Element {
         fae::config::AgentToolMode::ReadOnly => "read_only",
         fae::config::AgentToolMode::ReadWrite => "read_write",
         fae::config::AgentToolMode::Full => "full",
+        fae::config::AgentToolMode::FullNoApproval => "full_no_approval",
     };
     let tool_mode_select_enabled =
         settings_enabled && matches!(cfg_backend, fae::config::LlmBackend::Agent);
@@ -2469,7 +2512,7 @@ fn app() -> Element {
 
     let current_backend = *llm_backend.read();
     let current_tool_mode = *tool_mode.read();
-    let risky_tools_enabled = matches!(
+    let _risky_tools_enabled = matches!(
         (current_backend, current_tool_mode),
         (
             Some(fae::config::LlmBackend::Agent),
@@ -2996,12 +3039,6 @@ fn app() -> Element {
                 }
 
                 if is_running {
-                    if risky_tools_enabled {
-                        p { class: "warning",
-                            "Tools enabled: approvals required for write/edit/bash/web."
-                        }
-                    }
-
                     // Subtitle bubbles — most recent speaker at the bottom.
                     div { class: "subtitle-area",
                         {
@@ -3052,7 +3089,39 @@ fn app() -> Element {
                                     if evt.key() == Key::Enter {
                                         let msg = text_input.read().trim().to_owned();
                                         if !msg.is_empty() {
-                                            if let Some(tx) = text_injection_tx.read().as_ref() {
+                                            // Check if this should be an approval response
+                                            let is_approval = pending_approval.read().is_some();
+                                            let is_yes = msg.to_lowercase().contains("yes")
+                                                || msg.to_lowercase().contains("sure")
+                                                || msg.to_lowercase().contains("go ahead")
+                                                || msg.to_lowercase().contains("okay")
+                                                || msg.to_lowercase().contains("ok")
+                                                || msg.to_lowercase().contains("do it")
+                                                || msg.to_lowercase().contains("proceed");
+                                            let is_no = msg.to_lowercase().contains("no")
+                                                || msg.to_lowercase().contains("nope")
+                                                || msg.to_lowercase().contains("cancel");
+
+                                            if is_approval && (is_yes || is_no) {
+                                                // Handle approval response - take ownership to avoid borrow conflicts
+                                                if let Some(req) = pending_approval.take() {
+                                                    let approve = is_yes;
+                                                    let preview = parse_approval_preview(&req);
+                                                    let _ = req.respond(approve);
+                                                    push_approval_decision_to_canvas(
+                                                        &mut canvas_bridge.write(),
+                                                        &preview,
+                                                        approve,
+                                                    );
+
+                                                    // Process queued approvals
+                                                    let queued_req = approval_queue.write().pop_front();
+                                                    if let Some(queued) = queued_req {
+                                                        pending_approval.set(Some(queued));
+                                                    }
+                                                }
+                                            } else if let Some(tx) = text_injection_tx.read().as_ref() {
+                                                // Normal message - send to LLM
                                                 let injection = fae::pipeline::messages::TextInjection {
                                                     text: msg,
                                                     fork_at_keep_count: None,
@@ -3070,7 +3139,39 @@ fn app() -> Element {
                                 onclick: move |_| {
                                     let msg = text_input.read().trim().to_owned();
                                     if !msg.is_empty() {
-                                        if let Some(tx) = text_injection_tx.read().as_ref() {
+                                        // Check if this should be an approval response
+                                        let is_approval = pending_approval.read().is_some();
+                                        let is_yes = msg.to_lowercase().contains("yes")
+                                            || msg.to_lowercase().contains("sure")
+                                            || msg.to_lowercase().contains("go ahead")
+                                            || msg.to_lowercase().contains("okay")
+                                            || msg.to_lowercase().contains("ok")
+                                            || msg.to_lowercase().contains("do it")
+                                            || msg.to_lowercase().contains("proceed");
+                                        let is_no = msg.to_lowercase().contains("no")
+                                            || msg.to_lowercase().contains("nope")
+                                            || msg.to_lowercase().contains("cancel");
+
+                                        if is_approval && (is_yes || is_no) {
+                                            // Handle approval response - take ownership to avoid borrow conflicts
+                                            if let Some(req) = pending_approval.take() {
+                                                let approve = is_yes;
+                                                let preview = parse_approval_preview(&req);
+                                                let _ = req.respond(approve);
+                                                push_approval_decision_to_canvas(
+                                                    &mut canvas_bridge.write(),
+                                                    &preview,
+                                                    approve,
+                                                );
+
+                                                // Process queued approvals
+                                                let queued_req = approval_queue.write().pop_front();
+                                                if let Some(queued) = queued_req {
+                                                    pending_approval.set(Some(queued));
+                                                }
+                                            }
+                                        } else if let Some(tx) = text_injection_tx.read().as_ref() {
+                                            // Normal message - send to LLM
                                             let injection = fae::pipeline::messages::TextInjection {
                                                 text: msg,
                                                 fork_at_keep_count: None,
@@ -3081,6 +3182,31 @@ fn app() -> Element {
                                     }
                                 },
                                 "Send"
+                            }
+                        }
+
+                        // Permission toggle when tools enabled
+                        if _risky_tools_enabled {
+                            div { class: "perm-bar",
+                                span { class: "perm-label",
+                                    if always_allowed_tools.read().len() > 0 { "Tools: approved" } else { "Tools: ask first" }
+                                }
+                                button {
+                                    class: if always_allowed_tools.read().len() > 0 { "perm-revoke-btn" } else { "perm-grant-btn" },
+                                    onclick: move |_| {
+                                        if always_allowed_tools.read().len() > 0 {
+                                            always_allowed_tools.write().clear();
+                                            voice_permissions_granted.set(false);
+                                        } else {
+                                            always_allowed_tools.write().insert("read".to_string());
+                                            always_allowed_tools.write().insert("write".to_string());
+                                            always_allowed_tools.write().insert("edit".to_string());
+                                            always_allowed_tools.write().insert("bash".to_string());
+                                            voice_permissions_granted.set(true);
+                                        }
+                                    },
+                                    if always_allowed_tools.read().len() > 0 { "Revoke" } else { "Auto-Approve" }
+                                }
                             }
                         }
                     }
@@ -3207,14 +3333,16 @@ fn app() -> Element {
                                             "read_only" => fae::config::AgentToolMode::ReadOnly,
                                             "read_write" => fae::config::AgentToolMode::ReadWrite,
                                             "full" => fae::config::AgentToolMode::Full,
+                                            "full_no_approval" => fae::config::AgentToolMode::FullNoApproval,
                                             _ => fae::config::AgentToolMode::ReadOnly,
                                         };
                                         config_state.write().llm.tool_mode = mode;
                                     },
                                     option { value: "off", "Off" }
-                                    option { value: "read_only", "Read-only (+ask for escalation)" }
-                                    option { value: "read_write", "Read/write (approval)" }
-                                    option { value: "full", "Full (approval)" }
+                                    option { value: "read_only", "Read-only" }
+                                    option { value: "read_write", "Read/write (ask first)" }
+                                    option { value: "full", "Full (ask first)" }
+                                    option { value: "full_no_approval", "Full (no approval)" }
                                 }
                             }
                             div { class: "settings-row",
@@ -3906,15 +4034,44 @@ fn app() -> Element {
                         }
                     }
 
-                    // --- Scheduled Tasks ---
+                    // --- Updates ---
                     details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Scheduled Tasks" }
+                        summary { class: "settings-section-summary", "Updates" }
                         div { class: "settings-section-body",
                             div { class: "settings-row",
-                                label { class: "settings-label", "Check Fae updates" }
+                                label { class: "settings-label", "Current version" }
+                                p { class: "settings-value", "{FAE_VERSION}" }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Auto-check" }
                                 p { class: "settings-value", "daily at 09:00 UTC" }
                             }
-                            p { class: "note", "More scheduled tasks coming soon." }
+                            div { class: "settings-row",
+                                button {
+                                    class: "settings-save",
+                                    onclick: move |_| {
+                                        spawn(async move {
+                                            let checker = fae::update::UpdateChecker::for_fae();
+                                            match checker.check(None) {
+                                                Ok((Some(release), _)) => {
+                                                    config_save_status.set(format!(
+                                                        "Update available: v{} (current: {})",
+                                                        release.version,
+                                                        checker.current_version()
+                                                    ));
+                                                }
+                                                Ok((None, _)) => {
+                                                    config_save_status.set("You're on the latest version!".to_owned());
+                                                }
+                                                Err(e) => {
+                                                    config_save_status.set(format!("Check failed: {e}"));
+                                                }
+                                            }
+                                        });
+                                    },
+                                    "Check for Updates"
+                                }
+                            }
                         }
                     }
 
@@ -5787,6 +5944,72 @@ const GLOBAL_CSS: &str = r#"
     }
     .text-send-btn:hover:not(:disabled) { opacity: 0.85; }
     .text-send-btn:disabled { opacity: 0.35; cursor: default; }
+
+    /* Permission buttons */
+    .perm-buttons {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px;
+        background: var(--bg-card);
+        border-top: 1px solid var(--border-subtle);
+    }
+    .perm-status {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
+    .perm-btn {
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: 6px 12px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: opacity 0.15s;
+    }
+    .perm-btn:hover { opacity: 0.85; }
+    .perm-grant {
+        background: var(--green);
+        color: white;
+    }
+    .perm-revoke {
+        background: var(--red);
+        color: white;
+    }
+    .perm-grant-btn {
+        background: var(--green);
+        color: white;
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: 6px 12px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        cursor: pointer;
+    }
+    .perm-revoke-btn {
+        background: var(--red);
+        color: white;
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: 6px 12px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        cursor: pointer;
+    }
+    .perm-bar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 8px 12px;
+        background: var(--bg-card);
+        border-top: 1px solid var(--border-subtle);
+    }
+    .perm-label {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
 
 
     /* --- Modal --- */

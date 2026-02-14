@@ -198,12 +198,15 @@ impl CanvasBridge {
             // events don't produce canvas messages (handled elsewhere).
             RuntimeEvent::Control(_)
             | RuntimeEvent::AssistantAudioLevel { .. }
+            | RuntimeEvent::AssistantViseme { .. }
             | RuntimeEvent::Transcription(_)
             | RuntimeEvent::ModelSelectionPrompt { .. }
             | RuntimeEvent::ModelSelected { .. }
             | RuntimeEvent::VoiceCommandDetected { .. }
+            | RuntimeEvent::PermissionsChanged { .. }
             | RuntimeEvent::ModelSwitchRequested { .. }
-            | RuntimeEvent::ConversationCanvasVisibility { .. } => {}
+            | RuntimeEvent::ConversationCanvasVisibility { .. }
+            | RuntimeEvent::ProviderFallback { .. } => {}
         }
     }
 

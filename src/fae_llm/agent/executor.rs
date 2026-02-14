@@ -171,7 +171,20 @@ impl ToolExecutor {
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        tracing::info!(tool_name = %call.function_name, duration_ms = duration_ms, "Tool execution completed successfully");
+        tracing::info!(
+            tool_name = %call.function_name, 
+            duration_ms = duration_ms,
+            success = result.success,
+            truncated = result.truncated,
+            content_len = result.content.len(),
+            "Tool execution completed"
+        );
+        tracing::debug!(
+            tool_name = %call.function_name,
+            content = %result.content,
+            error = ?result.error,
+            "Tool result details"
+        );
 
         Ok(ExecutedToolCall {
             call_id: call.call_id.clone(),

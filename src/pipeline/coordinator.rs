@@ -698,6 +698,7 @@ impl PipelineCoordinator {
                     let config = self.config.clone();
                     let cancel = cancel.clone();
                     let interrupt = Arc::clone(&interrupt);
+                    let runtime_tx = runtime_tx.clone();
                     tokio::spawn(async move {
                         run_tts_stage(
                             config,
@@ -706,6 +707,7 @@ impl PipelineCoordinator {
                             synth_tx,
                             interrupt,
                             cancel,
+                            runtime_tx,
                         )
                         .await;
                     })
@@ -1522,11 +1524,12 @@ fn parse_name(text: &str) -> Option<String> {
     None
 }
 
-/// Returns `true` for common greetings, filler words, and articles that are
-/// not plausible names. Prevents "Hello" from being saved as the user's name.
+/// Returns `true` for common greetings, filler words, articles, nationalities,
+/// and identity words that are not plausible names.
 fn is_filler_word(token: &str) -> bool {
     matches!(
         token,
+        // Greetings / filler
         "hello"
             | "hi"
             | "hey"
@@ -1563,6 +1566,63 @@ fn is_filler_word(token: &str) -> bool {
             | "faye"
             | "fee"
             | "fey"
+            // Feelings / states
+            | "tired"
+            | "happy"
+            | "sad"
+            | "glad"
+            | "ready"
+            | "busy"
+            | "hungry"
+            | "fine"
+            | "good"
+            | "great"
+            | "here"
+            | "there"
+            | "back"
+            | "sorry"
+            | "excited"
+            // Gender / identity
+            | "male"
+            | "female"
+            | "nonbinary"
+            // Nationalities (common ones that follow "I'm")
+            | "scottish"
+            | "english"
+            | "irish"
+            | "welsh"
+            | "british"
+            | "american"
+            | "canadian"
+            | "australian"
+            | "french"
+            | "german"
+            | "italian"
+            | "spanish"
+            | "dutch"
+            | "swedish"
+            | "norwegian"
+            | "danish"
+            | "finnish"
+            | "polish"
+            | "russian"
+            | "chinese"
+            | "japanese"
+            | "korean"
+            | "indian"
+            | "brazilian"
+            | "mexican"
+            | "african"
+            | "european"
+            | "asian"
+            // Common professions
+            | "developer"
+            | "engineer"
+            | "teacher"
+            | "student"
+            | "doctor"
+            | "programmer"
+            | "retired"
     )
 }
 
@@ -1803,6 +1863,23 @@ async fn run_llm_stage(
                     }
                     Input::VoiceCommand(Some(cmd)) => {
                         let response = handle_voice_command(&cmd);
+                        // Emit permissions changed event for GUI
+                        use crate::voice_command::VoiceCommand;
+                        match &cmd {
+                            VoiceCommand::GrantPermissions => {
+                                if let Some(ref rt) = runtime_tx {
+                                    let _ =
+                                        rt.send(RuntimeEvent::PermissionsChanged { granted: true });
+                                }
+                            }
+                            VoiceCommand::RevokePermissions => {
+                                if let Some(ref rt) = runtime_tx {
+                                    let _ = rt
+                                        .send(RuntimeEvent::PermissionsChanged { granted: false });
+                                }
+                            }
+                            _ => {}
+                        }
                         if !response.is_empty() {
                             let _ = tx
                                 .send(SentenceChunk {
@@ -2350,6 +2427,12 @@ fn handle_voice_command(cmd: &crate::voice_command::VoiceCommand) -> String {
             "Voice model info is not currently available.".to_owned()
         }
         VoiceCommand::Help => crate::voice_command::help_response(),
+        VoiceCommand::GrantPermissions => {
+            "Permissions granted. I can now use tools without asking.".to_owned()
+        }
+        VoiceCommand::RevokePermissions => {
+            "Permissions revoked. I'll ask before using any tools.".to_owned()
+        }
     }
 }
 
@@ -2380,6 +2463,7 @@ async fn run_tts_stage(
     tx: mpsc::Sender<SynthesizedAudio>,
     interrupt: Arc<AtomicBool>,
     cancel: CancellationToken,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
 ) {
     let mut engine = match config.tts.backend {
         crate::config::TtsBackend::Kokoro => {
@@ -2420,6 +2504,18 @@ async fn run_tts_stage(
             sentence = rx.recv() => {
                 match sentence {
                     Some(sentence) => {
+                        // Generate visemes for lip-sync animation
+                        if let Some(ref rt_tx) = runtime_tx {
+                            let visemes = crate::viseme::text_to_visemes(&sentence.text, 1.0);
+                            // Send first viseme as a "preview" - the GUI will advance through them
+                            if let Some((viseme, _, _)) = visemes.first() {
+                                let mouth_png = crate::viseme::viseme_to_mouth_png(*viseme);
+                                let _ = rt_tx.send(RuntimeEvent::AssistantViseme {
+                                    mouth_png: mouth_png.to_owned(),
+                                });
+                            }
+                        }
+
                         // If an interrupt was requested (barge-in), drop any pending synthesis
                         // and only forward a final marker to unblock downstream state.
                         if interrupt.load(Ordering::Relaxed) {
@@ -2794,9 +2890,13 @@ async fn run_conversation_gate(
                 let assistant_active =
                     ctl.assistant_speaking.load(Ordering::Relaxed)
                     || ctl.assistant_generating.load(Ordering::Relaxed);
-                if !assistant_active
-                    && last_activity.elapsed() >= Duration::from_secs(idle_timeout_s as u64)
-                {
+                if assistant_active {
+                    // Keep the idle timer fresh while the assistant is speaking or
+                    // generating — the conversation is still alive. This ensures the
+                    // timeout counts from when the assistant FINISHES, not from when
+                    // the user last spoke.
+                    last_activity = Instant::now();
+                } else if last_activity.elapsed() >= Duration::from_secs(idle_timeout_s as u64) {
                     state = GateState::Idle;
                     gate_active.store(false, Ordering::Relaxed);
                     if ctl.console_output {
