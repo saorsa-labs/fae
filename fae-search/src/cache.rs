@@ -95,8 +95,14 @@ mod tests {
 
     #[test]
     fn cache_key_deterministic_for_same_inputs() {
-        let key1 = CacheKey::new("rust programming", &[SearchEngine::Google, SearchEngine::Bing]);
-        let key2 = CacheKey::new("rust programming", &[SearchEngine::Google, SearchEngine::Bing]);
+        let key1 = CacheKey::new(
+            "rust programming",
+            &[SearchEngine::Google, SearchEngine::Bing],
+        );
+        let key2 = CacheKey::new(
+            "rust programming",
+            &[SearchEngine::Google, SearchEngine::Bing],
+        );
         assert_eq!(key1, key2);
     }
 
