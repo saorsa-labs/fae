@@ -1,190 +1,130 @@
-# Phase 1.1: Remove PI Dependency — Task Plan
+# Phase 1.1: Crate Scaffold & Public API — Task Plan
 
-## Goal
-Remove all PI coding agent integration from the FAE codebase. This includes the pi module, pi_config, HTTP server, config types, and all references across 13+ source files. After this phase, zero PI references remain and the project compiles cleanly.
+## Overview
 
-## Strategy
-Remove in dependency order: standalone PI files first, then types/config, then all consumers, then deps. Tasks 1-6 perform deletions/edits, task 7 cleans deps and compiles, task 8 verifies everything.
-
----
+Create the `fae-search` library crate within the Fae workspace with core types, error handling, configuration, and public API surface. All implementation functions return placeholder errors — the goal is to establish the contract and module structure.
 
 ## Tasks
 
-### Task 1: Delete PI module directory and PI-only LLM files
-**Files to delete:**
-- `src/pi/mod.rs`
-- `src/pi/engine.rs`
-- `src/pi/manager.rs`
-- `src/pi/session.rs`
-- `src/pi/tool.rs`
-- `src/llm/pi_config.rs`
-- `src/llm/server.rs`
-- `Skills/pi.md`
-- `.pi/` directory
+### Task 1: Create fae-search Crate in Workspace
 
-**Files to edit:**
-- `src/lib.rs` — remove `pub mod pi;` declaration
-- `src/llm/mod.rs` — remove `pub mod pi_config;` and `pub mod server;` declarations
+**What:** Add `fae-search` as a workspace member. Create Cargo.toml and empty lib.rs.
 
----
+**Files:**
+- `Cargo.toml` (modify — add workspace members)
+- `fae-search/Cargo.toml` (create)
+- `fae-search/src/lib.rs` (create)
 
-### Task 2: Remove PiConfig and LlmBackend::Pi from config.rs
-**File:** `src/config.rs`
+**Acceptance Criteria:**
+- Root Cargo.toml has `[workspace]` with `members = ["fae-search"]`
+- fae-search/Cargo.toml defines lib crate with deps: thiserror, serde, serde_json, tokio, tracing, url
+- fae-search/src/lib.rs has crate-level doc comment
+- `cargo check --workspace` passes with zero errors/warnings
 
-**Changes:**
-- Remove `pub pi: PiConfig` field from `SpeechConfig` struct (~line 37)
-- Remove entire `PiConfig` struct definition (~lines 691-712) and its Default impl
-- Remove `Pi` variant from `LlmBackend` enum (~lines 161-163)
-- Change `LlmBackend` default from `Pi` to `Local`
-- Update `effective_provider_name()` to remove Pi match arm (~line 410)
-- Fix/remove test that asserts `LlmBackend::default() == LlmBackend::Pi` (~line 842)
-- Remove any imports/uses that only existed for PiConfig
+### Task 2: Define SearchError with thiserror (TDD)
 
----
+**What:** Create error types. Tests first.
 
-### Task 3: Remove PI from startup.rs and update/checker.rs
-**File:** `src/startup.rs`
+**Files:**
+- `fae-search/src/error.rs` (create)
+- `fae-search/src/lib.rs` (update)
 
-**Changes:**
-- Remove imports: `crate::llm::pi_config::default_pi_models_path`, `remove_fae_local_provider`
-- Remove Pi cleanup on shutdown (~lines 50-51)
-- Remove `LlmBackend::Pi` from use_local_llm decision branches (~lines 77, 177)
-- Remove Pi HTTP server startup logic (~lines 319-320, 355-356)
-- Remove `write_fae_local_provider()` calls
+**Acceptance Criteria:**
+- SearchError enum: AllEnginesFailed, Timeout, Http(String), Parse(String), Config(String)
+- All variants use `#[error("...")]`
+- SearchError is Send + Sync
+- Doc comments on all public items
+- Tests: display format, variant construction, Send+Sync bounds
 
-**File:** `src/update/checker.rs` (or `src/update/` module)
+### Task 3: Define Core Types (TDD)
 
-**Changes:**
-- Remove `use crate::pi::manager::version_is_newer` import
-- Remove `UpdateChecker::for_pi()` method
-- Remove `crate::pi::manager::platform_asset_name()` calls
-- Remove Pi-specific update checking logic
+**What:** Create SearchResult, SearchEngine, PageContent. Tests first.
 
----
+**Files:**
+- `fae-search/src/types.rs` (create)
+- `fae-search/src/lib.rs` (update)
 
-### Task 4: Remove PI from pipeline/coordinator.rs
-**File:** `src/pipeline/coordinator.rs`
+**Acceptance Criteria:**
+- SearchResult: title, url, snippet, engine (String), score (f64)
+- SearchEngine enum: DuckDuckGo, Brave, Google, Bing, Startpage with Display, name(), weight()
+- PageContent: url, title, text, word_count
+- Derive Debug, Clone, Serialize, Deserialize
+- Tests: instantiation, serde round-trip, Display, name(), weight()
 
-**Changes:**
-- Remove `Pi(Box<crate::pi::engine::PiLlm>)` variant from internal LLM backend enum (~line 1390)
-- Remove `use crate::pi::engine::PiLlm;` import (~line 1446)
-- Remove `LlmBackend::Pi =>` initialization block (~line 1487)
-- Remove `uuid::Uuid::new_v4()` usage in Pi context (~line 1726)
-- Remove entire axum HTTP server setup section (~lines 3094-3791)
-- Remove Pi-related test instances (~line 4143)
-- Remove model_selection_rx/voice_command_tx channels if only used for Pi
+### Task 4: Define SearchConfig with Defaults (TDD)
 
----
+**What:** Create SearchConfig with defaults and validation. Tests first.
 
-### Task 5: Remove PI from agent/mod.rs and llm/api.rs
-**File:** `src/agent/mod.rs`
+**Files:**
+- `fae-search/src/config.rs` (create)
+- `fae-search/src/lib.rs` (update)
 
-**Changes:**
-- Remove `use crate::pi::session::PiSession;` import
-- Remove `use crate::pi::tool::PiDelegateTool;` import
-- Remove `pi_session: Option<Arc<Mutex<PiSession>>>` constructor parameter
-- Remove Pi models.json resolution logic (~lines 57-66)
-- Remove cloud fallback using pi_config (~lines 378-380)
-- Remove PiDelegateTool registration
+**Acceptance Criteria:**
+- Fields: engines, max_results (10), timeout_seconds (8), safe_search (true), cache_ttl_seconds (600), request_delay_ms ((100,500)), user_agent (None)
+- Default impl
+- validate() -> Result<(), SearchError>
+- Tests: defaults, validation rejects bad config
 
-**File:** `src/llm/api.rs`
+### Task 5: Define SearchEngineTrait (TDD)
 
-**Changes:**
-- Remove Pi models.json lookups (~lines 334-338)
-- Remove `pi_config::read_pi_config()` usage
+**What:** Create async trait for engine implementations. Tests first.
 
----
+**Files:**
+- `fae-search/src/engine.rs` (create)
+- `fae-search/src/lib.rs` (update)
 
-### Task 6: Remove PI from GUI, voice commands, skills, and remaining files
-**File:** `src/bin/gui.rs`
+**Acceptance Criteria:**
+- trait SearchEngineTrait: Send + Sync
+- async fn search(&self, query: &str, config: &SearchConfig) -> Result<Vec<SearchResult>, SearchError>
+- fn engine_type(&self) -> SearchEngine
+- fn weight(&self) -> f64
+- Tests with mock engine: trait bounds, async execution, error propagation
 
-**Changes:**
-- Remove `LlmBackend::Pi` as default backend assignment (~line 1659)
-- Remove Pi provider/model UI selection dropdowns (~lines 1688-1750)
-- Remove all `LlmBackend::Pi` match arms throughout (14+ locations)
-- Remove "install_pi_update" action handling
-- Replace Pi backend references with appropriate remaining backends
+### Task 6: Stub Engine Modules
 
-**File:** `src/voice_command.rs`
+**What:** Create stub engine files returning placeholder errors.
 
-**Changes:**
-- Remove `use crate::pi::engine::PiLlm;` references (~lines 778, 803, 825)
-- Remove Pi backend pattern matching in model switching
+**Files:**
+- `fae-search/src/engines/mod.rs` (create)
+- `fae-search/src/engines/duckduckgo.rs` (create)
+- `fae-search/src/engines/brave.rs` (create)
+- `fae-search/src/engines/google.rs` (create)
+- `fae-search/src/engines/bing.rs` (create)
+- `fae-search/src/lib.rs` (update)
 
-**File:** `src/skills.rs`
+**Acceptance Criteria:**
+- Each struct implements SearchEngineTrait
+- Each returns Err(SearchError::Parse("not yet implemented"))
+- engines/mod.rs re-exports all
+- Doc comments on each struct
+- Tests: compile, satisfy trait
 
-**Changes:**
-- Remove `pub const PI_SKILL: &str = include_str!("../Skills/pi.md");`
-- Remove "pi" from `list_skills()`
-- Remove `PI_SKILL.to_owned()` from `load_all_skills()`
-- Remove pi skill filtering logic
+### Task 7: Define Public API Functions (TDD)
 
-**File:** `src/memory.rs` — Remove any Pi-specific references
-**File:** `src/progress.rs` — Remove Pi download progress tracking
-**File:** `src/runtime.rs` — Remove Pi runtime events
-**File:** `src/model_picker.rs` — Remove Pi model picker logic
-**File:** `src/model_selection.rs` — Remove Pi from tier selection
-**File:** `src/scheduler/tasks.rs` — Remove "install_pi_update" task
+**What:** Create search(), search_default(), fetch_page_content() stubs. Tests first.
 
----
+**Files:**
+- `fae-search/src/lib.rs` (update — public API)
 
-### Task 7: Clean up Cargo.toml dependencies and compile
-**File:** `Cargo.toml`
+**Acceptance Criteria:**
+- pub async fn search(query: &str, config: &SearchConfig) -> Result<Vec<SearchResult>, SearchError>
+- pub async fn search_default(query: &str) -> Result<Vec<SearchResult>, SearchError>
+- pub async fn fetch_page_content(url: &str) -> Result<PageContent, SearchError>
+- All return placeholder errors
+- Doc comments with usage examples
+- Tests: signatures, error types, search_default delegates
 
-**Changes:**
-- Remove `axum = "0.8"` (only used by deleted llm/server.rs)
-- Remove `tower-http = { version = "0.6", features = ["cors"] }` (only used with axum)
-- Remove `uuid = { version = "1", features = ["v4"] }` (only used for Pi request IDs)
-- Verify no other files use these deps before removal
+### Task 8: Full Validation & Doc Pass
 
-**Then:**
-- Run `cargo check --all-features --all-targets` — fix ALL compilation errors
-- Run `cargo clippy --all-features --all-targets -- -D warnings` — fix ALL warnings
-- Run `cargo fmt --all` — format all edited files
-- Iterate until zero errors and zero warnings
+**What:** Run full validation, fix issues, ensure docs complete.
 
----
+**Files:**
+- All fae-search files
 
-### Task 8: Verify tests pass and final cleanup
-**Verification:**
-- Run `cargo nextest run --all-features` — ALL tests must pass
-- Run `just check` (full validation: fmt, lint, build, test, doc, panic-scan)
-- Grep for any remaining PI references: `grep -r "pi::\|PiLlm\|PiSession\|PiManager\|PiConfig\|PiDelegateTool\|pi_config\|PI_SKILL\|LlmBackend::Pi" src/`
-- Remove any dead code flagged by clippy after removal
-- Verify zero warnings, zero errors
-
----
-
-## File Change Summary
-
-| File | Action |
-|------|--------|
-| `src/pi/` (5 files) | **DELETE** |
-| `src/llm/pi_config.rs` | **DELETE** |
-| `src/llm/server.rs` | **DELETE** |
-| `Skills/pi.md` | **DELETE** |
-| `.pi/` directory | **DELETE** |
-| `src/lib.rs` | **MODIFY** — remove pi module |
-| `src/llm/mod.rs` | **MODIFY** — remove pi_config, server modules |
-| `src/config.rs` | **MODIFY** — remove PiConfig, LlmBackend::Pi |
-| `src/startup.rs` | **MODIFY** — remove Pi init/cleanup |
-| `src/update/checker.rs` | **MODIFY** — remove Pi update logic |
-| `src/pipeline/coordinator.rs` | **MODIFY** — remove Pi backend, HTTP server |
-| `src/agent/mod.rs` | **MODIFY** — remove Pi session/tool |
-| `src/llm/api.rs` | **MODIFY** — remove Pi config lookups |
-| `src/bin/gui.rs` | **MODIFY** — remove Pi UI elements |
-| `src/voice_command.rs` | **MODIFY** — remove Pi model switching |
-| `src/skills.rs` | **MODIFY** — remove Pi skill |
-| `src/memory.rs` | **MODIFY** — remove Pi refs |
-| `src/progress.rs` | **MODIFY** — remove Pi progress |
-| `src/runtime.rs` | **MODIFY** — remove Pi events |
-| `src/model_picker.rs` | **MODIFY** — remove Pi picker |
-| `src/model_selection.rs` | **MODIFY** — remove Pi tier |
-| `Cargo.toml` | **MODIFY** — remove axum, tower-http, uuid |
-
-## Quality Gates
-- `just check` passes (fmt, lint, build, test, doc, panic-scan)
-- Zero `.unwrap()` or `.expect()` in production code
-- All remaining tests continue to pass
-- Zero PI references anywhere in src/
-- Zero compilation warnings
+**Acceptance Criteria:**
+- cargo fmt --all -- --check passes
+- cargo clippy --workspace --all-features -- -D warnings passes
+- cargo nextest run --workspace passes
+- cargo doc --workspace --no-deps passes zero warnings
+- All public items documented
+- Zero forbidden patterns

@@ -1,3 +1,6 @@
+[workspace]
+members = ["fae-search"]
+
 [package]
 name = "fae"
 version = "0.2.5"

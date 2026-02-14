@@ -1,0 +1,27 @@
+[package]
+name = "fae-search"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-configuration embedded web search for Fae — no API keys, no external services"
+license = "AGPL-3.0"
+repository = "https://github.com/saorsa-labs/fae"
+
+[dependencies]
+# Error handling
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+
+# Logging (trace-level only — no persistent query logging)
+tracing = "0.1"
+
+# URL parsing and normalisation
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

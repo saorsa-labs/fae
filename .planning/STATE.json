@@ -1,27 +1,25 @@
 {
   "version": 1,
-  "project": "fae-llm-module",
+  "project": "fae-tool5-web-search",
   "active": true,
   "milestone": {
-    "number": 4,
-    "name": "Observability & Release"
+    "number": 1,
+    "name": "fae-search Crate (Core Library)"
   },
   "phase": {
-    "number": "4.3",
-    "name": "App Integration & Release",
-    "plan": ".planning/PLAN-phase-4.3.md"
+    "number": "1.1",
+    "name": "Crate Scaffold & Public API",
+    "plan": ".planning/PLAN-phase-1.1.md"
   },
   "progress": {
     "total_tasks": 8,
     "completed_tasks": 8,
     "current_task": null
   },
-  "status": "milestone_complete",
+  "status": "reviewing",
   "review": {
     "status": "pending",
-    "iteration": 0,
-    "last_verdict": "PASS"
+    "iteration": 0
   },
-  "last_updated": 1770929000,
-  "last_action": "phase_4.3_transition"
+  "last_updated": "2026-02-14T00:00:00Z"
 }
