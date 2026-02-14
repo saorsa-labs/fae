@@ -1052,6 +1052,19 @@ mod gui {
             assert_eq!(counter.load(Ordering::Relaxed), 2);
         }
 
+        #[test]
+        fn privacy_settings_urls_include_mic_and_speech() {
+            let urls = super::super::macos_privacy_settings_urls();
+            assert!(
+                urls.iter().any(|u| u.contains("Privacy_Microphone")),
+                "missing microphone privacy deep link"
+            );
+            assert!(
+                urls.iter().any(|u| u.contains("Privacy_SpeechRecognition")),
+                "missing speech recognition privacy deep link"
+            );
+        }
+
         // --- format_bytes_short ---
 
         #[test]
@@ -1122,11 +1135,16 @@ use gui::{AppStatus, SharedState, UpdateGatePhase};
 
 use std::path::Path;
 #[cfg(feature = "gui")]
+use std::process::Command;
+#[cfg(feature = "gui")]
 use std::sync::OnceLock;
 
 /// Fae version from Cargo.toml
 #[cfg(feature = "gui")]
 const FAE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(feature = "gui")]
+const FAE_BUNDLE_ID: &str = "com.saorsalabs.fae";
 
 /// A subtitle bubble that auto-expires after a timeout.
 #[cfg(feature = "gui")]
@@ -1850,6 +1868,114 @@ fn fit_label(file_bytes: Option<u64>, ram_bytes: Option<u64>) -> Option<String> 
     Some(format!("{label} ({:.0}% of RAM)", ratio * 100.0))
 }
 
+#[cfg(feature = "gui")]
+fn run_system_command(program: &str, args: &[&str]) -> Result<(), String> {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|e| format!("failed to launch {program}: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with status {status}"))
+    }
+}
+
+#[cfg(feature = "gui")]
+fn open_external_target(target: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return run_system_command("open", &[target]);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return run_system_command("xdg-open", &[target]);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return run_system_command("cmd", &["/C", "start", "", target]);
+    }
+
+    #[allow(unreachable_code)]
+    Err(format!(
+        "opening external targets is unsupported for: {target}"
+    ))
+}
+
+#[cfg(feature = "gui")]
+fn macos_privacy_settings_urls() -> [&'static str; 2] {
+    [
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
+    ]
+}
+
+#[cfg(feature = "gui")]
+fn open_mic_permission_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut errors = Vec::new();
+        for target in macos_privacy_settings_urls() {
+            if let Err(e) = open_external_target(target) {
+                errors.push(e);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            // Fallback to the Privacy & Security pane if deep links fail.
+            match open_external_target("x-apple.systempreferences:com.apple.preference.security") {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    errors.push(e);
+                    Err(errors.join("; "))
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("microphone permission shortcuts are currently macOS-only".to_owned())
+    }
+}
+
+#[cfg(feature = "gui")]
+fn run_mic_permission_repair() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let mut warnings = Vec::new();
+
+        for service in ["Microphone", "SpeechRecognition"] {
+            if let Err(e) = run_system_command("tccutil", &["reset", service, FAE_BUNDLE_ID]) {
+                warnings.push(format!("could not reset {service}: {e}"));
+            }
+        }
+
+        if let Err(e) = open_mic_permission_settings() {
+            warnings.push(format!("could not open macOS privacy settings: {e}"));
+        }
+
+        if warnings.is_empty() {
+            "Reset access for Microphone and Speech Recognition. Enable Fae in macOS settings, then press Start Listening again.".to_owned()
+        } else {
+            format!(
+                "Repair attempted, but some steps failed: {}",
+                warnings.join(" | ")
+            )
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Microphone repair shortcut is available on macOS builds only.".to_owned()
+    }
+}
+
 /// Root application component.
 #[cfg(feature = "gui")]
 fn app() -> Element {
@@ -1926,6 +2052,8 @@ fn app() -> Element {
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut active_model = use_signal(|| None::<String>);
     let mut mic_active = use_signal(|| None::<bool>);
+    let mut mic_repair_busy = use_signal(|| false);
+    let mut mic_repair_status = use_signal(String::new);
     let mut diagnostics_status = use_signal(String::new);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
@@ -2463,6 +2591,9 @@ fn app() -> Element {
                                                         }
                                                         fae::RuntimeEvent::MicStatus { active } => {
                                                             mic_active.set(Some(*active));
+                                                            if *active {
+                                                                mic_repair_status.set(String::new());
+                                                            }
                                                         }
                                                         other if gui::suppress_main_screen_runtime_event(other) => {}
                                                         _ => {}
@@ -2475,6 +2606,8 @@ fn app() -> Element {
                                         assistant_speaking.set(false);
                                         assistant_generating.set(false);
                                         mic_active.set(None);
+                                        mic_repair_busy.set(false);
+                                        mic_repair_status.set(String::new());
                                         text_injection_tx.set(None);
                                     }
                                     PipelineMessage::ModelsReady(Err(e)) => {
@@ -3302,6 +3435,57 @@ fn app() -> Element {
                         "Say "
                         span { class: "hint-phrase", "\"That'll do Fae\"" }
                         " to stop me"
+                    }
+                }
+
+                if is_running && matches!(*mic_active.read(), Some(false)) {
+                    div { class: "mic-help-card",
+                        p { class: "mic-help-title", "Microphone setup needed" }
+                        p { class: "mic-help-copy",
+                            "Fae can reset this app's microphone permissions and open the right macOS settings automatically."
+                        }
+                        div { class: "mic-help-actions",
+                            button {
+                                class: "mic-help-btn",
+                                disabled: *mic_repair_busy.read(),
+                                onclick: move |_| {
+                                    mic_repair_busy.set(true);
+                                    mic_repair_status.set("Repairing microphone access...".to_owned());
+                                    spawn(async move {
+                                        let result = tokio::task::spawn_blocking(run_mic_permission_repair).await;
+                                        mic_repair_busy.set(false);
+                                        match result {
+                                            Ok(message) => mic_repair_status.set(message),
+                                            Err(e) => mic_repair_status
+                                                .set(format!("Microphone repair failed: {e}")),
+                                        }
+                                    });
+                                },
+                                if *mic_repair_busy.read() {
+                                    "Fixing..."
+                                } else {
+                                    "Fix Microphone"
+                                }
+                            }
+                            button {
+                                class: "mic-help-btn mic-help-btn-secondary",
+                                disabled: *mic_repair_busy.read(),
+                                onclick: move |_| {
+                                    match open_mic_permission_settings() {
+                                        Ok(()) => mic_repair_status
+                                            .set("Opened macOS microphone settings.".to_owned()),
+                                        Err(e) => mic_repair_status
+                                            .set(format!("Could not open settings: {e}")),
+                                    }
+                                },
+                                "Open Settings"
+                            }
+                        }
+                        if !mic_repair_status.read().is_empty() {
+                            p { class: "mic-help-status",
+                                "{mic_repair_status.read()}"
+                            }
+                        }
                     }
                 }
 
@@ -5941,6 +6125,65 @@ const GLOBAL_CSS: &str = r#"
         color: var(--accent);
         font-style: normal;
         font-weight: 600;
+    }
+
+    .mic-help-card {
+        width: 90%;
+        max-width: 360px;
+        border: 1px solid rgba(239, 68, 68, 0.45);
+        border-radius: var(--radius-md);
+        background: rgba(239, 68, 68, 0.08);
+        padding: 0.55rem 0.7rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        margin-top: 0.2rem;
+    }
+
+    .mic-help-title {
+        font-size: 0.74rem;
+        font-weight: 700;
+        color: #fecaca;
+        letter-spacing: 0.03em;
+    }
+
+    .mic-help-copy {
+        font-size: 0.72rem;
+        color: rgba(255, 255, 255, 0.82);
+        line-height: 1.35;
+    }
+
+    .mic-help-actions {
+        display: flex;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+    }
+
+    .mic-help-btn {
+        border: none;
+        border-radius: var(--radius-pill);
+        padding: 0.3rem 0.7rem;
+        background: #22c55e;
+        color: #062910;
+        font-weight: 700;
+        font-size: 0.68rem;
+        cursor: pointer;
+    }
+
+    .mic-help-btn-secondary {
+        background: rgba(255, 255, 255, 0.16);
+        color: var(--text-primary);
+    }
+
+    .mic-help-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .mic-help-status {
+        color: #c4f7d4;
+        font-size: 0.68rem;
+        line-height: 1.35;
     }
 
     /* --- Progress --- */
