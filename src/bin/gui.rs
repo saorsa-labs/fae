@@ -1065,6 +1065,31 @@ mod gui {
             );
         }
 
+        #[test]
+        fn windows_settings_urls_include_mic_and_speech() {
+            let urls = super::super::windows_privacy_settings_urls();
+            assert!(
+                urls.iter().any(|u| u.contains("privacy-microphone")),
+                "missing Windows microphone settings uri"
+            );
+            assert!(
+                urls.iter().any(|u| u.contains("privacy-speech")),
+                "missing Windows speech settings uri"
+            );
+        }
+
+        #[test]
+        fn mic_platform_copy_and_labels_are_non_empty() {
+            assert!(!super::super::mic_problem_status_text().trim().is_empty());
+            assert!(!super::super::mic_help_copy_text().trim().is_empty());
+            assert!(!super::super::mic_primary_action_label().trim().is_empty());
+            assert!(
+                !super::super::mic_primary_action_progress_label()
+                    .trim()
+                    .is_empty()
+            );
+        }
+
         // --- format_bytes_short ---
 
         #[test]
@@ -1143,7 +1168,7 @@ use std::sync::OnceLock;
 #[cfg(feature = "gui")]
 const FAE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[cfg(feature = "gui")]
+#[cfg(all(feature = "gui", target_os = "macos"))]
 const FAE_BUNDLE_ID: &str = "com.saorsalabs.fae";
 
 /// A subtitle bubble that auto-expires after a timeout.
@@ -1869,6 +1894,55 @@ fn fit_label(file_bytes: Option<u64>, ram_bytes: Option<u64>) -> Option<String> 
 }
 
 #[cfg(feature = "gui")]
+fn mic_problem_status_text() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Microphone not detecting audio. Use the fix actions below."
+    } else if cfg!(target_os = "windows") {
+        "Microphone not detecting audio. Open Windows microphone privacy settings."
+    } else if cfg!(target_os = "linux") {
+        "Microphone not detecting audio. Check Linux input permissions and selected input device."
+    } else {
+        "Microphone not detecting audio. Check this system's microphone permissions."
+    }
+}
+
+#[cfg(feature = "gui")]
+fn mic_help_copy_text() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Fae can reset this app's microphone permissions and open the correct macOS privacy panels."
+    } else if cfg!(target_os = "windows") {
+        "Fae can open Windows microphone privacy settings so you can allow microphone access."
+    } else if cfg!(target_os = "linux") {
+        "Fae can try opening your audio settings. If that fails, grant microphone access in your desktop settings and verify the default input device."
+    } else {
+        "Grant microphone permission for Fae in your system settings and retry listening."
+    }
+}
+
+#[cfg(feature = "gui")]
+fn mic_primary_action_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Fix Microphone"
+    } else {
+        "Open Mic Settings"
+    }
+}
+
+#[cfg(feature = "gui")]
+fn mic_primary_action_progress_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Fixing..."
+    } else {
+        "Opening..."
+    }
+}
+
+#[cfg(feature = "gui")]
+fn show_mic_secondary_open_button() -> bool {
+    cfg!(target_os = "macos")
+}
+
+#[cfg(feature = "gui")]
 fn run_system_command(program: &str, args: &[&str]) -> Result<(), String> {
     let status = Command::new(program)
         .args(args)
@@ -1913,67 +1987,139 @@ fn macos_privacy_settings_urls() -> [&'static str; 2] {
     ]
 }
 
-#[cfg(feature = "gui")]
-fn open_mic_permission_settings() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let mut errors = Vec::new();
-        for target in macos_privacy_settings_urls() {
-            if let Err(e) = open_external_target(target) {
-                errors.push(e);
-            }
-        }
+#[cfg(all(feature = "gui", any(target_os = "windows", test)))]
+fn windows_privacy_settings_urls() -> [&'static str; 2] {
+    [
+        "ms-settings:privacy-microphone",
+        "ms-settings:privacy-speech",
+    ]
+}
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            // Fallback to the Privacy & Security pane if deep links fail.
-            match open_external_target("x-apple.systempreferences:com.apple.preference.security") {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    errors.push(e);
-                    Err(errors.join("; "))
-                }
-            }
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn open_mic_permission_settings() -> Result<(), String> {
+    let mut errors = Vec::new();
+    for target in macos_privacy_settings_urls() {
+        if let Err(e) = open_external_target(target) {
+            errors.push(e);
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        Err("microphone permission shortcuts are currently macOS-only".to_owned())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        // Fallback to the Privacy & Security pane if deep links fail.
+        match open_external_target("x-apple.systempreferences:com.apple.preference.security") {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                errors.push(e);
+                Err(errors.join("; "))
+            }
+        }
     }
 }
 
-#[cfg(feature = "gui")]
+#[cfg(all(feature = "gui", target_os = "windows"))]
+fn open_mic_permission_settings() -> Result<(), String> {
+    let mut errors = Vec::new();
+    for target in windows_privacy_settings_urls() {
+        if let Err(e) = open_external_target(target) {
+            errors.push(e);
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+#[cfg(all(feature = "gui", target_os = "linux"))]
+fn open_mic_permission_settings() -> Result<(), String> {
+    // Best-effort desktop integration across common Linux environments.
+    if run_system_command("gnome-control-center", &["privacy"]).is_ok() {
+        return Ok(());
+    }
+    if run_system_command("pavucontrol", &[]).is_ok() {
+        return Ok(());
+    }
+    Err(
+        "could not open settings automatically (tried gnome-control-center and pavucontrol)"
+            .to_owned(),
+    )
+}
+
+#[cfg(all(
+    feature = "gui",
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux"))
+))]
+fn open_mic_permission_settings() -> Result<(), String> {
+    Err("automatic microphone settings shortcut is not available on this platform".to_owned())
+}
+
+#[cfg(all(feature = "gui", target_os = "macos"))]
 fn run_mic_permission_repair() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        let mut warnings = Vec::new();
+    let mut warnings = Vec::new();
 
-        for service in ["Microphone", "SpeechRecognition"] {
-            if let Err(e) = run_system_command("tccutil", &["reset", service, FAE_BUNDLE_ID]) {
-                warnings.push(format!("could not reset {service}: {e}"));
-            }
-        }
-
-        if let Err(e) = open_mic_permission_settings() {
-            warnings.push(format!("could not open macOS privacy settings: {e}"));
-        }
-
-        if warnings.is_empty() {
-            "Reset access for Microphone and Speech Recognition. Enable Fae in macOS settings, then press Start Listening again.".to_owned()
-        } else {
-            format!(
-                "Repair attempted, but some steps failed: {}",
-                warnings.join(" | ")
-            )
+    for service in ["Microphone", "SpeechRecognition"] {
+        if let Err(e) = run_system_command("tccutil", &["reset", service, FAE_BUNDLE_ID]) {
+            warnings.push(format!("could not reset {service}: {e}"));
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        "Microphone repair shortcut is available on macOS builds only.".to_owned()
+    if let Err(e) = open_mic_permission_settings() {
+        warnings.push(format!("could not open macOS privacy settings: {e}"));
     }
+
+    if warnings.is_empty() {
+        "Reset access for Microphone and Speech Recognition. Enable Fae in macOS settings, then click Restart Fae.".to_owned()
+    } else {
+        format!(
+            "Repair attempted, but some steps failed: {}",
+            warnings.join(" | ")
+        )
+    }
+}
+
+#[cfg(all(feature = "gui", target_os = "windows"))]
+fn run_mic_permission_repair() -> String {
+    match open_mic_permission_settings() {
+        Ok(()) => {
+            "Opened Windows microphone settings. Allow microphone access for Fae, then click Restart Fae.".to_owned()
+        }
+        Err(e) => format!(
+            "Could not open Windows microphone settings automatically: {e}. Open Settings > Privacy > Microphone manually."
+        ),
+    }
+}
+
+#[cfg(all(feature = "gui", target_os = "linux"))]
+fn run_mic_permission_repair() -> String {
+    match open_mic_permission_settings() {
+        Ok(()) => {
+            "Opened Linux audio settings. Allow microphone access and verify input device, then click Restart Fae.".to_owned()
+        }
+        Err(e) => format!(
+            "Could not open Linux audio settings automatically: {e}. Check desktop microphone permissions and your selected input device."
+        ),
+    }
+}
+
+#[cfg(all(
+    feature = "gui",
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux"))
+))]
+fn run_mic_permission_repair() -> String {
+    "Please grant microphone permission in your system settings, then restart Fae.".to_owned()
+}
+
+#[cfg(feature = "gui")]
+fn spawn_current_exe() -> Result<(), String> {
+    let current = std::env::current_exe().map_err(|e| format!("cannot locate executable: {e}"))?;
+    Command::new(&current)
+        .spawn()
+        .map_err(|e| format!("cannot restart executable {}: {e}", current.display()))?;
+    Ok(())
 }
 
 /// Root application component.
@@ -2709,7 +2855,7 @@ fn app() -> Element {
             } else if *assistant_generating.read() {
                 "Thinking...".to_owned()
             } else if matches!(*mic_active.read(), Some(false)) {
-                "Microphone not detecting audio. Check macOS microphone permission.".to_owned()
+                mic_problem_status_text().to_owned()
             } else {
                 current_status.display_text()
             }
@@ -3442,7 +3588,7 @@ fn app() -> Element {
                     div { class: "mic-help-card",
                         p { class: "mic-help-title", "Microphone setup needed" }
                         p { class: "mic-help-copy",
-                            "Fae can reset this app's microphone permissions and open the right macOS settings automatically."
+                            "{mic_help_copy_text()}"
                         }
                         div { class: "mic-help-actions",
                             button {
@@ -3450,7 +3596,8 @@ fn app() -> Element {
                                 disabled: *mic_repair_busy.read(),
                                 onclick: move |_| {
                                     mic_repair_busy.set(true);
-                                    mic_repair_status.set("Repairing microphone access...".to_owned());
+                                    mic_repair_status
+                                        .set("Applying microphone recovery...".to_owned());
                                     spawn(async move {
                                         let result = tokio::task::spawn_blocking(run_mic_permission_repair).await;
                                         mic_repair_busy.set(false);
@@ -3462,23 +3609,37 @@ fn app() -> Element {
                                     });
                                 },
                                 if *mic_repair_busy.read() {
-                                    "Fixing..."
+                                    "{mic_primary_action_progress_label()}"
                                 } else {
-                                    "Fix Microphone"
+                                    "{mic_primary_action_label()}"
+                                }
+                            }
+                            if show_mic_secondary_open_button() {
+                                button {
+                                    class: "mic-help-btn mic-help-btn-secondary",
+                                    disabled: *mic_repair_busy.read(),
+                                    onclick: move |_| {
+                                        match open_mic_permission_settings() {
+                                            Ok(()) => mic_repair_status
+                                                .set("Opened system microphone settings.".to_owned()),
+                                            Err(e) => mic_repair_status
+                                                .set(format!("Could not open settings: {e}")),
+                                        }
+                                    },
+                                    "Open Settings"
                                 }
                             }
                             button {
                                 class: "mic-help-btn mic-help-btn-secondary",
                                 disabled: *mic_repair_busy.read(),
                                 onclick: move |_| {
-                                    match open_mic_permission_settings() {
-                                        Ok(()) => mic_repair_status
-                                            .set("Opened macOS microphone settings.".to_owned()),
+                                    match spawn_current_exe() {
+                                        Ok(()) => std::process::exit(0),
                                         Err(e) => mic_repair_status
-                                            .set(format!("Could not open settings: {e}")),
+                                            .set(format!("Could not restart Fae: {e}")),
                                     }
                                 },
-                                "Open Settings"
+                                "Restart Fae"
                             }
                         }
                         if !mic_repair_status.read().is_empty() {
