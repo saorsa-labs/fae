@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn results_sorted_by_score_descending() {
-        let mut results = vec![
+        let mut results = [
             make_result("https://c.com", "Bing", 0.5),
             make_result("https://a.com", "Google", 1.5),
             make_result("https://b.com", "DuckDuckGo", 1.0),
