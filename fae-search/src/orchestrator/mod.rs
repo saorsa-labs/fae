@@ -4,4 +4,5 @@
 //! deduplicates results by normalised URL, applies weighted scoring with
 //! cross-engine boosting, and returns a sorted, truncated result set.
 
+pub mod dedup;
 pub mod url_normalize;

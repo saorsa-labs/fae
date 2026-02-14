@@ -148,9 +148,8 @@ mod tests {
 
     #[test]
     fn removes_tracking_params() {
-        let result = normalize_url(
-            "https://example.com/page?q=rust&utm_source=google&fbclid=abc&gclid=xyz",
-        );
+        let result =
+            normalize_url("https://example.com/page?q=rust&utm_source=google&fbclid=abc&gclid=xyz");
         assert_eq!(result, "https://example.com/page?q=rust");
     }
 

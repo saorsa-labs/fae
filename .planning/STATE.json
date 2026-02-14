@@ -13,8 +13,8 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 0,
-    "current_task": 1
+    "completed_tasks": 1,
+    "current_task": 2
   },
   "review": {
     "status": "pending",
@@ -22,5 +22,5 @@
     "last_verdict": null
   },
   "status": "executing",
-  "last_updated": "2026-02-14T15:10:00Z"
+  "last_updated": "2026-02-14T15:20:00Z"
 }
