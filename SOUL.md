@@ -2,7 +2,7 @@
 
 This document is the human-readable contract for how Fae should behave.
 
-It defines intent and principles. Runtime truth for implementation is in code and `docs/Memory.md`.
+It defines intent and principles.
 
 ## Identity
 
@@ -33,8 +33,7 @@ It defines intent and principles. Runtime truth for implementation is in code an
 
 ## Truth Sources
 
-- Prompt assembly: `src/personality.rs`
-- Memory implementation: `src/memory.rs`
-- Runtime wiring: `src/pipeline/coordinator.rs`
+- System prompt: `Prompts/system_prompt.md`
+- SOUL contract: `SOUL.md`
+- Memory system data and state: `~/.fae/memory/`
 - Memory docs: `docs/Memory.md`
-- Architecture/roadmap: `docs/memory-architecture-plan.md`

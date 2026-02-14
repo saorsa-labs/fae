@@ -6,7 +6,7 @@
 //! For GUI consumers, use [`initialize_models_with_progress`] which accepts a
 //! [`ProgressCallback`] for structured progress events.
 
-use crate::config::{AgentToolMode, LlmBackend, MemoryConfig, SpeechConfig, TtsBackend};
+use crate::config::{LlmBackend, MemoryConfig, SpeechConfig, TtsBackend};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
 use crate::models::ModelManager;
@@ -21,7 +21,7 @@ use tracing::info;
 pub struct InitializedModels {
     /// Parakeet TDT speech-to-text engine.
     pub stt: ParakeetStt,
-    /// Local LLM engine (only loaded for local backend).
+    /// Optional preloaded local LLM for local brain mode or local fallback.
     pub llm: Option<LocalLlm>,
     /// Kokoro TTS engine (None if using Fish Speech or other backend).
     pub tts: Option<KokoroTts>,
@@ -38,13 +38,28 @@ const STT_FILES: &[&str] = &[
 /// LLM tokenizer files to pre-download (from the tokenizer repo).
 const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"];
 
+fn has_agent_remote_brain_config(config: &SpeechConfig) -> bool {
+    !config.llm.api_key.trim().is_empty() || config.llm.cloud_provider.is_some()
+}
+
+fn should_preload_local_llm(config: &SpeechConfig) -> bool {
+    match config.llm.backend {
+        LlmBackend::Local => true,
+        LlmBackend::Api => config.llm.enable_local_fallback,
+        // Compatibility auto-mode: local brain unless explicit remote config,
+        // with optional fallback preload when enabled.
+        LlmBackend::Agent => {
+            !has_agent_remote_brain_config(config) || config.llm.enable_local_fallback
+        }
+    }
+}
+
 /// Build a download plan listing all files needed for startup.
 ///
 /// Checks cache status and queries file sizes for each file.
 /// The plan is used by the GUI to show total download size before starting.
 pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
-    let needs_local_model =
-        matches!(config.llm.backend, LlmBackend::Local) || config.llm.enable_local_fallback;
+    let needs_local_model = should_preload_local_llm(config);
 
     let mut files = Vec::new();
 
@@ -137,24 +152,12 @@ pub async fn initialize_models_with_progress(
     config: &SpeechConfig,
     callback: Option<&ProgressCallback>,
 ) -> Result<InitializedModels> {
-    let model_manager = ModelManager::new(&config.models)?;
-    // Load local model for Local backend or when fallback is enabled.
-    let use_local_llm =
-        matches!(config.llm.backend, LlmBackend::Local) || config.llm.enable_local_fallback;
-
-    if matches!(config.llm.backend, LlmBackend::Local | LlmBackend::Api)
-        && !matches!(config.llm.tool_mode, AgentToolMode::Off)
-    {
-        tracing::warn!(
-            "tool_mode={:?} is ignored for {:?} backend; use llm.backend=agent to enable tools",
-            config.llm.tool_mode,
-            config.llm.backend
-        );
-        println!(
-            "  Note: tool_mode is ignored for {:?} backend; use llm.backend=agent for tool access.",
-            config.llm.backend
-        );
+    if let Err(e) = crate::personality::ensure_prompt_assets() {
+        tracing::warn!("failed to ensure prompt assets in ~/.fae: {e}");
     }
+
+    let model_manager = ModelManager::new(&config.models)?;
+    let use_local_llm = should_preload_local_llm(config);
 
     // --- Phase 0: Build download plan and check disk space ---
     let plan = build_download_plan(config);
@@ -254,16 +257,30 @@ pub async fn initialize_models_with_progress(
 
     let stt = load_stt(config, callback)?;
     let llm = if use_local_llm {
-        if !matches!(config.llm.backend, LlmBackend::Local) {
-            println!(
-                "  LLM: using API backend ({} @ {}) with local fallback",
-                config.llm.api_model, config.llm.api_url
-            );
+        match config.llm.backend {
+            LlmBackend::Local => {
+                println!("  LLM brain: local (agent runtime)");
+            }
+            LlmBackend::Api => {
+                println!(
+                    "  LLM brain: API ({} @ {}) with local fallback (agent runtime)",
+                    config.llm.api_model, config.llm.api_url
+                );
+            }
+            LlmBackend::Agent => {
+                if has_agent_remote_brain_config(config) {
+                    println!(
+                        "  LLM brain: API (compat auto-mode) with local fallback (agent runtime)"
+                    );
+                } else {
+                    println!("  LLM brain: local (compat auto-mode, agent runtime)");
+                }
+            }
         }
         Some(load_llm(config, callback).await?)
     } else {
         println!(
-            "  LLM: using API backend ({} @ {})",
+            "  LLM brain: API ({} @ {}) (agent runtime)",
             config.llm.api_model, config.llm.api_url
         );
         None

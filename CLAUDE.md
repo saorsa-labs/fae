@@ -20,13 +20,19 @@ Key behavior:
 - explicit edit operations with audit history
 - migration-safe storage evolution with rollback
 
-Core files:
+Behavioral truth sources:
+
+- `Prompts/system_prompt.md`
+- `SOUL.md`
+- `~/.fae/memory/`
+- `docs/Memory.md`
+
+Implementation touchpoints (not behavioral truth):
 
 - `src/memory.rs`
 - `src/pipeline/coordinator.rs`
 - `src/runtime.rs`
 - `src/scheduler/tasks.rs`
-- `docs/Memory.md`
 
 ## Scheduler timing (actual current cadence)
 
@@ -81,10 +87,11 @@ Tool modes:
 
 Prompt assembly order:
 
-1. `CORE_PROMPT`
-2. personality profile
-3. skills
-4. user add-on
+1. system prompt (`Prompts/system_prompt.md`)
+2. SOUL contract (`SOUL.md`)
+3. memory context (from `~/.fae/memory/`)
+4. skills/tool instructions
+5. user message/add-on
 
 Human contract document:
 

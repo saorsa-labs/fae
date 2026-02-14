@@ -2500,8 +2500,7 @@ fn app() -> Element {
         fae::config::AgentToolMode::Full => "full",
         fae::config::AgentToolMode::FullNoApproval => "full_no_approval",
     };
-    let tool_mode_select_enabled =
-        settings_enabled && matches!(cfg_backend, fae::config::LlmBackend::Agent);
+    let tool_mode_select_enabled = settings_enabled;
     let config_path = fae::SpeechConfig::default_config_path();
     let current_voice = config_state.read().tts.voice.clone();
     let is_builtin_voice = !current_voice.ends_with(".bin") || current_voice.is_empty();
@@ -2538,7 +2537,11 @@ fn app() -> Element {
     let _risky_tools_enabled = matches!(
         (current_backend, current_tool_mode),
         (
-            Some(fae::config::LlmBackend::Agent),
+            Some(
+                fae::config::LlmBackend::Local
+                    | fae::config::LlmBackend::Api
+                    | fae::config::LlmBackend::Agent
+            ),
             Some(
                 fae::config::AgentToolMode::ReadOnly
                     | fae::config::AgentToolMode::ReadWrite
@@ -3500,34 +3503,26 @@ fn app() -> Element {
                         }
                     }
 
-                    // --- Personality ---
+                    // --- Prompt ---
                     details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Personality" }
+                        summary { class: "settings-section-summary", "Prompt + SOUL" }
                         div { class: "settings-section-body",
                             div { class: "settings-row",
-                                label { class: "settings-label", "Profile" }
-                                select {
-                                    class: "settings-select",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().llm.personality}",
-                                    onchange: move |evt| {
-                                        config_state.write().llm.personality = evt.value();
-                                    },
-                                    {fae::personality::list_personalities().into_iter().map(|name| {
-                                        rsx! {
-                                            option { value: "{name}", "{name}" }
-                                        }
-                                    })}
-                                }
+                                label { class: "settings-label", "SOUL file" }
+                                p { class: "settings-value", "{fae::personality::soul_path().display()}" }
                             }
                             p { class: "note",
-                                "Optional instructions appended after the personality profile."
+                                "System prompt = core prompt + SOUL.md + optional add-on."
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Onboarding checklist" }
+                                p { class: "settings-value", "{fae::personality::onboarding_path().display()}" }
                             }
                             textarea {
                                 class: "settings-textarea",
                                 disabled: !settings_enabled,
                                 value: "{config_state.read().llm.system_prompt}",
-                                placeholder: "Optional. e.g. \"Be more formal.\"",
+                                placeholder: "Optional add-on. e.g. \"Be more formal.\"",
                                 oninput: move |evt| {
                                     config_state.write().llm.system_prompt = evt.value();
                                 },
@@ -3552,7 +3547,7 @@ fn app() -> Element {
                         summary { class: "settings-section-summary", "Skills" }
                         div { class: "settings-section-body",
                             p { class: "note",
-                                "Behavioural guides injected into the system prompt."
+                                "Legacy skill files directory (not part of the default prompt stack)."
                             }
                             div { class: "settings-row",
                                 label { class: "settings-label", "Active skills" }

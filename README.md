@@ -19,13 +19,13 @@ After each LLM turn: memory capture persists episodes/facts/profile updates.
 
 ## LLM Backends
 
-The agent loop, tool calling, and sandboxing are shared. The backend changes where inference runs.
+Fae always runs through the internal agent loop (tool calling + sandboxing). The backend setting only chooses the LLM brain source (local vs API).
 
 | Backend | Config | Inference location | Tool loop |
 |---|---|---|---|
 | Local | `backend = "local"` | On-device (`mistralrs`) | Yes |
 | API | `backend = "api"` | Remote OpenAI-compatible endpoint | Yes |
-| Agent | `backend = "agent"` | Remote provider adapters (OpenAI/Anthropic/custom) | Yes |
+| Agent | `backend = "agent"` | Compatibility auto-mode (local when no remote creds, otherwise API) | Yes |
 
 Local fallback is supported when `enable_local_fallback = true`.
 
@@ -94,11 +94,13 @@ See:
 Runtime system prompt assembly is layered:
 
 1. `CORE_PROMPT`
-2. Personality profile (`fae` or custom)
-3. Loaded skills (built-in + user)
-4. User add-on prompt
+2. `~/.fae/SOUL.md` (with repository fallback)
+3. User add-on prompt
+4. `~/.fae/onboarding.md` is injected only while onboarding is incomplete
 
 [`SOUL.md`](SOUL.md) documents human-facing behavior and principles for identity, memory, and tool use.
+
+Prompt copy interview guide: `docs/prompt-content-interview.md`.
 
 ## Context and History Defaults
 
