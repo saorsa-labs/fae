@@ -22,6 +22,7 @@
 //! - Result snippets are sanitised before returning
 
 pub mod cache;
+pub mod circuit_breaker;
 pub mod config;
 pub mod content;
 pub mod engine;

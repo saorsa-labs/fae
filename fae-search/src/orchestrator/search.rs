@@ -4,6 +4,7 @@
 //! with position decay, deduplicates by normalised URL, applies cross-engine
 //! boosting, sorts by final score, and truncates to the requested maximum.
 
+use crate::circuit_breaker::global_breaker;
 use crate::config::SearchConfig;
 use crate::engine::SearchEngineTrait;
 use crate::engines::{BingEngine, BraveEngine, DuckDuckGoEngine, GoogleEngine};
@@ -35,10 +36,12 @@ pub async fn orchestrate_search(
     query: &str,
     config: &SearchConfig,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    // 1. Fan out to all engines concurrently, with staggered jitter delays.
+    // 0. Filter engines through circuit breaker.
+    let engines_to_query = select_engines(config);
+
+    // 1. Fan out to selected engines concurrently, with staggered jitter delays.
     let (delay_min, delay_max) = config.request_delay_ms;
-    let futures: Vec<_> = config
-        .engines
+    let futures: Vec<_> = engines_to_query
         .iter()
         .enumerate()
         .map(|(idx, engine)| {
@@ -64,7 +67,7 @@ pub async fn orchestrate_search(
 
     let outcomes = futures::future::join_all(futures).await;
 
-    // 2. Collect results, logging failures.
+    // 2. Collect results, logging failures, and update circuit breaker.
     let mut all_results: Vec<SearchResult> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
@@ -73,12 +76,20 @@ pub async fn orchestrate_search(
             Ok(engine_results) => {
                 let count = engine_results.len();
                 tracing::debug!(%engine, count, "engine returned results");
+                // Record success in circuit breaker.
+                if let Ok(mut breaker) = global_breaker().lock() {
+                    breaker.record_success(engine);
+                }
                 // 3. Apply position-decay scoring.
                 let scored = score_results(engine_results);
                 all_results.extend(scored);
             }
             Err(err) => {
                 tracing::warn!(engine = %engine, error = %err, "engine query failed");
+                // Record failure in circuit breaker.
+                if let Ok(mut breaker) = global_breaker().lock() {
+                    breaker.record_failure(engine);
+                }
                 errors.push(format!("{engine}: {err}"));
             }
         }
@@ -114,6 +125,42 @@ pub async fn orchestrate_search(
     final_results.truncate(config.max_results);
 
     Ok(final_results)
+}
+
+/// Select which engines to query, filtering out circuit-broken engines.
+///
+/// If all configured engines are tripped, falls back to querying all of them
+/// (better to try everything than return nothing).
+fn select_engines(config: &SearchConfig) -> Vec<SearchEngine> {
+    let Ok(mut breaker) = global_breaker().lock() else {
+        // If the mutex is poisoned, try all engines as a safe fallback.
+        return config.engines.clone();
+    };
+
+    let healthy: Vec<SearchEngine> = config
+        .engines
+        .iter()
+        .filter(|engine| breaker.should_attempt(**engine))
+        .copied()
+        .collect();
+
+    if healthy.is_empty() {
+        tracing::warn!(
+            "all {} engines are circuit-broken, falling back to full engine list",
+            config.engines.len()
+        );
+        config.engines.clone()
+    } else {
+        let skipped = config.engines.len() - healthy.len();
+        if skipped > 0 {
+            tracing::debug!(
+                skipped,
+                active = healthy.len(),
+                "circuit breaker filtered engines"
+            );
+        }
+        healthy
+    }
 }
 
 /// Query a single engine, dispatching to the concrete implementation.

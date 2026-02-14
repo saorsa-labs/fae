@@ -7,14 +7,14 @@
     "name": "Fae Integration"
   },
   "phase": {
-    "number": "2.3",
-    "name": "Content Extraction",
-    "plan": ".planning/PLAN-phase-2.3.md"
+    "number": "2.4",
+    "name": "Circuit Breaker & Adaptive Engine Selection",
+    "plan": ".planning/PLAN-phase-2.4.md"
   },
   "progress": {
-    "total_tasks": 3,
+    "total_tasks": 0,
     "completed_tasks": 0,
-    "current_task": 1
+    "current_task": null
   },
   "review": {
     "status": "pending",
@@ -22,5 +22,5 @@
     "last_verdict": null
   },
   "status": "executing",
-  "last_updated": "2026-02-14T18:00:00Z"
+  "last_updated": "2026-02-14T18:30:00Z"
 }
