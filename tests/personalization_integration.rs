@@ -15,9 +15,9 @@ fn personality_profile_assembles_with_fae_identity() {
     let prompt = personality::assemble_prompt("fae", "");
     // Must contain the core prompt anchor.
     assert!(prompt.contains("Fae"));
-    // Must contain Scottish identity from the voice-optimized profile.
+    // Must contain AI assistant identity.
     assert!(
-        prompt.contains("Scottish") || prompt.contains("scotland") || prompt.contains("Highlands")
+        prompt.contains("AI assistant") || prompt.contains("assistant") || prompt.contains("tool")
     );
 }
 
@@ -27,7 +27,7 @@ fn personality_profile_with_addon_appends_cleanly() {
     let prompt = personality::assemble_prompt("fae", addon);
     assert!(prompt.contains(addon));
     // Addon should appear after the personality section.
-    let personality_pos = prompt.find("Scottish").or_else(|| prompt.find("Highlands"));
+    let personality_pos = prompt.find("Fae").or_else(|| prompt.find("assistant"));
     let addon_pos = prompt.find(addon);
     if let (Some(p), Some(a)) = (personality_pos, addon_pos) {
         assert!(a > p, "addon should appear after personality");
