@@ -79,6 +79,9 @@ impl UpdateState {
 
     /// Load state from disk. Returns the default state if the file is missing
     /// or cannot be parsed.
+    ///
+    /// The `fae_version` field is always overwritten with the running binary's
+    /// version so it stays current across upgrades.
     pub fn load() -> Self {
         let path = match Self::state_file_path() {
             Some(p) => p,
@@ -90,7 +93,10 @@ impl UpdateState {
             Err(_) => return Self::default(),
         };
 
-        serde_json::from_slice(&bytes).unwrap_or_default()
+        let mut state: Self = serde_json::from_slice(&bytes).unwrap_or_default();
+        // Always reflect the running binary's version, not the stale disk value.
+        state.fae_version = env!("CARGO_PKG_VERSION").to_owned();
+        state
     }
 
     /// Persist the current state to disk.

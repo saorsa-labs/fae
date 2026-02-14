@@ -38,9 +38,12 @@ fn main() {
         .with(file_layer)
         .init();
 
+    // Build native menu bar.
+    let menu = build_menu_bar();
+
     LaunchBuilder::new()
         .with_cfg(
-            Config::new().with_window(
+            Config::new().with_menu(menu).with_window(
                 WindowBuilder::new()
                     .with_title("Fae")
                     .with_inner_size(LogicalSize::new(480.0, 800.0))
@@ -51,12 +54,94 @@ fn main() {
         .launch(app);
 }
 
+/// Build the native menu bar with About, Edit, and Window submenus.
+#[cfg(feature = "gui")]
+fn build_menu_bar() -> dioxus::desktop::muda::Menu {
+    use dioxus::desktop::muda::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
+
+    let menu = Menu::new();
+
+    // App submenu ("Fae" on macOS — first submenu becomes the app menu).
+    let app_menu = Submenu::new("Fae", true);
+    let about_metadata = AboutMetadata {
+        name: Some("Fae".to_owned()),
+        version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        short_version: Some(format!(
+            "{}.{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR")
+        )),
+        comments: Some("Speech-to-speech AI companion".to_owned()),
+        website: Some("https://github.com/saorsa-labs/fae".to_owned()),
+        ..Default::default()
+    };
+    let _ = app_menu.append_items(&[
+        &PredefinedMenuItem::about(None, Some(about_metadata)),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::hide(None),
+        &PredefinedMenuItem::hide_others(None),
+        &PredefinedMenuItem::show_all(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::quit(None),
+    ]);
+
+    // Edit submenu (Cut/Copy/Paste/Select All — standard accelerators).
+    let edit_menu = Submenu::new("Edit", true);
+    let _ = edit_menu.append_items(&[
+        &PredefinedMenuItem::undo(None),
+        &PredefinedMenuItem::redo(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::cut(None),
+        &PredefinedMenuItem::copy(None),
+        &PredefinedMenuItem::paste(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::select_all(None),
+    ]);
+
+    // Window submenu.
+    let window_menu = Submenu::new("Window", true);
+    let _ = window_menu.append_items(&[
+        &PredefinedMenuItem::minimize(None),
+        &PredefinedMenuItem::maximize(None),
+        &PredefinedMenuItem::fullscreen(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::close_window(None),
+    ]);
+
+    let _ = menu.append_items(&[&app_menu, &edit_menu, &window_menu]);
+
+    // On macOS, the first submenu automatically becomes the app menu,
+    // and the Window menu integrates with native window management.
+    #[cfg(target_os = "macos")]
+    {
+        window_menu.set_as_windows_menu_for_nsapp();
+    }
+
+    menu
+}
+
 #[cfg(feature = "gui")]
 mod gui {
     use fae::progress::ProgressEvent;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use tokio_util::sync::CancellationToken;
+
+    /// Update gate phases — blocks pipeline start while checking for updates.
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum UpdateGatePhase {
+        /// Checking for updates at startup.
+        Checking,
+        /// An update was found; waiting for user to install or skip.
+        Found {
+            version: String,
+            release_notes: String,
+        },
+        /// User chose to install — downloading and replacing binary.
+        Installing { version: String },
+        /// Install failed.
+        Failed { error: String },
+    }
 
     /// Application state phases.
     #[derive(Debug, Clone, PartialEq)]
@@ -1008,7 +1093,7 @@ use dioxus::prelude::*;
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder, use_window};
 
 #[cfg(feature = "gui")]
-use gui::{AppStatus, SharedState};
+use gui::{AppStatus, SharedState, UpdateGatePhase};
 
 use std::path::Path;
 #[cfg(feature = "gui")]
@@ -1810,6 +1895,7 @@ fn app() -> Element {
     let mut update_installing = use_signal(|| false);
     let mut update_install_error = use_signal(|| None::<String>);
     let mut update_restart_needed = use_signal(|| false);
+    let mut update_gate = use_signal(|| None::<UpdateGatePhase>);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut active_model = use_signal(|| None::<String>);
     let mut mic_active = use_signal(|| None::<bool>);
@@ -1848,15 +1934,21 @@ fn app() -> Element {
         });
     });
 
-    // Background update check at startup (non-blocking, respects preferences).
+    // Startup update gate: check for updates before pipeline starts.
+    // If an update is found and not dismissed, the gate blocks startup and
+    // shows an Install/Skip dialog. This prevents two copies of Fae running
+    // in parallel during an upgrade.
     use_hook(move || {
         spawn(async move {
-            // Only check if last check was more than 24 hours ago.
             let is_stale = update_state.read().check_is_stale(24);
             let pref = update_state.read().auto_update;
             if !is_stale || pref == fae::update::AutoUpdatePreference::Never {
+                // No check needed — clear gate immediately.
+                update_gate.set(None);
                 return;
             }
+
+            update_gate.set(Some(UpdateGatePhase::Checking));
 
             let etag = update_state.read().etag_fae.clone();
             let result = tokio::task::spawn_blocking(move || {
@@ -1875,7 +1967,15 @@ fn app() -> Element {
 
                     if !is_dismissed {
                         tracing::info!("update available: Fae v{}", release.version);
-                        update_available.set(Some(release));
+                        // Store the release for the in-session banner too.
+                        update_available.set(Some(release.clone()));
+                        // Show the gate dialog.
+                        update_gate.set(Some(UpdateGatePhase::Found {
+                            version: release.version,
+                            release_notes: release.release_notes,
+                        }));
+                    } else {
+                        update_gate.set(None);
                     }
 
                     let state = update_state.read().clone();
@@ -1886,12 +1986,15 @@ fn app() -> Element {
                     update_state.write().mark_checked();
                     let state = update_state.read().clone();
                     let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                    update_gate.set(None);
                 }
                 Ok(Err(e)) => {
                     tracing::debug!("startup update check failed: {e}");
+                    update_gate.set(None);
                 }
                 Err(e) => {
                     tracing::debug!("startup update check task failed: {e}");
+                    update_gate.set(None);
                 }
             }
         });
@@ -2403,7 +2506,8 @@ fn app() -> Element {
     // Auto-start: run pre-flight check on app launch.
     // If downloads are needed, show the PreFlight confirmation first.
     // If everything is cached, go straight to model loading.
-    if !*auto_started.read() {
+    // Blocked until the update gate clears (None = no pending update dialog).
+    if !*auto_started.read() && update_gate.read().is_none() {
         auto_started.set(true);
 
         let config_for_preflight = config_state.read().clone();
@@ -2952,7 +3056,122 @@ fn app() -> Element {
                 }
             }
 
-            if *view.read() == MainView::Home {
+            // --- Update gate overlay (blocks startup until resolved) ---
+            {
+                let gate_phase = update_gate.read().clone();
+                match gate_phase {
+                    Some(UpdateGatePhase::Checking) => rsx! {
+                        div { class: "update-gate",
+                            p { class: "update-gate-title", "Checking for updates..." }
+                        }
+                    },
+                    Some(UpdateGatePhase::Found { ref version, ref release_notes }) => {
+                        let ver = version.clone();
+                        let notes = release_notes.clone();
+                        rsx! {
+                            div { class: "update-gate",
+                                p { class: "update-gate-title", "Fae v{ver} is available" }
+                                if !notes.is_empty() {
+                                    p { class: "update-gate-notes", "{notes}" }
+                                }
+                                div { class: "update-gate-buttons",
+                                    button {
+                                        class: "update-gate-install",
+                                        onclick: move |_| {
+                                            let release = update_available.read().clone();
+                                            if let Some(rel) = release {
+                                                let v = rel.version.clone();
+                                                update_gate.set(Some(UpdateGatePhase::Installing {
+                                                    version: v,
+                                                }));
+                                                let url = rel.download_url.clone();
+                                                spawn(async move {
+                                                    let result = tokio::task::spawn_blocking(move || {
+                                                        let current = fae::update::applier::current_exe_path()?;
+                                                        fae::update::applier::apply_update(&url, &current)
+                                                    }).await;
+                                                    match result {
+                                                        Ok(Ok(apply_result)) => {
+                                                            // Relaunch: spawn new process then exit.
+                                                            let bin = match apply_result {
+                                                                fae::update::applier::ApplyResult::RestartRequired { new_binary } => new_binary,
+                                                                fae::update::applier::ApplyResult::ExitRequired { helper_script } => {
+                                                                    let _ = std::process::Command::new(&helper_script).spawn();
+                                                                    std::process::exit(0);
+                                                                }
+                                                            };
+                                                            tracing::info!("relaunching Fae from {}", bin.display());
+                                                            let _ = std::process::Command::new(&bin).spawn();
+                                                            std::process::exit(0);
+                                                        }
+                                                        Ok(Err(e)) => {
+                                                            update_gate.set(Some(UpdateGatePhase::Failed {
+                                                                error: format!("{e}"),
+                                                            }));
+                                                        }
+                                                        Err(e) => {
+                                                            update_gate.set(Some(UpdateGatePhase::Failed {
+                                                                error: format!("{e}"),
+                                                            }));
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        },
+                                        "Install & Relaunch"
+                                    }
+                                    button {
+                                        class: "update-gate-skip",
+                                        onclick: move |_| {
+                                            // Dismiss this version and proceed with normal startup.
+                                            if let Some(rel) = update_available.read().as_ref() {
+                                                update_state.write().dismissed_release =
+                                                    Some(rel.version.clone());
+                                            }
+                                            let state = update_state.read().clone();
+                                            spawn(async move {
+                                                let _ = tokio::task::spawn_blocking(move || state.save())
+                                                    .await;
+                                            });
+                                            update_banner_dismissed.set(true);
+                                            update_gate.set(None);
+                                        },
+                                        "Skip"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(UpdateGatePhase::Installing { ref version }) => {
+                        let ver = version.clone();
+                        rsx! {
+                            div { class: "update-gate",
+                                p { class: "update-gate-title", "Installing Fae v{ver}..." }
+                                p { class: "update-gate-subtitle", "Downloading and replacing binary. Fae will relaunch automatically." }
+                            }
+                        }
+                    },
+                    Some(UpdateGatePhase::Failed { ref error }) => {
+                        let err = error.clone();
+                        rsx! {
+                            div { class: "update-gate",
+                                p { class: "update-gate-title", "Update failed" }
+                                p { class: "update-gate-error", "{err}" }
+                                button {
+                                    class: "update-gate-skip",
+                                    onclick: move |_| {
+                                        update_gate.set(None);
+                                    },
+                                    "Continue without updating"
+                                }
+                            }
+                        }
+                    },
+                    None => rsx! {},
+                }
+            }
+
+            if *view.read() == MainView::Home && update_gate.read().is_none() {
               div { class: "home-layout",
                 div { class: "home-main",
                 if is_running {
@@ -2983,17 +3202,48 @@ fn app() -> Element {
                 // Title
                 h1 { class: "title", "Fae" }
 
-                // Mic status indicator (visible when pipeline is running)
+                // Status strip (visible when pipeline is running)
                 if is_running {
                     {
                         let mic_state = *mic_active.read();
-                        let (mic_class, mic_label) = match mic_state {
-                            None => ("mic-indicator mic-starting", "\u{1F3A4} Mic: starting..."),
-                            Some(true) => ("mic-indicator mic-active", "\u{1F3A4} Mic: active"),
-                            Some(false) => ("mic-indicator mic-failed", "\u{1F3A4} Mic: not detected"),
+                        let mic_dot = match mic_state {
+                            None => "status-dot status-dot-gray",
+                            Some(true) => "status-dot status-dot-green",
+                            Some(false) => "status-dot status-dot-red",
                         };
+                        let mic_label = match mic_state {
+                            None => "Mic",
+                            Some(true) => "Mic",
+                            Some(false) => "Mic",
+                        };
+                        let speaking = *assistant_speaking.read();
+                        let speaker_dot = if speaking {
+                            "status-dot status-dot-green"
+                        } else {
+                            "status-dot status-dot-gray"
+                        };
+                        let tools_granted = *voice_permissions_granted.read();
+                        let tools_dot = if tools_granted {
+                            "status-dot status-dot-green"
+                        } else {
+                            "status-dot status-dot-gray"
+                        };
+                        let tools_label = if tools_granted { "Tools on" } else { "Tools" };
                         rsx! {
-                            p { class: "{mic_class}", "{mic_label}" }
+                            div { class: "status-strip",
+                                div { class: "status-badge",
+                                    span { class: "{mic_dot}" }
+                                    span { "{mic_label}" }
+                                }
+                                div { class: "status-badge",
+                                    span { class: "{speaker_dot}" }
+                                    span { "Speaker" }
+                                }
+                                div { class: "status-badge",
+                                    span { class: "{tools_dot}" }
+                                    span { "{tools_label}" }
+                                }
+                            }
                         }
                     }
                 }
@@ -5615,16 +5865,35 @@ const GLOBAL_CSS: &str = r#"
     }
     .status-error { color: var(--red); }
 
-    /* --- Mic indicator --- */
-    .mic-indicator {
-        font-size: 0.75rem;
-        padding: 2px 8px;
-        border-radius: 4px;
+    /* --- Status strip --- */
+    .status-strip {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
         margin-bottom: 4px;
     }
-    .mic-starting { color: var(--text-tertiary); }
-    .mic-active { color: #22c55e; }
-    .mic-failed { color: var(--red); font-weight: 600; }
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+        border-radius: 999px;
+        padding: 2px 10px 2px 8px;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        background: var(--bg-elevated, rgba(255,255,255,0.04));
+        user-select: none;
+    }
+    .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .status-dot-green { background: #22c55e; box-shadow: 0 0 4px rgba(34,197,94,0.4); }
+    .status-dot-red { background: #ef4444; box-shadow: 0 0 4px rgba(239,68,68,0.4); }
+    .status-dot-gray { background: rgba(255,255,255,0.2); }
 
     .welcome-text {
         color: var(--text-secondary);
@@ -6582,6 +6851,70 @@ const GLOBAL_CSS: &str = r#"
         padding: 0 0.2rem;
     }
     .update-banner-dismiss:hover { color: var(--text-primary); }
+
+    /* --- Update gate --- */
+    .update-gate {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.8rem;
+        padding: 2rem 1.5rem;
+        text-align: center;
+        flex: 1;
+    }
+    .update-gate-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .update-gate-subtitle {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+    .update-gate-notes {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        max-height: 6rem;
+        overflow-y: auto;
+        padding: 0.5rem 0.8rem;
+        background: var(--bg-elevated);
+        border-radius: var(--radius-card);
+        border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+        text-align: left;
+        white-space: pre-wrap;
+        max-width: 90%;
+    }
+    .update-gate-error {
+        font-size: 0.8rem;
+        color: var(--red);
+    }
+    .update-gate-buttons {
+        display: flex;
+        gap: 0.6rem;
+        margin-top: 0.4rem;
+    }
+    .update-gate-install {
+        border: none;
+        border-radius: var(--radius-pill);
+        padding: 0.4rem 1.2rem;
+        background: var(--accent);
+        color: #000;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .update-gate-install:hover { opacity: 0.85; }
+    .update-gate-skip {
+        border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+        border-radius: var(--radius-pill);
+        padding: 0.4rem 1.2rem;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+    .update-gate-skip:hover { color: var(--text-primary); }
 
     /* --- Scrollbar --- */
     ::-webkit-scrollbar { width: 5px; }

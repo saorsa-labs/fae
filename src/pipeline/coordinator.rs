@@ -496,10 +496,11 @@ impl PipelineCoordinator {
             let cancel = cancel.clone();
             let control_tx = control_tx.clone();
             let onboarding_seg_tx = onboarding_seg_tx.clone();
-            let echo = VadEchoState {
+            let vad_state = VadStageState {
                 assistant_speaking: Arc::clone(&assistant_speaking),
                 assistant_generating: Arc::clone(&assistant_generating),
                 aec_enabled,
+                runtime_tx: runtime_tx.clone(),
             };
             tokio::spawn(async move {
                 run_vad_stage(
@@ -508,7 +509,7 @@ impl PipelineCoordinator {
                     speech_tx,
                     onboarding_seg_tx,
                     control_tx,
-                    echo,
+                    vad_state,
                     cancel,
                 )
                 .await;
@@ -874,10 +875,9 @@ async fn run_capture_stage(
 
     match CpalCapture::new(&config) {
         Ok(capture) => {
-            // Notify GUI that mic is active (stream opened successfully).
-            if let Some(ref rt) = runtime_tx {
-                let _ = rt.send(RuntimeEvent::MicStatus { active: true });
-            }
+            // NOTE: MicStatus { active: true } is NOT emitted here.
+            // The VAD stage validates actual audio flow before confirming
+            // mic health (macOS TCC can silently provide zero-amplitude audio).
             if let Err(e) = capture.run(tx, cancel).await {
                 error!("capture stage error: {e}");
                 if let Some(ref rt) = runtime_tx {
@@ -1004,12 +1004,14 @@ async fn run_wakeword_stage_with_signal(
     }
 }
 
-/// Shared state for echo suppression in the VAD stage.
-struct VadEchoState {
+/// Shared state for echo suppression and mic validation in the VAD stage.
+struct VadStageState {
     assistant_speaking: Arc<AtomicBool>,
     assistant_generating: Arc<AtomicBool>,
     /// When true, DSP-based AEC is active and echo suppression can be relaxed.
     aec_enabled: bool,
+    /// Runtime event sender for mic status updates.
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
 }
 
 async fn run_vad_stage(
@@ -1018,7 +1020,7 @@ async fn run_vad_stage(
     tx: mpsc::Sender<SpeechSegment>,
     onboarding_tx: Option<mpsc::Sender<SpeechSegment>>,
     control_tx: mpsc::UnboundedSender<ControlEvent>,
-    echo_state: VadEchoState,
+    state: VadStageState,
     cancel: CancellationToken,
 ) {
     use crate::vad::SileroVad;
@@ -1035,6 +1037,16 @@ async fn run_vad_stage(
     let confirm_samples = ms_to_samples(config.audio.input_sample_rate, config.barge_in.confirm_ms);
     let mut pending: Option<PendingBargeIn> = None;
 
+    // Mic audio flow validation: delay MicStatus { active: true } until we
+    // observe actual non-zero audio.  macOS TCC can silently provide all-zero
+    // samples when the app lacks microphone permission.
+    let mut mic_confirmed = false;
+    let mic_start_time = Instant::now();
+    /// RMS threshold below which audio is considered silent/zero.
+    const MIC_RMS_THRESHOLD: f32 = 0.001;
+    /// Seconds to wait for non-zero audio before declaring mic failed.
+    const MIC_WATCHDOG_SECS: u64 = 5;
+
     // Dynamic silence threshold: use a shorter silence gap during assistant
     // speech so segments reach the conversation gate faster for barge-in.
     let normal_silence_ms = config.vad.min_silence_duration_ms;
@@ -1046,7 +1058,7 @@ async fn run_vad_stage(
     // for a brief window so residual echo/reverb doesn't leak through.
     // When AEC is active, the DSP filter handles most echo removal, so only a
     // short tail is needed to catch residual reverb.
-    let echo_tail_ms: u64 = if echo_state.aec_enabled { 300 } else { 1500 };
+    let echo_tail_ms: u64 = if state.aec_enabled { 300 } else { 1500 };
     let echo_tail = std::time::Duration::from_millis(echo_tail_ms);
 
     let mut was_suppressing = false;
@@ -1060,10 +1072,28 @@ async fn run_vad_stage(
                     Some(chunk) => {
                         match vad.process_chunk(&chunk) {
                             Ok(out) => {
+                                // Mic audio flow validation: confirm mic is
+                                // delivering real audio, or time out.
+                                if !mic_confirmed {
+                                    if out.rms > MIC_RMS_THRESHOLD {
+                                        info!("mic audio confirmed (rms={:.4})", out.rms);
+                                        if let Some(ref rt) = state.runtime_tx {
+                                            let _ = rt.send(RuntimeEvent::MicStatus { active: true });
+                                        }
+                                        mic_confirmed = true;
+                                    } else if mic_start_time.elapsed() > Duration::from_secs(MIC_WATCHDOG_SECS) {
+                                        warn!("mic watchdog: no audio detected after {MIC_WATCHDOG_SECS}s");
+                                        if let Some(ref rt) = state.runtime_tx {
+                                            let _ = rt.send(RuntimeEvent::MicStatus { active: false });
+                                        }
+                                        mic_confirmed = true; // stop re-emitting
+                                    }
+                                }
+
                                 // Update echo tail: detect the transition from suppressing→not.
                                 let actively_suppressing =
-                                    echo_state.assistant_speaking.load(Ordering::Relaxed)
-                                    || echo_state.assistant_generating.load(Ordering::Relaxed);
+                                    state.assistant_speaking.load(Ordering::Relaxed)
+                                    || state.assistant_generating.load(Ordering::Relaxed);
                                 if was_suppressing && !actively_suppressing {
                                     suppress_until = Some(std::time::Instant::now() + echo_tail);
                                 }
