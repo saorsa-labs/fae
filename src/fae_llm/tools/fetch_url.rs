@@ -90,7 +90,7 @@ impl Tool for FetchUrlTool {
         let mut output = format!("## Page Content: {}\n\n", page.title);
         output.push_str(&format!("URL: {url}\n"));
         output.push_str(&format!("Words: {}\n\n", page.word_count));
-        output.push_str(&page.content);
+        output.push_str(&page.text);
 
         let (truncated_output, was_truncated) = truncate_output(&output, self.max_bytes);
         if was_truncated {
