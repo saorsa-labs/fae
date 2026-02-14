@@ -1,11 +1,14 @@
-//! Weighted scoring with position-decay for search results.
+//! Weighted scoring with position-decay and cross-engine boost for search results.
 //!
 //! Assigns scores based on:
 //! - Engine reliability/quality weight (from `SearchEngine::weight()`)
 //! - Position decay (earlier results score higher)
+//! - Cross-engine boost (URLs from multiple engines get a bonus)
 //!
-//! Formula: `score = engine_weight * position_decay`
+//! Base formula: `score = engine_weight * position_decay`
 //! where `position_decay = 1.0 / (1.0 + position_index * 0.1)`
+//!
+//! Cross-engine boost formula: `boosted_score = base_score * (1.0 + 0.2 * (engine_count - 1))`
 
 use crate::types::SearchResult;
 
@@ -49,6 +52,31 @@ pub fn score_results(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
         result.score = calculate_score(result, position);
     }
     results
+}
+
+/// Apply cross-engine boost to a base score.
+///
+/// URLs appearing in multiple search engines receive a score multiplier:
+///
+/// - 1 engine: 1.0x (no boost)
+/// - 2 engines: 1.2x
+/// - 3 engines: 1.4x
+/// - 4 engines: 1.6x
+/// - etc.
+///
+/// Formula: `boosted_score = base_score * (1.0 + 0.2 * (engine_count - 1))`
+///
+/// # Arguments
+///
+/// * `base_score` - The score before applying the boost
+/// * `engine_count` - Number of engines that returned this URL
+///
+/// # Returns
+///
+/// The boosted score as `f64`.
+pub fn apply_cross_engine_boost(base_score: f64, engine_count: usize) -> f64 {
+    let boost_multiplier = 1.0 + 0.2 * (engine_count.saturating_sub(1)) as f64;
+    base_score * boost_multiplier
 }
 
 /// Parse engine weight from engine name string.
@@ -199,6 +227,106 @@ mod tests {
         // Each subsequent position should have lower score
         for i in 1..scores.len() {
             assert!(scores[i] < scores[i - 1]);
+        }
+    }
+
+    // Cross-engine boost tests
+
+    #[test]
+    fn url_in_2_engines_scores_higher_than_1_engine() {
+        let base_score = 1.0;
+
+        let score_1_engine = apply_cross_engine_boost(base_score, 1);
+        let score_2_engines = apply_cross_engine_boost(base_score, 2);
+
+        assert!((score_1_engine - 1.0).abs() < f64::EPSILON); // No boost
+        assert!((score_2_engines - 1.2).abs() < f64::EPSILON); // 1.2x boost
+        assert!(score_2_engines > score_1_engine);
+    }
+
+    #[test]
+    fn boost_multiplier_correct_for_1_to_4_engines() {
+        let base_score = 10.0;
+
+        // 1 engine: no boost (1.0x)
+        let boosted_1 = apply_cross_engine_boost(base_score, 1);
+        assert!((boosted_1 - 10.0).abs() < f64::EPSILON);
+
+        // 2 engines: 1.2x boost
+        let boosted_2 = apply_cross_engine_boost(base_score, 2);
+        assert!((boosted_2 - 12.0).abs() < f64::EPSILON);
+
+        // 3 engines: 1.4x boost
+        let boosted_3 = apply_cross_engine_boost(base_score, 3);
+        assert!((boosted_3 - 14.0).abs() < f64::EPSILON);
+
+        // 4 engines: 1.6x boost
+        let boosted_4 = apply_cross_engine_boost(base_score, 4);
+        assert!((boosted_4 - 16.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn boost_integrates_with_position_decay_scoring() {
+        let result = make_result("https://example.com", "Google");
+
+        // Calculate base score for Google at position 0
+        let base_score = calculate_score(&result, 0); // 1.2 * 1.0
+        assert!((base_score - 1.2).abs() < f64::EPSILON);
+
+        // Apply cross-engine boost (2 engines)
+        let boosted = apply_cross_engine_boost(base_score, 2);
+        let expected = 1.2 * 1.2; // base * 1.2x multiplier
+        assert!((boosted - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn zero_engines_handled_gracefully() {
+        let base_score = 5.0;
+        // Edge case: 0 engines (shouldn't happen in practice, but safe handling)
+        let boosted = apply_cross_engine_boost(base_score, 0);
+        // saturating_sub(1) on 0 gives 0, so boost = 1.0 + 0.2 * 0 = 1.0
+        assert!((boosted - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn boost_scales_linearly_with_engine_count() {
+        let base_score = 1.0;
+
+        let boost_2 = apply_cross_engine_boost(base_score, 2);
+        let boost_3 = apply_cross_engine_boost(base_score, 3);
+        let boost_4 = apply_cross_engine_boost(base_score, 4);
+
+        // Each additional engine adds 0.2x
+        let delta_2_3 = boost_3 - boost_2;
+        let delta_3_4 = boost_4 - boost_3;
+
+        assert!((delta_2_3 - 0.2).abs() < f64::EPSILON);
+        assert!((delta_3_4 - 0.2).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn boost_works_with_fractional_base_scores() {
+        let base_score = 0.75;
+
+        let boosted_2 = apply_cross_engine_boost(base_score, 2);
+        let expected_2 = 0.75 * 1.2; // 0.9
+        assert!((boosted_2 - expected_2).abs() < f64::EPSILON);
+
+        let boosted_3 = apply_cross_engine_boost(base_score, 3);
+        let expected_3 = 0.75 * 1.4; // 1.05
+        assert!((boosted_3 - expected_3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn boost_formula_matches_spec() {
+        // Verify formula: 1.0 + 0.2 * (engine_count - 1)
+        let base = 1.0;
+
+        for engines in 1..=10 {
+            let boosted = apply_cross_engine_boost(base, engines);
+            let expected_multiplier = 1.0 + 0.2 * (engines.saturating_sub(1)) as f64;
+            let expected = base * expected_multiplier;
+            assert!((boosted - expected).abs() < f64::EPSILON);
         }
     }
 }
