@@ -330,10 +330,134 @@ jobs:
           name: fae-macos-arm64
           path: ${{ env.ARTIFACTS_DIR }}/*
 
+  # ── Build Linux binary (x86_64) ────────────────────────────────────
+  build-linux:
+    name: Build Linux (x86_64)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libasound2-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libxdo-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+          if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+            sudo apt-get install -y libwebkit2gtk-4.1-dev
+          else
+            sudo apt-get install -y libwebkit2gtk-4.0-dev
+          fi
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-x86_64-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-x86_64-release-
+
+      - name: Build release binary
+        run: cargo build --release --features gui
+
+      - name: Prepare release payloads
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          DIST_DIR="$RUNNER_TEMP/fae-dist"
+          ARCHIVE_STAGING="$RUNNER_TEMP/fae-archive-staging"
+          ARCHIVE="$DIST_DIR/fae-${VERSION}-linux-x86_64.tar.gz"
+          UPDATE_ASSET="$DIST_DIR/fae-linux-x86_64"
+
+          rm -rf "$DIST_DIR" "$ARCHIVE_STAGING"
+          mkdir -p "$DIST_DIR" "$ARCHIVE_STAGING"
+
+          cp target/release/fae "$UPDATE_ASSET"
+          chmod +x "$UPDATE_ASSET"
+
+          cp target/release/fae "$ARCHIVE_STAGING/"
+          cp README.md "$ARCHIVE_STAGING/"
+          cp LICENSE "$ARCHIVE_STAGING/" 2>/dev/null || true
+          chmod +x "$ARCHIVE_STAGING/fae"
+          tar -czf "$ARCHIVE" -C "$ARCHIVE_STAGING" .
+
+          echo "ARTIFACTS_DIR=$DIST_DIR" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fae-linux-x86_64
+          path: ${{ env.ARTIFACTS_DIR }}/*
+
+  # ── Build Windows binary (x86_64) ──────────────────────────────────
+  build-windows:
+    name: Build Windows (x86_64)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-x86_64-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-x86_64-release-
+
+      - name: Build release binary
+        run: cargo build --release --features gui
+
+      - name: Prepare release payloads
+        shell: pwsh
+        run: |
+          $Version = "${env:GITHUB_REF}".Replace("refs/tags/v", "")
+          $DistDir = Join-Path $env:RUNNER_TEMP "fae-dist"
+          $ArchiveStaging = Join-Path $env:RUNNER_TEMP "fae-archive-staging"
+          $Archive = Join-Path $DistDir "fae-$Version-windows-x86_64.zip"
+          $UpdateAsset = Join-Path $DistDir "fae-windows-x86_64.exe"
+
+          Remove-Item -Recurse -Force $DistDir, $ArchiveStaging -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $ArchiveStaging | Out-Null
+
+          Copy-Item "target/release/fae.exe" $UpdateAsset
+          Copy-Item "target/release/fae.exe" (Join-Path $ArchiveStaging "fae.exe")
+          Copy-Item "README.md" $ArchiveStaging
+          if (Test-Path "LICENSE") {
+            Copy-Item "LICENSE" $ArchiveStaging
+          }
+
+          Compress-Archive -Path (Join-Path $ArchiveStaging "*") -DestinationPath $Archive -Force
+          "ARTIFACTS_DIR=$DistDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fae-windows-x86_64
+          path: ${{ env.ARTIFACTS_DIR }}/*
+
   # ── Create GitHub Release with all artifacts ───────────────────────
   release:
     name: Create Release
-    needs: build-macos
+    needs: [build-macos, build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -358,8 +482,11 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/**/*.tar.gz
+            artifacts/**/*.zip
             artifacts/**/*.dmg
             artifacts/**/fae-darwin-aarch64
+            artifacts/**/fae-linux-x86_64
+            artifacts/**/fae-windows-x86_64.exe
             artifacts/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
