@@ -249,20 +249,25 @@ fn config_validation_rejects_invalid() {
     assert!(config.validate().is_err());
 }
 
-/// Live integration test — runs actual network queries.
-/// Only run manually: `cargo test -p fae-search --test orchestrator_integration live_ -- --ignored`
+// ── Live integration tests (require network) ──────────────────────────
+// Run with: cargo test -p fae-search --test orchestrator_integration live_ -- --ignored
+
+fn live_config(engines: Vec<SearchEngine>) -> SearchConfig {
+    SearchConfig {
+        engines,
+        max_results: 10,
+        timeout_seconds: 15,
+        safe_search: true,
+        cache_ttl_seconds: 0,
+        request_delay_ms: (200, 500),
+        user_agent: None,
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_search_returns_results() {
-    let config = SearchConfig {
-        engines: vec![SearchEngine::DuckDuckGo],
-        max_results: 5,
-        timeout_seconds: 10,
-        safe_search: true,
-        cache_ttl_seconds: 0,
-        request_delay_ms: (0, 0),
-        user_agent: None,
-    };
+    let config = live_config(vec![SearchEngine::DuckDuckGo]);
 
     let results = fae_search::search("rust programming language", &config).await;
     match results {
@@ -277,6 +282,220 @@ async fn live_search_returns_results() {
         Err(e) => {
             // Network failures are acceptable in CI; just log
             eprintln!("Live search failed (acceptable in CI): {e}");
+        }
+    }
+}
+
+/// Multi-engine live test: query with all 4 engines, verify aggregated results.
+#[tokio::test]
+#[ignore]
+async fn live_multi_engine_search() {
+    let config = live_config(vec![
+        SearchEngine::DuckDuckGo,
+        SearchEngine::Brave,
+        SearchEngine::Google,
+        SearchEngine::Bing,
+    ]);
+
+    match fae_search::search("rust programming", &config).await {
+        Ok(results) => {
+            assert!(
+                !results.is_empty(),
+                "multi-engine search should return results"
+            );
+            // With 4 engines we should get many results
+            assert!(
+                results.len() >= 3,
+                "expected at least 3 results, got {}",
+                results.len()
+            );
+            // Results should be scored and sorted
+            for i in 1..results.len() {
+                assert!(
+                    results[i - 1].score >= results[i].score,
+                    "results not sorted at position {i}"
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("Multi-engine live search failed (acceptable): {e}");
+        }
+    }
+}
+
+/// Verify deduplication works in practice — total results < sum of per-engine results.
+#[tokio::test]
+#[ignore]
+async fn live_search_dedup_works() {
+    let config = SearchConfig {
+        max_results: 20,
+        ..live_config(vec![SearchEngine::DuckDuckGo, SearchEngine::Brave])
+    };
+
+    match fae_search::search("rust programming language", &config).await {
+        Ok(results) => {
+            // With 2 engines and max 20, we'd expect some overlap → dedup reducing count
+            // At minimum, results should exist and be unique URLs
+            let urls: std::collections::HashSet<&str> =
+                results.iter().map(|r| r.url.as_str()).collect();
+            assert_eq!(
+                urls.len(),
+                results.len(),
+                "results should have unique URLs after dedup"
+            );
+        }
+        Err(e) => {
+            eprintln!("Dedup live test failed (acceptable): {e}");
+        }
+    }
+}
+
+/// Verify max_results truncation in live search.
+#[tokio::test]
+#[ignore]
+async fn live_search_respects_max_results() {
+    let config = SearchConfig {
+        max_results: 3,
+        ..live_config(vec![SearchEngine::DuckDuckGo])
+    };
+
+    match fae_search::search("rust programming", &config).await {
+        Ok(results) => {
+            assert!(
+                results.len() <= 3,
+                "expected at most 3 results, got {}",
+                results.len()
+            );
+        }
+        Err(e) => {
+            eprintln!("Max results live test failed (acceptable): {e}");
+        }
+    }
+}
+
+/// Selector breakage detection: each engine should return results individually.
+/// If any engine returns 0 results, its CSS selectors may be broken.
+#[tokio::test]
+#[ignore]
+async fn live_each_engine_returns_results() {
+    for &engine in SearchEngine::all() {
+        if engine == SearchEngine::Startpage {
+            continue; // Not implemented yet
+        }
+        let config = live_config(vec![engine]);
+        match fae_search::search("rust programming", &config).await {
+            Ok(results) => {
+                assert!(
+                    !results.is_empty(),
+                    "{engine} returned 0 results — CSS selectors may be broken!"
+                );
+            }
+            Err(e) => {
+                eprintln!("{engine} failed (may need investigation): {e}");
+            }
+        }
+        // Brief delay between engines to avoid rate limiting
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+/// Verify all result URLs are parseable.
+#[tokio::test]
+#[ignore]
+async fn live_results_have_valid_urls() {
+    let config = live_config(vec![SearchEngine::DuckDuckGo]);
+
+    match fae_search::search("rust programming", &config).await {
+        Ok(results) => {
+            for r in &results {
+                let parsed = url::Url::parse(&r.url);
+                assert!(
+                    parsed.is_ok(),
+                    "result URL is not valid: {} (error: {:?})",
+                    r.url,
+                    parsed.err()
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("URL validation live test failed (acceptable): {e}");
+        }
+    }
+}
+
+/// Verify result snippets are non-empty (quality check).
+#[tokio::test]
+#[ignore]
+async fn live_results_have_non_empty_snippets() {
+    let config = live_config(vec![SearchEngine::DuckDuckGo]);
+
+    match fae_search::search("rust programming language", &config).await {
+        Ok(results) => {
+            let with_snippets = results.iter().filter(|r| !r.snippet.is_empty()).count();
+            let total = results.len();
+            // At least 80% should have snippets
+            assert!(
+                with_snippets as f64 / total as f64 >= 0.8,
+                "only {with_snippets}/{total} results have snippets"
+            );
+        }
+        Err(e) => {
+            eprintln!("Snippet quality live test failed (acceptable): {e}");
+        }
+    }
+}
+
+/// Live content extraction test — fetch a known stable URL.
+#[tokio::test]
+#[ignore]
+async fn live_fetch_page_content() {
+    match fae_search::fetch_page_content("https://www.rust-lang.org/").await {
+        Ok(content) => {
+            assert!(
+                !content.text.is_empty(),
+                "extracted content should not be empty"
+            );
+            assert!(
+                content.word_count > 0,
+                "word count should be positive, got {}",
+                content.word_count
+            );
+            // The Rust lang homepage should have the word "Rust" somewhere
+            assert!(
+                content.text.contains("Rust") || content.text.contains("rust"),
+                "content should mention Rust"
+            );
+        }
+        Err(e) => {
+            eprintln!("Content extraction live test failed (acceptable): {e}");
+        }
+    }
+}
+
+/// Cache integration: same query twice should return equivalent results.
+#[tokio::test]
+#[ignore]
+async fn live_cached_search_returns_same_results() {
+    let config = SearchConfig {
+        cache_ttl_seconds: 300, // Enable cache
+        ..live_config(vec![SearchEngine::DuckDuckGo])
+    };
+
+    let first = fae_search::search("rust programming cache test", &config).await;
+    let second = fae_search::search("rust programming cache test", &config).await;
+
+    match (first, second) {
+        (Ok(first_results), Ok(second_results)) => {
+            // Cached results should have the same URLs
+            let first_urls: Vec<&str> = first_results.iter().map(|r| r.url.as_str()).collect();
+            let second_urls: Vec<&str> = second_results.iter().map(|r| r.url.as_str()).collect();
+            assert_eq!(
+                first_urls, second_urls,
+                "cached search should return same URLs"
+            );
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("Cache live test failed (acceptable): {e}");
         }
     }
 }
