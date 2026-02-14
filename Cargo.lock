@@ -3115,6 +3115,7 @@ dependencies = [
  "cpal",
  "crossbeam-channel",
  "dioxus",
+ "fae-search",
  "fdaf-aec",
  "futures-util",
  "half",

@@ -3,24 +3,24 @@
   "project": "fae-tool5-web-search",
   "active": true,
   "milestone": {
-    "number": 1,
-    "name": "fae-search Crate (Core Library)"
+    "number": 2,
+    "name": "Fae Integration"
   },
   "phase": {
-    "number": "1.5",
-    "name": "Cache, UA Rotation & Request Jitter",
-    "plan": ".planning/PLAN-phase-1.5.md"
+    "number": "2.1",
+    "name": "WebSearchTool & FetchUrlTool",
+    "plan": ".planning/PLAN-phase-2.1.md"
   },
   "progress": {
     "total_tasks": 5,
-    "completed_tasks": 5,
-    "current_task": null
+    "completed_tasks": 0,
+    "current_task": 1
   },
   "review": {
-    "status": "passed",
-    "iteration": 2,
-    "last_verdict": "PASS"
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-02-14T16:20:00Z"
+  "status": "executing",
+  "last_updated": "2026-02-14T17:05:00Z"
 }

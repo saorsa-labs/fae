@@ -36,6 +36,8 @@ directml = ["ort/directml"]
 cuda = ["ort/cuda"]
 # Voice cloning TTS backend (Fish Speech).
 fish-speech = []
+# Embedded web search (fae-search crate).
+web-search = ["dep:fae-search"]
 
 [dependencies]
 # Audio I/O
@@ -136,6 +138,9 @@ symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "wav"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rand = "0.8"
 zip = "2"
+
+# Embedded web search (optional, behind `web-search` feature)
+fae-search = { path = "fae-search", optional = true }
 
 # Filesystem utilities (disk space check via statvfs)
 libc = "0.2"
