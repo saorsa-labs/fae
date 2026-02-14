@@ -1028,13 +1028,19 @@ async fn run_vad_stage(
     let confirm_samples = ms_to_samples(config.audio.input_sample_rate, config.barge_in.confirm_ms);
     let mut pending: Option<PendingBargeIn> = None;
 
-    // Mic audio flow validation: delay MicStatus { active: true } until we
-    // observe actual non-zero audio.  macOS TCC can silently provide all-zero
-    // samples when the app lacks microphone permission.
-    let mut mic_confirmed = false;
+    // Mic audio flow validation:
+    // - Confirm active once we observe non-zero audio.
+    // - Emit a watchdog warning if startup stays silent for too long.
+    // - Keep checking after watchdog so the indicator can recover to green
+    //   when audio starts later (e.g. user was quiet during startup).
+    let mut mic_active_reported = false;
+    let mut mic_watchdog_reported = false;
     let mic_start_time = Instant::now();
-    /// RMS threshold below which audio is considered silent/zero.
-    const MIC_RMS_THRESHOLD: f32 = 0.001;
+    /// RMS threshold used for "non-zero audio" detection.
+    ///
+    /// Keep this low so normal room noise and very quiet speech count as
+    /// active audio, while permission-denied all-zero streams stay below it.
+    const MIC_RMS_THRESHOLD: f32 = 0.000_01;
     /// Seconds to wait for non-zero audio before declaring mic failed.
     const MIC_WATCHDOG_SECS: u64 = 5;
 
@@ -1065,20 +1071,28 @@ async fn run_vad_stage(
                             Ok(out) => {
                                 // Mic audio flow validation: confirm mic is
                                 // delivering real audio, or time out.
-                                if !mic_confirmed {
-                                    if out.rms > MIC_RMS_THRESHOLD {
-                                        info!("mic audio confirmed (rms={:.4})", out.rms);
+                                if out.rms > MIC_RMS_THRESHOLD {
+                                    if !mic_active_reported {
+                                        info!("mic audio confirmed (rms={:.5})", out.rms);
                                         if let Some(ref rt) = state.runtime_tx {
                                             let _ = rt.send(RuntimeEvent::MicStatus { active: true });
                                         }
-                                        mic_confirmed = true;
-                                    } else if mic_start_time.elapsed() > Duration::from_secs(MIC_WATCHDOG_SECS) {
-                                        warn!("mic watchdog: no audio detected after {MIC_WATCHDOG_SECS}s");
-                                        if let Some(ref rt) = state.runtime_tx {
-                                            let _ = rt.send(RuntimeEvent::MicStatus { active: false });
-                                        }
-                                        mic_confirmed = true; // stop re-emitting
+                                        mic_active_reported = true;
                                     }
+                                    if mic_watchdog_reported {
+                                        info!("mic audio detected after watchdog warning");
+                                        mic_watchdog_reported = false;
+                                    }
+                                } else if !mic_active_reported
+                                    && !mic_watchdog_reported
+                                    && mic_start_time.elapsed()
+                                        > Duration::from_secs(MIC_WATCHDOG_SECS)
+                                {
+                                    warn!("mic watchdog: no audio detected after {MIC_WATCHDOG_SECS}s");
+                                    if let Some(ref rt) = state.runtime_tx {
+                                        let _ = rt.send(RuntimeEvent::MicStatus { active: false });
+                                    }
+                                    mic_watchdog_reported = true;
                                 }
 
                                 // Update echo tail: detect the transition from suppressing→not.

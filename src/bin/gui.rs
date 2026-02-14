@@ -1020,6 +1020,31 @@ mod gui {
         }
 
         #[test]
+        fn canvas_messages_render_newest_first() {
+            let mut bridge = fae::canvas::bridge::CanvasBridge::new("gui-test", 800.0, 600.0);
+            bridge.on_event(&fae::RuntimeEvent::ConversationSnapshot {
+                entries: vec![
+                    fae::runtime::ConversationSnapshotEntry {
+                        role: fae::runtime::ConversationSnapshotEntryRole::User,
+                        text: "Older message".to_owned(),
+                    },
+                    fae::runtime::ConversationSnapshotEntry {
+                        role: fae::runtime::ConversationSnapshotEntryRole::Assistant,
+                        text: "Latest message".to_owned(),
+                    },
+                ],
+            });
+
+            let html = crate::build_canvas_messages_html(&bridge);
+            let latest_idx = html.find("Latest message").expect("latest message in HTML");
+            let older_idx = html.find("Older message").expect("older message in HTML");
+            assert!(
+                latest_idx < older_idx,
+                "latest message should render before older message in canvas"
+            );
+        }
+
+        #[test]
         fn increment_counter_returns_running_total() {
             let counter = AtomicU64::new(0);
             assert_eq!(increment_counter(&counter), 1);
@@ -1149,8 +1174,9 @@ enum MainView {
 #[cfg(feature = "gui")]
 fn build_canvas_messages_html(bridge: &fae::canvas::bridge::CanvasBridge) -> String {
     let views = bridge.session().message_views();
-    let mut html = String::new();
-    for mv in &views {
+    let mut html = String::from("<div class=\"canvas-messages\">");
+    // Newest-first ordering so the latest assistant output is always at the top.
+    for mv in views.iter().rev() {
         let role_label = match mv.role {
             fae::canvas::types::MessageRole::User => "user",
             fae::canvas::types::MessageRole::Assistant => "assistant",
@@ -1195,6 +1221,7 @@ fn build_canvas_messages_html(bridge: &fae::canvas::bridge::CanvasBridge) -> Str
             mv.html,
         ));
     }
+    html.push_str("</div>");
     html
 }
 
@@ -2548,6 +2575,8 @@ fn app() -> Element {
                 "Speaking...".to_owned()
             } else if *assistant_generating.read() {
                 "Thinking...".to_owned()
+            } else if matches!(*mic_active.read(), Some(false)) {
+                "Microphone not detecting audio. Check macOS microphone permission.".to_owned()
             } else {
                 current_status.display_text()
             }
@@ -2842,7 +2871,8 @@ fn app() -> Element {
         });
     }
 
-    // Keep canvas pinned to the newest content unless the user scrolls up.
+    // Keep the latest canvas content visible at the top whenever new content
+    // arrives or the panel is opened.
     use_effect(move || {
         let _rev = *canvas_revision.read();
         if !*canvas_visible.read() {
@@ -2852,16 +2882,11 @@ fn app() -> Element {
             "(function(){\
                 const pane = document.getElementById('fae-canvas-pane');\
                 if (!pane) return;\
-                const dist = pane.scrollHeight - pane.scrollTop - pane.clientHeight;\
-                const stick = pane.dataset.stickBottom;\
-                const shouldStick = !stick || stick === 'true' || dist < 180;\
-                if (!shouldStick) return;\
                 if (typeof pane.scrollTo === 'function') {\
-                    pane.scrollTo({ top: pane.scrollHeight, behavior: 'smooth' });\
+                    pane.scrollTo({ top: 0, behavior: 'auto' });\
                 } else {\
-                    pane.scrollTop = pane.scrollHeight;\
+                    pane.scrollTop = 0;\
                 }\
-                pane.dataset.stickBottom = 'true';\
             })();",
         );
     });
@@ -2902,6 +2927,10 @@ fn app() -> Element {
                     onclick: move |_| {
                         let next = !*canvas_visible.read();
                         canvas_visible.set(next);
+                        if next {
+                            let current = *canvas_revision.read();
+                            canvas_revision.set(current.saturating_add(1));
+                        }
                     },
                     if *canvas_visible.read() {
                         "Hide Conversation"
@@ -3523,17 +3552,20 @@ fn app() -> Element {
                             id: "fae-canvas-pane",
                             role: "log",
                             aria_label: "Canvas content",
-                            onscroll: move |_| {
-                                let _ = dioxus::document::eval(
-                                    "(function(){\
-                                        const pane = document.getElementById('fae-canvas-pane');\
-                                        if (!pane) return;\
-                                        const dist = pane.scrollHeight - pane.scrollTop - pane.clientHeight;\
-                                        pane.dataset.stickBottom = dist < 180 ? 'true' : 'false';\
-                                    })();"
-                                );
-                            },
-                            dangerous_inner_html: "{build_canvas_messages_html(&canvas_bridge.read())}",
+                            {
+                                let messages_html = build_canvas_messages_html(&canvas_bridge.read());
+                                if messages_html == "<div class=\"canvas-messages\"></div>" {
+                                    rsx! {
+                                        div { class: "canvas-hint",
+                                            "Conversation content will appear here."
+                                        }
+                                    }
+                                } else {
+                                    rsx! {
+                                        div { dangerous_inner_html: "{messages_html}" }
+                                    }
+                                }
+                            }
                             if *assistant_generating.read() {
                                 div {
                                     class: "thinking-indicator",
@@ -3547,7 +3579,7 @@ fn app() -> Element {
                             }
                             {
                                 let tools_html = canvas_bridge.read().session().tool_elements_html();
-                                if !tools_html.is_empty() {
+                                if !tools_html.trim().is_empty() {
                                     rsx! {
                                         div { class: "canvas-tools-section",
                                             dangerous_inner_html: "{tools_html}",
