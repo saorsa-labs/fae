@@ -28,6 +28,7 @@ pub mod approval;
 pub mod audio;
 pub mod canvas;
 pub mod config;
+pub mod diagnostics;
 pub mod error;
 pub mod fae_llm;
 pub mod huggingface;

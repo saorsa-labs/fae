@@ -199,6 +199,7 @@ jobs:
           # Build a macOS app bundle for user-friendly installer packaging.
           cp target/release/fae "$APP_BUNDLE/Contents/MacOS/fae"
           cp "${PI_BINARY}" "$APP_BUNDLE/Contents/Resources/pi"
+          cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
           chmod +x "$APP_BUNDLE/Contents/MacOS/fae" "$APP_BUNDLE/Contents/Resources/pi"
           cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -235,6 +236,8 @@ jobs:
             <string>Fae needs access to your Downloads to help manage files when you ask.</string>
             <key>NSSpeechRecognitionUsageDescription</key>
             <string>Fae uses speech recognition to understand your voice commands.</string>
+            <key>CFBundleIconFile</key>
+            <string>AppIcon</string>
           </dict>
           </plist>
           EOF

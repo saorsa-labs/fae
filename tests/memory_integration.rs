@@ -59,13 +59,16 @@ fn contradiction_resolution_supersedes_name_memory() {
         .recall_context("what is my name")
         .expect("recall")
         .unwrap_or_default();
-    
+
     // Profile data should contain Bob (the current name), not Alice.
     // Note: episodes (conversation logs) may still reference Alice since they're
     // immutable records of what was said. We verify the profile line specifically.
-    assert!(recall.contains("[profile"), "recall should include profile data");
+    assert!(
+        recall.contains("[profile"),
+        "recall should include profile data"
+    );
     assert!(recall.contains("Bob"), "profile should contain Bob");
-    
+
     // Extract just the profile line and verify Alice isn't in the PROFILE
     let profile_line = recall
         .lines()

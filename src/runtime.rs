@@ -119,6 +119,16 @@ pub enum RuntimeEvent {
     ConversationSnapshot {
         entries: Vec<ConversationSnapshotEntry>,
     },
+    /// Microphone status update.
+    ///
+    /// Emitted by the audio capture stage to indicate whether the microphone
+    /// is actively providing audio data. The GUI uses this to display a mic
+    /// health indicator (green = audio flowing, red = capture failed or no
+    /// audio detected).
+    MicStatus {
+        /// Whether audio data is being received from the microphone.
+        active: bool,
+    },
     /// Explicit canvas panel visibility command for conversation UX.
     ///
     /// This is emitted when the user asks to show/hide conversation canvas.

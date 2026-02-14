@@ -252,10 +252,7 @@ mod tests {
     #[test]
     fn fae_personality_contains_identity() {
         let prompt = assemble_prompt("fae", "");
-        assert!(
-            prompt.contains("Fae"),
-            "prompt should mention Fae identity"
-        );
+        assert!(prompt.contains("Fae"), "prompt should mention Fae identity");
         assert!(
             prompt.contains("AI assistant"),
             "prompt should mention AI assistant"
@@ -265,10 +262,7 @@ mod tests {
     #[test]
     fn fae_personality_contains_tool_instructions() {
         let prompt = assemble_prompt("fae", "");
-        assert!(
-            prompt.contains("bash"),
-            "prompt should mention bash tool"
-        );
+        assert!(prompt.contains("bash"), "prompt should mention bash tool");
         assert!(
             prompt.contains("read") || prompt.contains("Read"),
             "prompt should mention read tool"

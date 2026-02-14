@@ -12,14 +12,30 @@ fn main() {
 #[cfg(feature = "gui")]
 fn main() {
     use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
 
-    // Initialize tracing so pipeline logs are visible in the terminal.
-    // Control verbosity with RUST_LOG, e.g. RUST_LOG=info,fae=debug just run
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+    // Ensure log directory exists.
+    let log_dir = fae::diagnostics::fae_log_dir();
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    // File appender: daily rotating log files in ~/.fae/logs/
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "fae.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // Dual-output tracing: stdout (respects RUST_LOG) + file (always info).
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    let stdout_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(file_layer)
         .init();
 
     LaunchBuilder::new()
@@ -313,6 +329,7 @@ mod gui {
                 | fae::RuntimeEvent::MemoryWrite { .. }
                 | fae::RuntimeEvent::MemoryConflict { .. }
                 | fae::RuntimeEvent::MemoryMigration { .. }
+                | fae::RuntimeEvent::MicStatus { .. }
         )
     }
 
@@ -1795,6 +1812,8 @@ fn app() -> Element {
     let mut update_restart_needed = use_signal(|| false);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut active_model = use_signal(|| None::<String>);
+    let mut mic_active = use_signal(|| None::<bool>);
+    let mut diagnostics_status = use_signal(String::new);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
@@ -2312,6 +2331,9 @@ fn app() -> Element {
                                                         fae::RuntimeEvent::ConversationCanvasVisibility { visible } => {
                                                             canvas_visible.set(*visible);
                                                         }
+                                                        fae::RuntimeEvent::MicStatus { active } => {
+                                                            mic_active.set(Some(*active));
+                                                        }
                                                         other if gui::suppress_main_screen_runtime_event(other) => {}
                                                         _ => {}
                                                     }
@@ -2322,6 +2344,7 @@ fn app() -> Element {
                                         shared.write().cancel_token = None;
                                         assistant_speaking.set(false);
                                         assistant_generating.set(false);
+                                        mic_active.set(None);
                                         text_injection_tx.set(None);
                                     }
                                     PipelineMessage::ModelsReady(Err(e)) => {
@@ -2959,6 +2982,21 @@ fn app() -> Element {
 
                 // Title
                 h1 { class: "title", "Fae" }
+
+                // Mic status indicator (visible when pipeline is running)
+                if is_running {
+                    {
+                        let mic_state = *mic_active.read();
+                        let (mic_class, mic_label) = match mic_state {
+                            None => ("mic-indicator mic-starting", "\u{1F3A4} Mic: starting..."),
+                            Some(true) => ("mic-indicator mic-active", "\u{1F3A4} Mic: active"),
+                            Some(false) => ("mic-indicator mic-failed", "\u{1F3A4} Mic: not detected"),
+                        };
+                        rsx! {
+                            p { class: "{mic_class}", "{mic_label}" }
+                        }
+                    }
+                }
 
                 // Status text
                 p {
@@ -4070,6 +4108,53 @@ fn app() -> Element {
                                         });
                                     },
                                     "Check for Updates"
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Diagnostics ---
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Diagnostics" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Log directory" }
+                                p { class: "settings-value",
+                                    "{fae::diagnostics::fae_log_dir().display()}"
+                                }
+                            }
+                            div { class: "settings-row",
+                                button {
+                                    class: "settings-save",
+                                    onclick: move |_| {
+                                        diagnostics_status.set("Gathering...".to_owned());
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(
+                                                fae::diagnostics::gather_diagnostic_bundle,
+                                            )
+                                            .await;
+                                            match result {
+                                                Ok(Ok(path)) => {
+                                                    diagnostics_status.set(format!(
+                                                        "Saved to {}",
+                                                        path.display()
+                                                    ));
+                                                }
+                                                Ok(Err(e)) => {
+                                                    diagnostics_status
+                                                        .set(format!("Error: {e}"));
+                                                }
+                                                Err(e) => {
+                                                    diagnostics_status
+                                                        .set(format!("Error: {e}"));
+                                                }
+                                            }
+                                        });
+                                    },
+                                    "Gather Logs"
+                                }
+                                p { class: "settings-value",
+                                    "{diagnostics_status.read()}"
                                 }
                             }
                         }
@@ -5529,6 +5614,17 @@ const GLOBAL_CSS: &str = r#"
         transition: color 0.3s ease;
     }
     .status-error { color: var(--red); }
+
+    /* --- Mic indicator --- */
+    .mic-indicator {
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 4px;
+        margin-bottom: 4px;
+    }
+    .mic-starting { color: var(--text-tertiary); }
+    .mic-active { color: #22c55e; }
+    .mic-failed { color: var(--red); font-weight: 600; }
 
     .welcome-text {
         color: var(--text-secondary);

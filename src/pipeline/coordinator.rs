@@ -415,8 +415,9 @@ impl PipelineCoordinator {
         let capture_handle = {
             let config = self.config.audio.clone();
             let cancel = cancel.clone();
+            let rt_tx = runtime_tx.clone();
             tokio::spawn(async move {
-                run_capture_stage(config, audio_tx, cancel).await;
+                run_capture_stage(config, audio_tx, rt_tx, cancel).await;
             })
         };
 
@@ -866,17 +867,30 @@ impl PipelineCoordinator {
 async fn run_capture_stage(
     config: crate::config::AudioConfig,
     tx: mpsc::Sender<AudioChunk>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     cancel: CancellationToken,
 ) {
     use crate::audio::capture::CpalCapture;
 
     match CpalCapture::new(&config) {
         Ok(capture) => {
+            // Notify GUI that mic is active (stream opened successfully).
+            if let Some(ref rt) = runtime_tx {
+                let _ = rt.send(RuntimeEvent::MicStatus { active: true });
+            }
             if let Err(e) = capture.run(tx, cancel).await {
                 error!("capture stage error: {e}");
+                if let Some(ref rt) = runtime_tx {
+                    let _ = rt.send(RuntimeEvent::MicStatus { active: false });
+                }
             }
         }
-        Err(e) => error!("failed to init capture: {e}"),
+        Err(e) => {
+            error!("failed to init capture: {e}");
+            if let Some(ref rt) = runtime_tx {
+                let _ = rt.send(RuntimeEvent::MicStatus { active: false });
+            }
+        }
     }
 }
 

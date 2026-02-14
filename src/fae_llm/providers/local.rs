@@ -394,7 +394,7 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                 }
             })
             .collect();
-        
+
         tracing::info!(
             "mistralrs response: {} events, finish_reason={}, has_tool_calls={}",
             all_events.len(),

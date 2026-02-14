@@ -206,7 +206,8 @@ impl CanvasBridge {
             | RuntimeEvent::PermissionsChanged { .. }
             | RuntimeEvent::ModelSwitchRequested { .. }
             | RuntimeEvent::ConversationCanvasVisibility { .. }
-            | RuntimeEvent::ProviderFallback { .. } => {}
+            | RuntimeEvent::ProviderFallback { .. }
+            | RuntimeEvent::MicStatus { .. } => {}
         }
     }
 

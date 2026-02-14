@@ -172,7 +172,7 @@ impl ToolExecutor {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         tracing::info!(
-            tool_name = %call.function_name, 
+            tool_name = %call.function_name,
             duration_ms = duration_ms,
             success = result.success,
             truncated = result.truncated,
