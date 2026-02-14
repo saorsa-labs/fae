@@ -7,7 +7,7 @@
 use crate::circuit_breaker::global_breaker;
 use crate::config::SearchConfig;
 use crate::engine::SearchEngineTrait;
-use crate::engines::{BingEngine, BraveEngine, DuckDuckGoEngine, GoogleEngine};
+use crate::engines::{BingEngine, BraveEngine, DuckDuckGoEngine, GoogleEngine, StartpageEngine};
 use crate::error::SearchError;
 use crate::types::{SearchEngine, SearchResult};
 
@@ -174,12 +174,7 @@ async fn query_engine(
         SearchEngine::Brave => BraveEngine.search(query, config).await,
         SearchEngine::Google => GoogleEngine.search(query, config).await,
         SearchEngine::Bing => BingEngine.search(query, config).await,
-        SearchEngine::Startpage => {
-            // Startpage not yet implemented (Phase 3.3).
-            Err(SearchError::Parse(
-                "Startpage engine not yet implemented".into(),
-            ))
-        }
+        SearchEngine::Startpage => StartpageEngine.search(query, config).await,
     }
 }
 

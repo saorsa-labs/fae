@@ -379,9 +379,6 @@ async fn live_search_respects_max_results() {
 #[ignore]
 async fn live_each_engine_returns_results() {
     for &engine in SearchEngine::all() {
-        if engine == SearchEngine::Startpage {
-            continue; // Not implemented yet
-        }
         let config = live_config(vec![engine]);
         match fae_search::search("rust programming", &config).await {
             Ok(results) => {

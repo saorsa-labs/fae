@@ -7,8 +7,10 @@ pub mod bing;
 pub mod brave;
 pub mod duckduckgo;
 pub mod google;
+pub mod startpage;
 
 pub use bing::BingEngine;
 pub use brave::BraveEngine;
 pub use duckduckgo::DuckDuckGoEngine;
 pub use google::GoogleEngine;
+pub use startpage::StartpageEngine;
