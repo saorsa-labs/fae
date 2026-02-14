@@ -3227,12 +3227,12 @@ fn app() -> Element {
                         if _risky_tools_enabled {
                             div { class: "perm-bar",
                                 span { class: "perm-label",
-                                    if always_allowed_tools.read().len() > 0 { "Tools: approved" } else { "Tools: ask first" }
+                                    if !always_allowed_tools.read().is_empty() { "Tools: approved" } else { "Tools: ask first" }
                                 }
                                 button {
-                                    class: if always_allowed_tools.read().len() > 0 { "perm-revoke-btn" } else { "perm-grant-btn" },
+                                    class: if !always_allowed_tools.read().is_empty() { "perm-revoke-btn" } else { "perm-grant-btn" },
                                     onclick: move |_| {
-                                        if always_allowed_tools.read().len() > 0 {
+                                        if !always_allowed_tools.read().is_empty() {
                                             always_allowed_tools.write().clear();
                                             voice_permissions_granted.set(false);
                                         } else {
@@ -3243,7 +3243,7 @@ fn app() -> Element {
                                             voice_permissions_granted.set(true);
                                         }
                                     },
-                                    if always_allowed_tools.read().len() > 0 { "Revoke" } else { "Auto-Approve" }
+                                    if !always_allowed_tools.read().is_empty() { "Revoke" } else { "Auto-Approve" }
                                 }
                             }
                         }
