@@ -83,7 +83,10 @@ impl SearchEngineTrait for GoogleEngine {
 /// Parse Google HTML response into search results.
 ///
 /// Extracted as a separate function for testability with mock HTML.
-fn parse_google_html(html: &str, max_results: usize) -> Result<Vec<SearchResult>, SearchError> {
+pub(crate) fn parse_google_html(
+    html: &str,
+    max_results: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     let document = Html::parse_document(html);
 
     // Google organic results are in div.g containers
@@ -250,6 +253,67 @@ mod tests {
     fn is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<GoogleEngine>();
+    }
+
+    // ── Fixture-based parser tests ──────────────────────────────────────
+
+    const FIXTURE_GOOGLE_HTML: &str = include_str!("../../test-data/google.html");
+
+    #[test]
+    fn fixture_extracts_all_organic_results() {
+        let results = parse_google_html(FIXTURE_GOOGLE_HTML, 50);
+        let results = results.expect("fixture should parse");
+        // Fixture has 12 organic results (ads are outside div.g containers)
+        assert!(
+            results.len() >= 10,
+            "expected 10+ results, got {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn fixture_results_have_non_empty_fields() {
+        let results = parse_google_html(FIXTURE_GOOGLE_HTML, 50).expect("should parse");
+        for (i, r) in results.iter().enumerate() {
+            assert!(!r.title.is_empty(), "result {i} has empty title");
+            assert!(!r.url.is_empty(), "result {i} has empty URL");
+            assert!(!r.snippet.is_empty(), "result {i} has empty snippet");
+            assert_eq!(r.engine, "Google");
+        }
+    }
+
+    #[test]
+    fn fixture_unwraps_google_redirect_urls() {
+        let results = parse_google_html(FIXTURE_GOOGLE_HTML, 50).expect("should parse");
+        // Result 2 uses /url?q= redirect
+        let book_result = results
+            .iter()
+            .find(|r| r.title.contains("Rust Book"))
+            .expect("should find book result");
+        assert_eq!(book_result.url, "https://doc.rust-lang.org/book/");
+
+        // No result URL should contain /url?q=
+        for r in &results {
+            assert!(!r.url.starts_with("/url?"), "URL still wrapped: {}", r.url);
+        }
+    }
+
+    #[test]
+    fn fixture_excludes_ads() {
+        let results = parse_google_html(FIXTURE_GOOGLE_HTML, 50).expect("should parse");
+        for r in &results {
+            assert!(
+                !r.url.contains("ad.example.com"),
+                "ad result should be excluded: {}",
+                r.url
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_respects_max_results() {
+        let results = parse_google_html(FIXTURE_GOOGLE_HTML, 3).expect("should parse");
+        assert_eq!(results.len(), 3);
     }
 
     #[tokio::test]

@@ -88,11 +88,16 @@ impl SearchEngineTrait for DuckDuckGoEngine {
 /// Parse DuckDuckGo HTML response into search results.
 ///
 /// Extracted as a separate function for testability with mock HTML.
-fn parse_duckduckgo_html(html: &str, max_results: usize) -> Result<Vec<SearchResult>, SearchError> {
+pub(crate) fn parse_duckduckgo_html(
+    html: &str,
+    max_results: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     let document = Html::parse_document(html);
 
-    let result_sel = Selector::parse(".result.results_links.results_links_deep, .web-result")
-        .map_err(|e| SearchError::Parse(format!("invalid result selector: {e:?}")))?;
+    let result_sel = Selector::parse(
+        ".result.results_links.results_links_deep:not(.result--ad), .web-result:not(.result--ad)",
+    )
+    .map_err(|e| SearchError::Parse(format!("invalid result selector: {e:?}")))?;
     let title_sel = Selector::parse(".result__a")
         .map_err(|e| SearchError::Parse(format!("invalid title selector: {e:?}")))?;
     let snippet_sel = Selector::parse(".result__snippet")
@@ -240,6 +245,69 @@ mod tests {
     fn is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<DuckDuckGoEngine>();
+    }
+
+    // ── Fixture-based parser tests ──────────────────────────────────────
+
+    const FIXTURE_DDG_HTML: &str = include_str!("../../test-data/duckduckgo.html");
+
+    #[test]
+    fn fixture_extracts_all_organic_results() {
+        let results = parse_duckduckgo_html(FIXTURE_DDG_HTML, 50);
+        let results = results.expect("fixture should parse");
+        // Fixture has 12 organic results + 1 ad (ad uses result--ad class, not matched by selector)
+        assert!(
+            results.len() >= 10,
+            "expected 10+ results, got {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn fixture_results_have_non_empty_fields() {
+        let results = parse_duckduckgo_html(FIXTURE_DDG_HTML, 50).expect("should parse");
+        for (i, r) in results.iter().enumerate() {
+            assert!(!r.title.is_empty(), "result {i} has empty title");
+            assert!(!r.url.is_empty(), "result {i} has empty URL");
+            assert!(!r.snippet.is_empty(), "result {i} has empty snippet");
+            assert_eq!(r.engine, "DuckDuckGo");
+        }
+    }
+
+    #[test]
+    fn fixture_unwraps_ddg_redirect_urls() {
+        let results = parse_duckduckgo_html(FIXTURE_DDG_HTML, 50).expect("should parse");
+        // First result should have unwrapped URL
+        assert_eq!(
+            results[0].url, "https://www.rust-lang.org/",
+            "redirect URL not unwrapped"
+        );
+        // No result URL should contain duckduckgo.com/l/
+        for r in &results {
+            assert!(
+                !r.url.contains("duckduckgo.com/l/"),
+                "URL still wrapped: {}",
+                r.url
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_respects_max_results() {
+        let results = parse_duckduckgo_html(FIXTURE_DDG_HTML, 3).expect("should parse");
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn fixture_excludes_ads() {
+        let results = parse_duckduckgo_html(FIXTURE_DDG_HTML, 50).expect("should parse");
+        for r in &results {
+            assert!(
+                !r.title.contains("(Ad)"),
+                "ad result should be excluded: {}",
+                r.title
+            );
+        }
     }
 
     #[tokio::test]

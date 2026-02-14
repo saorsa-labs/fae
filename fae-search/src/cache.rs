@@ -181,4 +181,107 @@ mod tests {
         let hash2 = hash_engines(&[SearchEngine::Bing]);
         assert_ne!(hash1, hash2);
     }
+
+    // ── Additional cache edge-case tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn multiple_queries_cached_independently() {
+        let key_a = CacheKey::new("cache_test_independent_a", &[SearchEngine::Google]);
+        let key_b = CacheKey::new("cache_test_independent_b", &[SearchEngine::Google]);
+
+        let results_a = vec![SearchResult {
+            title: "Result A".into(),
+            url: "https://a.com".into(),
+            snippet: "snippet a".into(),
+            engine: "Google".into(),
+            score: 1.0,
+        }];
+        let results_b = vec![SearchResult {
+            title: "Result B".into(),
+            url: "https://b.com".into(),
+            snippet: "snippet b".into(),
+            engine: "Google".into(),
+            score: 2.0,
+        }];
+
+        insert(key_a.clone(), results_a, 600).await;
+        insert(key_b.clone(), results_b, 600).await;
+
+        let cached_a = get(&key_a, 600).await.expect("a should be cached");
+        let cached_b = get(&key_b, 600).await.expect("b should be cached");
+
+        assert_eq!(cached_a[0].title, "Result A");
+        assert_eq!(cached_b[0].title, "Result B");
+    }
+
+    #[tokio::test]
+    async fn overwrite_same_key_updates_value() {
+        let key = CacheKey::new("cache_test_overwrite", &[SearchEngine::DuckDuckGo]);
+
+        let old_results = vec![SearchResult {
+            title: "Old".into(),
+            url: "https://old.com".into(),
+            snippet: "old".into(),
+            engine: "DuckDuckGo".into(),
+            score: 1.0,
+        }];
+        let new_results = vec![SearchResult {
+            title: "New".into(),
+            url: "https://new.com".into(),
+            snippet: "new".into(),
+            engine: "DuckDuckGo".into(),
+            score: 2.0,
+        }];
+
+        insert(key.clone(), old_results, 600).await;
+        insert(key.clone(), new_results, 600).await;
+
+        let cached = get(&key, 600).await.expect("should be cached");
+        assert_eq!(cached[0].title, "New");
+    }
+
+    #[test]
+    fn cache_key_empty_query_normalised() {
+        let key1 = CacheKey::new("", &[SearchEngine::Google]);
+        let key2 = CacheKey::new("  ", &[SearchEngine::Google]);
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_all_engines_same_regardless_of_order() {
+        let key1 = CacheKey::new(
+            "test",
+            &[
+                SearchEngine::DuckDuckGo,
+                SearchEngine::Brave,
+                SearchEngine::Google,
+                SearchEngine::Bing,
+            ],
+        );
+        let key2 = CacheKey::new(
+            "test",
+            &[
+                SearchEngine::Bing,
+                SearchEngine::Google,
+                SearchEngine::Brave,
+                SearchEngine::DuckDuckGo,
+            ],
+        );
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn engine_hash_single_engine_deterministic() {
+        let hash1 = hash_engines(&[SearchEngine::DuckDuckGo]);
+        let hash2 = hash_engines(&[SearchEngine::DuckDuckGo]);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn engine_hash_empty_list() {
+        // Empty engine list should produce a deterministic hash.
+        let hash1 = hash_engines(&[]);
+        let hash2 = hash_engines(&[]);
+        assert_eq!(hash1, hash2);
+    }
 }

@@ -58,7 +58,10 @@ impl SearchEngineTrait for BraveEngine {
 /// Parse Brave Search HTML response into search results.
 ///
 /// Extracted as a separate function for testability with mock HTML.
-fn parse_brave_html(html: &str, max_results: usize) -> Result<Vec<SearchResult>, SearchError> {
+pub(crate) fn parse_brave_html(
+    html: &str,
+    max_results: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     let document = Html::parse_document(html);
 
     // Brave uses .snippet containers with data-pos attribute for organic results.
@@ -225,6 +228,62 @@ mod tests {
     fn is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<BraveEngine>();
+    }
+
+    // ── Fixture-based parser tests ──────────────────────────────────────
+
+    const FIXTURE_BRAVE_HTML: &str = include_str!("../../test-data/brave.html");
+
+    #[test]
+    fn fixture_extracts_all_organic_results() {
+        let results = parse_brave_html(FIXTURE_BRAVE_HTML, 50);
+        let results = results.expect("fixture should parse");
+        // Fixture has 11 organic + 2 standalone (excluded)
+        assert!(
+            results.len() >= 10,
+            "expected 10+ results, got {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn fixture_results_have_non_empty_fields() {
+        let results = parse_brave_html(FIXTURE_BRAVE_HTML, 50).expect("should parse");
+        for (i, r) in results.iter().enumerate() {
+            assert!(!r.title.is_empty(), "result {i} has empty title");
+            assert!(!r.url.is_empty(), "result {i} has empty URL");
+            assert!(!r.snippet.is_empty(), "result {i} has empty snippet");
+            assert_eq!(r.engine, "Brave");
+        }
+    }
+
+    #[test]
+    fn fixture_excludes_standalone_snippets() {
+        let results = parse_brave_html(FIXTURE_BRAVE_HTML, 50).expect("should parse");
+        for r in &results {
+            assert!(
+                !r.title.contains("Featured Answer"),
+                "standalone snippet included: {}",
+                r.title
+            );
+            assert!(
+                !r.title.contains("Rust Language Statistics"),
+                "standalone infobox included: {}",
+                r.title
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_respects_max_results() {
+        let results = parse_brave_html(FIXTURE_BRAVE_HTML, 3).expect("should parse");
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn fixture_first_result_is_rust_lang() {
+        let results = parse_brave_html(FIXTURE_BRAVE_HTML, 50).expect("should parse");
+        assert_eq!(results[0].url, "https://www.rust-lang.org/");
     }
 
     #[tokio::test]

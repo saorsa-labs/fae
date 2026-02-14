@@ -259,6 +259,68 @@ mod tests {
         assert!(config.validate().is_err());
     }
 
+    // ── select_engines + circuit breaker integration tests ──────────────
+
+    #[test]
+    fn select_engines_returns_all_when_healthy() {
+        // Reset global breaker state.
+        if let Ok(mut breaker) = global_breaker().lock() {
+            breaker.reset();
+        }
+        let config = make_config(
+            vec![
+                SearchEngine::DuckDuckGo,
+                SearchEngine::Google,
+                SearchEngine::Bing,
+            ],
+            10,
+        );
+        let selected = select_engines(&config);
+        assert_eq!(selected.len(), 3);
+    }
+
+    #[test]
+    fn select_engines_filters_tripped_engines() {
+        // Reset, then trip Google.
+        if let Ok(mut breaker) = global_breaker().lock() {
+            breaker.reset();
+            breaker.record_failure(SearchEngine::Google);
+            breaker.record_failure(SearchEngine::Google);
+            breaker.record_failure(SearchEngine::Google);
+        }
+        let config = make_config(vec![SearchEngine::DuckDuckGo, SearchEngine::Google], 10);
+        let selected = select_engines(&config);
+        // Google is Open (tripped) — should be filtered.
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0], SearchEngine::DuckDuckGo);
+
+        // Reset for other tests.
+        if let Ok(mut breaker) = global_breaker().lock() {
+            breaker.reset();
+        }
+    }
+
+    #[test]
+    fn select_engines_falls_back_when_all_tripped() {
+        // Trip all configured engines.
+        if let Ok(mut breaker) = global_breaker().lock() {
+            breaker.reset();
+            for _ in 0..3 {
+                breaker.record_failure(SearchEngine::DuckDuckGo);
+                breaker.record_failure(SearchEngine::Brave);
+            }
+        }
+        let config = make_config(vec![SearchEngine::DuckDuckGo, SearchEngine::Brave], 10);
+        let selected = select_engines(&config);
+        // All tripped → fallback to full list.
+        assert_eq!(selected.len(), 2);
+
+        // Reset for other tests.
+        if let Ok(mut breaker) = global_breaker().lock() {
+            breaker.reset();
+        }
+    }
+
     #[tokio::test]
     async fn all_engines_empty_returns_empty_vec() {
         // When engines return empty results (not errors), we should get Ok(empty)

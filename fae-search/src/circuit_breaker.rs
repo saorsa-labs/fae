@@ -396,6 +396,60 @@ mod tests {
     }
 
     #[test]
+    fn rapid_success_failure_alternation() {
+        let mut breaker = make_breaker(3, 60);
+        // Alternate success/failure — should never trip because consecutive failures reset.
+        for _ in 0..10 {
+            breaker.record_failure(SearchEngine::Google);
+            breaker.record_success(SearchEngine::Google);
+        }
+        assert_eq!(
+            breaker.engine_status(SearchEngine::Google),
+            CircuitState::Closed
+        );
+    }
+
+    #[test]
+    fn multiple_engines_mixed_states() {
+        let mut breaker = make_breaker(2, 0);
+
+        // Google: trip to Open
+        breaker.record_failure(SearchEngine::Google);
+        breaker.record_failure(SearchEngine::Google);
+        assert_eq!(
+            breaker.engine_status(SearchEngine::Google),
+            CircuitState::Open
+        );
+
+        // DDG: one failure, still Closed
+        breaker.record_failure(SearchEngine::DuckDuckGo);
+        assert_eq!(
+            breaker.engine_status(SearchEngine::DuckDuckGo),
+            CircuitState::Closed
+        );
+
+        // Brave: never seen, Closed
+        assert_eq!(
+            breaker.engine_status(SearchEngine::Brave),
+            CircuitState::Closed
+        );
+
+        // Bing: success recorded
+        breaker.record_success(SearchEngine::Bing);
+        assert_eq!(
+            breaker.engine_status(SearchEngine::Bing),
+            CircuitState::Closed
+        );
+
+        // Google: transition to HalfOpen (zero cooldown)
+        let _ = breaker.should_attempt(SearchEngine::Google);
+        assert_eq!(
+            breaker.engine_status(SearchEngine::Google),
+            CircuitState::HalfOpen
+        );
+    }
+
+    #[test]
     fn circuit_state_derives() {
         // Verify Debug, Clone, Copy, PartialEq
         let state = CircuitState::Closed;

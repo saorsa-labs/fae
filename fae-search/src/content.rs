@@ -411,4 +411,111 @@ mod tests {
         assert!(result.is_ok());
         // Should not panic on char boundary issues
     }
+
+    // ── Fixture-based and edge case tests ────────────────────────────────
+
+    const FIXTURE_COMPLEX: &str = include_str!("../test-data/content_complex.html");
+
+    #[test]
+    fn fixture_complex_extracts_title() {
+        let result = extract_content(FIXTURE_COMPLEX, "https://example.com/article");
+        let page = result.expect("should parse complex fixture");
+        assert_eq!(page.title, "Understanding Rust Ownership - A Deep Dive");
+    }
+
+    #[test]
+    fn fixture_complex_extracts_article_content() {
+        let result = extract_content(FIXTURE_COMPLEX, "https://example.com/article");
+        let page = result.expect("should parse");
+        assert!(page.text.contains("Ownership is one of Rust"));
+        assert!(page.text.contains("References and Borrowing"));
+        assert!(page.text.contains("Conclusion"));
+    }
+
+    #[test]
+    fn fixture_complex_strips_boilerplate() {
+        let result = extract_content(FIXTURE_COMPLEX, "https://example.com/article");
+        let page = result.expect("should parse");
+        // Navigation, sidebar, footer, scripts should be stripped.
+        assert!(!page.text.contains("analytics.track"));
+        assert!(!page.text.contains("tracking/pixel.gif"));
+        assert!(!page.text.contains("Privacy Policy"));
+        assert!(!page.text.contains("Advertisement content"));
+    }
+
+    #[test]
+    fn fixture_complex_has_positive_word_count() {
+        let result = extract_content(FIXTURE_COMPLEX, "https://example.com/article");
+        let page = result.expect("should parse");
+        assert!(
+            page.word_count > 50,
+            "expected 50+ words, got {}",
+            page.word_count
+        );
+    }
+
+    #[test]
+    fn deeply_nested_html_extracts_content() {
+        let html = r#"<html><body>
+            <div><div><div><div><div>
+                <p>Deeply nested paragraph content here.</p>
+            </div></div></div></div></div>
+        </body></html>"#;
+        let result = extract_content(html, "https://example.com");
+        let page = result.expect("should parse nested HTML");
+        assert!(page.text.contains("Deeply nested paragraph"));
+    }
+
+    #[test]
+    fn huge_text_truncated_at_limit() {
+        let word = "lorem ";
+        let huge_body = word.repeat(50_000); // ~300k chars
+        let html = format!("<html><body><p>{huge_body}</p></body></html>");
+        let result = extract_content_with_limit(&html, "https://example.com", 1000);
+        let page = result.expect("should parse and truncate");
+        assert!(
+            page.text.len() <= 1100,
+            "text should be truncated near limit, got {} chars",
+            page.text.len()
+        );
+    }
+
+    #[test]
+    fn no_title_tag_returns_empty_title() {
+        let html = "<html><head></head><body><p>Content without a title</p></body></html>";
+        let result = extract_content(html, "https://example.com");
+        let page = result.expect("should parse");
+        assert!(page.title.is_empty());
+        assert!(page.text.contains("Content without a title"));
+    }
+
+    #[test]
+    fn multiple_article_elements() {
+        let html = r#"<html><body>
+            <article>First article content here.</article>
+            <article>Second article content here.</article>
+        </body></html>"#;
+        let result = extract_content(html, "https://example.com");
+        let page = result.expect("should parse");
+        // First article should be picked as the content root.
+        assert!(page.text.contains("First article"));
+    }
+
+    #[test]
+    fn only_scripts_and_styles_returns_error() {
+        let html = r#"<html>
+            <head><style>body{color:red}</style></head>
+            <body>
+                <script>console.log('hello');</script>
+                <style>.hidden{display:none}</style>
+            </body>
+        </html>"#;
+        let result = extract_content(html, "https://example.com");
+        // Pages with only scripts/styles have no extractable content.
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no extractable content"),);
+    }
 }
