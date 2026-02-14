@@ -65,12 +65,9 @@ impl Tool for WebSearchTool {
     }
 
     fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
-        let query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                FaeLlmError::ToolValidationError("missing required argument: query".into())
-            })?;
+        let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
+            FaeLlmError::ToolValidationError("missing required argument: query".into())
+        })?;
 
         if query.trim().is_empty() {
             return Err(FaeLlmError::ToolValidationError(

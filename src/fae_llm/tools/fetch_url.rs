@@ -82,9 +82,7 @@ impl Tool for FetchUrlTool {
         let page = match handle.block_on(fae_search::fetch_page_content(url)) {
             Ok(page) => page,
             Err(e) => {
-                return Ok(ToolResult::failure(format!(
-                    "Failed to fetch {url}: {e}"
-                )));
+                return Ok(ToolResult::failure(format!("Failed to fetch {url}: {e}")));
             }
         };
 
