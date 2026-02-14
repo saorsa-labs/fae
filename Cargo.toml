@@ -1,6 +1,6 @@
 [package]
 name = "fae"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 description = "Real-time speech-to-speech AI conversation system"
 license = "AGPL-3.0"
