@@ -438,7 +438,12 @@ pub fn available_disk_space(path: &Path) -> Result<u64> {
 
     // f_bavail = blocks available to unprivileged users.
     // f_frsize = fundamental file system block size.
-    Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
+    // The `as u64` casts are needed for macOS where these are i32/i64; on Linux
+    // they are already u64 (clippy::unnecessary_cast).  Using a let-binding with
+    // explicit type annotation avoids the platform-specific lint.
+    let bavail: u64 = stat.f_bavail as _;
+    let frsize: u64 = stat.f_frsize as _;
+    Ok(bavail.wrapping_mul(frsize))
 }
 
 /// Fallback for non-Unix platforms — returns `u64::MAX` (skip the check).
