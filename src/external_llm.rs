@@ -359,8 +359,10 @@ var = "FAE_PROFILE_KEY"
         )
         .unwrap();
 
-        let mut llm = crate::config::LlmConfig::default();
-        llm.external_profile = Some("work".to_owned());
+        let mut llm = crate::config::LlmConfig {
+            external_profile: Some("work".to_owned()),
+            ..Default::default()
+        };
         llm.api_key.clear();
         llm.cloud_provider = None;
 

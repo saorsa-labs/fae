@@ -1,146 +1,169 @@
-# Phase 2.1: OpenAI Adapter
+# Phase 2.1: WebSearchTool & FetchUrlTool
 
-## Overview
-Implement the ProviderAdapter trait and the OpenAI adapter that supports both the Chat Completions API and the Responses API. Includes SSE streaming parser, request builder, tool call streaming with partial JSON accumulation, and normalization to the shared LlmEvent model.
+Implement Fae's `Tool` trait for web search and URL fetching. These tools bridge the sync `Tool::execute()` interface to the async `fae_search` API using `tokio::runtime::Handle::current().block_on()`.
 
-## Key Files
-- `src/fae_llm/provider.rs` (NEW) -- ProviderAdapter trait definition
-- `src/fae_llm/providers/mod.rs` (NEW) -- providers module
-- `src/fae_llm/providers/openai.rs` (NEW) -- OpenAI adapter
-- `src/fae_llm/providers/sse.rs` (NEW) -- SSE line parser
-- `src/fae_llm/providers/message.rs` (NEW) -- Message types (role, content)
-- `src/fae_llm/mod.rs` -- wire in new modules
+## Architecture Notes
 
-## Dependencies needed
-- `reqwest` with `stream` feature for async HTTP + SSE streaming
-- `tokio-stream` for StreamExt on byte streams
-- `pin-project-lite` (transitive, already available)
+- `Tool::execute(&self, args: Value) -> Result<ToolResult, FaeLlmError>` is **synchronous**
+- `fae_search::search()` is **async** — bridge via `Handle::current().block_on()`
+- Both tools are **read-only** (`allowed_in_mode` returns true for all modes)
+- Feature-gated behind `web-search` feature flag (optional dependency)
+- Results formatted as structured text for LLM consumption
 
 ---
 
-## Task 1: ProviderAdapter trait and message types
-**~120 lines | src/fae_llm/provider.rs, src/fae_llm/providers/message.rs**
+## Task 1: Add fae-search as optional dependency behind feature flag
 
-Define the core async trait that all providers implement:
+Add fae-search to the root Cargo.toml as an optional path dependency gated by the `web-search` feature flag. This is a prerequisite for all subsequent tasks.
 
-```rust
-#[async_trait]
-pub trait ProviderAdapter: Send + Sync {
-    fn name(&self) -> &str;
-    async fn send(
-        &self,
-        messages: &[Message],
-        options: &RequestOptions,
-        tools: &[ToolDefinition],
-    ) -> Result<Pin<Box<dyn Stream<Item = LlmEvent> + Send>>>;
+**Files:**
+- Modify: `Cargo.toml` (add `web-search` feature, add `fae-search` dependency)
+
+**Changes:**
+- Add `web-search = ["dep:fae-search"]` to `[features]`
+- Add `fae-search = { path = "fae-search", optional = true }` to `[dependencies]`
+- Verify: `cargo check --features web-search` passes
+
+**Acceptance criteria:**
+- Feature flag `web-search` exists and compiles
+- `fae-search` is only included when feature is enabled
+- `cargo check` without the feature still passes
+
+---
+
+## Task 2: Create WebSearchTool implementing Tool trait (TDD)
+
+Create the `WebSearchTool` struct that wraps `fae_search::search()` for LLM use.
+
+**JSON Schema:**
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": { "type": "string", "description": "Search query" },
+    "max_results": { "type": "integer", "description": "Max results (default 5)" }
+  },
+  "required": ["query"]
 }
 ```
 
-Also define:
-- `Message` struct with `role: Role`, `content: MessageContent`
-- `Role` enum: System, User, Assistant, Tool
-- `MessageContent` enum: Text(String), ToolResult { call_id, content }
-- `ToolDefinition` struct: name, description, parameters (JSON schema)
-- Wire `pub mod provider;` and `pub mod providers;` into `fae_llm/mod.rs`
+**Sync-async bridge:**
+```rust
+fn execute(&self, args: Value) -> Result<ToolResult, FaeLlmError> {
+    let handle = tokio::runtime::Handle::current();
+    handle.block_on(async { /* call fae_search::search() */ })
+}
+```
 
-All types must derive Debug, Clone, Serialize, Deserialize where appropriate.
-Add unit tests for message construction and serialization.
+**Result formatting for LLM:**
+```
+## Search Results for "query"
 
-## Task 2: SSE line parser
-**~120 lines | src/fae_llm/providers/sse.rs**
+1. **Title**
+   URL: https://example.com
+   Snippet text here...
 
-Implement a reusable SSE (Server-Sent Events) parser:
-- `SseParser` struct that processes a byte stream line by line
-- Handles `data:`, `event:`, `id:`, comment lines (`:` prefix), empty lines as event boundaries
-- `SseEvent { event_type: Option<String>, data: String, id: Option<String> }`
-- `parse_sse_stream(stream: impl Stream<Item = Result<Bytes>>) -> impl Stream<Item = SseEvent>`
-- Handle multi-line `data:` fields (concatenate with newlines)
-- Handle `[DONE]` sentinel
-- Unit tests: single events, multi-line data, comments, empty lines, DONE sentinel
+2. **Title 2**
+   ...
+```
 
-## Task 3: OpenAI Chat Completions request builder
-**~150 lines | src/fae_llm/providers/openai.rs**
+**Files:**
+- Create: `src/fae_llm/tools/web_search.rs`
 
-Implement the request body builder for OpenAI Chat Completions:
-- `OpenAiConfig` struct: api_key, base_url, org_id (optional), model
-- `build_completions_request(messages, options, tools) -> serde_json::Value`
-- Map Message/Role to OpenAI format: `{ "role": "user", "content": "..." }`
-- Map ToolDefinition to OpenAI tools format: `{ "type": "function", "function": { ... } }`
-- Map RequestOptions: temperature, max_tokens, top_p, stream: true
-- Handle tool results as `{ "role": "tool", "tool_call_id": "...", "content": "..." }`
-- Unit tests verifying JSON structure matches OpenAI spec
-
-## Task 4: OpenAI SSE response parser (Completions)
-**~150 lines | src/fae_llm/providers/openai.rs**
-
-Parse OpenAI Chat Completions streaming responses into LlmEvent:
-- `parse_completions_chunk(data: &str) -> Vec<LlmEvent>`
-- Parse `choices[0].delta.content` -> TextDelta
-- Parse `choices[0].delta.tool_calls[*]` -> ToolCallStart/ToolCallArgsDelta
-- Parse `choices[0].finish_reason` -> StreamEnd with mapped FinishReason
-- Handle `usage` field in final chunk -> store for ResponseMeta
-- Map OpenAI finish reasons: "stop" -> Stop, "length" -> Length, "tool_calls" -> ToolCalls, "content_filter" -> ContentFilter
-- Unit tests with realistic OpenAI SSE payloads (text, tool calls, errors)
-
-## Task 5: Tool call streaming accumulator
-**~100 lines | src/fae_llm/providers/openai.rs**
-
-Implement streaming tool call accumulation:
-- `ToolCallAccumulator` struct tracking in-flight tool calls
-- Each tool call has: index, id, function name, accumulated args
-- On first chunk with tool_call index -> emit ToolCallStart
-- On subsequent chunks -> emit ToolCallArgsDelta
-- On finish_reason "tool_calls" or new call -> emit ToolCallEnd for completed calls
-- Handle multiple parallel tool calls (different indices)
-- Unit tests: single tool call, parallel tool calls, args split across chunks
-
-## Task 6: OpenAI ProviderAdapter implementation
-**~120 lines | src/fae_llm/providers/openai.rs**
-
-Wire everything together in the ProviderAdapter impl:
-- `OpenAiAdapter` struct holding `OpenAiConfig` and `reqwest::Client`
-- `OpenAiAdapter::new(config: OpenAiConfig) -> Self`
-- Implement `send()`: build request, POST to /v1/chat/completions, parse SSE stream
-- Map SSE events through `parse_completions_chunk` -> flatten into LlmEvent stream
-- Emit StreamStart at beginning, StreamError on HTTP errors
-- Set Authorization header, optional Organization header
-- Handle non-200 responses: parse error body, emit StreamError
-- Integration-style test with mock (deferred to Task 8)
-
-## Task 7: OpenAI Responses API support
-**~100 lines | src/fae_llm/providers/openai.rs**
-
-Add support for the OpenAI Responses API (newer streaming format):
-- `build_responses_request(messages, options, tools) -> serde_json::Value`
-- Responses API uses input items format: `{ "type": "message", "role": "user", "content": [...] }`
-- `parse_responses_event(event_type: &str, data: &str) -> Vec<LlmEvent>`
-- Map response events: `response.output_item.added`, `response.content_part.delta`, `response.function_call_arguments.delta`, `response.completed`
-- `OpenAiApiMode` enum: Completions, Responses -- selectable in config
-- Unit tests for Responses API event parsing
-
-## Task 8: Integration tests and module wiring
-**~120 lines | src/fae_llm/providers/openai.rs, src/fae_llm/mod.rs**
-
-Full integration tests:
-- Test complete SSE stream -> LlmEvent sequence for Chat Completions format
-- Test complete SSE stream -> LlmEvent sequence for Responses API format
-- Test error handling: HTTP 401 -> AuthError, 429 -> RequestError, 500 -> ProviderError
-- Test empty response stream
-- Test malformed SSE data (graceful degradation, no panics)
-- Wire all public types into `mod.rs` re-exports
-- Verify `just check` passes with zero warnings
-- Update progress.md
+**Acceptance criteria:**
+- Tests: schema has required `query` field
+- Tests: execute with valid args returns formatted results (mock/synthetic)
+- Tests: missing query returns ToolValidationError
+- Tests: allowed_in_mode returns true for both ReadOnly and Full
+- Tests: empty results returns "No results found" message
+- Tests: result output is properly truncated for large result sets
+- Zero clippy warnings
 
 ---
 
-## Acceptance Criteria
-- [ ] `ProviderAdapter` trait defined with async streaming interface
-- [ ] SSE parser correctly handles all SSE edge cases
-- [ ] OpenAI Chat Completions request builder produces valid JSON
-- [ ] Streaming text deltas normalized to LlmEvent::TextDelta
-- [ ] Streaming tool calls normalized to ToolCallStart/ArgsDelta/End
-- [ ] Tool call accumulator handles parallel tool calls
-- [ ] Responses API events parsed and normalized
-- [ ] Error responses mapped to appropriate FaeLlmError variants
-- [ ] `just check` passes with zero warnings
-- [ ] All new code has doc comments
+## Task 3: Create FetchUrlTool implementing Tool trait (TDD)
+
+Create the `FetchUrlTool` struct that wraps `fae_search::fetch_page_content()`.
+
+**JSON Schema:**
+```json
+{
+  "type": "object",
+  "properties": {
+    "url": { "type": "string", "description": "URL to fetch" }
+  },
+  "required": ["url"]
+}
+```
+
+**Note:** `fetch_page_content()` currently returns a stub error. The tool should handle this gracefully — it will work once Phase 2.3 implements content extraction.
+
+**Result formatting for LLM:**
+```
+## Page Content: Title
+
+URL: https://example.com
+Words: 1234
+
+Content text here...
+```
+
+**Files:**
+- Create: `src/fae_llm/tools/fetch_url.rs`
+
+**Acceptance criteria:**
+- Tests: schema has required `url` field
+- Tests: execute handles stub error gracefully (returns ToolResult::failure, not panic)
+- Tests: missing url returns ToolValidationError
+- Tests: allowed_in_mode returns true for both ReadOnly and Full
+- Tests: invalid URL format returns clear error message
+- Zero clippy warnings
+
+---
+
+## Task 4: Wire modules into tools/mod.rs
+
+Add module declarations and re-exports for both new tools. Gate behind `web-search` feature.
+
+**Files:**
+- Modify: `src/fae_llm/tools/mod.rs`
+
+**Changes:**
+```rust
+#[cfg(feature = "web-search")]
+pub mod fetch_url;
+#[cfg(feature = "web-search")]
+pub mod web_search;
+
+#[cfg(feature = "web-search")]
+pub use fetch_url::FetchUrlTool;
+#[cfg(feature = "web-search")]
+pub use web_search::WebSearchTool;
+```
+
+**Acceptance criteria:**
+- Compiles without `web-search` feature (no changes to existing tools)
+- Compiles with `web-search` feature (new tools available)
+- All existing tests still pass
+- `cargo check --all-features` passes
+- Zero clippy warnings
+
+---
+
+## Task 5: Validate all tests pass and documentation complete
+
+Final validation pass ensuring everything compiles and tests pass in both feature configurations.
+
+**Verification:**
+- `cargo check` (without web-search) — passes
+- `cargo check --features web-search` — passes
+- `cargo clippy --all-features --all-targets -- -D warnings` — zero warnings
+- `cargo nextest run --all-features` — all tests pass
+- `cargo doc --all-features --no-deps` — zero doc warnings
+- All public items documented
+
+**Acceptance criteria:**
+- Both feature configurations compile clean
+- All tests pass
+- All public items have doc comments
+- Zero warnings in any mode

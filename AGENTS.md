@@ -117,6 +117,8 @@ In-repo registered core tools:
 - `write`
 - `edit`
 - `bash`
+- `web_search` (when `web-search` feature is enabled)
+- `fetch_url` (when `web-search` feature is enabled)
 - canvas tools when canvas is active (`canvas_render`, `canvas_interact`, `canvas_export`)
 
 Tool modes:

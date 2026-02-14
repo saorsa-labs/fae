@@ -446,6 +446,14 @@ fn build_registry(
         registry.register(Arc::new(CanvasExportTool::new(canvas_registry)));
     }
 
+    // Web search tools (read-only, allowed in all non-Off modes).
+    #[cfg(feature = "web-search")]
+    if !matches!(config.tool_mode, AgentToolMode::Off) {
+        use crate::fae_llm::tools::{FetchUrlTool, WebSearchTool};
+        registry.register(Arc::new(WebSearchTool::new()));
+        registry.register(Arc::new(FetchUrlTool::new()));
+    }
+
     Arc::new(registry)
 }
 

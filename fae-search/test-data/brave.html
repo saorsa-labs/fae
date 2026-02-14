@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rust programming - Brave Search</title>
+<link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+<header class="navbar">
+  <nav>
+    <a href="/" class="logo">Brave Search</a>
+    <form action="/search" method="get">
+      <input type="text" name="q" value="rust programming">
+      <button type="submit">Search</button>
+    </form>
+  </nav>
+</header>
+<main id="results">
+  <div class="snippet-card-list">
+
+    <!-- Featured snippet (standalone) — should be excluded by parser -->
+    <div class="snippet standalone" data-pos="0">
+      <div class="snippet-title">
+        <a href="https://featured.example.com/what-is-rust">
+          What is Rust? - Featured Answer
+        </a>
+      </div>
+      <div class="snippet-description">
+        Rust is a multi-paradigm programming language designed for performance and safety.
+      </div>
+    </div>
+
+    <!-- Organic result 1 -->
+    <div class="snippet" data-pos="1">
+      <div class="snippet-title">
+        <a href="https://www.rust-lang.org/">
+          Rust Programming Language
+        </a>
+      </div>
+      <div class="snippet-description">
+        A language empowering everyone to build reliable and efficient software. Get started with Rust today.
+      </div>
+    </div>
+
+    <!-- Organic result 2 -->
+    <div class="snippet" data-pos="2">
+      <div class="snippet-title">
+        <a href="https://doc.rust-lang.org/book/">
+          The Rust Programming Language Book
+        </a>
+      </div>
+      <div class="snippet-description">
+        An introductory book about Rust. The Rust Programming Language, affectionately nicknamed the book.
+      </div>
+    </div>
+
+    <!-- Organic result 3 -->
+    <div class="snippet" data-pos="3">
+      <div class="snippet-title">
+        <a href="https://en.wikipedia.org/wiki/Rust_(programming_language)">
+          Rust (programming language) - Wikipedia
+        </a>
+      </div>
+      <div class="snippet-description">
+        Rust is a multi-paradigm, general-purpose programming language that emphasizes performance, type safety, and concurrency.
+      </div>
+    </div>
+
+    <!-- Another standalone — should be excluded -->
+    <div class="snippet standalone" data-pos="4">
+      <div class="snippet-title">
+        <a href="https://infobox.example.com/rust-stats">
+          Rust Language Statistics
+        </a>
+      </div>
+      <div class="snippet-description">
+        First appeared: 2010. Designed by: Graydon Hoare.
+      </div>
+    </div>
+
+    <!-- Organic result 4 -->
+    <div class="snippet" data-pos="5">
+      <div class="snippet-title">
+        <a href="https://github.com/rust-lang/rust">
+          rust-lang/rust - GitHub
+        </a>
+      </div>
+      <div class="snippet-description">
+        The Rust programming language compiler and standard library source code on GitHub.
+      </div>
+    </div>
+
+    <!-- Organic result 5 -->
+    <div class="snippet" data-pos="6">
+      <div class="snippet-title">
+        <a href="https://play.rust-lang.org/">
+          Rust Playground
+        </a>
+      </div>
+      <div class="snippet-description">
+        Run and share Rust code online. The Rust Playground provides an interactive environment for experimenting with Rust code.
+      </div>
+    </div>
+
+    <!-- Organic result 6 -->
+    <div class="snippet" data-pos="7">
+      <div class="snippet-title">
+        <a href="https://crates.io/">
+          crates.io: Rust Package Registry
+        </a>
+      </div>
+      <div class="snippet-description">
+        The Rust community crate host. Download and publish Rust packages.
+      </div>
+    </div>
+
+    <!-- Organic result 7 -->
+    <div class="snippet" data-pos="8">
+      <div class="snippet-title">
+        <a href="https://www.rust-lang.org/learn">
+          Learn Rust - Rust Programming Language
+        </a>
+      </div>
+      <div class="snippet-description">
+        Resources for learning Rust. The Rust Programming Language book, Rust by Example, and more.
+      </div>
+    </div>
+
+    <!-- Organic result 8 -->
+    <div class="snippet" data-pos="9">
+      <div class="snippet-title">
+        <a href="https://stackoverflow.com/questions/tagged/rust">
+          Newest 'rust' Questions - Stack Overflow
+        </a>
+      </div>
+      <div class="snippet-description">
+        Questions tagged with rust on Stack Overflow. Get answers to your Rust programming questions.
+      </div>
+    </div>
+
+    <!-- Organic result 9 -->
+    <div class="snippet" data-pos="10">
+      <div class="snippet-title">
+        <a href="https://blog.rust-lang.org/">
+          Rust Blog - Official Announcements
+        </a>
+      </div>
+      <div class="snippet-description">
+        The official Rust project blog. Stay up to date with Rust releases, RFCs, and community news.
+      </div>
+    </div>
+
+    <!-- Organic result 10 -->
+    <div class="snippet" data-pos="11">
+      <div class="snippet-title">
+        <a href="https://www.reddit.com/r/rust/">
+          r/rust - The Rust Programming Language Community
+        </a>
+      </div>
+      <div class="snippet-description">
+        A subreddit dedicated to the Rust programming language. Discuss Rust, share projects, and get help.
+      </div>
+    </div>
+
+    <!-- Organic result 11 -->
+    <div class="snippet" data-pos="12">
+      <div class="snippet-title">
+        <a href="https://doc.rust-lang.org/std/">
+          Rust Standard Library Documentation
+        </a>
+      </div>
+      <div class="snippet-description">
+        API documentation for the Rust standard library. Browse modules, types, and functions.
+      </div>
+    </div>
+
+  </div>
+</main>
+<footer>
+  <div class="footer-content">
+    <span>&copy; 2026 Brave Software</span>
+    <a href="/about">About</a>
+    <a href="/privacy">Privacy</a>
+  </div>
+</footer>
+</body>
+</html>
