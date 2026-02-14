@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "fae-tool5-web-search",
-  "active": true,
+  "active": false,
   "milestone": {
     "number": 3,
     "name": "Production Hardening"
@@ -17,10 +17,10 @@
     "current_task": 3
   },
   "review": {
-    "status": "pending",
-    "iteration": 0,
-    "last_verdict": null
+    "status": "passed",
+    "iteration": 1,
+    "last_verdict": "APPROVED"
   },
-  "status": "reviewing",
-  "last_updated": "2026-02-14T21:30:00Z"
+  "status": "milestone_complete",
+  "last_updated": "2026-02-14T21:35:00Z"
 }
