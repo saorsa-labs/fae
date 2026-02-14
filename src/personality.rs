@@ -3,7 +3,8 @@
 //! Runtime prompt stack:
 //! 1. Core system prompt (`Prompts/system_prompt.md`)
 //! 2. User-editable SOUL contract (`~/.fae/SOUL.md`, with repo fallback)
-//! 3. Optional user add-on text from config
+//! 3. Built-in + user skills (`Skills/*.md` + `~/.fae/skills/*.md`)
+//! 4. Optional user add-on text from config
 //!
 //! Onboarding checklist text is loaded separately and injected only while
 //! onboarding is incomplete (see memory orchestrator).
@@ -81,18 +82,24 @@ pub fn load_onboarding_checklist() -> String {
 #[must_use]
 pub fn assemble_prompt(_personality_name: &str, user_add_on: &str) -> String {
     let soul = load_soul();
+    let skills = crate::skills::load_all_skills();
     let add_on = user_add_on.trim();
 
-    let mut parts: Vec<&str> = Vec::with_capacity(3);
-    parts.push(CORE_PROMPT.trim());
+    let mut parts: Vec<String> = Vec::with_capacity(4);
+    parts.push(CORE_PROMPT.trim().to_owned());
 
     let soul_trimmed = soul.trim();
     if !soul_trimmed.is_empty() {
-        parts.push(soul_trimmed);
+        parts.push(soul_trimmed.to_owned());
+    }
+
+    let skills_trimmed = skills.trim();
+    if !skills_trimmed.is_empty() {
+        parts.push(skills_trimmed.to_owned());
     }
 
     if !add_on.is_empty() {
-        parts.push(add_on);
+        parts.push(add_on.to_owned());
     }
 
     parts.join("\n\n")
@@ -126,5 +133,11 @@ mod tests {
     fn assemble_appends_user_add_on() {
         let prompt = assemble_prompt("any", "Be extra concise.");
         assert!(prompt.ends_with("Be extra concise."));
+    }
+
+    #[test]
+    fn assemble_includes_built_in_skills() {
+        let prompt = assemble_prompt("any", "");
+        assert!(prompt.contains("You have a canvas window."));
     }
 }

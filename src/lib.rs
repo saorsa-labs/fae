@@ -30,6 +30,7 @@ pub mod canvas;
 pub mod config;
 pub mod diagnostics;
 pub mod error;
+pub mod external_llm;
 pub mod fae_llm;
 pub mod huggingface;
 pub mod llm;

@@ -14,7 +14,7 @@ use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Audio capture from system microphone via cpal.
 ///
@@ -42,13 +42,25 @@ impl CpalCapture {
         let host = cpal::default_host();
 
         let device = if let Some(ref name) = config.input_device {
-            host.input_devices()
+            let requested = host
+                .input_devices()
                 .map_err(|e| SpeechError::Audio(format!("cannot enumerate devices: {e}")))?
                 .find(|d| match d.description() {
                     Ok(desc) => desc.name() == name,
                     Err(_) => false,
-                })
-                .ok_or_else(|| SpeechError::Audio(format!("input device '{name}' not found")))?
+                });
+
+            match requested {
+                Some(device) => device,
+                None => {
+                    warn!(
+                        "configured input device '{}' not found, falling back to default input device",
+                        name
+                    );
+                    host.default_input_device()
+                        .ok_or_else(|| SpeechError::Audio("no default input device".into()))?
+                }
+            }
         } else {
             host.default_input_device()
                 .ok_or_else(|| SpeechError::Audio("no default input device".into()))?

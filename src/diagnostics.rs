@@ -187,6 +187,19 @@ fn build_system_info() -> String {
             info.push_str(&format!("  Error listing devices: {e}\n"));
         }
     }
+    match crate::audio::playback::CpalPlayback::list_output_devices() {
+        Ok(devices) => {
+            if devices.is_empty() {
+                info.push_str("  (no output devices found)\n");
+            }
+            for d in &devices {
+                info.push_str(&format!("  Output: {d}\n"));
+            }
+        }
+        Err(e) => {
+            info.push_str(&format!("  Error listing output devices: {e}\n"));
+        }
+    }
 
     info
 }

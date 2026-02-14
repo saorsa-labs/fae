@@ -15,7 +15,7 @@ use crate::stt::ParakeetStt;
 use crate::tts::KokoroTts;
 use std::path::Path;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Pre-loaded model instances ready for the pipeline.
 pub struct InitializedModels {
@@ -39,7 +39,7 @@ const STT_FILES: &[&str] = &[
 const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"];
 
 fn has_agent_remote_brain_config(config: &SpeechConfig) -> bool {
-    !config.llm.api_key.trim().is_empty() || config.llm.cloud_provider.is_some()
+    config.llm.has_remote_provider_configured()
 }
 
 fn should_preload_local_llm(config: &SpeechConfig) -> bool {
@@ -155,6 +155,21 @@ pub async fn initialize_models_with_progress(
     if let Err(e) = crate::personality::ensure_prompt_assets() {
         tracing::warn!("failed to ensure prompt assets in ~/.fae: {e}");
     }
+
+    let mut resolved_config = config.clone();
+    match crate::external_llm::apply_external_profile(&mut resolved_config.llm) {
+        Ok(Some(applied)) => {
+            info!(
+                "applied external LLM profile '{}' (provider={}, model={})",
+                applied.profile_id, applied.provider, applied.api_model
+            );
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!("failed to apply external LLM profile: {e}");
+        }
+    }
+    let config = &resolved_config;
 
     let model_manager = ModelManager::new(&config.models)?;
     let use_local_llm = should_preload_local_llm(config);

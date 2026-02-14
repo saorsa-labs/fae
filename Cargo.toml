@@ -142,6 +142,19 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 mistralrs = { version = "0.7", features = ["metal"] }
 
+[package.metadata.bundle]
+name = "Fae"
+identifier = "com.saorsalabs.fae"
+icon = ["assets/AppIcon.icns"]
+osx_minimum_system_version = "12.0"
+
+[package.metadata.bundle.osx_info_plist_exts]
+NSMicrophoneUsageDescription = "Fae needs microphone access to hear your voice commands."
+NSSpeechRecognitionUsageDescription = "Fae uses speech recognition to understand your voice commands."
+NSDesktopFolderUsageDescription = "Fae needs access to your Desktop to help manage files when you ask."
+NSDocumentsFolderUsageDescription = "Fae needs access to your Documents to help manage files when you ask."
+NSDownloadsFolderUsageDescription = "Fae needs access to your Downloads to help manage files when you ask."
+
 [dev-dependencies]
 # Mock HTTP server for API integration tests
 axum = "0.8"

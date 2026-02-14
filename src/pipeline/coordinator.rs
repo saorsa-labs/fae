@@ -1632,6 +1632,16 @@ async fn run_llm_stage(
         warn!("failed to ensure prompt assets in ~/.fae: {e}");
     }
 
+    let mut config = config;
+    match crate::external_llm::apply_external_profile(&mut config.llm) {
+        Ok(Some(applied)) => info!(
+            "LLM stage applied external profile '{}' (provider={}, model={})",
+            applied.profile_id, applied.provider, applied.api_model
+        ),
+        Ok(None) => {}
+        Err(e) => warn!("failed to apply external LLM profile in LLM stage: {e}"),
+    }
+
     let mut engine = match FaeAgentLlm::new(
         &config.llm,
         preloaded,
@@ -2884,8 +2894,6 @@ async fn run_conversation_gate(
                                 // If no wake word, silently discard
                             }
                             GateState::Active => {
-                                last_activity = Instant::now();
-
                                 // Strip punctuation for phrase matching so STT
                                 // formatting (commas, periods) doesn't break
                                 // comparisons. E.g. "that will do, fae" matches
@@ -2949,6 +2957,7 @@ async fn run_conversation_gate(
                                     if llm_tx.send(forwarded).await.is_err() {
                                         break;
                                     }
+                                    last_activity = Instant::now();
                                     continue;
                                 }
 
@@ -2976,6 +2985,7 @@ async fn run_conversation_gate(
                                 if llm_tx.send(t).await.is_err() {
                                     break;
                                 }
+                                last_activity = Instant::now();
                             }
                         }
                     }

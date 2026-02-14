@@ -116,7 +116,7 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             threshold: 0.01,
-            min_silence_duration_ms: 1800,
+            min_silence_duration_ms: 2200,
             speech_pad_ms: 30,
             min_speech_duration_ms: 500,
         }
@@ -156,6 +156,23 @@ pub enum LlmBackend {
     /// Compatibility auto-mode for older configs:
     /// local brain when remote credentials are absent, otherwise API brain.
     Agent,
+}
+
+/// API protocol type for remote LLM providers.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmApiType {
+    /// Infer protocol from provider hint / URL (backward-compatible).
+    #[default]
+    Auto,
+    /// OpenAI Chat Completions-compatible API.
+    #[serde(rename = "openai_completions", alias = "open_ai_completions")]
+    OpenAiCompletions,
+    /// OpenAI Responses API.
+    #[serde(rename = "openai_responses", alias = "open_ai_responses")]
+    OpenAiResponses,
+    /// Anthropic Messages API.
+    AnthropicMessages,
 }
 
 /// Tool capability mode for the agent harness.
@@ -216,6 +233,14 @@ pub struct LlmConfig {
     pub api_url: String,
     /// Model name to request from the API (API backend only).
     pub api_model: String,
+    /// API protocol type for remote providers.
+    pub api_type: LlmApiType,
+    /// Optional API version value (used by providers like Anthropic).
+    #[serde(default)]
+    pub api_version: Option<String>,
+    /// Optional API organization/project hint (OpenAI-compatible providers).
+    #[serde(default)]
+    pub api_organization: Option<String>,
     /// API key for the remote provider (API/Agent backends only).
     ///
     /// For local servers (Ollama/LM Studio/vLLM), this is typically empty.
@@ -271,6 +296,11 @@ pub struct LlmConfig {
     /// When set, overrides `api_model` for the cloud provider.
     #[serde(default)]
     pub cloud_model: Option<String>,
+    /// Optional external LLM profile ID stored in `~/.fae/external_apis/`.
+    ///
+    /// When set, runtime loads `<profile>.toml` and overlays API fields.
+    #[serde(default)]
+    pub external_profile: Option<String>,
     /// Whether to fall back to the local model when a remote provider fails.
     ///
     /// When enabled and the backend is `Agent` or `Api`, the local Qwen model
@@ -300,6 +330,9 @@ impl Default for LlmConfig {
             // Ollama default endpoint.
             api_url: "http://localhost:11434".to_owned(),
             api_model: "smollm3:3b".to_owned(),
+            api_type: LlmApiType::default(),
+            api_version: None,
+            api_organization: None,
             api_key: String::new(),
             tool_mode: AgentToolMode::default(),
             max_tokens: 200,
@@ -317,6 +350,7 @@ impl Default for LlmConfig {
             system_prompt: String::new(),
             cloud_provider: None,
             cloud_model: None,
+            external_profile: None,
             enable_local_fallback: default_enable_local_fallback(),
             model_selection_timeout_secs: default_model_selection_timeout_secs(),
         }
@@ -475,6 +509,16 @@ Personal context:\n\
         }
     }
 
+    /// Returns true when a remote provider is configured directly or via an external profile.
+    pub fn has_remote_provider_configured(&self) -> bool {
+        !self.api_key.trim().is_empty()
+            || self.cloud_provider.is_some()
+            || self
+                .external_profile
+                .as_ref()
+                .is_some_and(|id| !id.trim().is_empty())
+    }
+
     /// Returns the fully assembled system prompt.
     ///
     /// Combines core prompt + SOUL + optional user add-on text.
@@ -563,7 +607,7 @@ impl Default for ConversationConfig {
             wake_word: "hi fae".to_owned(),
             stop_phrase: "that will do fae".to_owned(),
             enabled: true,
-            idle_timeout_s: 60,
+            idle_timeout_s: 20,
         }
     }
 }
@@ -601,7 +645,7 @@ impl Default for BargeInConfig {
             min_rms: 0.05,
             confirm_ms: 150,
             assistant_start_holdoff_ms: 500,
-            barge_in_silence_ms: 800,
+            barge_in_silence_ms: 1200,
         }
     }
 }

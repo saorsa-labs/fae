@@ -6,7 +6,7 @@
 use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use crate::canvas::registry::CanvasSessionRegistry;
 use crate::canvas::tools::{CanvasExportTool, CanvasInteractTool, CanvasRenderTool};
-use crate::config::{AgentToolMode, LlmConfig};
+use crate::config::{AgentToolMode, LlmApiType, LlmConfig};
 use crate::error::{Result, SpeechError};
 use crate::fae_llm::agent::{
     AgentConfig as FaeAgentConfig, AgentLoop, AgentLoopResult, StopReason,
@@ -19,7 +19,7 @@ use crate::fae_llm::providers::anthropic::{AnthropicAdapter, AnthropicConfig};
 use crate::fae_llm::providers::fallback::FallbackProvider;
 use crate::fae_llm::providers::local::{LocalMistralrsAdapter, LocalMistralrsConfig};
 use crate::fae_llm::providers::message::{Message, Role};
-use crate::fae_llm::providers::openai::{OpenAiAdapter, OpenAiConfig};
+use crate::fae_llm::providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
 use crate::fae_llm::tools::{
     BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool,
 };
@@ -246,7 +246,7 @@ impl FaeAgentLlm {
 /// (non-empty API key or a cloud provider set). When neither is present,
 /// there is no remote LLM to talk to and we should use local inference only.
 fn has_remote_provider_configured(config: &LlmConfig) -> bool {
-    !config.api_key.trim().is_empty() || config.cloud_provider.is_some()
+    config.has_remote_provider_configured()
 }
 
 fn build_provider(
@@ -324,24 +324,50 @@ fn build_remote_provider(config: &LlmConfig) -> Arc<dyn ProviderAdapter> {
         .clone()
         .unwrap_or_default()
         .to_ascii_lowercase();
+    let resolved_api_type = match config.api_type {
+        LlmApiType::Auto => {
+            if provider_hint == "anthropic" || config.api_url.contains("anthropic.com") {
+                LlmApiType::AnthropicMessages
+            } else {
+                LlmApiType::OpenAiCompletions
+            }
+        }
+        explicit => explicit,
+    };
 
-    if provider_hint == "anthropic" || config.api_url.contains("anthropic.com") {
-        let mut provider_cfg = AnthropicConfig::new(config.api_key.clone(), model_id);
-        if !config.api_url.trim().is_empty() {
-            provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
+    match resolved_api_type {
+        LlmApiType::AnthropicMessages => {
+            let mut provider_cfg = AnthropicConfig::new(config.api_key.clone(), model_id);
+            if !config.api_url.trim().is_empty() {
+                provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
+            }
+            if let Some(version) = config.api_version.as_deref()
+                && !version.trim().is_empty()
+            {
+                provider_cfg = provider_cfg.with_api_version(version.to_owned());
+            }
+            provider_cfg = provider_cfg.with_max_tokens(config.max_tokens);
+            Arc::new(AnthropicAdapter::new(provider_cfg))
         }
-        provider_cfg = provider_cfg.with_max_tokens(config.max_tokens);
-        Arc::new(AnthropicAdapter::new(provider_cfg))
-    } else {
-        let mut provider_cfg = if let Some(provider_name) = config.cloud_provider.as_deref() {
-            OpenAiConfig::for_provider(provider_name, config.api_key.clone(), model_id)
-        } else {
-            OpenAiConfig::new(config.api_key.clone(), model_id)
-        };
-        if !config.api_url.trim().is_empty() {
-            provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
+        LlmApiType::OpenAiCompletions | LlmApiType::OpenAiResponses | LlmApiType::Auto => {
+            let mut provider_cfg = if let Some(provider_name) = config.cloud_provider.as_deref() {
+                OpenAiConfig::for_provider(provider_name, config.api_key.clone(), model_id)
+            } else {
+                OpenAiConfig::new(config.api_key.clone(), model_id)
+            };
+            if !config.api_url.trim().is_empty() {
+                provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
+            }
+            if let Some(org) = config.api_organization.as_deref()
+                && !org.trim().is_empty()
+            {
+                provider_cfg = provider_cfg.with_org_id(org.to_owned());
+            }
+            if matches!(resolved_api_type, LlmApiType::OpenAiResponses) {
+                provider_cfg = provider_cfg.with_api_mode(OpenAiApiMode::Responses);
+            }
+            Arc::new(OpenAiAdapter::new(provider_cfg))
         }
-        Arc::new(OpenAiAdapter::new(provider_cfg))
     }
 }
 

@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Playback lifecycle events emitted from the audio callback thread.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,13 +50,25 @@ impl CpalPlayback {
         let host = cpal::default_host();
 
         let device = if let Some(ref name) = config.output_device {
-            host.output_devices()
+            let requested = host
+                .output_devices()
                 .map_err(|e| SpeechError::Audio(format!("cannot enumerate devices: {e}")))?
                 .find(|d| match d.description() {
                     Ok(desc) => desc.name() == name,
                     Err(_) => false,
-                })
-                .ok_or_else(|| SpeechError::Audio(format!("output device '{name}' not found")))?
+                });
+
+            match requested {
+                Some(device) => device,
+                None => {
+                    warn!(
+                        "configured output device '{}' not found, falling back to default output device",
+                        name
+                    );
+                    host.default_output_device()
+                        .ok_or_else(|| SpeechError::Audio("no default output device".into()))?
+                }
+            }
         } else {
             host.default_output_device()
                 .ok_or_else(|| SpeechError::Audio("no default output device".into()))?
@@ -68,8 +80,13 @@ impl CpalPlayback {
         };
         info!("using output device: {device_name}");
 
-        let stream_config = StreamConfig {
-            channels: 1,
+        let default_stream_config = device
+            .default_output_config()
+            .map_err(|e| SpeechError::Audio(format!("no default output config: {e}")))?
+            .config();
+
+        let requested_stream_config = StreamConfig {
+            channels: default_stream_config.channels,
             sample_rate: config.output_sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
@@ -80,74 +97,60 @@ impl CpalPlayback {
             last_level_emit: None,
         }));
 
-        let shared_cb = Arc::clone(&shared);
-        let event_tx_cb = event_tx.clone();
+        let (stream, stream_config) = match build_stream(
+            &device,
+            &requested_stream_config,
+            Arc::clone(&shared),
+            event_tx.clone(),
+        ) {
+            Ok(stream) => (stream, requested_stream_config),
+            Err(requested_err) => {
+                let fallback_stream_config = StreamConfig {
+                    channels: default_stream_config.channels,
+                    sample_rate: default_stream_config.sample_rate,
+                    buffer_size: cpal::BufferSize::Default,
+                };
+                if fallback_stream_config.sample_rate == requested_stream_config.sample_rate
+                    && fallback_stream_config.channels == requested_stream_config.channels
+                {
+                    return Err(SpeechError::Audio(format!(
+                        "failed to build output stream at {}Hz/{}ch: {requested_err}",
+                        requested_stream_config.sample_rate, requested_stream_config.channels
+                    )));
+                }
 
-        let stream = device
-            .build_output_stream(
-                &stream_config,
-                move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                    let mut drained = false;
-                    let mut should_finish = false;
-                    let mut level: Option<f32> = None;
+                warn!(
+                    "output stream config {}Hz/{}ch not supported: {requested_err}; falling back to {}Hz/{}ch",
+                    requested_stream_config.sample_rate,
+                    requested_stream_config.channels,
+                    fallback_stream_config.sample_rate,
+                    fallback_stream_config.channels
+                );
 
-                    {
-                        let Ok(mut st) = shared_cb.lock() else {
-                            // If the mutex is poisoned, output silence.
-                            for s in data.iter_mut() {
-                                *s = 0.0;
-                            }
-                            return;
-                        };
+                let fallback_stream = build_stream(
+                    &device,
+                    &fallback_stream_config,
+                    Arc::clone(&shared),
+                    event_tx.clone(),
+                )
+                .map_err(|fallback_err| {
+                    SpeechError::Audio(format!(
+                        "failed to build output stream (requested {}Hz/{}ch: {requested_err}; fallback {}Hz/{}ch: {fallback_err})",
+                        requested_stream_config.sample_rate,
+                        requested_stream_config.channels,
+                        fallback_stream_config.sample_rate,
+                        fallback_stream_config.channels,
+                    ))
+                })?;
 
-                        for out in data.iter_mut() {
-                            match st.queue.pop_front() {
-                                Some(v) => *out = v,
-                                None => {
-                                    *out = 0.0;
-                                    drained = true;
-                                }
-                            }
-                        }
+                (fallback_stream, fallback_stream_config)
+            }
+        };
 
-                        if drained && st.queue.is_empty() && st.final_pending {
-                            st.final_pending = false;
-                            should_finish = true;
-                        }
-
-                        // Rate limit level updates to avoid spamming the UI.
-                        // 50ms is responsive enough for mouth animation.
-                        let now = Instant::now();
-                        let can_emit = match st.last_level_emit {
-                            Some(t0) => {
-                                now.duration_since(t0) >= std::time::Duration::from_millis(50)
-                            }
-                            None => true,
-                        };
-                        if can_emit && !data.is_empty() {
-                            let mut sum = 0.0f32;
-                            for s in data.iter() {
-                                sum += *s * *s;
-                            }
-                            let rms = (sum / data.len() as f32).sqrt();
-                            st.last_level_emit = Some(now);
-                            level = Some(rms);
-                        }
-                    }
-
-                    if should_finish {
-                        let _ = event_tx_cb.send(PlaybackEvent::Finished);
-                    }
-                    if let Some(rms) = level {
-                        let _ = event_tx_cb.send(PlaybackEvent::Level { rms });
-                    }
-                },
-                move |err| {
-                    error!("audio output stream error: {err}");
-                },
-                None,
-            )
-            .map_err(|e| SpeechError::Audio(format!("failed to build output stream: {e}")))?;
+        info!(
+            "using output stream config: {}Hz, {} channels",
+            stream_config.sample_rate, stream_config.channels
+        );
 
         stream
             .play()
@@ -167,15 +170,8 @@ impl CpalPlayback {
     ///
     /// # Errors
     ///
-    /// Returns an error if the sample rate doesn't match the configured output rate.
+    /// Returns an error if the playback queue lock is poisoned.
     pub fn enqueue(&mut self, samples: &[f32], sample_rate: u32, is_final: bool) -> Result<()> {
-        if sample_rate != self.stream_config.sample_rate {
-            return Err(SpeechError::Audio(format!(
-                "playback sample rate mismatch: got {sample_rate}Hz, expected {}Hz",
-                self.stream_config.sample_rate
-            )));
-        }
-
         if samples.is_empty() {
             // End-of-response marker: emit finished immediately so callers can clear state.
             if is_final {
@@ -184,11 +180,28 @@ impl CpalPlayback {
             return Ok(());
         }
 
+        let mut prepared = if sample_rate != self.stream_config.sample_rate {
+            resample_linear(samples, sample_rate, self.stream_config.sample_rate)
+        } else {
+            samples.to_vec()
+        };
+
+        let channels = self.stream_config.channels as usize;
+        if channels > 1 {
+            let mut interleaved = Vec::with_capacity(prepared.len().saturating_mul(channels));
+            for sample in prepared {
+                for _ in 0..channels {
+                    interleaved.push(sample);
+                }
+            }
+            prepared = interleaved;
+        }
+
         let Ok(mut st) = self.shared.lock() else {
             return Err(SpeechError::Audio("playback queue lock poisoned".into()));
         };
 
-        st.queue.extend(samples.iter().copied());
+        st.queue.extend(prepared);
         if is_final {
             st.final_pending = true;
         }
@@ -240,4 +253,99 @@ impl CpalPlayback {
         }
         Ok(names)
     }
+}
+
+fn build_stream(
+    device: &cpal::Device,
+    stream_config: &StreamConfig,
+    shared: Arc<Mutex<SharedState>>,
+    event_tx: UnboundedSender<PlaybackEvent>,
+) -> std::result::Result<cpal::Stream, cpal::BuildStreamError> {
+    device.build_output_stream(
+        stream_config,
+        move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+            let mut drained = false;
+            let mut should_finish = false;
+            let mut level: Option<f32> = None;
+
+            {
+                let Ok(mut st) = shared.lock() else {
+                    // If the mutex is poisoned, output silence.
+                    for s in data.iter_mut() {
+                        *s = 0.0;
+                    }
+                    return;
+                };
+
+                for out in data.iter_mut() {
+                    match st.queue.pop_front() {
+                        Some(v) => *out = v,
+                        None => {
+                            *out = 0.0;
+                            drained = true;
+                        }
+                    }
+                }
+
+                if drained && st.queue.is_empty() && st.final_pending {
+                    st.final_pending = false;
+                    should_finish = true;
+                }
+
+                // Rate limit level updates to avoid spamming the UI.
+                // 50ms is responsive enough for mouth animation.
+                let now = Instant::now();
+                let can_emit = match st.last_level_emit {
+                    Some(t0) => now.duration_since(t0) >= std::time::Duration::from_millis(50),
+                    None => true,
+                };
+                if can_emit && !data.is_empty() {
+                    let mut sum = 0.0f32;
+                    for s in data.iter() {
+                        sum += *s * *s;
+                    }
+                    let rms = (sum / data.len() as f32).sqrt();
+                    st.last_level_emit = Some(now);
+                    level = Some(rms);
+                }
+            }
+
+            if should_finish {
+                let _ = event_tx.send(PlaybackEvent::Finished);
+            }
+            if let Some(rms) = level {
+                let _ = event_tx.send(PlaybackEvent::Level { rms });
+            }
+        },
+        move |err| {
+            error!("audio output stream error: {err}");
+        },
+        None,
+    )
+}
+
+fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    if src_rate == dst_rate || samples.is_empty() {
+        return samples.to_vec();
+    }
+
+    let ratio = src_rate as f64 / dst_rate as f64;
+    let out_len = ((samples.len() as f64 / ratio).max(1.0)) as usize;
+    let mut output = Vec::with_capacity(out_len);
+
+    for i in 0..out_len {
+        let src_pos = i as f64 * ratio;
+        let idx = src_pos as usize;
+        let frac = src_pos - idx as f64;
+
+        let sample = if idx + 1 < samples.len() {
+            samples[idx] as f64 * (1.0 - frac) + samples[idx + 1] as f64 * frac
+        } else {
+            samples[idx.min(samples.len() - 1)] as f64
+        };
+
+        output.push(sample as f32);
+    }
+
+    output
 }

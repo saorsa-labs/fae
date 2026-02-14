@@ -3797,7 +3797,7 @@ fn app() -> Element {
                         summary { class: "settings-section-summary", "Skills" }
                         div { class: "settings-section-body",
                             p { class: "note",
-                                "Legacy skill files directory (not part of the default prompt stack)."
+                                "Built-in and custom skills are included in the active prompt stack."
                             }
                             div { class: "settings-row",
                                 label { class: "settings-label", "Active skills" }

@@ -13,6 +13,8 @@ use std::path::PathBuf;
 
 /// The built-in canvas skill, compiled from `Skills/canvas.md`.
 pub const CANVAS_SKILL: &str = include_str!("../Skills/canvas.md");
+/// Built-in skill for external LLM setup and operations.
+pub const EXTERNAL_LLM_SKILL: &str = include_str!("../Skills/external-llm.md");
 
 /// Returns the directory where user-created skills are stored.
 ///
@@ -30,7 +32,7 @@ pub fn skills_dir() -> PathBuf {
 /// Always includes `"canvas"` (built-in). Any `.md` files found in
 /// [`skills_dir`] are added by stem name (e.g. `custom.md` → `"custom"`).
 pub fn list_skills() -> Vec<String> {
-    let mut names = vec!["canvas".to_owned()];
+    let mut names = vec!["canvas".to_owned(), "external-llm".to_owned()];
     let dir = skills_dir();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -39,7 +41,7 @@ pub fn list_skills() -> Vec<String> {
                 && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
             {
                 let name = stem.to_owned();
-                if name != "canvas" {
+                if name != "canvas" && name != "external-llm" {
                     names.push(name);
                 }
             }
@@ -53,7 +55,7 @@ pub fn list_skills() -> Vec<String> {
 /// Returns the built-in canvas skill followed by the contents of each `.md`
 /// file in [`skills_dir`]. Missing directory is silently ignored.
 pub fn load_all_skills() -> String {
-    let mut parts: Vec<String> = vec![CANVAS_SKILL.to_owned()];
+    let mut parts: Vec<String> = vec![CANVAS_SKILL.to_owned(), EXTERNAL_LLM_SKILL.to_owned()];
     let dir = skills_dir();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         let mut paths: Vec<_> = entries
@@ -93,9 +95,16 @@ mod tests {
     }
 
     #[test]
+    fn external_llm_skill_is_nonempty() {
+        assert!(!EXTERNAL_LLM_SKILL.is_empty());
+        assert!(EXTERNAL_LLM_SKILL.contains("External LLM"));
+    }
+
+    #[test]
     fn list_includes_canvas_builtin() {
         let names = list_skills();
         assert!(names.contains(&"canvas".to_owned()));
+        assert!(names.contains(&"external-llm".to_owned()));
     }
 
     #[test]
@@ -103,6 +112,7 @@ mod tests {
         let all = load_all_skills();
         assert!(all.contains("Canvas"));
         assert!(all.contains("Chart"));
+        assert!(all.contains("External LLM"));
     }
 
     #[test]

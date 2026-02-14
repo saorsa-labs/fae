@@ -95,8 +95,9 @@ Runtime system prompt assembly is layered:
 
 1. `CORE_PROMPT`
 2. `~/.fae/SOUL.md` (with repository fallback)
-3. User add-on prompt
-4. `~/.fae/onboarding.md` is injected only while onboarding is incomplete
+3. Built-in + user skills (`Skills/*.md` + `~/.fae/skills/*.md`)
+4. User add-on prompt
+5. `~/.fae/onboarding.md` is injected only while onboarding is incomplete
 
 [`SOUL.md`](SOUL.md) documents human-facing behavior and principles for identity, memory, and tool use.
 
@@ -126,6 +127,8 @@ context_size_tokens = 32768
 max_history_messages = 24
 enable_local_fallback = true
 tool_mode = "read_only"
+api_type = "auto"
+# external_profile = "work-openai"
 
 [memory]
 enabled = true
