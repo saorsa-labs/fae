@@ -51,18 +51,24 @@ impl SearchEngineTrait for DuckDuckGoEngine {
         query: &str,
         config: &SearchConfig,
     ) -> Result<Vec<SearchResult>, SearchError> {
-        tracing::debug!(query, "DuckDuckGo search");
+        tracing::trace!(query, "DuckDuckGo search");
 
         let client = http::build_client(config)?;
 
-        let params = [("q", query)];
+        let mut params = vec![("q", query)];
+        if config.safe_search {
+            params.push(("kp", "1"));
+        }
+
         let response = client
             .post("https://html.duckduckgo.com/html/")
             .form(&params)
             .header("Accept-Language", "en-US,en;q=0.9")
             .send()
             .await
-            .map_err(|e| SearchError::Http(format!("DuckDuckGo request failed: {e}")))?;
+            .map_err(|e| SearchError::Http(format!("DuckDuckGo request failed: {e}")))?
+            .error_for_status()
+            .map_err(|e| SearchError::Http(format!("DuckDuckGo HTTP error: {e}")))?;
 
         let html = response
             .text()

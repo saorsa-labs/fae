@@ -23,18 +23,22 @@ impl SearchEngineTrait for BraveEngine {
         query: &str,
         config: &SearchConfig,
     ) -> Result<Vec<SearchResult>, SearchError> {
-        tracing::debug!(query, "Brave search");
+        tracing::trace!(query, "Brave search");
 
         let client = http::build_client(config)?;
 
+        let safesearch_val = if config.safe_search { "strict" } else { "off" };
+
         let response = client
             .get("https://search.brave.com/search")
-            .query(&[("q", query)])
+            .query(&[("q", query), ("safesearch", safesearch_val)])
             .header("Accept", "text/html,application/xhtml+xml")
             .header("Accept-Language", "en-US,en;q=0.9")
             .send()
             .await
-            .map_err(|e| SearchError::Http(format!("Brave request failed: {e}")))?;
+            .map_err(|e| SearchError::Http(format!("Brave request failed: {e}")))?
+            .error_for_status()
+            .map_err(|e| SearchError::Http(format!("Brave HTTP error: {e}")))?;
 
         let html = response
             .text()
