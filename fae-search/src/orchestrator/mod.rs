@@ -5,4 +5,5 @@
 //! cross-engine boosting, and returns a sorted, truncated result set.
 
 pub mod dedup;
+pub mod scoring;
 pub mod url_normalize;
