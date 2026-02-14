@@ -148,6 +148,8 @@ mod gui {
     pub enum AppStatus {
         /// Waiting for user to press Start.
         Idle,
+        /// Pipeline startup in progress (checking cache / initializing).
+        Starting,
         /// Pre-flight: showing download confirmation before starting.
         PreFlight {
             /// Total bytes that need to be downloaded.
@@ -209,6 +211,7 @@ mod gui {
         pub fn display_text(&self) -> String {
             match self {
                 Self::Idle => "Ready".into(),
+                Self::Starting => "Starting...".into(),
                 Self::PreFlight { total_bytes, .. } => {
                     format!(
                         "Ready to download {:.1} GB",
@@ -503,6 +506,11 @@ mod gui {
         }
 
         #[test]
+        fn starting_display_text() {
+            assert_eq!(AppStatus::Starting.display_text(), "Starting...");
+        }
+
+        #[test]
         fn downloading_display_text() {
             let s = AppStatus::Downloading {
                 current_file: "model.onnx".into(),
@@ -619,6 +627,7 @@ mod gui {
                 }
                 .show_start()
             );
+            assert!(!AppStatus::Starting.show_start());
             assert!(!AppStatus::Running.show_start());
         }
 
@@ -636,6 +645,7 @@ mod gui {
                 }
                 .buttons_enabled()
             );
+            assert!(!AppStatus::Starting.buttons_enabled());
             assert!(
                 !AppStatus::Loading {
                     model_name: "x".into()
@@ -2452,17 +2462,7 @@ fn app() -> Element {
             | AppStatus::Error(_)
             | AppStatus::DownloadError { .. } => {
                 // --- START ---
-                status.set(AppStatus::Downloading {
-                    current_file: "Checking models...".into(),
-                    bytes_downloaded: 0,
-                    total_bytes: None,
-                    files_complete: 0,
-                    files_total: 0,
-                    aggregate_bytes: 0,
-                    aggregate_total: 0,
-                    speed_bps: 0.0,
-                    eta_secs: None,
-                });
+                status.set(AppStatus::Starting);
                 stt_stage.set(StagePhase::Loading);
                 llm_stage.set(StagePhase::Pending);
                 tts_stage.set(StagePhase::Pending);
@@ -2864,8 +2864,9 @@ fn app() -> Element {
     };
     // Context-aware secondary message for first-run experience.
     let welcome_text: &str = match &current_status {
+        AppStatus::Starting => "Checking your local model cache.",
         AppStatus::PreFlight { .. } => "Welcome to Fae! Setting up your personal AI assistant.",
-        AppStatus::Downloading { .. } => "Downloading AI models \u{2014} this only happens once.",
+        AppStatus::Downloading { .. } => "Downloading required AI model files.",
         AppStatus::Loading { .. } => "Almost ready \u{2014} loading models into memory.",
         AppStatus::Error(_) | AppStatus::DownloadError { .. } => {
             "Something went wrong. Press Retry to try again."
@@ -2888,7 +2889,7 @@ fn app() -> Element {
     };
     let is_loading = matches!(
         current_status,
-        AppStatus::Downloading { .. } | AppStatus::Loading { .. }
+        AppStatus::Starting | AppStatus::Downloading { .. } | AppStatus::Loading { .. }
     );
     let is_error = matches!(
         current_status,
