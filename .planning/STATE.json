@@ -7,19 +7,20 @@
     "name": "fae-search Crate (Core Library)"
   },
   "phase": {
-    "number": "1.1",
-    "name": "Crate Scaffold & Public API",
-    "plan": ".planning/PLAN-phase-1.1.md"
+    "number": "1.2",
+    "name": "DuckDuckGo & Brave Engines",
+    "plan": null
   },
   "progress": {
-    "total_tasks": 8,
-    "completed_tasks": 8,
+    "total_tasks": 3,
+    "completed_tasks": 3,
     "current_task": null
   },
-  "status": "reviewing",
   "review": {
-    "status": "pending",
-    "iteration": 0
+    "status": "passed",
+    "iteration": 1,
+    "last_verdict": "PASS"
   },
-  "last_updated": "2026-02-14T00:00:00Z"
+  "status": "task_complete",
+  "last_updated": "2026-02-14T13:30:00Z"
 }

@@ -25,6 +25,7 @@ pub mod config;
 pub mod engine;
 pub mod engines;
 pub mod error;
+pub mod http;
 pub mod types;
 
 pub use config::SearchConfig;
