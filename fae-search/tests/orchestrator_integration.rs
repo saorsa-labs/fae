@@ -136,8 +136,7 @@ fn single_engine_mode_returns_results() {
         make_result("https://c.com", "DuckDuckGo", "Page C"),
     ];
 
-    let final_results =
-        run_pipeline(vec![(SearchEngine::DuckDuckGo, results)], 10);
+    let final_results = run_pipeline(vec![(SearchEngine::DuckDuckGo, results)], 10);
 
     assert_eq!(final_results.len(), 3);
     // No cross-engine boost (all from same engine)
@@ -175,7 +174,13 @@ fn score_ordering_verified() {
 #[test]
 fn max_results_truncation() {
     let results: Vec<SearchResult> = (0..20)
-        .map(|i| make_result(&format!("https://page{i}.com"), "Google", &format!("Page {i}")))
+        .map(|i| {
+            make_result(
+                &format!("https://page{i}.com"),
+                "Google",
+                &format!("Page {i}"),
+            )
+        })
         .collect();
 
     let final_results = run_pipeline(vec![(SearchEngine::Google, results)], 5);
@@ -193,9 +198,7 @@ fn cross_engine_url_boosted_above_single_engine() {
         make_result("https://b.com", "Google", "B Only"),
         make_result("https://a.com", "Google", "A Shared"),
     ];
-    let ddg_results = vec![
-        make_result("https://a.com", "DuckDuckGo", "A Shared DDG"),
-    ];
+    let ddg_results = vec![make_result("https://a.com", "DuckDuckGo", "A Shared DDG")];
 
     let final_results = run_pipeline(
         vec![

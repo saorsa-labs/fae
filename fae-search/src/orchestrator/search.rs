@@ -92,7 +92,11 @@ pub async fn orchestrate_search(
         .collect();
 
     // 7. Sort by score descending.
-    final_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    final_results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // 8. Truncate to max_results.
     final_results.truncate(config.max_results);
@@ -113,7 +117,9 @@ async fn query_engine(
         SearchEngine::Bing => BingEngine.search(query, config).await,
         SearchEngine::Startpage => {
             // Startpage not yet implemented (Phase 3.3).
-            Err(SearchError::Parse("Startpage engine not yet implemented".into()))
+            Err(SearchError::Parse(
+                "Startpage engine not yet implemented".into(),
+            ))
         }
     }
 }
@@ -169,7 +175,13 @@ mod tests {
     #[test]
     fn truncation_respects_max_results() {
         let mut results: Vec<SearchResult> = (0..20)
-            .map(|i| make_result(&format!("https://example{i}.com"), "Google", 1.0 - i as f64 * 0.01))
+            .map(|i| {
+                make_result(
+                    &format!("https://example{i}.com"),
+                    "Google",
+                    1.0 - i as f64 * 0.01,
+                )
+            })
             .collect();
 
         results.truncate(5);
