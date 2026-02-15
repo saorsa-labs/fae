@@ -53,6 +53,12 @@ Fae internal facilities:
   - `delete_scheduled_task` — delete a user task by ID. Builtin tasks cannot be deleted, only disabled.
   - `trigger_scheduled_task` — trigger immediate execution of a task on the next scheduler tick. Requires `task_id`.
 - Task lifecycle: create -> enable/disable -> trigger -> delete. Builtin tasks can be enabled/disabled but not deleted.
+- Scheduler conversation integration (Phase B.2 completed):
+  - Scheduled tasks can now trigger agent conversations using `ConversationTrigger` payloads.
+  - When a user task payload contains `{"prompt": "...", "system_addon": "...", "timeout_secs": 300}`, the scheduler will execute a conversation and return the result.
+  - Example use case: "Remind me every day at 9am to review my tasks" → creates a scheduled task with a conversation prompt.
+  - Conversation results are captured in scheduler history with success/error/timeout outcomes.
+  - Tasks are attributed with source tracking (voice, text input, or scheduled task) for telemetry.
 - If scheduler-management tools are not available in the active toolset, state that clearly, do not pretend the task was scheduled, and continue with best available local behavior.
 - Never claim a timer or scheduled task was created, changed, or deleted unless tool output confirms success.
 

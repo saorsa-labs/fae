@@ -189,11 +189,11 @@ mod tests {
                     }
 
                     // Send success response
-                    let _ = request
-                        .response_tx
-                        .send(crate::pipeline::messages::ConversationResponse::Success(
+                    let _ = request.response_tx.send(
+                        crate::pipeline::messages::ConversationResponse::Success(
                             "Test response".to_owned(),
-                        ));
+                        ),
+                    );
                 }
             });
 
@@ -312,6 +312,160 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Integration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn full_workflow_scheduled_task_to_conversation_response() {
+        let rt = tokio::runtime::Runtime::new().expect("create runtime");
+
+        rt.block_on(async {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let bridge = TaskExecutorBridge::new(tx);
+            let executor = bridge.into_executor();
+
+            // Create a scheduled task with conversation trigger
+            let trigger = ConversationTrigger::new("What is 2+2?")
+                .with_system_addon("You are a helpful calculator")
+                .with_timeout_secs(60);
+            let payload = trigger.to_json().expect("serialize trigger");
+
+            let mut task = ScheduledTask::user_task(
+                "calc_task",
+                "Calculator Task",
+                Schedule::Interval { secs: 3600 },
+            );
+            task.payload = Some(payload);
+
+            // Spawn conversation handler (simulates the runtime handler)
+            tokio::spawn(async move {
+                if let Some(request) = rx.recv().await {
+                    // Validate request fields
+                    assert_eq!(request.task_id, "calc_task");
+                    assert_eq!(request.prompt, "What is 2+2?");
+                    assert_eq!(
+                        request.system_addon,
+                        Some("You are a helpful calculator".to_owned())
+                    );
+
+                    // Simulate successful conversation
+                    let _ = request.response_tx.send(
+                        crate::pipeline::messages::ConversationResponse::Success(
+                            "The answer is 4.".to_owned(),
+                        ),
+                    );
+                }
+            });
+
+            // Execute task (this blocks until response received)
+            let result = tokio::task::spawn_blocking(move || executor(&task))
+                .await
+                .expect("spawn_blocking failed");
+
+            // Verify result
+            match result {
+                TaskResult::Success(text) => {
+                    assert_eq!(text, "The answer is 4.");
+                }
+                other => panic!("Expected Success, got: {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn full_workflow_conversation_error_propagates() {
+        let rt = tokio::runtime::Runtime::new().expect("create runtime");
+
+        rt.block_on(async {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let bridge = TaskExecutorBridge::new(tx);
+            let executor = bridge.into_executor();
+
+            // Create task
+            let trigger = ConversationTrigger::new("Trigger error");
+            let payload = trigger.to_json().expect("serialize trigger");
+
+            let mut task = ScheduledTask::user_task(
+                "error_task",
+                "Error Task",
+                Schedule::Interval { secs: 3600 },
+            );
+            task.payload = Some(payload);
+
+            // Spawn handler that returns error
+            tokio::spawn(async move {
+                if let Some(request) = rx.recv().await {
+                    let _ = request.response_tx.send(
+                        crate::pipeline::messages::ConversationResponse::Error(
+                            "LLM connection failed".to_owned(),
+                        ),
+                    );
+                }
+            });
+
+            // Execute task
+            let result = tokio::task::spawn_blocking(move || executor(&task))
+                .await
+                .expect("spawn_blocking failed");
+
+            // Verify error propagates
+            match result {
+                TaskResult::Error(msg) => {
+                    assert_eq!(msg, "LLM connection failed");
+                }
+                other => panic!("Expected Error, got: {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn full_workflow_conversation_timeout_propagates() {
+        let rt = tokio::runtime::Runtime::new().expect("create runtime");
+
+        rt.block_on(async {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let bridge = TaskExecutorBridge::new(tx);
+            let executor = bridge.into_executor();
+
+            // Create task
+            let trigger = ConversationTrigger::new("Trigger timeout");
+            let payload = trigger.to_json().expect("serialize trigger");
+
+            let mut task = ScheduledTask::user_task(
+                "timeout_task",
+                "Timeout Task",
+                Schedule::Interval { secs: 3600 },
+            );
+            task.payload = Some(payload);
+
+            // Spawn handler that returns timeout
+            tokio::spawn(async move {
+                if let Some(request) = rx.recv().await {
+                    let _ = request
+                        .response_tx
+                        .send(crate::pipeline::messages::ConversationResponse::Timeout);
+                }
+            });
+
+            // Execute task
+            let result = tokio::task::spawn_blocking(move || executor(&task))
+                .await
+                .expect("spawn_blocking failed");
+
+            // Verify timeout propagates as error
+            match result {
+                TaskResult::Error(msg) => {
+                    assert!(
+                        msg.contains("timed out"),
+                        "Expected timeout error, got: {msg}"
+                    );
+                }
+                other => panic!("Expected Error for timeout, got: {other:?}"),
+            }
+        });
+    }
+
     #[test]
     fn executor_handles_minimal_trigger() {
         let rt = tokio::runtime::Runtime::new().expect("create runtime");
@@ -336,11 +490,11 @@ mod tests {
                     assert!(request.system_addon.is_none());
 
                     // Send success response
-                    let _ = request
-                        .response_tx
-                        .send(crate::pipeline::messages::ConversationResponse::Success(
+                    let _ = request.response_tx.send(
+                        crate::pipeline::messages::ConversationResponse::Success(
                             "Minimal response".to_owned(),
-                        ));
+                        ),
+                    );
                 }
             });
 
