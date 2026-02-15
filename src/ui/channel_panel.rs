@@ -207,6 +207,229 @@ pub struct ChannelStatus {
     pub rate_limit_remaining: Option<u32>,
 }
 
+/// Render Discord configuration form.
+///
+/// Returns HTML string for editing Discord channel settings.
+#[must_use]
+pub fn render_discord_form(form: &DiscordEditForm) -> String {
+    let mut html = String::new();
+    html.push_str(r#"<div class="discord-form channel-form">"#);
+    html.push_str(r#"<h3>Discord Configuration</h3>"#);
+
+    // Setup instructions (collapsible)
+    html.push_str(r#"<details class="setup-instructions">
+        <summary>Setup Instructions</summary>
+        <ol>
+            <li>Go to <a href="https://discord.com/developers/applications" target="_blank">Discord Developer Portal</a></li>
+            <li>Create a new application or select an existing one</li>
+            <li>Go to the "Bot" section and create a bot</li>
+            <li>Copy the bot token (click "Reset Token" if needed)</li>
+            <li>Enable required intents: Message Content Intent</li>
+            <li>Generate OAuth2 URL with bot scope and necessary permissions</li>
+            <li>Invite the bot to your server using the generated URL</li>
+            <li>Copy the Guild ID and authorized user/channel IDs</li>
+        </ol>
+    </details>"#);
+
+    // Bot token (masked input)
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="discord-bot-token">Bot Token <span class="required">*</span></label>
+        <input type="password" id="discord-bot-token" name="bot_token" "#,
+    );
+    html.push_str(&format!(r#"value="{}" "#, html_escape(&form.bot_token)));
+    html.push_str(
+        r#"placeholder="Your Discord bot token" />
+    </div>"#,
+    );
+
+    // Guild ID
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="discord-guild-id">Guild ID (optional)</label>
+        <input type="text" id="discord-guild-id" name="guild_id" "#,
+    );
+    html.push_str(&format!(r#"value="{}" "#, html_escape(&form.guild_id)));
+    html.push_str(
+        r#"placeholder="e.g., 123456789012345678" />
+        <p class="hint">Leave empty to monitor all guilds the bot is in.</p>
+    </div>"#,
+    );
+
+    // Allowed user IDs
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="discord-allowed-users">Allowed User IDs</label>
+        <div class="list-editor" id="discord-allowed-users">"#,
+    );
+    for user_id in &form.allowed_user_ids {
+        html.push_str(&format!(
+            r#"<div class="list-item">
+                <span>{}</span>
+                <button class="remove-btn" data-value="{}">Remove</button>
+            </div>"#,
+            html_escape(user_id),
+            html_escape(user_id)
+        ));
+    }
+    html.push_str(
+        r#"<div class="add-item">
+            <input type="text" placeholder="User ID" id="new-discord-user" />
+            <button class="add-btn">Add</button>
+        </div>
+        </div>
+    </div>"#,
+    );
+
+    // Allowed channel IDs
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="discord-allowed-channels">Allowed Channel IDs (optional)</label>
+        <div class="list-editor" id="discord-allowed-channels">"#,
+    );
+    for channel_id in &form.allowed_channel_ids {
+        html.push_str(&format!(
+            r#"<div class="list-item">
+                <span>{}</span>
+                <button class="remove-btn" data-value="{}">Remove</button>
+            </div>"#,
+            html_escape(channel_id),
+            html_escape(channel_id)
+        ));
+    }
+    html.push_str(
+        r#"<div class="add-item">
+            <input type="text" placeholder="Channel ID" id="new-discord-channel" />
+            <button class="add-btn">Add</button>
+        </div>
+        </div>
+        <p class="hint">Leave empty to allow all channels.</p>
+    </div>"#,
+    );
+
+    // Action buttons
+    html.push_str(
+        r#"<div class="form-actions">
+        <button class="save-btn">Save</button>
+        <button class="test-connection-btn">Test Connection</button>
+    </div>"#,
+    );
+
+    html.push_str(r#"</div>"#); // discord-form
+    html
+}
+
+/// Render WhatsApp configuration form.
+///
+/// Returns HTML string for editing WhatsApp channel settings.
+#[must_use]
+pub fn render_whatsapp_form(form: &WhatsAppEditForm) -> String {
+    let mut html = String::new();
+    html.push_str(r#"<div class="whatsapp-form channel-form">"#);
+    html.push_str(r#"<h3>WhatsApp Configuration</h3>"#);
+
+    // Setup instructions (collapsible)
+    html.push_str(r#"<details class="setup-instructions">
+        <summary>Setup Instructions</summary>
+        <ol>
+            <li>Go to <a href="https://developers.facebook.com/" target="_blank">Meta for Developers</a></li>
+            <li>Create a new app or select an existing one</li>
+            <li>Add WhatsApp product to your app</li>
+            <li>Go to WhatsApp > Getting Started</li>
+            <li>Copy the temporary access token (or generate a permanent one)</li>
+            <li>Copy the Phone Number ID</li>
+            <li>Configure webhook with verify token</li>
+            <li>Add authorized phone numbers for testing</li>
+        </ol>
+    </details>"#);
+
+    // Access token (masked input)
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="whatsapp-access-token">Access Token <span class="required">*</span></label>
+        <input type="password" id="whatsapp-access-token" name="access_token" "#,
+    );
+    html.push_str(&format!(r#"value="{}" "#, html_escape(&form.access_token)));
+    html.push_str(
+        r#"placeholder="Your WhatsApp access token" />
+    </div>"#,
+    );
+
+    // Phone number ID
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="whatsapp-phone-id">Phone Number ID <span class="required">*</span></label>
+        <input type="text" id="whatsapp-phone-id" name="phone_number_id" "#,
+    );
+    html.push_str(&format!(
+        r#"value="{}" "#,
+        html_escape(&form.phone_number_id)
+    ));
+    html.push_str(
+        r#"placeholder="e.g., 123456789012345" />
+    </div>"#,
+    );
+
+    // Verify token (masked input)
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="whatsapp-verify-token">Verify Token <span class="required">*</span></label>
+        <input type="password" id="whatsapp-verify-token" name="verify_token" "#,
+    );
+    html.push_str(&format!(r#"value="{}" "#, html_escape(&form.verify_token)));
+    html.push_str(
+        r#"placeholder="Your webhook verify token" />
+        <p class="hint">Used for webhook verification by Meta.</p>
+    </div>"#,
+    );
+
+    // Allowed numbers
+    html.push_str(
+        r#"<div class="form-field">
+        <label for="whatsapp-allowed-numbers">Allowed Phone Numbers</label>
+        <div class="list-editor" id="whatsapp-allowed-numbers">"#,
+    );
+    for number in &form.allowed_numbers {
+        html.push_str(&format!(
+            r#"<div class="list-item">
+                <span>{}</span>
+                <button class="remove-btn" data-value="{}">Remove</button>
+            </div>"#,
+            html_escape(number),
+            html_escape(number)
+        ));
+    }
+    html.push_str(
+        r#"<div class="add-item">
+            <input type="text" placeholder="+14155551234" id="new-whatsapp-number" />
+            <button class="add-btn">Add</button>
+        </div>
+        </div>
+        <p class="hint">Use E.164 format (e.g., +14155551234).</p>
+    </div>"#,
+    );
+
+    // Action buttons
+    html.push_str(
+        r#"<div class="form-actions">
+        <button class="save-btn">Save</button>
+        <button class="test-connection-btn">Test Connection</button>
+    </div>"#,
+    );
+
+    html.push_str(r#"</div>"#); // whatsapp-form
+    html
+}
+
+/// Escape HTML special characters.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// Render channel overview with health indicators and status.
 ///
 /// Returns HTML string for display.
@@ -497,5 +720,71 @@ mod tests {
         assert!(html.contains("connected"));
         assert!(html.contains("error"));
         assert!(html.contains("Refresh Health"));
+    }
+
+    #[test]
+    fn render_discord_form_empty() {
+        let form = DiscordEditForm::new();
+        let html = render_discord_form(&form);
+
+        assert!(html.contains("Discord Configuration"));
+        assert!(html.contains("Bot Token"));
+        assert!(html.contains("Setup Instructions"));
+        assert!(html.contains("Test Connection"));
+        assert!(html.contains("Save"));
+    }
+
+    #[test]
+    fn render_discord_form_with_config() {
+        let form = DiscordEditForm {
+            bot_token: "test_token".to_owned(),
+            guild_id: "123456".to_owned(),
+            allowed_user_ids: vec!["user1".to_owned(), "user2".to_owned()],
+            allowed_channel_ids: vec!["chan1".to_owned()],
+        };
+
+        let html = render_discord_form(&form);
+        assert!(html.contains("test_token"));
+        assert!(html.contains("123456"));
+        assert!(html.contains("user1"));
+        assert!(html.contains("user2"));
+        assert!(html.contains("chan1"));
+    }
+
+    #[test]
+    fn render_whatsapp_form_empty() {
+        let form = WhatsAppEditForm::new();
+        let html = render_whatsapp_form(&form);
+
+        assert!(html.contains("WhatsApp Configuration"));
+        assert!(html.contains("Access Token"));
+        assert!(html.contains("Phone Number ID"));
+        assert!(html.contains("Verify Token"));
+        assert!(html.contains("E.164 format"));
+        assert!(html.contains("Test Connection"));
+    }
+
+    #[test]
+    fn render_whatsapp_form_with_config() {
+        let form = WhatsAppEditForm {
+            access_token: "test_access".to_owned(),
+            phone_number_id: "phone123".to_owned(),
+            verify_token: "verify_token".to_owned(),
+            allowed_numbers: vec!["+14155551234".to_owned(), "+14155555678".to_owned()],
+        };
+
+        let html = render_whatsapp_form(&form);
+        assert!(html.contains("test_access"));
+        assert!(html.contains("phone123"));
+        assert!(html.contains("verify_token"));
+        assert!(html.contains("+14155551234"));
+        assert!(html.contains("+14155555678"));
+    }
+
+    #[test]
+    fn html_escape_special_chars() {
+        assert!(html_escape("<script>") == "&lt;script&gt;");
+        assert!(html_escape("a & b") == "a &amp; b");
+        assert!(html_escape("\"quote\"") == "&quot;quote&quot;");
     }
 }
