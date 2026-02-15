@@ -1,5 +1,6 @@
 //! Configuration types for the speech-to-speech pipeline.
 
+use crate::credentials::CredentialRef;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -263,8 +264,10 @@ pub struct LlmConfig {
     pub api_organization: Option<String>,
     /// API key for the remote provider (API/Agent backends only).
     ///
-    /// For local servers (Ollama/LM Studio/vLLM), this is typically empty.
-    pub api_key: String,
+    /// Stored as a credential reference for secure storage. For local servers
+    /// (Ollama/LM Studio/vLLM), this is typically `CredentialRef::None`.
+    #[serde(default, alias = "api_key")]
+    pub api_key: CredentialRef,
     /// Tool capability mode (Agent backend only).
     pub tool_mode: AgentToolMode,
     /// Maximum tokens to generate per response.
@@ -353,7 +356,7 @@ impl Default for LlmConfig {
             api_type: LlmApiType::default(),
             api_version: None,
             api_organization: None,
-            api_key: String::new(),
+            api_key: CredentialRef::None,
             tool_mode: AgentToolMode::default(),
             max_tokens: 200,
             context_size_tokens: default_llm_context_size_tokens(),
@@ -519,7 +522,7 @@ Personal context:\n\
                     format!("{}/{}", self.api_url, self.api_model)
                 }
                 LlmBackend::Agent => {
-                    if self.api_key.trim().is_empty() && self.cloud_provider.is_none() {
+                    if !self.api_key.is_set() && self.cloud_provider.is_none() {
                         format!("local/{} (agent-auto)", self.model_id)
                     } else {
                         format!("{}/{} (agent-auto)", self.api_url, self.api_model)
@@ -531,7 +534,7 @@ Personal context:\n\
 
     /// Returns true when a remote provider is configured directly or via an external profile.
     pub fn has_remote_provider_configured(&self) -> bool {
-        !self.api_key.trim().is_empty()
+        self.api_key.is_set()
             || self.cloud_provider.is_some()
             || self
                 .external_profile
@@ -827,7 +830,14 @@ pub struct ChannelGatewayConfig {
     /// Bind port for the channel gateway.
     pub port: u16,
     /// Optional bearer token for generic webhook authentication.
-    pub bearer_token: Option<String>,
+    ///
+    /// Stored as a credential reference for secure storage.
+    #[serde(
+        default,
+        alias = "bearer_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bearer_token: Option<CredentialRef>,
 }
 
 impl Default for ChannelGatewayConfig {
@@ -846,7 +856,10 @@ impl Default for ChannelGatewayConfig {
 #[serde(default)]
 pub struct DiscordChannelConfig {
     /// Discord bot token.
-    pub bot_token: String,
+    ///
+    /// Stored as a credential reference for secure storage.
+    #[serde(default, alias = "bot_token")]
+    pub bot_token: CredentialRef,
     /// Optional guild filter. If set, only this guild is processed.
     pub guild_id: Option<String>,
     /// Allowed Discord user IDs. Empty means deny all.
@@ -860,11 +873,17 @@ pub struct DiscordChannelConfig {
 #[serde(default)]
 pub struct WhatsAppChannelConfig {
     /// Access token from Meta.
-    pub access_token: String,
+    ///
+    /// Stored as a credential reference for secure storage.
+    #[serde(default, alias = "access_token")]
+    pub access_token: CredentialRef,
     /// Phone number ID from Meta.
     pub phone_number_id: String,
     /// Verification token used by Meta webhook challenge.
-    pub verify_token: String,
+    ///
+    /// Stored as a credential reference for secure storage.
+    #[serde(default, alias = "verify_token")]
+    pub verify_token: CredentialRef,
     /// Allowed sender phone numbers in E.164 format (e.g. +44123...).
     pub allowed_numbers: Vec<String>,
 }

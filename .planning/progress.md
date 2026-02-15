@@ -578,3 +578,12 @@ Tasks:
 - All 11 unit tests passing
 - Commit: 6405770
 
+
+### Task 3: Implement encrypted fallback backend — COMPLETE
+- Added `keyring = "3.5"` dependency
+- Created `src/credentials/encrypted.rs` with EncryptedCredentialManager
+- Platform-specific backends: Linux (Secret Service), Windows (Credential Manager)
+- Factory returns encrypted manager on non-macOS, Keychain on macOS
+- All tests passing (11 on macOS, 16 total on Linux/Windows)
+- Commit: c908d06
+
