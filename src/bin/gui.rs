@@ -49,6 +49,9 @@ fn main() {
         .init();
 
     // Build native menu bar.
+    // On macOS, this creates a standard application menu bar (not a system tray/status bar item).
+    // The app runs as a foreground application with full window chrome and menu bar integration.
+    // Window closing behavior: standard macOS app - closing the window quits the app.
     let menu = build_menu_bar();
 
     LaunchBuilder::new()
@@ -65,6 +68,14 @@ fn main() {
 }
 
 /// Build the native menu bar with About, Edit, and Window submenus.
+///
+/// Creates a standard macOS menu bar with:
+/// - App menu: About, Settings, Soul, Skills, Memories, Scheduler, Ingestion, Guide, Check Updates, Hide/Show, Quit
+/// - Edit menu: Undo/Redo, Cut/Copy/Paste, Select All
+/// - Window menu: Minimize, Maximize, Fullscreen, Close
+///
+/// The menu bar persists for the lifetime of the application and provides
+/// standard macOS application integration. This is NOT a system tray/status bar item.
 #[cfg(feature = "gui")]
 fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     use dioxus::desktop::muda::accelerator::{Accelerator, CMD_OR_CTRL, Code};
