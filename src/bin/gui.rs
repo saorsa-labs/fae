@@ -3870,11 +3870,14 @@ fn app() -> Element {
 
     // Theme state: mode from config, effective theme based on mode + system
     let theme_mode = use_memo(move || config_state.read().theme.mode);
-    let _effective_theme = use_memo(move || match theme_mode() {
+    let effective_theme = use_memo(move || match theme_mode() {
         fae::config::ThemeMode::Auto => fae::theme::SystemTheme::current(),
         fae::config::ThemeMode::Light => fae::theme::SystemTheme::Light,
         fae::config::ThemeMode::Dark => fae::theme::SystemTheme::Dark,
     });
+
+    // Dynamic CSS based on current theme
+    let global_css = use_memo(move || build_global_css(effective_theme()));
 
     let mut stt_stage = use_signal(|| StagePhase::Pending);
     let mut llm_stage = use_signal(|| StagePhase::Pending);
@@ -5058,8 +5061,8 @@ fn app() -> Element {
     });
 
     rsx! {
-        // Global styles
-        style { {GLOBAL_CSS} }
+        // Global styles (theme-aware)
+        style { {global_css()} }
 
         div { class: if *canvas_visible.read() { "container container-with-canvas" } else { "container" },
             div { class: "topbar",
@@ -6272,9 +6275,12 @@ fn app() -> Element {
 #[cfg(feature = "gui")]
 fn fae_guide_window() -> Element {
     let desktop = use_window();
+    // Panel windows use system theme (no config access)
+    let theme = fae::theme::SystemTheme::current();
+    let global_css = build_global_css(theme);
 
     rsx! {
-        style { {GLOBAL_CSS} }
+        style { {global_css} }
         style { {PANEL_CSS} }
         div { class: "container panel-window",
             div { class: "topbar",
@@ -6361,6 +6367,9 @@ fn fae_guide_window() -> Element {
 #[cfg(feature = "gui")]
 fn soul_window() -> Element {
     let desktop = use_window();
+    // Panel windows use system theme (no config access)
+    let theme = fae::theme::SystemTheme::current();
+    let global_css = build_global_css(theme);
 
     let mut soul_text = use_signal(String::new);
     let mut onboarding_text = use_signal(String::new);
@@ -6377,7 +6386,7 @@ fn soul_window() -> Element {
     let onboarding_path = fae::personality::onboarding_path();
 
     rsx! {
-        style { {GLOBAL_CSS} }
+        style { {global_css} }
         style { {PANEL_CSS} }
         div { class: "container panel-window",
             div { class: "topbar",
@@ -6513,6 +6522,9 @@ fn soul_window() -> Element {
 #[cfg(feature = "gui")]
 fn skills_window() -> Element {
     let desktop = use_window();
+    // Panel windows use system theme (no config access)
+    let theme = fae::theme::SystemTheme::current();
+    let global_css = build_global_css(theme);
     let skills_dir = fae::skills::skills_dir();
 
     let mut source_url = use_signal(String::new);
@@ -6540,7 +6552,7 @@ fn skills_window() -> Element {
         .collect::<Vec<_>>();
 
     rsx! {
-        style { {GLOBAL_CSS} }
+        style { {global_css} }
         style { {PANEL_CSS} }
         div { class: "container panel-window",
             div { class: "topbar",
@@ -6715,6 +6727,9 @@ fn skills_window() -> Element {
 #[cfg(feature = "gui")]
 fn ingestion_window() -> Element {
     let desktop = use_window();
+    // Panel windows use system theme (no config access)
+    let theme = fae::theme::SystemTheme::current();
+    let global_css = build_global_css(theme);
 
     let mut target_path = use_signal(String::new);
     let mut action_status = use_signal(String::new);
@@ -6759,7 +6774,7 @@ fn ingestion_window() -> Element {
     };
 
     rsx! {
-        style { {GLOBAL_CSS} }
+        style { {global_css} }
         style { {PANEL_CSS} }
         div { class: "container panel-window",
             div { class: "topbar",
@@ -6911,6 +6926,9 @@ fn ingestion_window() -> Element {
 #[cfg(feature = "gui")]
 fn memories_window() -> Element {
     let desktop = use_window();
+    // Panel windows use system theme (no config access)
+    let theme = fae::theme::SystemTheme::current();
+    let global_css = build_global_css(theme);
     let memory_root = read_config_or_default().memory.root_dir;
 
     let mut primary_name = use_signal(String::new);
@@ -6974,7 +6992,7 @@ fn memories_window() -> Element {
     });
 
     rsx! {
-        style { {GLOBAL_CSS} }
+        style { {global_css} }
         style { {PANEL_CSS} }
         div { class: "container panel-window",
             div { class: "topbar",
@@ -7260,6 +7278,9 @@ fn memories_window() -> Element {
 #[cfg(feature = "gui")]
 fn preferences_window() -> Element {
     let desktop = use_window();
+    // Panel windows use system theme (no config access)
+    let theme = fae::theme::SystemTheme::current();
+    let global_css = build_global_css(theme);
     let mut config_state = use_signal(read_config_or_default);
     let mut save_status = use_signal(String::new);
     let update_state = use_signal(fae::update::UpdateState::load);
@@ -7317,7 +7338,7 @@ fn preferences_window() -> Element {
     let config_path = fae::SpeechConfig::default_config_path();
 
     rsx! {
-        style { {GLOBAL_CSS} }
+        style { {global_css} }
         style { {PANEL_CSS} }
 
         div { class: "container panel-window",
@@ -7744,6 +7765,9 @@ fn preferences_window() -> Element {
 #[cfg(feature = "gui")]
 fn models_window() -> Element {
     let desktop = use_window();
+    // Panel windows use system theme (no config access)
+    let theme = fae::theme::SystemTheme::current();
+    let global_css = build_global_css(theme);
 
     let mut config_state = use_signal(read_config_or_default);
     let mut save_status = use_signal(String::new);
@@ -7957,7 +7981,7 @@ fn models_window() -> Element {
     let current_file = config_state.read().llm.gguf_file.clone();
 
     rsx! {
-        style { {GLOBAL_CSS} }
+        style { {global_css} }
         style { {PANEL_CSS} }
 
         div { class: "container panel-window",
@@ -8262,36 +8286,25 @@ enum PipelineMessage {
     ),
 }
 
-/// Global CSS styles for the application.
+/// Build global CSS with theme-specific variables.
+///
+/// Combines theme color variables with static structural CSS.
 #[cfg(feature = "gui")]
-const GLOBAL_CSS: &str = r#"
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+fn build_global_css(theme: fae::theme::SystemTheme) -> String {
+    let theme_css = fae::theme::generate_theme_css(theme);
+    format!(
+        r#"
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 
-    :root {
-        --bg-primary: #0f0f1a;
-        --bg-secondary: #161625;
-        --bg-card: rgba(255, 255, 255, 0.025);
-        --bg-elevated: rgba(255, 255, 255, 0.04);
-        --border-subtle: rgba(255, 255, 255, 0.07);
-        --border-medium: rgba(255, 255, 255, 0.12);
-        --accent: #a78bfa;
-        --accent-dim: rgba(167, 139, 250, 0.15);
-        --accent-glow: rgba(167, 139, 250, 0.25);
-        --green: #22c55e;
-        --green-dim: rgba(34, 197, 94, 0.12);
-        --red: #ef4444;
-        --red-dim: rgba(239, 68, 68, 0.12);
-        --yellow: #fbbf24;
-        --blue: #3b82f6;
-        --text-primary: #f0eef6;
-        --text-secondary: #a1a1b5;
-        --text-tertiary: #6b6b80;
-        --radius-sm: 8px;
-        --radius-md: 12px;
-        --radius-lg: 16px;
-        --radius-pill: 999px;
-    }
+    {}
+"#,
+        theme_css
+    ) + STRUCTURAL_CSS
+}
 
+/// Structural CSS (layout, sizes, transitions) - theme-independent.
+#[cfg(feature = "gui")]
+const STRUCTURAL_CSS: &str = r#"
     body {
         background: var(--bg-primary);
         color: var(--text-primary);
