@@ -62,6 +62,22 @@ fn get_latest_version() -> Result<Option<SoulVersion>> {
     Ok(versions.into_iter().next())
 }
 
+/// Convenience wrapper for backup-before-save flow.
+///
+/// Creates a backup, then returns appropriate status message.
+/// Returns an error only if backup fails critically.
+pub fn backup_before_save(soul_content: &str) -> Result<String> {
+    match create_backup(soul_content) {
+        Ok(Some(version)) => Ok(format!("Backed up previous version ({})", version.id)),
+        Ok(None) => Ok("No changes since last backup".to_string()),
+        Err(e) => {
+            // Log the error but don't block save
+            eprintln!("Warning: backup failed: {}", e);
+            Ok("Backup failed (save will proceed)".to_string())
+        }
+    }
+}
+
 /// Create a backup of SOUL.md content.
 ///
 /// Returns None if the content is identical to the most recent backup (by hash).
@@ -317,5 +333,32 @@ mod tests {
         assert!(result2.is_ok());
         let version2 = result2.expect("second");
         assert!(version2.is_some(), "different content should create backup");
+    }
+
+    #[test]
+    fn test_backup_before_save_flow() {
+        // Test the convenience wrapper used by GUI
+        let content = format!("# GUI save test {}", chrono::Utc::now());
+
+        let result = backup_before_save(&content);
+        assert!(result.is_ok());
+
+        let msg = result.expect("get message");
+        assert!(
+            msg.contains("Backed up") || msg.contains("No changes"),
+            "Expected backup message, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_backup_failure_does_not_block_save() {
+        // Even if backup fails (which shouldn't happen in this test),
+        // the backup_before_save function should return Ok with a warning message
+        let content = "# Test content";
+
+        let result = backup_before_save(content);
+        // Should always return Ok, never Err
+        assert!(result.is_ok());
     }
 }

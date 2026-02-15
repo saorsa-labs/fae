@@ -6411,14 +6411,23 @@ fn soul_window() -> Element {
                                 class: "settings-save",
                                 onclick: move |_| {
                                     let body = soul_text.read().to_string();
-                                    status.set("Saving SOUL.md...".to_owned());
+                                    status.set("Backing up and saving SOUL.md...".to_owned());
                                     spawn(async move {
                                         let result = tokio::task::spawn_blocking(move || {
-                                            write_text_file(&fae::personality::soul_path(), &body)
+                                            // Create backup before save
+                                            let backup_msg = fae::soul_version::backup_before_save(&body)
+                                                .map_err(|e| format!("backup error: {}", e))?;
+
+                                            // Save the file
+                                            write_text_file(&fae::personality::soul_path(), &body)?;
+
+                                            Ok::<String, String>(backup_msg)
                                         })
                                         .await;
                                         match result {
-                                            Ok(Ok(())) => status.set("Saved SOUL.md.".to_owned()),
+                                            Ok(Ok(backup_msg)) => {
+                                                status.set(format!("Saved SOUL.md. {}", backup_msg));
+                                            }
                                             Ok(Err(e)) => status.set(e),
                                             Err(e) => status.set(format!("could not save SOUL.md: {e}")),
                                         }
