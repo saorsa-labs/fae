@@ -124,6 +124,8 @@ pub struct ConversationRequest {
     pub prompt: String,
     /// Optional addition to the system prompt for this conversation.
     pub system_addon: Option<String>,
+    /// Timeout in seconds for this conversation. Defaults to 300s if None.
+    pub timeout_secs: Option<u64>,
     /// Channel for sending the conversation result back to the scheduler.
     pub response_tx: oneshot::Sender<ConversationResponse>,
 }
@@ -150,6 +152,7 @@ mod tests {
             task_id: "reminder_123".to_owned(),
             prompt: "Check my calendar".to_owned(),
             system_addon: Some("You are a calendar assistant".to_owned()),
+            timeout_secs: Some(120),
             response_tx: tx,
         };
 
@@ -159,6 +162,7 @@ mod tests {
             Some(ref addon) => assert_eq!(addon, "You are a calendar assistant"),
             None => unreachable!(),
         }
+        assert_eq!(request.timeout_secs, Some(120));
     }
 
     #[test]
@@ -168,12 +172,14 @@ mod tests {
             task_id: "task_1".to_owned(),
             prompt: "Simple prompt".to_owned(),
             system_addon: None,
+            timeout_secs: None,
             response_tx: tx,
         };
 
         assert_eq!(request.task_id, "task_1");
         assert_eq!(request.prompt, "Simple prompt");
         assert!(request.system_addon.is_none());
+        assert!(request.timeout_secs.is_none());
     }
 
     #[test]
@@ -229,6 +235,7 @@ mod tests {
             task_id: "test".to_owned(),
             prompt: "test prompt".to_owned(),
             system_addon: None,
+            timeout_secs: None,
             response_tx: tx,
         };
 

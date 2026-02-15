@@ -51,6 +51,7 @@ impl TaskExecutorBridge {
                 task_id: task.id.clone(),
                 prompt: trigger.prompt.clone(),
                 system_addon: trigger.system_addon.clone(),
+                timeout_secs: trigger.timeout_secs,
                 response_tx,
             };
 

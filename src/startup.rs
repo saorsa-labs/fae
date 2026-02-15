@@ -703,8 +703,9 @@ async fn handle_conversation_requests(
             request.task_id, request.prompt
         );
 
-        // Execute conversation with timeout
-        let conversation_timeout = Duration::from_secs(300); // 5 minutes default
+        // Execute conversation with timeout (use request.timeout_secs or default to 300)
+        let timeout_secs = request.timeout_secs.unwrap_or(300);
+        let conversation_timeout = Duration::from_secs(timeout_secs);
         let result = timeout(
             conversation_timeout,
             execute_scheduled_conversation(&config, &request),
