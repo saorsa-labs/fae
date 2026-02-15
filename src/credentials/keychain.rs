@@ -77,17 +77,19 @@ impl CredentialManager for KeychainCredentialManager {
                 Ok(())
             }
             CredentialRef::Keychain { service, account } => {
-                security_framework::passwords::delete_generic_password(service, account).map_err(
-                    |e| {
-                        // Deleting a non-existent item is not an error
+                match security_framework::passwords::delete_generic_password(service, account) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        // Deleting a non-existent item is not an error (idempotent delete)
                         let err_str = format!("{e:?}");
                         if err_str.contains("errSecItemNotFound") || err_str.contains("-25300") {
-                            return CredentialError::NotFound;
+                            return Ok(()); // Idempotent: already deleted
                         }
-                        CredentialError::KeychainAccess(format!("Failed to delete credential: {e}"))
-                    },
-                )?;
-                Ok(())
+                        Err(CredentialError::KeychainAccess(format!(
+                            "Failed to delete credential: {e}"
+                        )))
+                    }
+                }
             }
         }
     }

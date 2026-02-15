@@ -76,7 +76,7 @@ impl CredentialManager for EncryptedCredentialManager {
 
                 match entry.delete_credential() {
                     Ok(()) => Ok(()),
-                    Err(keyring::Error::NoEntry) => Err(CredentialError::NotFound),
+                    Err(keyring::Error::NoEntry) => Ok(()), // Idempotent: already deleted
                     Err(e) => Err(CredentialError::StorageError(format!(
                         "Failed to delete credential: {e}"
                     ))),
