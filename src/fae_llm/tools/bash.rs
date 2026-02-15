@@ -104,13 +104,22 @@ impl Tool for BashTool {
         let timeout = std::time::Duration::from_secs(timeout_secs);
         let start = std::time::Instant::now();
 
-        let mut child = match std::process::Command::new("/bin/sh")
-            .arg("-c")
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg("-c")
             .arg(command)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
+            .stderr(std::process::Stdio::piped());
+
+        // When running inside an App Sandbox, inject sandbox-safe directory
+        // env vars so that child processes can locate Fae's data/config/cache
+        // without relying on hardcoded `~/.fae` paths.
+        if crate::fae_dirs::is_sandboxed() {
+            cmd.env("FAE_DATA_DIR", crate::fae_dirs::data_dir());
+            cmd.env("FAE_CONFIG_DIR", crate::fae_dirs::config_dir());
+            cmd.env("FAE_CACHE_DIR", crate::fae_dirs::cache_dir());
+        }
+
+        let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
                 return Ok(ToolResult::failure(format!("failed to spawn command: {e}")));
@@ -311,5 +320,35 @@ mod tests {
         assert!(result.content.contains("line1"));
         assert!(result.content.contains("line2"));
         assert!(result.content.contains("line3"));
+    }
+
+    #[test]
+    fn bash_sandbox_env_vars_injected_when_sandboxed() {
+        // Simulate sandbox by setting the sentinel env var.
+        let key = "APP_SANDBOX_CONTAINER_ID";
+        let original = std::env::var_os(key);
+        unsafe { std::env::set_var(key, "test-container") };
+
+        let tool = BashTool::new();
+        // Use `printenv` which doesn't need shell metacharacters.
+        let result = tool.execute(serde_json::json!({
+            "command": "printenv FAE_DATA_DIR"
+        }));
+        let result = match result {
+            Ok(r) => r,
+            Err(_) => unreachable!("printenv should succeed"),
+        };
+        assert!(result.success, "printenv should succeed");
+        assert!(
+            result.content.contains("fae"),
+            "FAE_DATA_DIR should contain 'fae': {}",
+            result.content.trim()
+        );
+
+        // Restore.
+        match original {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
     }
 }
