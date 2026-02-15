@@ -40,7 +40,6 @@ fn generate_version_id() -> String {
 }
 
 /// Get the file path for a specific version ID.
-#[allow(dead_code)] // Will be used in Task 4 (load_version)
 fn version_path(version_id: &str) -> PathBuf {
     versions_dir().join(format!("{version_id}.md"))
 }
@@ -117,6 +116,21 @@ pub fn create_backup(soul_content: &str) -> Result<Option<SoulVersion>> {
     std::fs::write(metadata_path, metadata_json)?;
 
     Ok(Some(version))
+}
+
+/// Load content from a specific version by ID.
+pub fn load_version(version_id: &str) -> Result<String> {
+    let path = version_path(version_id);
+
+    if !path.exists() {
+        return Err(crate::error::SpeechError::Config(format!(
+            "Version {} not found",
+            version_id
+        )));
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    Ok(content)
 }
 
 /// Lists all SOUL.md versions in chronological order (newest first).
@@ -360,5 +374,80 @@ mod tests {
         let result = backup_before_save(content);
         // Should always return Ok, never Err
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_load_version_success() {
+        // Create a backup, then load it back
+        let content = format!("# Load test {}", chrono::Utc::now());
+
+        let backup_result = create_backup(&content);
+        assert!(backup_result.is_ok());
+
+        let version_opt = backup_result.expect("backup");
+        assert!(version_opt.is_some());
+
+        let version = version_opt.expect("version");
+
+        // Load it back
+        let load_result = load_version(&version.id);
+        assert!(load_result.is_ok());
+
+        let loaded_content = load_result.expect("loaded content");
+        assert_eq!(loaded_content, content);
+    }
+
+    #[test]
+    fn test_load_version_not_found() {
+        let result = load_version("nonexistent_version_id");
+        assert!(result.is_err());
+
+        let err = result.expect_err("should error");
+        match err {
+            crate::error::SpeechError::Config(msg) => {
+                assert!(msg.contains("not found"));
+            }
+            _ => panic!("Expected Config error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_list_versions_with_metadata() {
+        // Create a few backups
+        let content1 = format!("# Version 1 {}", chrono::Utc::now());
+        let _ = create_backup(&content1);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let content2 = format!("# Version 2 {}", chrono::Utc::now());
+        let _ = create_backup(&content2);
+
+        // List versions
+        let versions_result = list_versions();
+        assert!(versions_result.is_ok());
+
+        let versions = versions_result.expect("versions");
+
+        // Should have at least 2 versions (may have more from other tests)
+        assert!(
+            versions.len() >= 2,
+            "Expected at least 2 versions, got {}",
+            versions.len()
+        );
+
+        // Should be sorted newest first
+        for i in 1..versions.len() {
+            assert!(
+                versions[i - 1].timestamp >= versions[i].timestamp,
+                "Versions not sorted correctly"
+            );
+        }
+
+        // Each version should have metadata
+        for version in &versions {
+            assert!(!version.id.is_empty());
+            assert!(!version.content_hash.is_empty());
+            assert!(version.path.exists());
+        }
     }
 }
