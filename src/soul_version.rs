@@ -72,7 +72,10 @@ pub fn list_versions() -> Result<Vec<SoulVersion>> {
         match serde_json::from_str::<SoulVersion>(&metadata_content) {
             Ok(version) => versions.push(version),
             Err(e) => {
-                eprintln!("Warning: failed to parse version metadata {:?}: {}", path, e);
+                eprintln!(
+                    "Warning: failed to parse version metadata {:?}: {}",
+                    path, e
+                );
                 continue;
             }
         }
@@ -103,14 +106,20 @@ mod tests {
     fn test_version_path_format() {
         let id = "20260215_221500_123";
         let path = version_path(id);
-        assert!(path.to_string_lossy().ends_with("soul_versions/20260215_221500_123.md"));
+        assert!(
+            path.to_string_lossy()
+                .ends_with("soul_versions/20260215_221500_123.md")
+        );
     }
 
     #[test]
     fn test_version_metadata_path_format() {
         let id = "20260215_221500_123";
         let path = version_metadata_path(id);
-        assert!(path.to_string_lossy().ends_with("soul_versions/20260215_221500_123.json"));
+        assert!(
+            path.to_string_lossy()
+                .ends_with("soul_versions/20260215_221500_123.json")
+        );
     }
 
     #[test]
