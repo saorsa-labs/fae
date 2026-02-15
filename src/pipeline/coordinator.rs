@@ -186,20 +186,37 @@ fn append_collected_text(base: &mut String, next: &str) {
     base.push_str(next);
 }
 
+/// Source of a conversation turn for attribution and telemetry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // ScheduledTask variant will be used when scheduler integration completes
+enum ConversationSource {
+    /// User spoke via microphone (STT).
+    Voice,
+    /// User typed text via GUI.
+    TextInput,
+    /// Scheduled task triggered conversation.
+    ScheduledTask { task_id: String },
+}
+
 #[derive(Debug, Clone)]
 struct ConversationTurn {
     user_text: String,
     assistant_text: String,
+    /// Source of this turn (voice, text, or scheduled task).
+    #[allow(dead_code)] // Will be used for telemetry/analytics in future phases
+    source: ConversationSource,
 }
 
 fn append_conversation_turn(
     turns: &mut Vec<ConversationTurn>,
     user_text: String,
     assistant_text: String,
+    source: ConversationSource,
 ) {
     turns.push(ConversationTurn {
         user_text,
         assistant_text,
+        source,
     });
 }
 
@@ -1861,6 +1878,12 @@ async fn run_llm_stage(
             }
         };
 
+        // Determine source of this turn for attribution
+        let conversation_source = match &next_input {
+            QueuedLlmInput::Transcription(_) => ConversationSource::Voice,
+            QueuedLlmInput::TextInjection(_) => ConversationSource::TextInput,
+        };
+
         let user_ctx = UserInputContext {
             config: &config,
             name: &name,
@@ -1891,6 +1914,7 @@ async fn run_llm_stage(
                 &mut conversation_turns,
                 user_text.clone(),
                 assistant_text.clone(),
+                conversation_source.clone(),
             );
 
             if let Some(rt) = &runtime_tx {
@@ -1924,6 +1948,7 @@ async fn run_llm_stage(
                 &mut conversation_turns,
                 user_text.clone(),
                 assistant_text.clone(),
+                conversation_source.clone(),
             );
 
             if let Some(rt) = &runtime_tx {
@@ -2174,6 +2199,7 @@ async fn run_llm_stage(
             &mut conversation_turns,
             user_text.clone(),
             assistant_text.clone(),
+            conversation_source,
         );
         capture_memory_turn(
             memory_orchestrator.as_ref(),
