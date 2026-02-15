@@ -447,7 +447,6 @@ fn build_registry(
     }
 
     // Web search tools (read-only, allowed in all non-Off modes).
-    #[cfg(feature = "web-search")]
     if !matches!(config.tool_mode, AgentToolMode::Off) {
         use crate::fae_llm::tools::{FetchUrlTool, WebSearchTool};
         registry.register(Arc::new(WebSearchTool::new()));

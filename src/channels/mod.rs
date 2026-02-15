@@ -423,15 +423,17 @@ mod tests {
 
     #[test]
     fn validation_flags_missing_discord_token() {
-        let mut config = SpeechConfig::default();
-        config.channels = ChannelsConfig {
-            enabled: true,
-            auto_start: true,
-            inbound_queue_size: 128,
-            gateway: Default::default(),
-            discord: Some(DiscordChannelConfig::default()),
-            whatsapp: None,
-            extensions: Vec::new(),
+        let config = SpeechConfig {
+            channels: ChannelsConfig {
+                enabled: true,
+                auto_start: true,
+                inbound_queue_size: 128,
+                gateway: Default::default(),
+                discord: Some(DiscordChannelConfig::default()),
+                whatsapp: None,
+                extensions: Vec::new(),
+            },
+            ..Default::default()
         };
 
         let issues = validate_config(&config);

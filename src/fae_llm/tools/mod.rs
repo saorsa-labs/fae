@@ -9,8 +9,8 @@
 //! - **bash** — Execute shell commands with timeout
 //! - **edit** — Deterministic text edits (find/replace)
 //! - **write** — Create or overwrite files
-//! - **web_search** — Search the web (requires `web-search` feature)
-//! - **fetch_url** — Fetch and extract web page content (requires `web-search` feature)
+//! - **web_search** — Search the web via embedded multi-engine scraper
+//! - **fetch_url** — Fetch and extract web page content
 //!
 //! # Mode Gating
 //!
@@ -20,7 +20,6 @@
 
 pub mod bash;
 pub mod edit;
-#[cfg(feature = "web-search")]
 pub mod fetch_url;
 pub mod input_sanitize;
 pub mod path_validation;
@@ -28,13 +27,11 @@ pub mod read;
 pub mod registry;
 pub mod sanitize;
 pub mod types;
-#[cfg(feature = "web-search")]
 pub mod web_search;
 pub mod write;
 
 pub use bash::BashTool;
 pub use edit::EditTool;
-#[cfg(feature = "web-search")]
 pub use fetch_url::FetchUrlTool;
 pub use input_sanitize::{SanitizedInput, sanitize_command_input, sanitize_content_input};
 pub use path_validation::{validate_read_path, validate_write_path};
@@ -42,7 +39,6 @@ pub use read::ReadTool;
 pub use registry::ToolRegistry;
 pub use sanitize::{SanitizedOutput, sanitize_tool_output};
 pub use types::{Tool, ToolResult, truncate_output};
-#[cfg(feature = "web-search")]
 pub use web_search::WebSearchTool;
 pub use write::WriteTool;
 

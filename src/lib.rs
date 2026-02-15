@@ -33,6 +33,7 @@ pub mod diagnostics;
 pub mod doctor;
 pub mod error;
 pub mod external_llm;
+pub mod fae_dirs;
 pub mod fae_llm;
 pub mod huggingface;
 pub mod llm;
