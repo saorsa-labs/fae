@@ -2,8 +2,8 @@
 //!
 //! Runtime prompt stack:
 //! 1. Core system prompt (`Prompts/system_prompt.md`)
-//! 2. User-editable SOUL contract (`~/.fae/SOUL.md`, with repo fallback)
-//! 3. Built-in + user skills (`Skills/*.md` + `~/.fae/skills/*.md`)
+//! 2. User-editable SOUL contract (in app data dir, with repo fallback)
+//! 3. Built-in + user skills (`Skills/*.md` + user skills dir)
 //! 4. Optional user add-on text from config
 //!
 //! Onboarding checklist text is loaded separately and injected only while
@@ -15,35 +15,34 @@ use std::path::{Path, PathBuf};
 /// Core system prompt (small, operational instructions).
 pub const CORE_PROMPT: &str = include_str!("../Prompts/system_prompt.md");
 
-/// Default SOUL contract installed to `~/.fae/SOUL.md`.
+/// Default SOUL contract installed to the app data directory.
 pub const DEFAULT_SOUL: &str = include_str!("../SOUL.md");
 
-/// Default onboarding checklist installed to `~/.fae/onboarding.md`.
+/// Default onboarding checklist installed to the app data directory.
 pub const DEFAULT_ONBOARDING_CHECKLIST: &str = include_str!("../Prompts/onboarding.md");
 
-/// Returns `~/.fae` (or `/tmp/.fae` fallback).
+/// Returns the Fae data directory.
+///
+/// Delegates to [`crate::fae_dirs::data_dir`] for sandbox-safe resolution.
+/// Retained as a convenience alias used by GUI code.
 #[must_use]
 pub fn fae_home_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae")
-    } else {
-        PathBuf::from("/tmp/.fae")
-    }
+    crate::fae_dirs::data_dir()
 }
 
-/// Returns the user SOUL file path (`~/.fae/SOUL.md`).
+/// Returns the user SOUL file path (inside the app data directory).
 #[must_use]
 pub fn soul_path() -> PathBuf {
-    fae_home_dir().join("SOUL.md")
+    crate::fae_dirs::data_dir().join("SOUL.md")
 }
 
-/// Returns the user onboarding checklist path (`~/.fae/onboarding.md`).
+/// Returns the user onboarding checklist path (inside the app data directory).
 #[must_use]
 pub fn onboarding_path() -> PathBuf {
-    fae_home_dir().join("onboarding.md")
+    crate::fae_dirs::data_dir().join("onboarding.md")
 }
 
-/// Ensure user-editable prompt assets exist in `~/.fae/`.
+/// Ensure user-editable prompt assets exist in the app data directory.
 ///
 /// Existing files are never overwritten.
 pub fn ensure_prompt_assets() -> Result<()> {

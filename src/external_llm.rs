@@ -1,6 +1,6 @@
 //! External LLM profile loading and runtime overlay.
 //!
-//! External profiles live under `~/.fae/external_apis/*.toml` and let Fae
+//! External profiles live under the app data directory (`external_apis/*.toml`) and let Fae
 //! configure remote providers without storing all provider details in the main
 //! config file.
 
@@ -144,7 +144,7 @@ impl ExternalLlmProfile {
 /// Returns the directory where external LLM profiles are stored.
 #[must_use]
 pub fn external_apis_dir() -> PathBuf {
-    fae_home_dir().join("external_apis")
+    crate::fae_dirs::external_apis_dir()
 }
 
 /// Returns the expected path for a profile ID.
@@ -239,14 +239,6 @@ fn normalize_profile_id(profile_id: &str) -> Result<String> {
     }
 
     Ok(trimmed.to_owned())
-}
-
-fn fae_home_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae")
-    } else {
-        PathBuf::from("/tmp/.fae")
-    }
 }
 
 #[cfg(test)]
