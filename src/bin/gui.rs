@@ -7426,6 +7426,63 @@ fn preferences_window() -> Element {
                     }
                 }
 
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Theme" }
+                    div { class: "settings-section-body",
+                        p { class: "note", "Choose light or dark appearance, or follow system settings." }
+                        div { class: "settings-row",
+                            label { class: "settings-label",
+                                input {
+                                    r#type: "radio",
+                                    class: "settings-checkbox",
+                                    name: "theme-mode",
+                                    checked: config_state.read().theme.mode == fae::config::ThemeMode::Auto,
+                                    onchange: move |_| {
+                                        config_state.write().theme.mode = fae::config::ThemeMode::Auto;
+                                    }
+                                }
+                                " Auto (follow system)"
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label",
+                                input {
+                                    r#type: "radio",
+                                    class: "settings-checkbox",
+                                    name: "theme-mode",
+                                    checked: config_state.read().theme.mode == fae::config::ThemeMode::Light,
+                                    onchange: move |_| {
+                                        config_state.write().theme.mode = fae::config::ThemeMode::Light;
+                                    }
+                                }
+                                " Light"
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label",
+                                input {
+                                    r#type: "radio",
+                                    class: "settings-checkbox",
+                                    name: "theme-mode",
+                                    checked: config_state.read().theme.mode == fae::config::ThemeMode::Dark,
+                                    onchange: move |_| {
+                                        config_state.write().theme.mode = fae::config::ThemeMode::Dark;
+                                    }
+                                }
+                                " Dark"
+                            }
+                        }
+                        p { class: "settings-sub",
+                            "Current theme: ",
+                            {match config_state.read().theme.mode {
+                                fae::config::ThemeMode::Auto => format!("Auto ({})", fae::theme::SystemTheme::current()),
+                                fae::config::ThemeMode::Light => "Light".to_string(),
+                                fae::config::ThemeMode::Dark => "Dark".to_string(),
+                            }}
+                        }
+                    }
+                }
+
                 details { class: "settings-section", open: *settings_mode.read() == SettingsMode::Advanced,
                     summary { class: "settings-section-summary", "Channels" }
                     div { class: "settings-section-body",
