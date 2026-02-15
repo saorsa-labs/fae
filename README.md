@@ -6,25 +6,28 @@
 
 ![Fae](assets/fae.jpg)
 
-Fae is a local-first personal AI assistant built in Rust for low-latency voice interaction and practical computer operations. Today, she runs a multi-model pipeline, and that "brain" can be upgraded over time as smaller and better models become available.
+Fae is your personal AI assistant. It is currently made up of a few different models in a pipeline. As AI and small models improve, we will simply improve the "brain" of the system. Fae allows you to set remote AI models like OpenAI or Anthropic, or use open-source models. However, Fae retains the security: anything involving your keys, passwords, or wallets is handled by Fae and the local AI. She can hand off tasks to larger models for deeper thinking, but you don't necessarily need that; you can work directly with Fae.
 
-The project exists to make advanced computer tasks accessible to everyday users without giving up control of private data. You can run Fae fully local, connect remote providers such as OpenAI or Anthropic, or combine both. Sensitive workflows can stay on-device while remote models are optional for deeper reasoning.
+What we want people to realize is that while she is relatively capable now and will improve quickly, she is already significantly more capable than a human at:
+1. Configuring the computer
+2. Getting software to work
+3. Operating a wallet
+4. Handling payments
 
-In practice, Fae is designed to help with:
+Because she is completely local, your passwords and keys are safe. To put it in perspective, you will need a relatively powerful computer—a decent laptop like a MacBook works fine—and hardware requirements will improve over time. This is not intended to be an OpenClaw or OpenAI replacement right now.
 
-1. Computer setup and configuration
-2. Software installation and troubleshooting
-3. Wallet-oriented workflows
-4. Payment-related workflows
+Fae is a personal, capable, local assistant who gets significantly smarter every few months. She gets to know you over time, and the memories you share with her are yours. They are stored locally and maintained securely. We work as hard as we can to ensure that security is in place.
 
-Fae is not positioned as a replacement for large hosted AI platforms today. It is a personal assistant that runs close to the user, improves quickly as model quality improves, and keeps long-term memory under user control on local storage. A modern laptop (for example, a recent MacBook) is recommended for the best local experience.
+This is the first significant step on a ladder. It allows for:
+1. Very easy setup
+2. Reasonable intelligence
+3. A highly capable configuration manager for your computer
 
-## Using Fae Out of the Box
+Imagine a tool that allows your grandmother to use a computer, set things up, download software, and configure it. At the moment, we recommend that users use the menu system to introduce new skills to Fae. You can read the skill yourself before it ever reaches her context window, which is an important security element.
 
-1. Run `just run`.
-2. Click `Start Listening` and speak naturally in short, concrete requests.
-3. Keep default local settings to start, then change capabilities gradually as trust grows.
-4. Open `Fae -> Fae Guide` for prompt examples and operating patterns.
+Fae is your personal second brain. She is there to help you, and for you to help her. As your memories grow and you get to know each other, the AI models will improve. Updates over the next few months will improve her brain, helping her know you better through the memories living on your computer. We will also add the ability to securely store those memories in different locations so you don't lose them, while ensuring no one else has access to them.
+
+If you have ever wanted to run a node on a network, run a server, or use peer-to-peer software—which has historically been complex and required professional tweaking—Fae takes all that difficulty away. Fae allows a novice to outperform a modern-day computer wizard. Beyond being a friend and a memory, she is likely a better computer professional than anyone you know today. We hope you enjoy using Fae and understand the vision behind what she is.
 
 ## Menu Options (What They Are For)
 
