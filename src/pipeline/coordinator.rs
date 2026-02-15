@@ -1673,12 +1673,14 @@ async fn run_llm_stage(
         Err(e) => warn!("failed to apply external LLM profile in LLM stage: {e}"),
     }
 
+    let credential_manager = crate::credentials::create_manager();
     let mut engine = match FaeAgentLlm::new(
         &config.llm,
         preloaded,
         ctl.runtime_tx.clone(),
         ctl.tool_approval_tx.clone(),
         ctl.canvas_registry.clone(),
+        credential_manager.as_ref(),
     )
     .await
     {

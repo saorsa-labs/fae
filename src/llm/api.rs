@@ -54,10 +54,13 @@ impl ApiLlm {
     ///
     /// Returns an error if configuration is invalid or the cloud provider
     /// cannot be found in models.json.
-    pub fn new(config: &LlmConfig) -> Result<Self> {
+    pub async fn new(
+        config: &LlmConfig,
+        manager: &dyn crate::credentials::CredentialManager,
+    ) -> Result<Self> {
         let agent = ureq::agent();
 
-        let conn = resolve_connection(config)?;
+        let conn = resolve_connection(config, manager).await?;
 
         info!(
             "API LLM configured: {} model={}",
@@ -326,15 +329,27 @@ impl ApiLlm {
 }
 
 /// Resolve API connection details from config fields.
-fn resolve_connection(config: &LlmConfig) -> Result<ResolvedConnection> {
+async fn resolve_connection(
+    config: &LlmConfig,
+    manager: &dyn crate::credentials::CredentialManager,
+) -> Result<ResolvedConnection> {
     let model_id = config
         .cloud_model
         .clone()
         .unwrap_or_else(|| config.api_model.clone());
 
+    let api_key = config
+        .api_key
+        .resolve(manager)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("failed to resolve API key in ApiLlm: {}", e);
+            String::new()
+        });
+
     Ok(ResolvedConnection {
         api_url: config.api_url.clone(),
         api_model: model_id,
-        api_key: config.api_key.resolve_plaintext(),
+        api_key,
     })
 }

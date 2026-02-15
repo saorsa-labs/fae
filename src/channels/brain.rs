@@ -30,7 +30,16 @@ impl ChannelBrain {
             None
         };
 
-        let agent = FaeAgentLlm::new(&llm_cfg, preloaded_local, None, None, None).await?;
+        let credential_manager = crate::credentials::create_manager();
+        let agent = FaeAgentLlm::new(
+            &llm_cfg,
+            preloaded_local,
+            None,
+            None,
+            None,
+            credential_manager.as_ref(),
+        )
+        .await?;
         Ok(Self {
             agent: Arc::new(Mutex::new(agent)),
         })

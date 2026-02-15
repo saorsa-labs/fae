@@ -54,8 +54,9 @@ impl FaeAgentLlm {
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+        credential_manager: &dyn crate::credentials::CredentialManager,
     ) -> Result<Self> {
-        let provider = build_provider(config, preloaded_llm.as_ref());
+        let provider = build_provider(config, preloaded_llm.as_ref(), credential_manager).await;
         let registry = build_registry(config, tool_approval_tx, canvas_registry);
 
         let history = vec![Message::system(config.effective_system_prompt())];
@@ -249,9 +250,10 @@ fn has_remote_provider_configured(config: &LlmConfig) -> bool {
     config.has_remote_provider_configured()
 }
 
-fn build_provider(
+async fn build_provider(
     config: &LlmConfig,
     preloaded_llm: Option<&LocalLlm>,
+    manager: &dyn crate::credentials::CredentialManager,
 ) -> Arc<dyn ProviderAdapter> {
     // All runtime paths use the agent loop; backend selects which provider
     // the agent should use as its "brain":
@@ -283,7 +285,7 @@ fn build_provider(
     }
 
     // Build the remote provider (only reached when a remote API is configured)
-    let remote = build_remote_provider(config);
+    let remote = build_remote_provider(config, manager).await;
 
     // Wrap with local fallback when enabled and a local model is available
     if config.enable_local_fallback {
@@ -310,7 +312,10 @@ fn build_provider(
 }
 
 /// Build the remote (API) provider from config.
-fn build_remote_provider(config: &LlmConfig) -> Arc<dyn ProviderAdapter> {
+async fn build_remote_provider(
+    config: &LlmConfig,
+    manager: &dyn crate::credentials::CredentialManager,
+) -> Arc<dyn ProviderAdapter> {
     if config.api_url.trim().is_empty() {
         tracing::warn!("no API URL configured - agent will not function without an LLM provider");
     }
@@ -335,10 +340,19 @@ fn build_remote_provider(config: &LlmConfig) -> Arc<dyn ProviderAdapter> {
         explicit => explicit,
     };
 
+    // Resolve API key using the credential manager
+    let api_key = config
+        .api_key
+        .resolve(manager)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("failed to resolve API key: {}", e);
+            String::new()
+        });
+
     match resolved_api_type {
         LlmApiType::AnthropicMessages => {
-            let mut provider_cfg =
-                AnthropicConfig::new(config.api_key.resolve_plaintext(), model_id);
+            let mut provider_cfg = AnthropicConfig::new(api_key, model_id);
             if !config.api_url.trim().is_empty() {
                 provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
             }
@@ -352,13 +366,9 @@ fn build_remote_provider(config: &LlmConfig) -> Arc<dyn ProviderAdapter> {
         }
         LlmApiType::OpenAiCompletions | LlmApiType::OpenAiResponses | LlmApiType::Auto => {
             let mut provider_cfg = if let Some(provider_name) = config.cloud_provider.as_deref() {
-                OpenAiConfig::for_provider(
-                    provider_name,
-                    config.api_key.resolve_plaintext(),
-                    model_id,
-                )
+                OpenAiConfig::for_provider(provider_name, api_key.clone(), model_id)
             } else {
-                OpenAiConfig::new(config.api_key.resolve_plaintext(), model_id)
+                OpenAiConfig::new(api_key.clone(), model_id)
             };
             if !config.api_url.trim().is_empty() {
                 provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));

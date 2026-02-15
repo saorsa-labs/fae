@@ -3243,16 +3243,23 @@ fn start_ingestion_job(target: PathBuf) -> Result<(), String> {
                 }
             };
 
-            let mut agent =
-                match fae::agent::FaeAgentLlm::new(&local_cfg, Some(local_model), None, None, None)
-                    .await
-                {
-                    Ok(agent) => agent,
-                    Err(e) => {
-                        finish_with_error(format!("could not start local ingestion agent: {e}"));
-                        return;
-                    }
-                };
+            let credential_manager = fae::credentials::create_manager();
+            let mut agent = match fae::agent::FaeAgentLlm::new(
+                &local_cfg,
+                Some(local_model),
+                None,
+                None,
+                None,
+                credential_manager.as_ref(),
+            )
+            .await
+            {
+                Ok(agent) => agent,
+                Err(e) => {
+                    finish_with_error(format!("could not start local ingestion agent: {e}"));
+                    return;
+                }
+            };
 
             let memory_repo = fae::memory::MemoryRepository::new(&config.memory.root_dir);
             if let Err(e) = memory_repo.ensure_layout() {
