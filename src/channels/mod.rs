@@ -6,6 +6,7 @@
 mod brain;
 mod discord;
 mod gateway;
+pub mod history;
 pub mod rate_limit;
 pub mod traits;
 mod whatsapp;
@@ -13,6 +14,7 @@ mod whatsapp;
 use crate::channels::brain::ChannelBrain;
 use crate::channels::discord::DiscordAdapter;
 use crate::channels::gateway::run_gateway;
+use crate::channels::history::{ChannelHistory, ChannelMessage, MessageDirection};
 use crate::channels::rate_limit::ChannelRateLimiters;
 use crate::channels::traits::{ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage};
 use crate::channels::whatsapp::WhatsAppAdapter;
@@ -35,6 +37,9 @@ pub enum ChannelRuntimeEvent {
     Outbound {
         channel: String,
         reply_target: String,
+    },
+    MessageRecorded {
+        message: ChannelMessage,
     },
     Warning(String),
     Error(String),
@@ -290,6 +295,8 @@ async fn run_runtime(
         &config.channels.rate_limits,
     )));
 
+    let history = Arc::new(Mutex::new(ChannelHistory::default()));
+
     let mut adapters: HashMap<String, Arc<dyn ChannelAdapter>> = HashMap::new();
     let mut active_channels = Vec::new();
 
@@ -374,6 +381,23 @@ async fn run_runtime(
             sender: message.sender.clone(),
         });
 
+        // Record inbound message
+        let inbound_msg = ChannelMessage {
+            id: String::new(),
+            channel: message.channel.clone(),
+            direction: MessageDirection::Inbound,
+            sender: message.sender.clone(),
+            text: message.text.clone(),
+            timestamp: chrono::Utc::now(),
+            reply_target: message.reply_target.clone(),
+        };
+        if let Ok(mut hist) = history.lock() {
+            hist.push(inbound_msg.clone());
+            let _ = event_tx.send(ChannelRuntimeEvent::MessageRecorded {
+                message: inbound_msg,
+            });
+        }
+
         let prompt = format!(
             "[channel:{}]\n[sender:{}]\n{}",
             message.channel, message.sender, message.text
@@ -402,15 +426,32 @@ async fn run_runtime(
                     let send_result = adapter
                         .send(ChannelOutboundMessage {
                             reply_target: message.reply_target.clone(),
-                            text: response,
+                            text: response.clone(),
                         })
                         .await;
                     match send_result {
                         Ok(()) => {
                             let _ = event_tx.send(ChannelRuntimeEvent::Outbound {
-                                channel: message.channel,
-                                reply_target: message.reply_target,
+                                channel: message.channel.clone(),
+                                reply_target: message.reply_target.clone(),
                             });
+
+                            // Record outbound message
+                            let outbound_msg = ChannelMessage {
+                                id: String::new(),
+                                channel: message.channel.clone(),
+                                direction: MessageDirection::Outbound,
+                                sender: "fae".to_owned(),
+                                text: response,
+                                timestamp: chrono::Utc::now(),
+                                reply_target: message.reply_target,
+                            };
+                            if let Ok(mut hist) = history.lock() {
+                                hist.push(outbound_msg.clone());
+                                let _ = event_tx.send(ChannelRuntimeEvent::MessageRecorded {
+                                    message: outbound_msg,
+                                });
+                            }
                         }
                         Err(err) => {
                             let warning =

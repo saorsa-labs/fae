@@ -14,8 +14,8 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 1,
-    "current_task": 2
+    "completed_tasks": 2,
+    "current_task": 3
   },
   "review": {
     "status": "pending",
