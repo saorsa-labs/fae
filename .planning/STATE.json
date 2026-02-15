@@ -3,24 +3,24 @@
   "project": "fae-production-hardening",
   "active": true,
   "milestone": {
-    "number": 1,
-    "name": "App Store Readiness"
+    "number": 2,
+    "name": "Scheduler Completeness"
   },
   "phase": {
-    "number": "A.3",
-    "name": "Credential Security",
-    "plan": ".planning/PLAN-phase-A.3.md"
+    "number": "B.1",
+    "name": "Scheduler LLM Tools",
+    "plan": ".planning/PLAN-phase-B.1.md"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 8,
+    "completed_tasks": 7,
     "current_task": 8
   },
   "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "PASS"
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-02-15T19:07:34Z"
+  "status": "executing",
+  "last_updated": "2026-02-15T20:15:00Z"
 }

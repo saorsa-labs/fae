@@ -458,6 +458,19 @@ fn build_registry(
         registry.register(Arc::new(FetchUrlTool::new()));
     }
 
+    // Scheduler tools (mode gating handled by each tool's allowed_in_mode).
+    if !matches!(config.tool_mode, AgentToolMode::Off) {
+        use crate::fae_llm::tools::{
+            SchedulerCreateTool, SchedulerDeleteTool, SchedulerListTool, SchedulerTriggerTool,
+            SchedulerUpdateTool,
+        };
+        registry.register(Arc::new(SchedulerListTool::new()));
+        registry.register(Arc::new(SchedulerCreateTool::new()));
+        registry.register(Arc::new(SchedulerUpdateTool::new()));
+        registry.register(Arc::new(SchedulerDeleteTool::new()));
+        registry.register(Arc::new(SchedulerTriggerTool::new()));
+    }
+
     Arc::new(registry)
 }
 
