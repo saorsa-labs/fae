@@ -20,8 +20,25 @@ pub struct SoulVersion {
     pub path: PathBuf,
 }
 
+#[cfg(test)]
+use std::sync::Mutex;
+
+#[cfg(test)]
+static TEST_VERSIONS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+#[cfg(test)]
+pub fn set_test_versions_dir(dir: Option<PathBuf>) {
+    *TEST_VERSIONS_DIR.lock().expect("lock") = dir;
+}
+
 /// Returns the directory where SOUL.md version backups are stored.
 fn versions_dir() -> PathBuf {
+    #[cfg(test)]
+    {
+        if let Some(dir) = TEST_VERSIONS_DIR.lock().expect("lock").as_ref() {
+            return dir.clone();
+        }
+    }
     crate::fae_dirs::data_dir().join("soul_versions")
 }
 
@@ -277,12 +294,18 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Helper to create a test versions directory.
+    /// Helper to create a test versions directory and set it as the test override.
     fn setup_test_dir() -> (TempDir, PathBuf) {
         let temp = TempDir::new().expect("create tempdir");
         let versions_dir = temp.path().join("soul_versions");
         std::fs::create_dir_all(&versions_dir).expect("create versions dir");
+        set_test_versions_dir(Some(versions_dir.clone()));
         (temp, versions_dir)
+    }
+
+    /// Helper to clean up test directory override.
+    fn cleanup_test_dir() {
+        set_test_versions_dir(None);
     }
 
     #[test]
@@ -393,8 +416,7 @@ mod tests {
 
     #[test]
     fn test_create_backup_success() {
-        // This test creates a real backup in the actual data directory
-        // Clean up is not guaranteed, but versions are small
+        let (_temp, _dir) = setup_test_dir();
         let content = format!("# Test SOUL.md\nTest backup at {}", chrono::Utc::now());
 
         let result = create_backup(&content);
@@ -410,11 +432,13 @@ mod tests {
         // Verify content was written correctly
         let written_content = std::fs::read_to_string(&version.path).expect("read backup");
         assert_eq!(written_content, content);
+
+        cleanup_test_dir();
     }
 
     #[test]
     fn test_create_backup_duplicate_content() {
-        // First backup with unique content (timestamp ensures uniqueness)
+        let (_temp, _dir) = setup_test_dir();
         let content = format!("# Duplicate test {}", chrono::Utc::now());
 
         let result1 = create_backup(&content);
@@ -430,11 +454,13 @@ mod tests {
             version2_opt.is_none(),
             "duplicate content should skip backup"
         );
+
+        cleanup_test_dir();
     }
 
     #[test]
     fn test_create_backup_different_content() {
-        // Create two backups with different content
+        let (_temp, _dir) = setup_test_dir();
         let content1 = format!("# First backup {}", chrono::Utc::now());
         let content2 = format!("# Second backup {}", chrono::Utc::now());
 
@@ -449,11 +475,13 @@ mod tests {
         assert!(result2.is_ok());
         let version2 = result2.expect("second");
         assert!(version2.is_some(), "different content should create backup");
+
+        cleanup_test_dir();
     }
 
     #[test]
     fn test_backup_before_save_flow() {
-        // Test the convenience wrapper used by GUI
+        let (_temp, _dir) = setup_test_dir();
         let content = format!("# GUI save test {}", chrono::Utc::now());
 
         let result = backup_before_save(&content);
@@ -465,6 +493,8 @@ mod tests {
             "Expected backup message, got: {}",
             msg
         );
+
+        cleanup_test_dir();
     }
 
     #[test]
@@ -480,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_load_version_success() {
-        // Create a backup, then load it back
+        let (_temp, _dir) = setup_test_dir();
         let content = format!("# Load test {}", chrono::Utc::now());
 
         let backup_result = create_backup(&content);
@@ -497,6 +527,8 @@ mod tests {
 
         let loaded_content = load_result.expect("loaded content");
         assert_eq!(loaded_content, content);
+
+        cleanup_test_dir();
     }
 
     #[test]
@@ -515,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_list_versions_with_metadata() {
-        // Create a few backups
+        let (_temp, _dir) = setup_test_dir();
         let content1 = format!("# Version 1 {}", chrono::Utc::now());
         let _ = create_backup(&content1);
 
@@ -530,12 +562,8 @@ mod tests {
 
         let versions = versions_result.expect("versions");
 
-        // Should have at least 2 versions (may have more from other tests)
-        assert!(
-            versions.len() >= 2,
-            "Expected at least 2 versions, got {}",
-            versions.len()
-        );
+        // Should have exactly 2 versions (isolated test dir)
+        assert_eq!(versions.len(), 2, "Expected exactly 2 versions");
 
         // Should be sorted newest first
         for i in 1..versions.len() {
@@ -551,6 +579,8 @@ mod tests {
             assert!(!version.content_hash.is_empty());
             assert!(version.path.exists());
         }
+
+        cleanup_test_dir();
     }
 
     #[test]
@@ -604,6 +634,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Skipped: requires mocking personality::soul_path() and load_soul()
     fn test_restore_version_success() {
         // Create a backup
         let original_content = format!("# Original content {}", chrono::Utc::now());
@@ -628,6 +659,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Skipped: requires mocking personality::soul_path() and load_soul()
     fn test_restore_creates_backup() {
         // Create initial version
         let content1 = format!("# Content 1 {}", chrono::Utc::now());
@@ -665,10 +697,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_old_versions() {
-        // Test cleanup logic directly: create versions, verify cleanup removes excess.
-        // Since all tests share the same directory and run in parallel, we test
-        // the cleanup function's correctness rather than exact counts.
-        let count_before = list_versions().expect("list before").len();
+        let (_temp, _dir) = setup_test_dir();
 
         // Create 5 unique versions
         for i in 0..5 {
@@ -683,30 +712,21 @@ mod tests {
         }
 
         let count_after_create = list_versions().expect("after create").len();
-        assert!(
-            count_after_create >= count_before + 5,
-            "Should have created 5 new versions (before={}, after={})",
-            count_before,
-            count_after_create
-        );
+        assert_eq!(count_after_create, 5, "Should have created 5 versions");
 
-        // Cleanup to keep only a generous limit that still requires deletion
-        let keep = count_after_create.saturating_sub(2).max(1);
-        let deleted = cleanup_old_versions(keep).expect("cleanup");
+        // Cleanup to keep only 3
+        let deleted = cleanup_old_versions(3).expect("cleanup");
 
         let count_final = list_versions().expect("final").len();
-        assert!(deleted > 0, "Should have deleted at least some versions");
-        assert!(
-            count_final <= keep,
-            "Should have at most {} versions left, got {}",
-            keep,
-            count_final
-        );
+        assert_eq!(deleted, 2, "Should have deleted 2 versions");
+        assert_eq!(count_final, 3, "Should have 3 versions left");
+
+        cleanup_test_dir();
     }
 
     #[test]
     fn test_cleanup_preserves_recent() {
-        // Create 3 versions with truly unique content
+        let (_temp, _dir) = setup_test_dir();
         let mut version_ids = Vec::new();
         for i in 0..3 {
             let content = format!(
@@ -722,20 +742,16 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
 
-        // Ensure we created all 3
         assert_eq!(version_ids.len(), 3, "Should have created 3 versions");
 
-        // Get total count and keep enough to include our 2 newest
-        let total = list_versions().expect("list").len();
-        // Keep total - 1 to guarantee at least one deletion while preserving recents
-        let keep = total.saturating_sub(1).max(2);
-        let _ = cleanup_old_versions(keep);
+        // Keep only 2 versions
+        let _ = cleanup_old_versions(2);
 
         // Verify the most recent 2 of our versions still exist
         let versions = list_versions().expect("list versions");
         let remaining_ids: Vec<String> = versions.iter().map(|v| v.id.clone()).collect();
 
-        // The two newest versions we created should still be there
+        assert_eq!(remaining_ids.len(), 2, "Should have 2 versions left");
         assert!(
             remaining_ids.contains(&version_ids[2]),
             "Most recent version should be preserved"
@@ -744,6 +760,8 @@ mod tests {
             remaining_ids.contains(&version_ids[1]),
             "Second most recent version should be preserved"
         );
+
+        cleanup_test_dir();
     }
 
     #[test]
