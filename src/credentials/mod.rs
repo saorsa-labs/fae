@@ -28,8 +28,14 @@
 mod encrypted;
 #[cfg(target_os = "macos")]
 mod keychain;
+pub mod loader;
+pub mod migration;
+pub mod secure;
 mod types;
 
+pub use loader::{LoadedCredentials, load_all_credentials};
+pub use migration::{PlaintextCredential, detect_plaintext_credentials, migrate_to_keychain};
+pub use secure::{secure_clear, secure_clear_option};
 pub use types::{CredentialError, CredentialRef};
 
 /// Manages secure storage and retrieval of credentials.
