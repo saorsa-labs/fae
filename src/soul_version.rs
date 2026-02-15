@@ -129,6 +129,15 @@ pub struct DiffLine {
     pub content: String,
 }
 
+/// Calculate diff between current SOUL.md and a specific version.
+///
+/// Convenience wrapper for GUI use.
+pub fn diff_with_current(version_id: &str) -> Result<Vec<DiffLine>> {
+    let current_content = crate::personality::load_soul();
+    let old_content = load_version(version_id)?;
+    Ok(calculate_diff(&old_content, &current_content))
+}
+
 /// Calculate unified diff between two versions.
 ///
 /// Returns a vector of DiffLine structs representing the changes.

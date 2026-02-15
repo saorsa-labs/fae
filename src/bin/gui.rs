@@ -6440,6 +6440,17 @@ fn soul_window() -> Element {
                 }
 
                 details { class: "settings-section",
+                    summary { class: "settings-section-summary", "SOUL Version History" }
+                    div { class: "settings-section-body",
+                        p { "Previous versions of SOUL.md are saved automatically before each edit." }
+                        p { style: "color: #666; font-size: 0.9em;",
+                            "Version history backend is active. Full UI with diff viewer and rollback coming in Task 7."
+                        }
+                        // Task 7 will add: version list, diff viewer, rollback buttons
+                    }
+                }
+
+                details { class: "settings-section",
                     summary { class: "settings-section-summary", "Onboarding (Behavior File)" }
                     div { class: "settings-section-body",
                         textarea {
