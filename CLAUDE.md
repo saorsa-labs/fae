@@ -97,6 +97,19 @@ Human contract document:
 
 - `SOUL.md`
 
+## Platform module (App Sandbox)
+
+`src/platform/` provides cross-platform security-scoped bookmark support:
+
+- `mod.rs`: `BookmarkManager` trait, `create_manager()` factory, `bookmark_and_persist()`, `restore_all_bookmarks()`
+- `macos.rs`: Real implementation using `objc2-foundation` NSURL bookmark APIs
+- `stub.rs`: No-op for non-macOS (bookmark create/restore return errors, access ops are no-ops)
+
+Bookmarks are persisted in `config.toml` under `[[bookmarks]]` (base64-encoded, labeled).
+On startup, `restore_all_bookmarks()` re-establishes access; stale bookmarks are refreshed, invalid ones pruned.
+
+File picker flows (`gui.rs`) call `bookmark_and_persist()` after user selection.
+
 ## Delivery quality requirements
 
 Always run:

@@ -1,26 +1,26 @@
 {
   "version": 1,
-  "project": "fae-tool5-web-search",
-  "active": false,
+  "project": "fae-production-hardening",
+  "active": true,
   "milestone": {
-    "number": 3,
-    "name": "Production Hardening"
+    "number": 1,
+    "name": "App Store Readiness"
   },
   "phase": {
-    "number": "3.3",
-    "name": "Documentation, Startpage Engine & Safe Search",
-    "plan": ".planning/PLAN-phase-3.3.md"
+    "number": "A.1",
+    "name": "Apple Sandbox & Entitlements",
+    "plan": ".planning/PLAN-phase-A.1.md"
   },
   "progress": {
-    "total_tasks": 3,
+    "total_tasks": 8,
     "completed_tasks": 3,
-    "current_task": 3
+    "current_task": 4
   },
   "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "APPROVED"
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-02-14T21:35:00Z"
+  "status": "executing",
+  "last_updated": "2026-02-15T13:15:00Z"
 }
