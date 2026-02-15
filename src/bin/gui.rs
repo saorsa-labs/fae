@@ -3473,6 +3473,19 @@ fn mic_primary_action_progress_label() -> &'static str {
 }
 
 #[cfg(feature = "gui")]
+fn mic_primary_action_status_text() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Requesting microphone access..."
+    } else if cfg!(target_os = "windows") {
+        "Opening Windows microphone settings..."
+    } else if cfg!(target_os = "linux") {
+        "Opening Linux audio settings..."
+    } else {
+        "Opening microphone settings..."
+    }
+}
+
+#[cfg(feature = "gui")]
 fn show_mic_secondary_open_button() -> bool {
     cfg!(target_os = "macos")
 }
@@ -5375,7 +5388,7 @@ fn app() -> Element {
                                 onclick: move |_| {
                                     mic_repair_busy.set(true);
                                     mic_repair_status
-                                        .set("Applying microphone recovery...".to_owned());
+                                        .set(mic_primary_action_status_text().to_owned());
                                     spawn(async move {
                                         let result = tokio::task::spawn_blocking(run_mic_permission_repair).await;
                                         mic_repair_busy.set(false);
