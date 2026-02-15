@@ -19,9 +19,9 @@ pub struct WhatsAppAdapter {
 impl WhatsAppAdapter {
     pub fn new(config: &WhatsAppChannelConfig) -> Self {
         Self {
-            access_token: config.access_token.clone(),
+            access_token: config.access_token.resolve_plaintext(),
             phone_number_id: config.phone_number_id.clone(),
-            verify_token: config.verify_token.clone(),
+            verify_token: config.verify_token.resolve_plaintext(),
             allowed_numbers: config.allowed_numbers.clone(),
             client: reqwest::Client::new(),
         }
@@ -186,9 +186,9 @@ mod tests {
 
     fn make_adapter() -> WhatsAppAdapter {
         let cfg = WhatsAppChannelConfig {
-            access_token: "token".to_owned(),
+            access_token: crate::credentials::CredentialRef::Plaintext("token".to_owned()),
             phone_number_id: "123".to_owned(),
-            verify_token: "verify".to_owned(),
+            verify_token: crate::credentials::CredentialRef::Plaintext("verify".to_owned()),
             allowed_numbers: vec!["+1234567890".to_owned()],
         };
         WhatsAppAdapter::new(&cfg)

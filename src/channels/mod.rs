@@ -147,7 +147,7 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
     }
 
     if let Some(discord) = &config.channels.discord {
-        if discord.bot_token.trim().is_empty() {
+        if !discord.bot_token.is_set() {
             issues.push(ChannelValidationIssue {
                 id: "discord-missing-token".to_owned(),
                 title: "Discord token missing".to_owned(),
@@ -167,7 +167,7 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
     }
 
     if let Some(whatsapp) = &config.channels.whatsapp {
-        if whatsapp.access_token.trim().is_empty() {
+        if !whatsapp.access_token.is_set() {
             issues.push(ChannelValidationIssue {
                 id: "whatsapp-missing-access-token".to_owned(),
                 title: "WhatsApp access token missing".to_owned(),
@@ -183,7 +183,7 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
                 summary: "WhatsApp is enabled but phone number ID is empty.".to_owned(),
             });
         }
-        if whatsapp.verify_token.trim().is_empty() {
+        if !whatsapp.verify_token.is_set() {
             issues.push(ChannelValidationIssue {
                 id: "whatsapp-missing-verify-token".to_owned(),
                 title: "WhatsApp verify token missing".to_owned(),
@@ -210,7 +210,7 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
                 .gateway
                 .bearer_token
                 .as_ref()
-                .is_none_or(|token| token.trim().is_empty())
+                .is_none_or(|token| token.resolve_plaintext().trim().is_empty())
         {
             issues.push(ChannelValidationIssue {
                 id: "gateway-public-without-auth".to_owned(),
@@ -288,7 +288,7 @@ async fn run_runtime(
     let mut active_channels = Vec::new();
 
     if let Some(discord_cfg) = &config.channels.discord
-        && !discord_cfg.bot_token.trim().is_empty()
+        && discord_cfg.bot_token.is_set()
     {
         let adapter: Arc<dyn ChannelAdapter> = Arc::new(DiscordAdapter::new(discord_cfg));
         adapters.insert(adapter.id().to_owned(), Arc::clone(&adapter));
@@ -297,7 +297,7 @@ async fn run_runtime(
 
     let mut whatsapp_adapter: Option<Arc<WhatsAppAdapter>> = None;
     if let Some(whatsapp_cfg) = &config.channels.whatsapp
-        && !whatsapp_cfg.access_token.trim().is_empty()
+        && whatsapp_cfg.access_token.is_set()
         && !whatsapp_cfg.phone_number_id.trim().is_empty()
     {
         let wa = Arc::new(WhatsAppAdapter::new(whatsapp_cfg));

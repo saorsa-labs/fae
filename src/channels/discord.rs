@@ -19,7 +19,7 @@ pub struct DiscordAdapter {
 impl DiscordAdapter {
     pub fn new(config: &DiscordChannelConfig) -> Self {
         Self {
-            bot_token: config.bot_token.clone(),
+            bot_token: config.bot_token.resolve_plaintext(),
             guild_id: config.guild_id.clone(),
             allowed_user_ids: config.allowed_user_ids.clone(),
             allowed_channel_ids: config.allowed_channel_ids.clone(),

@@ -3210,7 +3210,7 @@ fn start_ingestion_job(target: PathBuf) -> Result<(), String> {
             local_cfg.tool_mode = fae::config::AgentToolMode::Off;
             local_cfg.enable_local_fallback = false;
             local_cfg.api_url.clear();
-            local_cfg.api_key.clear();
+            local_cfg.api_key = fae::credentials::CredentialRef::None;
             local_cfg.cloud_provider = None;
             local_cfg.cloud_model = None;
             local_cfg.max_tokens = local_cfg.max_tokens.max(1600);
@@ -7361,7 +7361,7 @@ fn preferences_window() -> Element {
                                     value: "{config_state.read().channels.discord.as_ref().map(|d| d.bot_token.as_str()).unwrap_or_default()}",
                                     oninput: move |evt| {
                                         if let Some(discord) = config_state.write().channels.discord.as_mut() {
-                                            discord.bot_token = evt.value();
+                                            discord.bot_token = fae::credentials::CredentialRef::Plaintext(evt.value());
                                         }
                                     },
                                 }
@@ -7421,7 +7421,7 @@ fn preferences_window() -> Element {
                                     value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.access_token.as_str()).unwrap_or_default()}",
                                     oninput: move |evt| {
                                         if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
-                                            wa.access_token = evt.value();
+                                            wa.access_token = fae::credentials::CredentialRef::Plaintext(evt.value());
                                         }
                                     },
                                 }
@@ -7451,7 +7451,7 @@ fn preferences_window() -> Element {
                                     value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.verify_token.as_str()).unwrap_or_default()}",
                                     oninput: move |evt| {
                                         if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
-                                            wa.verify_token = evt.value();
+                                            wa.verify_token = fae::credentials::CredentialRef::Plaintext(evt.value());
                                         }
                                     },
                                 }

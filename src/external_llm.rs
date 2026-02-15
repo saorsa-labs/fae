@@ -188,7 +188,7 @@ pub fn apply_external_profile(llm: &mut LlmConfig) -> Result<Option<AppliedExter
     llm.api_type = profile.api_type;
     llm.api_version = profile.api_version.clone();
     llm.api_organization = profile.api_organization.clone();
-    llm.api_key = resolved_api_key;
+    llm.api_key = crate::credentials::CredentialRef::Plaintext(resolved_api_key);
     llm.cloud_provider = Some(profile.provider.clone());
     llm.cloud_model = Some(profile.api_model.clone());
 
@@ -355,7 +355,7 @@ var = "FAE_PROFILE_KEY"
             external_profile: Some("work".to_owned()),
             ..Default::default()
         };
-        llm.api_key.clear();
+        llm.api_key = crate::credentials::CredentialRef::None;
         llm.cloud_provider = None;
 
         let applied = apply_external_profile(&mut llm).unwrap().unwrap();
@@ -363,7 +363,10 @@ var = "FAE_PROFILE_KEY"
         assert_eq!(llm.api_url, "https://example.com");
         assert_eq!(llm.api_model, "example-model");
         assert_eq!(llm.api_type, LlmApiType::OpenAiResponses);
-        assert_eq!(llm.api_key, "sk-test-xyz");
+        assert_eq!(
+            llm.api_key,
+            crate::credentials::CredentialRef::Plaintext("sk-test-xyz".to_owned())
+        );
         assert_eq!(llm.api_organization.as_deref(), Some("org-123"));
         assert_eq!(llm.cloud_provider.as_deref(), Some("openai"));
         assert_eq!(llm.cloud_model.as_deref(), Some("example-model"));

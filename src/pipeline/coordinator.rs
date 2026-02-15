@@ -4474,7 +4474,7 @@ mod tests {
         config.llm.backend = LlmBackend::Api;
         config.llm.api_url = api_url;
         config.llm.api_model = "fae-test".to_owned();
-        config.llm.api_key.clear();
+        config.llm.api_key = crate::credentials::CredentialRef::None;
         config.llm.max_tokens = 64;
         config.memory.root_dir = root.to_path_buf();
         config.memory.enabled = true;

@@ -337,7 +337,8 @@ fn build_remote_provider(config: &LlmConfig) -> Arc<dyn ProviderAdapter> {
 
     match resolved_api_type {
         LlmApiType::AnthropicMessages => {
-            let mut provider_cfg = AnthropicConfig::new(config.api_key.clone(), model_id);
+            let mut provider_cfg =
+                AnthropicConfig::new(config.api_key.resolve_plaintext(), model_id);
             if !config.api_url.trim().is_empty() {
                 provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
             }
@@ -351,9 +352,13 @@ fn build_remote_provider(config: &LlmConfig) -> Arc<dyn ProviderAdapter> {
         }
         LlmApiType::OpenAiCompletions | LlmApiType::OpenAiResponses | LlmApiType::Auto => {
             let mut provider_cfg = if let Some(provider_name) = config.cloud_provider.as_deref() {
-                OpenAiConfig::for_provider(provider_name, config.api_key.clone(), model_id)
+                OpenAiConfig::for_provider(
+                    provider_name,
+                    config.api_key.resolve_plaintext(),
+                    model_id,
+                )
             } else {
-                OpenAiConfig::new(config.api_key.clone(), model_id)
+                OpenAiConfig::new(config.api_key.resolve_plaintext(), model_id)
             };
             if !config.api_url.trim().is_empty() {
                 provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));

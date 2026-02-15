@@ -51,7 +51,7 @@ pub async fn run_gateway(
 
     let state = GatewayState {
         inbound_tx,
-        bearer_token: config.bearer_token,
+        bearer_token: config.bearer_token.map(|c| c.resolve_plaintext()),
         whatsapp,
     };
 

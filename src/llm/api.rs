@@ -335,6 +335,6 @@ fn resolve_connection(config: &LlmConfig) -> Result<ResolvedConnection> {
     Ok(ResolvedConnection {
         api_url: config.api_url.clone(),
         api_model: model_id,
-        api_key: config.api_key.clone(),
+        api_key: config.api_key.resolve_plaintext(),
     })
 }
