@@ -57,12 +57,23 @@ fn main() {
 /// Build the native menu bar with About, Edit, and Window submenus.
 #[cfg(feature = "gui")]
 fn build_menu_bar() -> dioxus::desktop::muda::Menu {
+    use dioxus::desktop::muda::accelerator::{Accelerator, CMD_OR_CTRL, Code};
     use dioxus::desktop::muda::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
     let menu = Menu::new();
 
     // App submenu ("Fae" on macOS — first submenu becomes the app menu).
     let app_menu = Submenu::new("Fae", true);
+    let open_settings_item = MenuItem::with_id(
+        FAE_MENU_OPEN_SETTINGS,
+        if cfg!(target_os = "macos") {
+            "Settings..."
+        } else {
+            "Preferences..."
+        },
+        true,
+        Some(Accelerator::new(Some(CMD_OR_CTRL), Code::Comma)),
+    );
     let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
     let check_updates_item =
         MenuItem::with_id(FAE_MENU_CHECK_UPDATES, "Check for Updates...", true, None);
@@ -77,6 +88,7 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     let _ = app_menu.append_items(&[
         &PredefinedMenuItem::about(None, Some(about_metadata)),
         &PredefinedMenuItem::separator(),
+        &open_settings_item,
         &open_guide_item,
         &check_updates_item,
         &PredefinedMenuItem::separator(),
@@ -1239,6 +1251,8 @@ const FAE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const STARTUP_UPDATE_STALE_HOURS: u64 = 1;
 
 #[cfg(feature = "gui")]
+const FAE_MENU_OPEN_SETTINGS: &str = "fae-open-settings";
+#[cfg(feature = "gui")]
 const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
 #[cfg(feature = "gui")]
 const FAE_MENU_CHECK_UPDATES: &str = "fae-check-updates";
@@ -1284,7 +1298,6 @@ impl Subtitle {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MainView {
     Home,
-    Settings,
     Voices,
 }
 
@@ -1293,64 +1306,6 @@ enum MainView {
 enum SettingsMode {
     Basic,
     Advanced,
-}
-
-#[cfg(feature = "gui")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReminderPreset {
-    Hourly,
-    DailyMorning,
-    DailyEvening,
-    WeekdayMorning,
-}
-
-#[cfg(feature = "gui")]
-impl ReminderPreset {
-    fn as_value(self) -> &'static str {
-        match self {
-            Self::Hourly => "hourly",
-            Self::DailyMorning => "daily_morning",
-            Self::DailyEvening => "daily_evening",
-            Self::WeekdayMorning => "weekday_morning",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Hourly => "Every hour",
-            Self::DailyMorning => "Daily 09:00",
-            Self::DailyEvening => "Daily 18:00",
-            Self::WeekdayMorning => "Weekdays 09:00",
-        }
-    }
-
-    fn from_value(value: &str) -> Self {
-        match value {
-            "hourly" => Self::Hourly,
-            "daily_evening" => Self::DailyEvening,
-            "weekday_morning" => Self::WeekdayMorning,
-            _ => Self::DailyMorning,
-        }
-    }
-
-    fn schedule(self) -> fae::scheduler::Schedule {
-        match self {
-            Self::Hourly => fae::scheduler::Schedule::Interval { secs: 3600 },
-            Self::DailyMorning => fae::scheduler::Schedule::Daily { hour: 9, min: 0 },
-            Self::DailyEvening => fae::scheduler::Schedule::Daily { hour: 18, min: 0 },
-            Self::WeekdayMorning => fae::scheduler::Schedule::Weekly {
-                weekdays: vec![
-                    fae::scheduler::Weekday::Mon,
-                    fae::scheduler::Weekday::Tue,
-                    fae::scheduler::Weekday::Wed,
-                    fae::scheduler::Weekday::Thu,
-                    fae::scheduler::Weekday::Fri,
-                ],
-                hour: 9,
-                min: 0,
-            },
-        }
-    }
 }
 
 /// Build the messages HTML from the current canvas bridge state.
@@ -2047,7 +2002,6 @@ enum ModelPickerTab {
 #[derive(Clone, Debug)]
 enum UiBusEvent {
     ConfigUpdated,
-    SchedulerStateUpdated,
 }
 
 #[cfg(feature = "gui")]
@@ -2067,49 +2021,6 @@ fn read_config_or_default() -> fae::SpeechConfig {
         fae::SpeechConfig::from_file(&path).unwrap_or_default()
     } else {
         fae::SpeechConfig::default()
-    }
-}
-
-#[cfg(feature = "gui")]
-fn create_reminder_task(message: &str, preset: ReminderPreset) -> fae::scheduler::ScheduledTask {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let trimmed = message.trim();
-    let task_name = if trimmed.is_empty() {
-        "Reminder".to_owned()
-    } else {
-        let mut title: String = trimmed.chars().take(40).collect();
-        if trimmed.chars().count() > 40 {
-            title.push_str("...");
-        }
-        format!("Reminder: {title}")
-    };
-
-    let mut task = fae::scheduler::ScheduledTask::user_task(
-        format!("reminder-{now_secs}"),
-        task_name,
-        preset.schedule(),
-    );
-    task.payload = Some(serde_json::json!({
-        "type": "reminder",
-        "title": task.name,
-        "message": if trimmed.is_empty() {
-            "Your reminder is due.".to_owned()
-        } else {
-            trimmed.to_owned()
-        }
-    }));
-    task
-}
-
-#[cfg(feature = "gui")]
-fn managed_skill_state_label(state: fae::skills::ManagedSkillState) -> &'static str {
-    match state {
-        fae::skills::ManagedSkillState::Active => "Active",
-        fae::skills::ManagedSkillState::Disabled => "Disabled",
-        fae::skills::ManagedSkillState::Quarantined => "Quarantined",
     }
 }
 
@@ -2584,7 +2495,6 @@ fn app() -> Element {
     // Track if voice permissions are currently granted
     let mut voice_permissions_granted = use_signal(|| false);
     let mut config_state = use_signal(read_config_or_default);
-    let mut config_save_status = use_signal(String::new);
 
     let mut stt_stage = use_signal(|| StagePhase::Pending);
     let mut llm_stage = use_signal(|| StagePhase::Pending);
@@ -2630,7 +2540,7 @@ fn app() -> Element {
     let mut update_state = use_signal(fae::update::UpdateState::load);
     let mut update_available = use_signal(|| None::<fae::update::Release>);
     let mut update_banner_dismissed = use_signal(|| false);
-    let mut update_check_status = use_signal(String::new);
+    let update_check_status = use_signal(String::new);
     let mut update_installing = use_signal(|| false);
     let mut update_install_error = use_signal(|| None::<String>);
     let mut update_restart_needed = use_signal(|| false);
@@ -2640,18 +2550,7 @@ fn app() -> Element {
     let mut mic_active = use_signal(|| None::<bool>);
     let mut mic_repair_busy = use_signal(|| false);
     let mut mic_repair_status = use_signal(String::new);
-    let mut skills_busy = use_signal(|| false);
-    let mut skills_status = use_signal(String::new);
-    let mut scheduler_busy = use_signal(|| false);
-    let mut scheduler_status = use_signal(String::new);
     let channels_runtime_status = use_signal(|| "Channels runtime: disabled".to_owned());
-    let mut reminder_text = use_signal(String::new);
-    let mut reminder_preset = use_signal(|| ReminderPreset::DailyMorning.as_value().to_owned());
-    let mut diagnostics_status = use_signal(String::new);
-    let mut settings_mode = use_signal(|| SettingsMode::Basic);
-    let mut doctor_findings = use_signal(Vec::<fae::doctor::DoctorFinding>::new);
-    let mut doctor_status = use_signal(String::new);
-    let mut doctor_busy = use_signal(|| false);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
@@ -2667,7 +2566,6 @@ fn app() -> Element {
                             config_state.set(cfg);
                         }
                     }
-                    Ok(UiBusEvent::SchedulerStateUpdated) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 }
@@ -2726,7 +2624,6 @@ fn app() -> Element {
                         launch_runtime(&cfg);
                         config_state.set(cfg);
                     }
-                    Ok(UiBusEvent::SchedulerStateUpdated) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         if let Some(mut handle) = runtime_handle.take() {
                             handle.abort();
@@ -2947,15 +2844,6 @@ fn app() -> Element {
                                     active_binding = next_binding;
                                 }
                                 config_state.set(cfg);
-                            }
-                            Ok(UiBusEvent::SchedulerStateUpdated) => {
-                                let cfg = config_state.read().memory.clone();
-                                tracing::info!("scheduler state changed; restarting scheduler runtime");
-                                scheduler_handle.abort();
-                                let launched = fae::startup::start_scheduler_with_memory(&cfg);
-                                scheduler_handle = launched.0;
-                                scheduler_rx = launched.1;
-                                active_binding = gui::scheduler_memory_binding(&cfg);
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                 tracing::debug!("ui bus closed; stopping scheduler manager");
@@ -3416,22 +3304,6 @@ fn app() -> Element {
         current_status,
         AppStatus::Idle | AppStatus::Error(_) | AppStatus::DownloadError { .. }
     );
-    let cfg_backend = config_state.read().llm.backend;
-    let cfg_tool_mode = config_state.read().llm.tool_mode;
-    let backend_value = match cfg_backend {
-        fae::config::LlmBackend::Local => "local",
-        fae::config::LlmBackend::Api => "api",
-        fae::config::LlmBackend::Agent => "agent",
-    };
-    let tool_mode_value = match cfg_tool_mode {
-        fae::config::AgentToolMode::Off => "off",
-        fae::config::AgentToolMode::ReadOnly => "read_only",
-        fae::config::AgentToolMode::ReadWrite => "read_write",
-        fae::config::AgentToolMode::Full => "full",
-        fae::config::AgentToolMode::FullNoApproval => "full_no_approval",
-    };
-    let tool_mode_select_enabled = settings_enabled;
-    let config_path = fae::SpeechConfig::default_config_path();
     let current_voice = config_state.read().tts.voice.clone();
     let is_builtin_voice = !current_voice.ends_with(".bin") || current_voice.is_empty();
     let voice_ref_display = if is_builtin_voice {
@@ -3445,21 +3317,6 @@ fn app() -> Element {
         )
     } else {
         current_voice.clone()
-    };
-
-    let (stt_model_id, llm_models_in_use, tts_models_in_use) = {
-        let cfg = config_state.read();
-        let stt = cfg.stt.model_id.clone();
-        let llm = match cfg_backend {
-            fae::config::LlmBackend::Api => {
-                format!("API: {} @ {}", cfg.llm.api_model, cfg.llm.api_url)
-            }
-            fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent => {
-                format!("{} / {}", cfg.llm.model_id, cfg.llm.gguf_file)
-            }
-        };
-        let tts = format!("Kokoro-82M ({}, {})", cfg.tts.voice, cfg.tts.model_variant);
-        (stt, llm, tts)
     };
 
     let current_backend = *llm_backend.read();
@@ -3608,6 +3465,21 @@ fn app() -> Element {
         })
     };
 
+    let open_preferences_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(preferences_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Settings")
+                    .with_inner_size(LogicalSize::new(620.0, 780.0))
+                    .with_min_inner_size(LogicalSize::new(520.0, 640.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
     let open_guide_window = {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
@@ -3624,13 +3496,16 @@ fn app() -> Element {
     };
 
     let _menu_handler = {
+        let open_preferences_window = open_preferences_window.clone();
         let open_guide_window = open_guide_window.clone();
         let update_check_status = update_check_status;
         let update_available = update_available;
         let update_state = update_state;
         let update_banner_dismissed = update_banner_dismissed;
         use_muda_event_handler(move |event| {
-            if event.id() == FAE_MENU_OPEN_GUIDE {
+            if event.id() == FAE_MENU_OPEN_SETTINGS {
+                open_preferences_window();
+            } else if event.id() == FAE_MENU_OPEN_GUIDE {
                 open_guide_window();
             } else if event.id() == FAE_MENU_CHECK_UPDATES {
                 run_manual_update_check(
@@ -3677,66 +3552,6 @@ fn app() -> Element {
 
     // For the idle/stopped portrait: always use the full uncropped woodland image.
     let portrait_src = embedded_fae_jpg_data_uri();
-    let doctor_summary = {
-        doctor_findings
-            .read()
-            .iter()
-            .map(|finding| {
-                format!(
-                    "{} [{:?}]\n{}",
-                    finding.title, finding.severity, finding.summary
-                )
-            })
-            .collect::<Vec<String>>()
-            .join("\n\n")
-    };
-    let doctor_findings_count = doctor_findings.read().len();
-    let doctor_actions = doctor_findings
-        .read()
-        .iter()
-        .flat_map(|finding| {
-            finding.actions.iter().map(move |action| {
-                (
-                    format!("{}: {}", finding.title, action.label),
-                    action.kind.clone(),
-                )
-            })
-        })
-        .collect::<Vec<(String, fae::doctor::DoctorActionKind)>>();
-    let managed_skills = fae::skills::list_managed_skills();
-    let managed_skill_count = managed_skills.len();
-    let managed_skill_active_count = managed_skills
-        .iter()
-        .filter(|skill| skill.state == fae::skills::ManagedSkillState::Active)
-        .count();
-    let scheduler_snapshot = fae::scheduler::load_persisted_snapshot().ok();
-    let user_scheduler_tasks = scheduler_snapshot
-        .as_ref()
-        .map(|snapshot| {
-            snapshot
-                .tasks
-                .iter()
-                .filter(|task| task.kind == fae::scheduler::tasks::TaskKind::User)
-                .cloned()
-                .collect::<Vec<fae::scheduler::ScheduledTask>>()
-        })
-        .unwrap_or_default();
-    let scheduler_task_count = scheduler_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.tasks.len())
-        .unwrap_or(0);
-    let scheduler_recent_errors = scheduler_snapshot
-        .as_ref()
-        .map(|snapshot| {
-            snapshot
-                .history
-                .iter()
-                .rev()
-                .take(20)
-                .filter(|run| run.outcome == fae::scheduler::TaskRunOutcome::Error)
-                .count()
-        })
-        .unwrap_or(0);
 
     // Resize the main window when the canvas panel opens/closes.
     // Poll the signal on a short timer so the resize happens regardless
@@ -3851,14 +3666,6 @@ fn app() -> Element {
                                 drawer_open.set(false);
                             },
                             "Home"
-                        }
-                        button {
-                            class: "drawer-item",
-                            onclick: move |_| {
-                                view.set(MainView::Settings);
-                                drawer_open.set(false);
-                            },
-                            "Settings"
                         }
                         button {
                             class: "drawer-item",
@@ -4556,1570 +4363,6 @@ fn app() -> Element {
               } // end home-layout
             }
 
-            if *view.read() == MainView::Settings {
-                div { class: "settings",
-                    div { class: "screen-header",
-                        button {
-                            class: "back-btn",
-                            onclick: move |_| view.set(MainView::Home),
-                            "\u{2190} Back"
-                        }
-                        h2 { class: "settings-title", "Settings" }
-                        // Spacer for centering
-                        div { class: "back-btn-spacer" }
-                    }
-                    p { class: "settings-sub",
-                        "Saved at: {config_path.display()}"
-                    }
-                    div { class: "settings-row",
-                        label { class: "settings-label", "Mode" }
-                        div { class: "details-actions",
-                            button {
-                                class: if *settings_mode.read() == SettingsMode::Basic { "pill pill-primary" } else { "pill" },
-                                onclick: move |_| settings_mode.set(SettingsMode::Basic),
-                                "Basic"
-                            }
-                            button {
-                                class: if *settings_mode.read() == SettingsMode::Advanced { "pill pill-primary" } else { "pill" },
-                                onclick: move |_| settings_mode.set(SettingsMode::Advanced),
-                                "Advanced"
-                            }
-                        }
-                    }
-
-                    // --- Models in use (read-only summary) ---
-                    div { class: "settings-block",
-                        h3 { class: "settings-h3", "Models in use" }
-                        p { class: "note",
-                            "The specific models loaded when you press Start."
-                        }
-                        div { class: "settings-row",
-                            label { class: "settings-label", "Speech-to-text" }
-                            p { class: "settings-value", "{stt_model_id}" }
-                        }
-                        div { class: "settings-row",
-                            label { class: "settings-label", "Intelligence (LLM)" }
-                            p { class: "settings-value", "{llm_models_in_use}" }
-                        }
-                        div { class: "settings-row",
-                            label { class: "settings-label", "Text-to-speech" }
-                            p { class: "settings-value", "{tts_models_in_use}" }
-                        }
-                    }
-
-                    if *settings_mode.read() == SettingsMode::Basic {
-                        div {
-                        details { class: "settings-section", open: true,
-                            summary { class: "settings-section-summary", "Assistant" }
-                            div { class: "settings-section-body",
-                                p { class: "note", "Simple setup for everyday use. Switch to Advanced for all technical controls." }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Tool mode" }
-                                    select {
-                                        class: "settings-select",
-                                        disabled: !tool_mode_select_enabled,
-                                        value: "{tool_mode_value}",
-                                        onchange: move |evt| {
-                                            let mode = match evt.value().as_str() {
-                                                "off" => fae::config::AgentToolMode::Off,
-                                                "read_only" => fae::config::AgentToolMode::ReadOnly,
-                                                "read_write" => fae::config::AgentToolMode::ReadWrite,
-                                                "full" => fae::config::AgentToolMode::Full,
-                                                "full_no_approval" => fae::config::AgentToolMode::FullNoApproval,
-                                                _ => fae::config::AgentToolMode::ReadOnly,
-                                            };
-                                            config_state.write().llm.tool_mode = mode;
-                                        },
-                                        option { value: "off", "Off" }
-                                        option { value: "read_only", "Read-only" }
-                                        option { value: "read_write", "Read/write (ask first)" }
-                                        option { value: "full", "Full (ask first)" }
-                                        option { value: "full_no_approval", "Full (no approval)" }
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Wake word" }
-                                    input {
-                                        class: "settings-select",
-                                        r#type: "text",
-                                        disabled: !settings_enabled,
-                                        value: "{config_state.read().conversation.wake_word}",
-                                        oninput: move |evt| config_state.write().conversation.wake_word = evt.value(),
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Stop phrase" }
-                                    input {
-                                        class: "settings-select",
-                                        r#type: "text",
-                                        disabled: !settings_enabled,
-                                        value: "{config_state.read().conversation.stop_phrase}",
-                                        oninput: move |evt| config_state.write().conversation.stop_phrase = evt.value(),
-                                    }
-                                }
-                            }
-                        }
-
-                        details { class: "settings-section",
-                            summary { class: "settings-section-summary", "Channels" }
-                            div { class: "settings-section-body",
-                                p { class: "note",
-                                    "Connect Discord or WhatsApp. Keep it simple: enable only the channels you use."
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Channels enabled" }
-                                    input {
-                                        class: "settings-checkbox",
-                                        r#type: "checkbox",
-                                        disabled: !settings_enabled,
-                                        checked: config_state.read().channels.enabled,
-                                        onchange: move |evt| {
-                                            config_state.write().channels.enabled = evt.checked();
-                                        },
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Auto-start on launch" }
-                                    input {
-                                        class: "settings-checkbox",
-                                        r#type: "checkbox",
-                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
-                                        checked: config_state.read().channels.auto_start,
-                                        onchange: move |evt| {
-                                            config_state.write().channels.auto_start = evt.checked();
-                                        },
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Runtime" }
-                                    p { class: "settings-value", "{channels_runtime_status.read()}" }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Discord enabled" }
-                                    input {
-                                        class: "settings-checkbox",
-                                        r#type: "checkbox",
-                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
-                                        checked: config_state.read().channels.discord.is_some(),
-                                        onchange: move |evt| {
-                                            let checked = evt.checked();
-                                            let mut cfg = config_state.write();
-                                            if checked {
-                                                if cfg.channels.discord.is_none() {
-                                                    cfg.channels.discord = Some(fae::config::DiscordChannelConfig::default());
-                                                }
-                                            } else {
-                                                cfg.channels.discord = None;
-                                            }
-                                        },
-                                    }
-                                }
-                                if config_state.read().channels.discord.is_some() {
-                                    div { class: "settings-row",
-                                        label { class: "settings-label", "Discord bot token" }
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "password",
-                                            placeholder: "Bot token",
-                                            disabled: !settings_enabled,
-                                            value: "{config_state.read().channels.discord.as_ref().map(|d| d.bot_token.as_str()).unwrap_or_default()}",
-                                            oninput: move |evt| {
-                                                if let Some(discord) = config_state.write().channels.discord.as_mut() {
-                                                    discord.bot_token = evt.value();
-                                                }
-                                            },
-                                        }
-                                    }
-                                    div { class: "settings-row",
-                                        label { class: "settings-label", "Discord allowlist" }
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "text",
-                                            placeholder: "user IDs, comma-separated",
-                                            disabled: !settings_enabled,
-                                            value: "{config_state.read().channels.discord.as_ref().map(|d| d.allowed_user_ids.join(\", \")).unwrap_or_default()}",
-                                            oninput: move |evt| {
-                                                let parsed = evt
-                                                    .value()
-                                                    .split(',')
-                                                    .map(str::trim)
-                                                    .filter(|s| !s.is_empty())
-                                                    .map(ToOwned::to_owned)
-                                                    .collect::<Vec<_>>();
-                                                if let Some(discord) = config_state.write().channels.discord.as_mut() {
-                                                    discord.allowed_user_ids = parsed;
-                                                }
-                                            },
-                                        }
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "WhatsApp enabled" }
-                                    input {
-                                        class: "settings-checkbox",
-                                        r#type: "checkbox",
-                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
-                                        checked: config_state.read().channels.whatsapp.is_some(),
-                                        onchange: move |evt| {
-                                            let checked = evt.checked();
-                                            let mut cfg = config_state.write();
-                                            if checked {
-                                                if cfg.channels.whatsapp.is_none() {
-                                                    cfg.channels.whatsapp = Some(fae::config::WhatsAppChannelConfig::default());
-                                                }
-                                                cfg.channels.gateway.enabled = true;
-                                            } else {
-                                                cfg.channels.whatsapp = None;
-                                            }
-                                        },
-                                    }
-                                }
-                                if config_state.read().channels.whatsapp.is_some() {
-                                    div { class: "settings-row",
-                                        label { class: "settings-label", "WhatsApp access token" }
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "password",
-                                            placeholder: "Meta access token",
-                                            disabled: !settings_enabled,
-                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.access_token.as_str()).unwrap_or_default()}",
-                                            oninput: move |evt| {
-                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
-                                                    wa.access_token = evt.value();
-                                                }
-                                            },
-                                        }
-                                    }
-                                    div { class: "settings-row",
-                                        label { class: "settings-label", "WhatsApp phone number ID" }
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "text",
-                                            placeholder: "Phone number ID",
-                                            disabled: !settings_enabled,
-                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.phone_number_id.as_str()).unwrap_or_default()}",
-                                            oninput: move |evt| {
-                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
-                                                    wa.phone_number_id = evt.value();
-                                                }
-                                            },
-                                        }
-                                    }
-                                    div { class: "settings-row",
-                                        label { class: "settings-label", "WhatsApp verify token" }
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "text",
-                                            placeholder: "Webhook verify token",
-                                            disabled: !settings_enabled,
-                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.verify_token.as_str()).unwrap_or_default()}",
-                                            oninput: move |evt| {
-                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
-                                                    wa.verify_token = evt.value();
-                                                }
-                                            },
-                                        }
-                                    }
-                                    div { class: "settings-row",
-                                        label { class: "settings-label", "WhatsApp allowlist" }
-                                        input {
-                                            class: "settings-select",
-                                            r#type: "text",
-                                            placeholder: "+15551234567, comma-separated",
-                                            disabled: !settings_enabled,
-                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.allowed_numbers.join(\", \")).unwrap_or_default()}",
-                                            oninput: move |evt| {
-                                                let parsed = evt
-                                                    .value()
-                                                    .split(',')
-                                                    .map(str::trim)
-                                                    .filter(|s| !s.is_empty())
-                                                    .map(ToOwned::to_owned)
-                                                    .collect::<Vec<_>>();
-                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
-                                                    wa.allowed_numbers = parsed;
-                                                }
-                                            },
-                                        }
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Gateway enabled" }
-                                    input {
-                                        class: "settings-checkbox",
-                                        r#type: "checkbox",
-                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
-                                        checked: config_state.read().channels.gateway.enabled,
-                                        onchange: move |evt| {
-                                            config_state.write().channels.gateway.enabled = evt.checked();
-                                        },
-                                    }
-                                }
-                            }
-                        }
-
-                        details { class: "settings-section",
-                            summary { class: "settings-section-summary", "Skills" }
-                            div { class: "settings-section-body",
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Active skills" }
-                                    p { class: "settings-value", "{fae::skills::list_skills().join(\", \")}" }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Managed skills" }
-                                    p { class: "settings-value", "{managed_skill_active_count}/{managed_skill_count} active" }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Custom skills folder" }
-                                    p { class: "settings-value", "{fae::skills::skills_dir().display()}/" }
-                                }
-                                div { class: "details-actions",
-                                    button {
-                                        class: "pill pill-primary",
-                                        disabled: *skills_busy.read(),
-                                        onclick: move |_| {
-                                            skills_busy.set(true);
-                                            skills_status.set("Choose a skill package folder...".to_owned());
-                                            spawn(async move {
-                                                let picked = tokio::task::spawn_blocking(|| {
-                                                    rfd::FileDialog::new()
-                                                        .set_directory(fae::skills::skills_dir())
-                                                        .pick_folder()
-                                                }).await;
-
-                                                let Some(path) = (match picked {
-                                                    Ok(path) => path,
-                                                    Err(e) => {
-                                                        skills_status.set(format!("Folder picker failed: {e}"));
-                                                        skills_busy.set(false);
-                                                        return;
-                                                    }
-                                                }) else {
-                                                    skills_status.set("Cancelled.".to_owned());
-                                                    skills_busy.set(false);
-                                                    return;
-                                                };
-
-                                                skills_status.set(format!("Installing from {}...", path.display()));
-                                                let install = tokio::task::spawn_blocking(move || {
-                                                    fae::skills::install_skill_package(&path)
-                                                }).await;
-                                                match install {
-                                                    Ok(Ok(info)) => {
-                                                        skills_status.set(format!(
-                                                            "Installed `{}` v{}.",
-                                                            info.id, info.version
-                                                        ));
-                                                    }
-                                                    Ok(Err(e)) => skills_status.set(format!("Install failed: {e}")),
-                                                    Err(e) => skills_status.set(format!("Install failed: {e}")),
-                                                }
-                                                skills_busy.set(false);
-                                            });
-                                        },
-                                        "Install package..."
-                                    }
-                                }
-                                if !skills_status.read().is_empty() {
-                                    p { class: "settings-value", "{skills_status.read()}" }
-                                }
-                                if managed_skills.is_empty() {
-                                    p { class: "note", "No managed skills installed yet." }
-                                } else {
-                                    div { class: "settings-block",
-                                        for skill in managed_skills.clone() {
-                                            div { class: "settings-row",
-                                                label { class: "settings-label", "{skill.name}" }
-                                                p { class: "settings-value", "{managed_skill_state_label(skill.state)}" }
-                                            }
-                                            div { class: "details-actions",
-                                                button {
-                                                    class: "pill",
-                                                    disabled: *skills_busy.read(),
-                                                    onclick: {
-                                                        let skill_id = skill.id.clone();
-                                                        let activate = skill.state != fae::skills::ManagedSkillState::Active;
-                                                        move |_| {
-                                                            skills_busy.set(true);
-                                                            let skill_id = skill_id.clone();
-                                                            spawn(async move {
-                                                                let skill_id_for_call = skill_id.clone();
-                                                                let result = tokio::task::spawn_blocking(move || {
-                                                                    if activate {
-                                                                        fae::skills::activate_skill(&skill_id_for_call)
-                                                                    } else {
-                                                                        fae::skills::disable_skill(&skill_id_for_call)
-                                                                    }
-                                                                }).await;
-                                                                match result {
-                                                                    Ok(Ok(())) => {
-                                                                        let action = if activate { "Activated" } else { "Disabled" };
-                                                                        skills_status.set(format!("{action} `{skill_id}`."));
-                                                                    }
-                                                                    Ok(Err(e)) => skills_status.set(format!("Skill update failed: {e}")),
-                                                                    Err(e) => skills_status.set(format!("Skill update failed: {e}")),
-                                                                }
-                                                                skills_busy.set(false);
-                                                            });
-                                                        }
-                                                    },
-                                                    if skill.state == fae::skills::ManagedSkillState::Active { "Disable" } else { "Activate" }
-                                                }
-                                                button {
-                                                    class: "pill",
-                                                    disabled: *skills_busy.read(),
-                                                    onclick: {
-                                                        let skill_id = skill.id.clone();
-                                                        move |_| {
-                                                            skills_busy.set(true);
-                                                            let skill_id = skill_id.clone();
-                                                            spawn(async move {
-                                                                let skill_id_for_call = skill_id.clone();
-                                                                let result = tokio::task::spawn_blocking(move || {
-                                                                    fae::skills::rollback_skill(&skill_id_for_call)
-                                                                }).await;
-                                                                match result {
-                                                                    Ok(Ok(())) => skills_status.set(format!("Rolled back `{skill_id}`.")),
-                                                                    Ok(Err(e)) => skills_status.set(format!("Rollback failed: {e}")),
-                                                                    Err(e) => skills_status.set(format!("Rollback failed: {e}")),
-                                                                }
-                                                                skills_busy.set(false);
-                                                            });
-                                                        }
-                                                    },
-                                                    "Rollback"
-                                                }
-                                            }
-                                            if let Some(err) = skill.last_error {
-                                                p { class: "note", "Last error: {err}" }
-                                            }
-                                        }
-                                    }
-                                }
-                                p { class: "note", "For web skills: Fae should fetch via tools, render full draft to Canvas, then wait for your accept/edit/reject decision before install." }
-                            }
-                        }
-
-                        details { class: "settings-section",
-                            summary { class: "settings-section-summary", "Updates" }
-                            div { class: "settings-section-body",
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Fae version" }
-                                    p { class: "settings-value", "{update_state.read().fae_version}" }
-                                }
-                                div { class: "settings-row",
-                                    button {
-                                        class: "settings-save",
-                                        onclick: {
-                                            let update_check_status = update_check_status;
-                                            let update_available = update_available;
-                                            let update_state = update_state;
-                                            let update_banner_dismissed = update_banner_dismissed;
-                                            move |_| {
-                                                run_manual_update_check(
-                                                    update_check_status,
-                                                    update_available,
-                                                    update_state,
-                                                    update_banner_dismissed,
-                                                );
-                                            }
-                                        },
-                                        "Check now"
-                                    }
-                                    p { class: "settings-value", "{update_check_status.read()}" }
-                                }
-                            }
-                        }
-
-                        details { class: "settings-section",
-                            summary { class: "settings-section-summary", "Scheduler" }
-                            div { class: "settings-section-body",
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Scheduled jobs" }
-                                    p { class: "settings-value", "{scheduler_task_count}" }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Recent errors (last 20 runs)" }
-                                    p { class: "settings-value", "{scheduler_recent_errors}" }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Reminder text" }
-                                    input {
-                                        class: "settings-select",
-                                        r#type: "text",
-                                        disabled: *scheduler_busy.read(),
-                                        placeholder: "Example: Drink water",
-                                        value: "{reminder_text.read()}",
-                                        oninput: move |evt| reminder_text.set(evt.value()),
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "Cadence" }
-                                    select {
-                                        class: "settings-select",
-                                        disabled: *scheduler_busy.read(),
-                                        value: "{reminder_preset.read()}",
-                                        onchange: move |evt| reminder_preset.set(evt.value()),
-                                        option {
-                                            value: "{ReminderPreset::Hourly.as_value()}",
-                                            "{ReminderPreset::Hourly.label()}"
-                                        }
-                                        option {
-                                            value: "{ReminderPreset::DailyMorning.as_value()}",
-                                            "{ReminderPreset::DailyMorning.label()}"
-                                        }
-                                        option {
-                                            value: "{ReminderPreset::DailyEvening.as_value()}",
-                                            "{ReminderPreset::DailyEvening.label()}"
-                                        }
-                                        option {
-                                            value: "{ReminderPreset::WeekdayMorning.as_value()}",
-                                            "{ReminderPreset::WeekdayMorning.label()}"
-                                        }
-                                    }
-                                }
-                                div { class: "details-actions",
-                                    button {
-                                        class: "pill pill-primary",
-                                        disabled: *scheduler_busy.read(),
-                                        onclick: move |_| {
-                                            scheduler_busy.set(true);
-                                            scheduler_status.set("Saving reminder...".to_owned());
-                                            let message = reminder_text.read().to_string();
-                                            let preset = ReminderPreset::from_value(&reminder_preset.read());
-                                            spawn(async move {
-                                                let result = tokio::task::spawn_blocking(move || {
-                                                    let task = create_reminder_task(&message, preset);
-                                                    let task_name = task.name.clone();
-                                                    fae::scheduler::upsert_persisted_user_task(task)?;
-                                                    Ok::<String, fae::SpeechError>(task_name)
-                                                }).await;
-                                                match result {
-                                                    Ok(Ok(task_name)) => {
-                                                        scheduler_status.set(format!("Scheduled `{task_name}`."));
-                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
-                                                    }
-                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not save reminder: {e}")),
-                                                    Err(e) => scheduler_status.set(format!("Could not save reminder: {e}")),
-                                                }
-                                                scheduler_busy.set(false);
-                                            });
-                                        },
-                                        "Schedule reminder"
-                                    }
-                                }
-                                if !scheduler_status.read().is_empty() {
-                                    p { class: "settings-value", "{scheduler_status.read()}" }
-                                }
-                                if user_scheduler_tasks.is_empty() {
-                                    p { class: "note", "No user reminders yet." }
-                                } else {
-                                    div { class: "settings-block",
-                                        for task in user_scheduler_tasks.clone() {
-                                            div { class: "settings-row",
-                                                label { class: "settings-label", "{task.name}" }
-                                                p { class: "settings-value", "{task.schedule}" }
-                                            }
-                                            div { class: "details-actions",
-                                                button {
-                                                    class: "pill",
-                                                    disabled: *scheduler_busy.read(),
-                                                    onclick: {
-                                                        let task_id = task.id.clone();
-                                                        move |_| {
-                                                            scheduler_busy.set(true);
-                                                            let task_id = task_id.clone();
-                                                            spawn(async move {
-                                                                let task_id_for_call = task_id.clone();
-                                                                let result = tokio::task::spawn_blocking(move || {
-                                                                    fae::scheduler::mark_persisted_task_due_now(&task_id_for_call)
-                                                                }).await;
-                                                                match result {
-                                                                    Ok(Ok(true)) => {
-                                                                        scheduler_status.set(format!("Queued `{task_id}` for next tick."));
-                                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
-                                                                    }
-                                                                    Ok(Ok(false)) => scheduler_status.set(format!("Task `{task_id}` was not found.")),
-                                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not run now: {e}")),
-                                                                    Err(e) => scheduler_status.set(format!("Could not run now: {e}")),
-                                                                }
-                                                                scheduler_busy.set(false);
-                                                            });
-                                                        }
-                                                    },
-                                                    "Run now"
-                                                }
-                                                button {
-                                                    class: "pill",
-                                                    disabled: *scheduler_busy.read(),
-                                                    onclick: {
-                                                        let task_id = task.id.clone();
-                                                        let next_enabled = !task.enabled;
-                                                        move |_| {
-                                                            scheduler_busy.set(true);
-                                                            let task_id = task_id.clone();
-                                                            spawn(async move {
-                                                                let task_id_for_call = task_id.clone();
-                                                                let result = tokio::task::spawn_blocking(move || {
-                                                                    fae::scheduler::set_persisted_task_enabled(&task_id_for_call, next_enabled)
-                                                                }).await;
-                                                                match result {
-                                                                    Ok(Ok(true)) => {
-                                                                        let label = if next_enabled { "Enabled" } else { "Paused" };
-                                                                        scheduler_status.set(format!("{label} `{task_id}`."));
-                                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
-                                                                    }
-                                                                    Ok(Ok(false)) => scheduler_status.set(format!("Task `{task_id}` was not found.")),
-                                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not update task: {e}")),
-                                                                    Err(e) => scheduler_status.set(format!("Could not update task: {e}")),
-                                                                }
-                                                                scheduler_busy.set(false);
-                                                            });
-                                                        }
-                                                    },
-                                                    if task.enabled { "Pause" } else { "Enable" }
-                                                }
-                                                button {
-                                                    class: "pill",
-                                                    disabled: *scheduler_busy.read(),
-                                                    onclick: {
-                                                        let task_id = task.id.clone();
-                                                        move |_| {
-                                                            scheduler_busy.set(true);
-                                                            let task_id = task_id.clone();
-                                                            spawn(async move {
-                                                                let task_id_for_call = task_id.clone();
-                                                                let result = tokio::task::spawn_blocking(move || {
-                                                                    fae::scheduler::remove_persisted_task(&task_id_for_call)
-                                                                }).await;
-                                                                match result {
-                                                                    Ok(Ok(true)) => {
-                                                                        scheduler_status.set(format!("Deleted `{task_id}`."));
-                                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
-                                                                    }
-                                                                    Ok(Ok(false)) => scheduler_status.set(format!("Task `{task_id}` was not found.")),
-                                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not delete task: {e}")),
-                                                                    Err(e) => scheduler_status.set(format!("Could not delete task: {e}")),
-                                                                }
-                                                                scheduler_busy.set(false);
-                                                            });
-                                                        }
-                                                    },
-                                                    "Delete"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                p { class: "note", "Doctor can reset scheduler state if jobs become unhealthy." }
-                            }
-                        }
-                        }
-                    } else {
-                    div {
-                    // --- LLM ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "LLM / Intelligence" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Backend" }
-                                select {
-                                    class: "settings-select",
-                                    disabled: true,
-                                    value: "{backend_value}",
-                                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Tool mode" }
-                                select {
-                                    class: "settings-select",
-                                    disabled: !tool_mode_select_enabled,
-                                    value: "{tool_mode_value}",
-                                    onchange: move |evt| {
-                                        let v = evt.value();
-                                        let mode = match v.as_str() {
-                                            "off" => fae::config::AgentToolMode::Off,
-                                            "read_only" => fae::config::AgentToolMode::ReadOnly,
-                                            "read_write" => fae::config::AgentToolMode::ReadWrite,
-                                            "full" => fae::config::AgentToolMode::Full,
-                                            "full_no_approval" => fae::config::AgentToolMode::FullNoApproval,
-                                            _ => fae::config::AgentToolMode::ReadOnly,
-                                        };
-                                        config_state.write().llm.tool_mode = mode;
-                                    },
-                                    option { value: "off", "Off" }
-                                    option { value: "read_only", "Read-only" }
-                                    option { value: "read_write", "Read/write (ask first)" }
-                                    option { value: "full", "Full (ask first)" }
-                                    option { value: "full_no_approval", "Full (no approval)" }
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Max tokens" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().llm.max_tokens}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<usize>() {
-                                            config_state.write().llm.max_tokens = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Context window (tokens)" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    min: "1024",
-                                    step: "1024",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().llm.context_size_tokens}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<usize>() {
-                                            config_state.write().llm.context_size_tokens = v;
-                                        }
-                                    },
-                                }
-                            }
-                            p { class: "note",
-                                "If omitted in config.toml, Fae auto-tunes context size from system RAM."
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Temperature" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    step: "0.1",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().llm.temperature}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<f64>() {
-                                            config_state.write().llm.temperature = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Top-p" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    step: "0.05",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().llm.top_p}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<f64>() {
-                                            config_state.write().llm.top_p = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Repeat penalty" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    step: "0.05",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().llm.repeat_penalty}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<f32>() {
-                                            config_state.write().llm.repeat_penalty = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Max history msgs" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().llm.max_history_messages}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<usize>() {
-                                            config_state.write().llm.max_history_messages = v;
-                                        }
-                                    },
-                                }
-                            }
-                            if matches!(cfg_backend, fae::config::LlmBackend::Api) {
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "API URL" }
-                                    input {
-                                        class: "settings-select",
-                                        r#type: "text",
-                                        disabled: !settings_enabled,
-                                        value: "{config_state.read().llm.api_url}",
-                                        oninput: move |evt| config_state.write().llm.api_url = evt.value(),
-                                    }
-                                }
-                                div { class: "settings-row",
-                                    label { class: "settings-label", "API model" }
-                                    input {
-                                        class: "settings-select",
-                                        r#type: "text",
-                                        disabled: !settings_enabled,
-                                        value: "{config_state.read().llm.api_model}",
-                                        oninput: move |evt| config_state.write().llm.api_model = evt.value(),
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Prompt ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Prompt + SOUL" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "SOUL file" }
-                                p { class: "settings-value", "{fae::personality::soul_path().display()}" }
-                            }
-                            p { class: "note",
-                                "System prompt = core prompt + SOUL.md + optional add-on."
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Onboarding checklist" }
-                                p { class: "settings-value", "{fae::personality::onboarding_path().display()}" }
-                            }
-                            textarea {
-                                class: "settings-textarea",
-                                disabled: !settings_enabled,
-                                value: "{config_state.read().llm.system_prompt}",
-                                placeholder: "Optional add-on. e.g. \"Be more formal.\"",
-                                oninput: move |evt| {
-                                    config_state.write().llm.system_prompt = evt.value();
-                                },
-                            }
-                            div { class: "details-actions",
-                                button {
-                                    class: "pill",
-                                    disabled: !settings_enabled,
-                                    onclick: move |_| config_state.write().llm.system_prompt.clear(),
-                                    "Clear add-on"
-                                }
-                            }
-                            details { class: "details",
-                                summary { class: "details-summary", "Show active prompt" }
-                                pre { class: "details-pre", "{config_state.read().llm.effective_system_prompt()}" }
-                            }
-                        }
-                    }
-
-                    // --- Skills (read-only info) ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Skills" }
-                        div { class: "settings-section-body",
-                            p { class: "note",
-                                "Built-in and custom skills are included in the active prompt stack."
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Active skills" }
-                                p { class: "settings-value",
-                                    {fae::skills::list_skills().join(", ")}
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Custom skills" }
-                                p { class: "settings-value",
-                                    "{fae::skills::skills_dir().display()}/"
-                                }
-                            }
-                            p { class: "note",
-                                "Add .md files to the custom skills directory for extra skills."
-                            }
-                        }
-                    }
-
-                    // --- Audio ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Audio" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Input sample rate" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().audio.input_sample_rate}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().audio.input_sample_rate = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Output sample rate" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().audio.output_sample_rate}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().audio.output_sample_rate = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Input channels" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().audio.input_channels}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u16>() {
-                                            config_state.write().audio.input_channels = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Buffer size" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().audio.buffer_size}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().audio.buffer_size = v;
-                                        }
-                                    },
-                                }
-                            }
-                        }
-                    }
-
-                    // --- VAD ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Voice Activity Detection" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Threshold" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    step: "0.05",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().vad.threshold}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<f32>() {
-                                            config_state.write().vad.threshold = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Min silence (ms)" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().vad.min_silence_duration_ms}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().vad.min_silence_duration_ms = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Speech pad (ms)" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().vad.speech_pad_ms}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().vad.speech_pad_ms = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Min speech (ms)" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().vad.min_speech_duration_ms}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().vad.min_speech_duration_ms = v;
-                                        }
-                                    },
-                                }
-                            }
-                        }
-                    }
-
-                    // --- STT ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Speech-to-Text" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Model ID" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "text",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().stt.model_id}",
-                                    oninput: move |evt| config_state.write().stt.model_id = evt.value(),
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Chunk size" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().stt.chunk_size}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<usize>() {
-                                            config_state.write().stt.chunk_size = v;
-                                        }
-                                    },
-                                }
-                            }
-                        }
-                    }
-
-                    // --- TTS ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Text-to-Speech" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Model variant" }
-                                select {
-                                    class: "settings-select",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().tts.model_variant}",
-                                    onchange: move |evt| config_state.write().tts.model_variant = evt.value(),
-                                    option { value: "q8", "q8 (recommended)" }
-                                    option { value: "q8f16", "q8f16 (smallest)" }
-                                    option { value: "fp16", "fp16" }
-                                    option { value: "fp32", "fp32 (best)" }
-                                    option { value: "q4", "q4" }
-                                    option { value: "q4f16", "q4f16" }
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Voice" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "text",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().tts.voice}",
-                                    oninput: move |evt| {
-                                        config_state.write().tts.voice = evt.value();
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Speed" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    step: "0.1",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().tts.speed}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<f32>() {
-                                            config_state.write().tts.speed = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Sample rate" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().tts.sample_rate}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().tts.sample_rate = v;
-                                        }
-                                    },
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Conversation ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Conversation" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Enabled" }
-                                input {
-                                    class: "settings-checkbox",
-                                    r#type: "checkbox",
-                                    disabled: !settings_enabled,
-                                    checked: config_state.read().conversation.enabled,
-                                    onchange: move |evt| {
-                                        config_state.write().conversation.enabled = evt.checked();
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Wake word" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "text",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().conversation.wake_word}",
-                                    oninput: move |evt| config_state.write().conversation.wake_word = evt.value(),
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Stop phrase" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "text",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().conversation.stop_phrase}",
-                                    oninput: move |evt| config_state.write().conversation.stop_phrase = evt.value(),
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Barge-in ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Barge-in" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Enabled" }
-                                input {
-                                    class: "settings-checkbox",
-                                    r#type: "checkbox",
-                                    disabled: !settings_enabled,
-                                    checked: config_state.read().barge_in.enabled,
-                                    onchange: move |evt| {
-                                        config_state.write().barge_in.enabled = evt.checked();
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Min RMS" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    step: "0.005",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().barge_in.min_rms}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<f32>() {
-                                            config_state.write().barge_in.min_rms = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Confirm (ms)" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().barge_in.confirm_ms}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().barge_in.confirm_ms = v;
-                                        }
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Start holdoff (ms)" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "number",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().barge_in.assistant_start_holdoff_ms}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<u32>() {
-                                            config_state.write().barge_in.assistant_start_holdoff_ms = v;
-                                        }
-                                    },
-                                }
-                            }
-                        }
-                    }
-
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Canvas" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Server URL" }
-                                input {
-                                    class: "settings-select",
-                                    r#type: "text",
-                                    placeholder: "ws://localhost:9473/ws/sync",
-                                    disabled: !settings_enabled,
-                                    value: "{config_state.read().canvas.server_url.as_deref().unwrap_or_default()}",
-                                    oninput: move |evt| {
-                                        let val = evt.value();
-                                        config_state.write().canvas.server_url = if val.is_empty() {
-                                            None
-                                        } else {
-                                            Some(val)
-                                        };
-                                    },
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Status" }
-                                {
-                                    let status = canvas_bridge.read().session().connection_status();
-                                    let label = match status {
-                                        fae::canvas::backend::ConnectionStatus::Local => "Local (no server)",
-                                        fae::canvas::backend::ConnectionStatus::Connected => "Connected",
-                                        fae::canvas::backend::ConnectionStatus::Connecting => "Connecting\u{2026}",
-                                        fae::canvas::backend::ConnectionStatus::Reconnecting { .. } => "Reconnecting\u{2026}",
-                                        fae::canvas::backend::ConnectionStatus::Disconnected => "Disconnected",
-                                        fae::canvas::backend::ConnectionStatus::Failed(_) => "Failed",
-                                    };
-                                    rsx! { p { class: "settings-value", "{label}" } }
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Elements" }
-                                p { class: "settings-value",
-                                    "{canvas_bridge.read().session().element_count()}"
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Updates ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Updates" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Fae version" }
-                                p { class: "settings-value",
-                                    "{update_state.read().fae_version}"
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Auto-update" }
-                                select {
-                                    class: "settings-select",
-                                    value: "{update_state.read().auto_update}",
-                                    onchange: move |evt| {
-                                        let pref = match evt.value().as_str() {
-                                            "always" => fae::update::AutoUpdatePreference::Always,
-                                            "never" => fae::update::AutoUpdatePreference::Never,
-                                            _ => fae::update::AutoUpdatePreference::Ask,
-                                        };
-                                        update_state.write().auto_update = pref;
-                                        let state = update_state.read().clone();
-                                        spawn(async move {
-                                            let _ = tokio::task::spawn_blocking(move || state.save()).await;
-                                        });
-                                    },
-                                    option { value: "ask", "Ask" }
-                                    option { value: "always", "Always" }
-                                    option { value: "never", "Never" }
-                                }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Last check" }
-                                {
-                                    let ts = update_state.read().last_check.clone();
-                                    let label = ts.unwrap_or_else(|| "never".to_owned());
-                                    rsx! { p { class: "settings-value", "{label}" } }
-                                }
-                            }
-                            div { class: "settings-row",
-                                button {
-                                    class: "settings-save",
-                                    onclick: {
-                                        let update_check_status = update_check_status;
-                                        let update_available = update_available;
-                                        let update_state = update_state;
-                                        let update_banner_dismissed = update_banner_dismissed;
-                                        move |_| {
-                                            run_manual_update_check(
-                                                update_check_status,
-                                                update_available,
-                                                update_state,
-                                                update_banner_dismissed,
-                                            );
-                                        }
-                                    },
-                                    "Check now"
-                                }
-                                p { class: "settings-value",
-                                    "{update_check_status.read()}"
-                                }
-                            }
-                            // "Install Now" button — visible when an update is available.
-                            if update_available.read().is_some() && !*update_restart_needed.read() {
-                                div { class: "settings-row",
-                                    button {
-                                        class: "settings-save",
-                                        disabled: *update_installing.read(),
-                                        onclick: move |_| {
-                                            let release = update_available.read().clone();
-                                            if let Some(rel) = release {
-                                                update_installing.set(true);
-                                                update_install_error.set(None);
-                                                let url = rel.download_url.clone();
-                                                spawn(async move {
-                                                    let result = tokio::task::spawn_blocking(move || {
-                                                        let current = fae::update::applier::current_exe_path()?;
-                                                        fae::update::applier::apply_update(&url, &current)
-                                                    }).await;
-                                                    update_installing.set(false);
-                                                    match result {
-                                                        Ok(Ok(_apply_result)) => {
-                                                            update_restart_needed.set(true);
-                                                            update_check_status.set("Installed! Restart to use the new version.".to_owned());
-                                                        }
-                                                        Ok(Err(e)) => {
-                                                            update_install_error.set(Some(format!("{e}")));
-                                                            update_check_status.set(format!("Install failed: {e}"));
-                                                        }
-                                                        Err(e) => {
-                                                            update_install_error.set(Some(format!("{e}")));
-                                                            update_check_status.set(format!("Install failed: {e}"));
-                                                        }
-                                                    }
-                                                });
-                                            }
-                                        },
-                                        if *update_installing.read() { "Installing..." } else { "Install Now" }
-                                    }
-                                }
-                            }
-                            if *update_restart_needed.read() {
-                                div { class: "settings-row",
-                                    p { class: "settings-value",
-                                        "Update installed. Restart Fae to use the new version."
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Diagnostics ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Diagnostics" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Log directory" }
-                                p { class: "settings-value",
-                                    "{fae::diagnostics::fae_log_dir().display()}"
-                                }
-                            }
-                            div { class: "settings-row",
-                                button {
-                                    class: "settings-save",
-                                    onclick: move |_| {
-                                        diagnostics_status.set("Gathering...".to_owned());
-                                        spawn(async move {
-                                            let result = tokio::task::spawn_blocking(
-                                                fae::diagnostics::gather_diagnostic_bundle,
-                                            )
-                                            .await;
-                                            match result {
-                                                Ok(Ok(path)) => {
-                                                    diagnostics_status.set(format!(
-                                                        "Saved to {}",
-                                                        path.display()
-                                                    ));
-                                                }
-                                                Ok(Err(e)) => {
-                                                    diagnostics_status
-                                                        .set(format!("Error: {e}"));
-                                                }
-                                                Err(e) => {
-                                                    diagnostics_status
-                                                        .set(format!("Error: {e}"));
-                                                }
-                                            }
-                                        });
-                                    },
-                                    "Gather Logs"
-                                }
-                                p { class: "settings-value",
-                                    "{diagnostics_status.read()}"
-                                }
-                            }
-                        }
-                    }
-                    }
-                    }
-
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Doctor" }
-                        div { class: "settings-section-body",
-                            p { class: "note",
-                                "Health checks and repair actions for scheduler and managed skills."
-                            }
-                            div { class: "settings-row",
-                                button {
-                                    class: "settings-save",
-                                    disabled: *doctor_busy.read(),
-                                    onclick: move |_| {
-                                        doctor_busy.set(true);
-                                        doctor_status.set("Running checks...".to_owned());
-                                        spawn(async move {
-                                            let result = tokio::task::spawn_blocking(fae::doctor::run_checks).await;
-                                            doctor_busy.set(false);
-                                            match result {
-                                                Ok(findings) => {
-                                                    let count = findings.iter().filter(|f| f.severity != fae::doctor::DoctorSeverity::Info).count();
-                                                    doctor_status.set(format!("Doctor finished. {} actionable finding(s).", count));
-                                                    doctor_findings.set(findings);
-                                                }
-                                                Err(e) => {
-                                                    doctor_status.set(format!("Doctor failed: {e}"));
-                                                }
-                                            }
-                                        });
-                                    },
-                                    if *doctor_busy.read() { "Running..." } else { "Run Doctor" }
-                                }
-                                p { class: "settings-value", "{doctor_status.read()}" }
-                            }
-                            div { class: "details-actions",
-                                button {
-                                    class: "pill",
-                                    disabled: *doctor_busy.read(),
-                                    onclick: move |_| {
-                                        doctor_busy.set(true);
-                                        doctor_status.set("Gathering diagnostics...".to_owned());
-                                        spawn(async move {
-                                            let result = tokio::task::spawn_blocking(|| {
-                                                fae::doctor::apply_action(&fae::doctor::DoctorActionKind::GatherDiagnostics)
-                                            }).await;
-                                            doctor_busy.set(false);
-                                            match result {
-                                                Ok(Ok(msg)) => doctor_status.set(msg),
-                                                Ok(Err(e)) => doctor_status.set(format!("Action failed: {e}")),
-                                                Err(e) => doctor_status.set(format!("Action failed: {e}")),
-                                            }
-                                        });
-                                    },
-                                    "Gather diagnostics"
-                                }
-                                button {
-                                    class: "pill",
-                                    disabled: *doctor_busy.read(),
-                                    onclick: move |_| {
-                                        doctor_busy.set(true);
-                                        doctor_status.set("Resetting scheduler state...".to_owned());
-                                        spawn(async move {
-                                            let result = tokio::task::spawn_blocking(|| {
-                                                fae::doctor::apply_action(&fae::doctor::DoctorActionKind::ClearSchedulerState)
-                                            }).await;
-                                            doctor_busy.set(false);
-                                            match result {
-                                                Ok(Ok(msg)) => doctor_status.set(msg),
-                                                Ok(Err(e)) => doctor_status.set(format!("Action failed: {e}")),
-                                                Err(e) => doctor_status.set(format!("Action failed: {e}")),
-                                            }
-                                        });
-                                    },
-                                    "Reset scheduler state"
-                                }
-                            }
-                            if doctor_actions.is_empty() {
-                                p { class: "note", "No repair actions yet. Run Doctor to generate findings." }
-                            } else {
-                                div { class: "details-actions",
-                                    for (action_label, action_kind) in doctor_actions {
-                                        button {
-                                            class: "pill",
-                                            disabled: *doctor_busy.read(),
-                                            onclick: {
-                                                let action_kind = action_kind.clone();
-                                                let action_label = action_label.clone();
-                                                move |_| {
-                                                    let action_kind = action_kind.clone();
-                                                    let action_label = action_label.clone();
-                                                    doctor_busy.set(true);
-                                                    doctor_status.set(format!("Applying {action_label}..."));
-                                                    spawn(async move {
-                                                        let result = tokio::task::spawn_blocking(move || {
-                                                            fae::doctor::apply_action(&action_kind)
-                                                        }).await;
-                                                        match result {
-                                                            Ok(Ok(msg)) => {
-                                                                doctor_status.set(msg);
-                                                                let refresh = tokio::task::spawn_blocking(fae::doctor::run_checks).await;
-                                                                match refresh {
-                                                                    Ok(findings) => doctor_findings.set(findings),
-                                                                    Err(e) => doctor_status.set(format!("Action succeeded, but refresh failed: {e}")),
-                                                                }
-                                                            }
-                                                            Ok(Err(e)) => doctor_status.set(format!("Action failed: {e}")),
-                                                            Err(e) => doctor_status.set(format!("Action failed: {e}")),
-                                                        }
-                                                        doctor_busy.set(false);
-                                                    });
-                                                }
-                                            },
-                                            "{action_label}"
-                                        }
-                                    }
-                                }
-                            }
-                            p { class: "note", "Findings: {doctor_findings_count}" }
-                            pre { class: "details-pre", "{doctor_summary}" }
-                        }
-                    }
-
-                    // --- Save / Models buttons ---
-                    div { class: "settings-actions",
-                        button {
-                            class: "settings-save",
-                            disabled: !settings_enabled,
-                            onclick: move |_| {
-                                let cfg = config_state.read().clone();
-                                let path = fae::SpeechConfig::default_config_path();
-                                spawn(async move {
-                                    let res = tokio::task::spawn_blocking(move || cfg.save_to_file(&path)).await;
-                                    let msg = match res {
-                                        Ok(Ok(())) => {
-                                            let _ = ui_bus().send(UiBusEvent::ConfigUpdated);
-                                            "Saved.".to_owned()
-                                        }
-                                        Ok(Err(e)) => format!("Save failed: {e}"),
-                                        Err(e) => format!("Save failed: {e}"),
-                                    };
-                                    config_save_status.set(msg);
-                                });
-                            },
-                            "Save"
-                        }
-                        button {
-                            class: "settings-save",
-                            disabled: !settings_enabled,
-                            onclick: {
-                                let open = open_models_window.clone();
-                                move |_| open()
-                            },
-                            "Models..."
-                        }
-                    }
-                    p { class: "settings-status", "{config_save_status.read()}" }
-                }
-            }
-
             if *view.read() == MainView::Voices {
                 div { class: "model-picker",
                     div { class: "screen-header",
@@ -6629,7 +4872,7 @@ fn fae_guide_window() -> Element {
                          \"Fetch this URL and extract the key setup steps.\""
                     }
                     p { class: "settings-sub",
-                        "If tools are unavailable, check Settings -> LLM backend/tool mode and confirm Fae is running with web-search enabled."
+                        "If tools are unavailable, check Fae -> Settings -> Assistant and confirm Fae is running with web-search enabled."
                     }
                 }
 
@@ -6647,8 +4890,450 @@ fn fae_guide_window() -> Element {
                 div { class: "settings-block",
                     h3 { class: "settings-h3", "5) Updates" }
                     p { class: "settings-sub",
-                        "Use Fae -> Check for Updates from the macOS menu bar, or open Settings -> Updates in the main window."
+                        "Use Fae -> Check for Updates from the menu bar, or open Fae -> Settings -> Updates."
                     }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn preferences_window() -> Element {
+    let desktop = use_window();
+    let mut config_state = use_signal(read_config_or_default);
+    let mut save_status = use_signal(String::new);
+    let update_state = use_signal(fae::update::UpdateState::load);
+    let update_available = use_signal(|| None::<fae::update::Release>);
+    let update_banner_dismissed = use_signal(|| false);
+    let update_check_status = use_signal(String::new);
+    let mut settings_mode = use_signal(|| SettingsMode::Basic);
+    let mut diagnostics_status = use_signal(String::new);
+
+    use_hook(move || {
+        let mut config_state = config_state;
+        spawn(async move {
+            let mut rx = ui_bus().subscribe();
+            loop {
+                match rx.recv().await {
+                    Ok(UiBusEvent::ConfigUpdated) => {
+                        let res = tokio::task::spawn_blocking(read_config_or_default).await;
+                        if let Ok(cfg) = res {
+                            config_state.set(cfg);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    });
+
+    let open_models_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(models_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Models")
+                    .with_inner_size(LogicalSize::new(520.0, 760.0))
+                    .with_min_inner_size(LogicalSize::new(420.0, 600.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
+    let settings_enabled = true;
+    let tool_mode_select_enabled = settings_enabled;
+    let tool_mode_value = {
+        let cfg = config_state.read();
+        match cfg.llm.tool_mode {
+            fae::config::AgentToolMode::Off => "off",
+            fae::config::AgentToolMode::ReadOnly => "read_only",
+            fae::config::AgentToolMode::ReadWrite => "read_write",
+            fae::config::AgentToolMode::Full => "full",
+            fae::config::AgentToolMode::FullNoApproval => "full_no_approval",
+        }
+    };
+    let config_path = fae::SpeechConfig::default_config_path();
+
+    rsx! {
+        style { {GLOBAL_CSS} }
+
+        div { class: "container",
+            div { class: "topbar",
+                button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
+                p { class: "topbar-title", "Settings" }
+                button {
+                    class: "topbar-btn",
+                    onclick: {
+                        let open = open_models_window.clone();
+                        move |_| open()
+                    },
+                    "Models..."
+                }
+            }
+
+            div { class: "settings", style: "max-width: 760px; width: 100%;",
+                p { class: "settings-sub", "Saved at: {config_path.display()}" }
+                p { class: "note", "Main window stays focused on conversation. Configure Fae here." }
+
+                div { class: "settings-row",
+                    label { class: "settings-label", "Mode" }
+                    div { class: "details-actions",
+                        button {
+                            class: if *settings_mode.read() == SettingsMode::Basic { "pill pill-primary" } else { "pill" },
+                            onclick: move |_| settings_mode.set(SettingsMode::Basic),
+                            "Basic"
+                        }
+                        button {
+                            class: if *settings_mode.read() == SettingsMode::Advanced { "pill pill-primary" } else { "pill" },
+                            onclick: move |_| settings_mode.set(SettingsMode::Advanced),
+                            "Advanced"
+                        }
+                    }
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Assistant" }
+                    div { class: "settings-section-body",
+                        p { class: "note", "Core behavior for normal day-to-day usage." }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Tool mode" }
+                            select {
+                                class: "settings-select",
+                                disabled: !tool_mode_select_enabled,
+                                value: "{tool_mode_value}",
+                                onchange: move |evt| {
+                                    let mode = match evt.value().as_str() {
+                                        "off" => fae::config::AgentToolMode::Off,
+                                        "read_only" => fae::config::AgentToolMode::ReadOnly,
+                                        "read_write" => fae::config::AgentToolMode::ReadWrite,
+                                        "full" => fae::config::AgentToolMode::Full,
+                                        "full_no_approval" => fae::config::AgentToolMode::FullNoApproval,
+                                        _ => fae::config::AgentToolMode::ReadOnly,
+                                    };
+                                    config_state.write().llm.tool_mode = mode;
+                                },
+                                option { value: "off", "Off" }
+                                option { value: "read_only", "Read-only" }
+                                option { value: "read_write", "Read/write (ask first)" }
+                                option { value: "full", "Full (ask first)" }
+                                option { value: "full_no_approval", "Full (no approval)" }
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Wake word" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                disabled: !settings_enabled,
+                                value: "{config_state.read().conversation.wake_word}",
+                                oninput: move |evt| config_state.write().conversation.wake_word = evt.value(),
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Stop phrase" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                disabled: !settings_enabled,
+                                value: "{config_state.read().conversation.stop_phrase}",
+                                oninput: move |evt| config_state.write().conversation.stop_phrase = evt.value(),
+                            }
+                        }
+                    }
+                }
+
+                details { class: "settings-section", open: *settings_mode.read() == SettingsMode::Advanced,
+                    summary { class: "settings-section-summary", "Channels" }
+                    div { class: "settings-section-body",
+                        p { class: "note", "Enable only the channels you actively use." }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Channels enabled" }
+                            input {
+                                class: "settings-checkbox",
+                                r#type: "checkbox",
+                                disabled: !settings_enabled,
+                                checked: config_state.read().channels.enabled,
+                                onchange: move |evt| {
+                                    config_state.write().channels.enabled = evt.checked();
+                                },
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Auto-start on launch" }
+                            input {
+                                class: "settings-checkbox",
+                                r#type: "checkbox",
+                                disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                checked: config_state.read().channels.auto_start,
+                                onchange: move |evt| {
+                                    config_state.write().channels.auto_start = evt.checked();
+                                },
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Discord enabled" }
+                            input {
+                                class: "settings-checkbox",
+                                r#type: "checkbox",
+                                disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                checked: config_state.read().channels.discord.is_some(),
+                                onchange: move |evt| {
+                                    let checked = evt.checked();
+                                    let mut cfg = config_state.write();
+                                    if checked {
+                                        if cfg.channels.discord.is_none() {
+                                            cfg.channels.discord = Some(fae::config::DiscordChannelConfig::default());
+                                        }
+                                    } else {
+                                        cfg.channels.discord = None;
+                                    }
+                                },
+                            }
+                        }
+                        if config_state.read().channels.discord.is_some() {
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Discord bot token" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "password",
+                                    placeholder: "Bot token",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().channels.discord.as_ref().map(|d| d.bot_token.as_str()).unwrap_or_default()}",
+                                    oninput: move |evt| {
+                                        if let Some(discord) = config_state.write().channels.discord.as_mut() {
+                                            discord.bot_token = evt.value();
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Discord allowlist" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    placeholder: "user IDs, comma-separated",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().channels.discord.as_ref().map(|d| d.allowed_user_ids.join(\", \")).unwrap_or_default()}",
+                                    oninput: move |evt| {
+                                        let parsed = evt
+                                            .value()
+                                            .split(',')
+                                            .map(str::trim)
+                                            .filter(|s| !s.is_empty())
+                                            .map(ToOwned::to_owned)
+                                            .collect::<Vec<_>>();
+                                        if let Some(discord) = config_state.write().channels.discord.as_mut() {
+                                            discord.allowed_user_ids = parsed;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "WhatsApp enabled" }
+                            input {
+                                class: "settings-checkbox",
+                                r#type: "checkbox",
+                                disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                checked: config_state.read().channels.whatsapp.is_some(),
+                                onchange: move |evt| {
+                                    let checked = evt.checked();
+                                    let mut cfg = config_state.write();
+                                    if checked {
+                                        if cfg.channels.whatsapp.is_none() {
+                                            cfg.channels.whatsapp = Some(fae::config::WhatsAppChannelConfig::default());
+                                        }
+                                        cfg.channels.gateway.enabled = true;
+                                    } else {
+                                        cfg.channels.whatsapp = None;
+                                    }
+                                },
+                            }
+                        }
+                        if config_state.read().channels.whatsapp.is_some() {
+                            div { class: "settings-row",
+                                label { class: "settings-label", "WhatsApp access token" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "password",
+                                    placeholder: "Meta access token",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.access_token.as_str()).unwrap_or_default()}",
+                                    oninput: move |evt| {
+                                        if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                            wa.access_token = evt.value();
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "WhatsApp phone number ID" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    placeholder: "Phone number ID",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.phone_number_id.as_str()).unwrap_or_default()}",
+                                    oninput: move |evt| {
+                                        if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                            wa.phone_number_id = evt.value();
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "WhatsApp verify token" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    placeholder: "Webhook verify token",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.verify_token.as_str()).unwrap_or_default()}",
+                                    oninput: move |evt| {
+                                        if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                            wa.verify_token = evt.value();
+                                        }
+                                    },
+                                }
+                            }
+                            div { class: "settings-row",
+                                label { class: "settings-label", "WhatsApp allowlist" }
+                                input {
+                                    class: "settings-select",
+                                    r#type: "text",
+                                    placeholder: "+15551234567, comma-separated",
+                                    disabled: !settings_enabled,
+                                    value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.allowed_numbers.join(\", \")).unwrap_or_default()}",
+                                    oninput: move |evt| {
+                                        let parsed = evt
+                                            .value()
+                                            .split(',')
+                                            .map(str::trim)
+                                            .filter(|s| !s.is_empty())
+                                            .map(ToOwned::to_owned)
+                                            .collect::<Vec<_>>();
+                                        if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                            wa.allowed_numbers = parsed;
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Gateway enabled" }
+                            input {
+                                class: "settings-checkbox",
+                                r#type: "checkbox",
+                                disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                checked: config_state.read().channels.gateway.enabled,
+                                onchange: move |evt| {
+                                    config_state.write().channels.gateway.enabled = evt.checked();
+                                },
+                            }
+                        }
+                    }
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Updates" }
+                    div { class: "settings-section-body",
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Fae version" }
+                            p { class: "settings-value", "{update_state.read().fae_version}" }
+                        }
+                        if let Some(release) = update_available.read().as_ref() {
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Available" }
+                                p { class: "settings-value", "v{release.version}" }
+                            }
+                        }
+                        div { class: "settings-row",
+                            button {
+                                class: "settings-save",
+                                onclick: {
+                                    let update_check_status = update_check_status;
+                                    let update_available = update_available;
+                                    let update_state = update_state;
+                                    let update_banner_dismissed = update_banner_dismissed;
+                                    move |_| {
+                                        run_manual_update_check(
+                                            update_check_status,
+                                            update_available,
+                                            update_state,
+                                            update_banner_dismissed,
+                                        );
+                                    }
+                                },
+                                "Check now"
+                            }
+                            p { class: "settings-value", "{update_check_status.read()}" }
+                        }
+                    }
+                }
+
+                if *settings_mode.read() == SettingsMode::Advanced {
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Diagnostics" }
+                        div { class: "settings-section-body",
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Log directory" }
+                                p { class: "settings-value", "{fae::diagnostics::fae_log_dir().display()}" }
+                            }
+                            div { class: "settings-row",
+                                button {
+                                    class: "settings-save",
+                                    onclick: move |_| {
+                                        diagnostics_status.set("Gathering...".to_owned());
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(
+                                                fae::diagnostics::gather_diagnostic_bundle,
+                                            )
+                                            .await;
+                                            match result {
+                                                Ok(Ok(path)) => diagnostics_status
+                                                    .set(format!("Saved to {}", path.display())),
+                                                Ok(Err(e)) => diagnostics_status
+                                                    .set(format!("Error: {e}")),
+                                                Err(e) => diagnostics_status
+                                                    .set(format!("Error: {e}")),
+                                            }
+                                        });
+                                    },
+                                    "Gather Logs"
+                                }
+                                p { class: "settings-value", "{diagnostics_status.read()}" }
+                            }
+                        }
+                    }
+                }
+
+                div { class: "settings-actions",
+                    button {
+                        class: "settings-save",
+                        disabled: !settings_enabled,
+                        onclick: move |_| {
+                            let cfg = config_state.read().clone();
+                            let path = fae::SpeechConfig::default_config_path();
+                            spawn(async move {
+                                let res = tokio::task::spawn_blocking(move || cfg.save_to_file(&path)).await;
+                                let msg = match res {
+                                    Ok(Ok(())) => {
+                                        let _ = ui_bus().send(UiBusEvent::ConfigUpdated);
+                                        "Saved.".to_owned()
+                                    }
+                                    Ok(Err(e)) => format!("Save failed: {e}"),
+                                    Err(e) => format!("Save failed: {e}"),
+                                };
+                                save_status.set(msg);
+                            });
+                        },
+                        "Save"
+                    }
+                    p { class: "settings-status", "{save_status.read()}" }
                 }
             }
         }
@@ -6902,7 +5587,7 @@ fn models_window() -> Element {
 
                 if !can_pick_local_models {
                     p { class: "note",
-                        "Model picker is for Local/Agent backends. Switch backends in Settings in the main window."
+                        "Model picker is for Local/Agent backends. Switch backends in Fae -> Settings."
                     }
                 }
 
