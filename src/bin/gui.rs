@@ -6171,6 +6171,13 @@ fn fae_guide_window() -> Element {
                         "Use Fae -> Check for Updates from the menu bar, or open Fae -> Settings -> Updates."
                     }
                 }
+
+                div { class: "settings-block",
+                    h3 { class: "settings-h3", "6) Customization progression" }
+                    p { class: "settings-sub",
+                        "Keep tools conservative at first, tune model selection in Models, refine behavior in Soul, add reviewed skills, and gradually let Fae handle more of your personal workflow."
+                    }
+                }
             }
         }
     }

@@ -4,7 +4,41 @@
 >
 > This project is in active early development. APIs, functionality, and behavior may change without notice. **Do not use in production or any environment where safety is a concern.** Use at your own risk.
 
-A real-time voice conversation system in Rust. Fae is a calm, helpful Scottish voice assistant designed for low-latency local operation with optional cloud providers.
+![Fae](assets/fae.jpg)
+
+Fae is a local-first personal AI assistant built in Rust for low-latency voice interaction and practical computer operations. Today, she runs a multi-model pipeline, and that "brain" can be upgraded over time as smaller and better models become available.
+
+The project exists to make advanced computer tasks accessible to everyday users without giving up control of private data. You can run Fae fully local, connect remote providers such as OpenAI or Anthropic, or combine both. Sensitive workflows can stay on-device while remote models are optional for deeper reasoning.
+
+In practice, Fae is designed to help with:
+
+1. Computer setup and configuration
+2. Software installation and troubleshooting
+3. Wallet-oriented workflows
+4. Payment-related workflows
+
+Fae is not positioned as a replacement for large hosted AI platforms today. It is a personal assistant that runs close to the user, improves quickly as model quality improves, and keeps long-term memory under user control on local storage. A modern laptop (for example, a recent MacBook) is recommended for the best local experience.
+
+## Using Fae Out of the Box
+
+1. Run `just run`.
+2. Click `Start Listening` and speak naturally in short, concrete requests.
+3. Keep default local settings to start, then change capabilities gradually as trust grows.
+4. Open `Fae -> Fae Guide` for prompt examples and operating patterns.
+
+## Menu Options (What They Are For)
+
+| Menu option | Why it exists | How to use it |
+|---|---|---|
+| `Fae -> Settings...` (`Preferences...` on non-macOS) | Day-to-day runtime controls | Set tool mode, wake word, stop phrase, channels, and updates, then click `Save`. |
+| `Fae -> Soul...` | Personality and behavior scaffolding | Edit `SOUL.md` and onboarding behavior, then save. |
+| `Fae -> Skills...` | Safe capability expansion | Download a skill draft, review/edit it, run analysis, then install only if approved. |
+| `Fae -> Memories...` | Memory transparency and control | Manage primary profile data and review/edit durable records (including forget/invalidate actions). |
+| `Fae -> Ingestion...` | Bring local files into memory | Select a file/folder and run ingestion in the background using the local brain. |
+| `Fae -> Fae Guide` | In-app usage help | Review recommended prompt style, tool safety, and update flow. |
+| `Fae -> Check for Updates...` | Keep Fae current | Run a manual update check from the menu bar. |
+
+As you customize Fae, the typical progression is: keep tools conservative at first, tune your model selection in `Models`, refine behavior in `Soul`, add reviewed skills, and gradually let Fae handle more of your personal workflow.
 
 ## Architecture Overview
 
