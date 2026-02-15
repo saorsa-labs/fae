@@ -79,6 +79,9 @@ tokio-util = { version = "0.7", features = ["rt"] }
 thiserror = "2"
 anyhow = "1"
 
+# Cross-platform encrypted credential storage
+keyring = "3.5"
+
 # UUID for request IDs
 uuid = { version = "1", features = ["v4"] }
 

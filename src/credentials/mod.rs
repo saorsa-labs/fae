@@ -24,6 +24,8 @@
 //! # }
 //! ```
 
+#[cfg(not(target_os = "macos"))]
+mod encrypted;
 #[cfg(target_os = "macos")]
 mod keychain;
 mod types;
@@ -85,41 +87,10 @@ pub trait CredentialManager {
     fn delete(&self, cred_ref: &CredentialRef) -> Result<(), CredentialError>;
 }
 
-/// Stub credential manager for non-macOS platforms.
-///
-/// This will be replaced with encrypted storage in Task 3.
-#[cfg(not(target_os = "macos"))]
-struct StubCredentialManager;
-
-#[cfg(not(target_os = "macos"))]
-impl CredentialManager for StubCredentialManager {
-    fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
-        Err(CredentialError::StorageError(
-            "Encrypted credential storage not yet implemented for this platform".to_owned(),
-        ))
-    }
-
-    fn retrieve(&self, cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
-        match cred_ref {
-            CredentialRef::None => Ok(None),
-            CredentialRef::Plaintext(value) => Ok(Some(value.clone())),
-            CredentialRef::Keychain { .. } => Err(CredentialError::StorageError(
-                "Encrypted credential storage not yet implemented for this platform".to_owned(),
-            )),
-        }
-    }
-
-    fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
-        Err(CredentialError::StorageError(
-            "Encrypted credential storage not yet implemented for this platform".to_owned(),
-        ))
-    }
-}
-
 /// Create a platform-appropriate credential manager.
 ///
 /// - **macOS**: Returns a Keychain Services-backed manager
-/// - **Other platforms**: Returns an encrypted storage manager (Task 3)
+/// - **Other platforms**: Returns an encrypted storage manager via `keyring`
 ///
 /// # Example
 ///
@@ -135,6 +106,6 @@ pub fn create_manager() -> Box<dyn CredentialManager> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        Box::new(StubCredentialManager)
+        Box::new(encrypted::EncryptedCredentialManager::new())
     }
 }

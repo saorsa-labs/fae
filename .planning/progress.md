@@ -569,3 +569,12 @@ Tasks:
 - All 7 unit tests passing
 - Commit: b8da0d3
 
+
+### Task 2: Implement macOS Keychain backend — COMPLETE
+- Added `security-framework = "3.0"` to macOS dependencies
+- Created `src/credentials/keychain.rs` with KeychainCredentialManager
+- Implemented Security framework integration (set/get/delete_generic_password)
+- Factory returns Keychain manager on macOS, stub on other platforms
+- All 11 unit tests passing
+- Commit: 6405770
+
