@@ -133,6 +133,21 @@ pub fn wakeword_dir() -> PathBuf {
     data_dir().join("wakeword")
 }
 
+/// Ensure the `HF_HOME` environment variable points to [`hf_cache_dir`].
+///
+/// The `hf-hub` crate reads `HF_HOME` to locate its download cache.
+/// Call this **once** early in startup (before any model download) so that
+/// models are stored in a sandbox-safe location on macOS.
+///
+/// If `HF_HOME` is already set, this function is a no-op.
+pub fn ensure_hf_home() {
+    if std::env::var_os("HF_HOME").is_none() {
+        let dir = hf_cache_dir();
+        // SAFETY: Called once at startup before any threads spawn.
+        unsafe { std::env::set_var("HF_HOME", &dir) };
+    }
+}
+
 /// Returns `true` if the app is running inside a macOS App Sandbox container.
 ///
 /// macOS automatically sets the `APP_SANDBOX_CONTAINER_ID` environment variable
@@ -327,5 +342,29 @@ mod tests {
     #[test]
     fn memory_dir_equals_data_dir() {
         assert_eq!(memory_dir(), data_dir());
+    }
+
+    #[test]
+    fn ensure_hf_home_sets_env_when_absent() {
+        let key = "HF_HOME";
+        let original = std::env::var_os(key);
+
+        // Clear to test the set path.
+        unsafe { std::env::remove_var(key) };
+        ensure_hf_home();
+        let val = std::env::var_os(key);
+        assert!(val.is_some(), "HF_HOME should be set after ensure_hf_home");
+        let path = PathBuf::from(val.clone().unwrap_or_default());
+        assert!(
+            path.to_string_lossy().contains("huggingface"),
+            "HF_HOME should point to huggingface dir: {}",
+            path.display()
+        );
+
+        // Restore.
+        match original {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
     }
 }

@@ -153,8 +153,11 @@ pub async fn initialize_models_with_progress(
     callback: Option<&ProgressCallback>,
 ) -> Result<InitializedModels> {
     if let Err(e) = crate::personality::ensure_prompt_assets() {
-        tracing::warn!("failed to ensure prompt assets in ~/.fae: {e}");
+        tracing::warn!("failed to ensure prompt assets: {e}");
     }
+
+    // Point hf-hub at our sandbox-safe cache before any model downloads.
+    crate::fae_dirs::ensure_hf_home();
 
     let mut resolved_config = config.clone();
     match crate::external_llm::apply_external_profile(&mut resolved_config.llm) {
