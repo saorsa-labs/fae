@@ -7,20 +7,20 @@
     "name": "App Store Readiness"
   },
   "phase": {
-    "number": "A.1",
-    "name": "Apple Sandbox & Entitlements",
-    "plan": ".planning/PLAN-phase-A.1.md"
+    "number": "A.2",
+    "name": "Path & Permission Hardening",
+    "plan": ".planning/PLAN-phase-A.2.md"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 3,
-    "current_task": 4
+    "completed_tasks": 8,
+    "current_task": 8
   },
   "review": {
     "status": "pending",
     "iteration": 0,
     "last_verdict": null
   },
-  "status": "executing",
-  "last_updated": "2026-02-15T13:15:00Z"
+  "status": "phase_complete",
+  "last_updated": "2026-02-15T16:30:00Z"
 }
