@@ -512,6 +512,79 @@ fn weekly_next_after(
 }
 
 // ---------------------------------------------------------------------------
+// Conversation trigger payload
+// ---------------------------------------------------------------------------
+
+/// Payload schema for scheduler tasks that trigger agent conversations.
+///
+/// This payload is stored in [`ScheduledTask::payload`] and parsed when
+/// the task executes. The scheduler will inject the prompt into the
+/// conversation system and optionally augment the system prompt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConversationTrigger {
+    /// The user prompt to inject into the conversation.
+    pub prompt: String,
+    /// Optional addition to the system prompt for this conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_addon: Option<String>,
+    /// Optional conversation timeout in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+impl ConversationTrigger {
+    /// Create a new conversation trigger with the given prompt.
+    pub fn new(prompt: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            system_addon: None,
+            timeout_secs: None,
+        }
+    }
+
+    /// Set the system prompt addon.
+    pub fn with_system_addon(mut self, addon: impl Into<String>) -> Self {
+        self.system_addon = Some(addon.into());
+        self
+    }
+
+    /// Set the conversation timeout in seconds.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
+        self
+    }
+
+    /// Parse a conversation trigger from a task payload.
+    ///
+    /// Returns `Ok(trigger)` if the payload is a valid ConversationTrigger.
+    /// Returns `Err` if the payload is missing, null, or malformed JSON.
+    pub fn from_task_payload(payload: &Option<serde_json::Value>) -> crate::Result<Self> {
+        let Some(value) = payload else {
+            return Err(crate::error::SpeechError::Config(
+                "task payload is missing".to_owned(),
+            ));
+        };
+
+        if value.is_null() {
+            return Err(crate::error::SpeechError::Config(
+                "task payload is null".to_owned(),
+            ));
+        }
+
+        serde_json::from_value(value.clone()).map_err(|e| {
+            crate::error::SpeechError::Config(format!("invalid conversation trigger: {e}"))
+        })
+    }
+
+    /// Convert this trigger to a JSON payload suitable for [`ScheduledTask::payload`].
+    pub fn to_json(&self) -> crate::Result<serde_json::Value> {
+        serde_json::to_value(self).map_err(|e| {
+            crate::error::SpeechError::Config(format!("failed to serialize trigger: {e}"))
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Built-in task executors
 // ---------------------------------------------------------------------------
 
@@ -993,5 +1066,203 @@ mod tests {
     #[test]
     fn task_id_constants() {
         assert_eq!(TASK_CHECK_FAE_UPDATE, "check_fae_update");
+    }
+
+    // -----------------------------------------------------------------------
+    // ConversationTrigger tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn conversation_trigger_new() {
+        let trigger = ConversationTrigger::new("What's the weather?");
+        assert_eq!(trigger.prompt, "What's the weather?");
+        assert!(trigger.system_addon.is_none());
+        assert!(trigger.timeout_secs.is_none());
+    }
+
+    #[test]
+    fn conversation_trigger_with_system_addon() {
+        let trigger = ConversationTrigger::new("Check calendar")
+            .with_system_addon("You are a calendar assistant");
+        assert_eq!(trigger.prompt, "Check calendar");
+        match trigger.system_addon {
+            Some(ref addon) => assert_eq!(addon, "You are a calendar assistant"),
+            None => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn conversation_trigger_with_timeout() {
+        let trigger = ConversationTrigger::new("Quick task").with_timeout_secs(30);
+        assert_eq!(trigger.prompt, "Quick task");
+        match trigger.timeout_secs {
+            Some(secs) => assert_eq!(secs, 30),
+            None => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn conversation_trigger_serialize_deserialize() {
+        let trigger = ConversationTrigger::new("Hello")
+            .with_system_addon("Test")
+            .with_timeout_secs(60);
+
+        let json = serde_json::to_value(&trigger).expect("serialize");
+        let deserialized: ConversationTrigger = serde_json::from_value(json).expect("deserialize");
+
+        assert_eq!(trigger, deserialized);
+    }
+
+    #[test]
+    fn conversation_trigger_serialize_minimal() {
+        let trigger = ConversationTrigger::new("Simple prompt");
+        let json = serde_json::to_value(&trigger).expect("serialize");
+
+        assert!(
+            json.get("prompt").is_some(),
+            "JSON must contain prompt field"
+        );
+        assert_eq!(
+            json.get("prompt").and_then(|v| v.as_str()),
+            Some("Simple prompt")
+        );
+        assert!(
+            json.get("system_addon").is_none(),
+            "Optional fields should not serialize when None"
+        );
+        assert!(
+            json.get("timeout_secs").is_none(),
+            "Optional fields should not serialize when None"
+        );
+    }
+
+    #[test]
+    fn conversation_trigger_deserialize_missing_optional_fields() {
+        let json = serde_json::json!({
+            "prompt": "Test prompt"
+        });
+
+        let trigger: ConversationTrigger = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(trigger.prompt, "Test prompt");
+        assert!(trigger.system_addon.is_none());
+        assert!(trigger.timeout_secs.is_none());
+    }
+
+    #[test]
+    fn conversation_trigger_from_task_payload_valid() {
+        let payload = Some(serde_json::json!({
+            "prompt": "Remind me",
+            "system_addon": "Calendar mode",
+            "timeout_secs": 120
+        }));
+
+        let trigger = ConversationTrigger::from_task_payload(&payload).expect("parse payload");
+        assert_eq!(trigger.prompt, "Remind me");
+        match trigger.system_addon {
+            Some(ref addon) => assert_eq!(addon, "Calendar mode"),
+            None => unreachable!(),
+        }
+        match trigger.timeout_secs {
+            Some(secs) => assert_eq!(secs, 120),
+            None => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn conversation_trigger_from_task_payload_minimal() {
+        let payload = Some(serde_json::json!({
+            "prompt": "Simple"
+        }));
+
+        let trigger = ConversationTrigger::from_task_payload(&payload).expect("parse payload");
+        assert_eq!(trigger.prompt, "Simple");
+        assert!(trigger.system_addon.is_none());
+        assert!(trigger.timeout_secs.is_none());
+    }
+
+    #[test]
+    fn conversation_trigger_from_task_payload_none() {
+        let result = ConversationTrigger::from_task_payload(&None);
+        match result {
+            Err(crate::error::SpeechError::Config(msg)) => {
+                assert!(
+                    msg.contains("missing"),
+                    "Expected 'missing' in error: {msg}"
+                );
+            }
+            other => panic!("Expected Config error for missing payload, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conversation_trigger_from_task_payload_null() {
+        let payload = Some(serde_json::Value::Null);
+        let result = ConversationTrigger::from_task_payload(&payload);
+        match result {
+            Err(crate::error::SpeechError::Config(msg)) => {
+                assert!(msg.contains("null"), "Expected 'null' in error: {msg}");
+            }
+            other => panic!("Expected Config error for null payload, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conversation_trigger_from_task_payload_invalid_json() {
+        let payload = Some(serde_json::json!({
+            "invalid_field": "no prompt field"
+        }));
+
+        let result = ConversationTrigger::from_task_payload(&payload);
+        match result {
+            Err(crate::error::SpeechError::Config(msg)) => {
+                assert!(
+                    msg.contains("invalid") || msg.contains("missing field"),
+                    "Expected JSON error in message: {msg}"
+                );
+            }
+            other => panic!("Expected Config error for invalid JSON, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conversation_trigger_to_json() {
+        let trigger = ConversationTrigger::new("Test prompt")
+            .with_system_addon("Addon text")
+            .with_timeout_secs(90);
+
+        let json = trigger.to_json().expect("to_json");
+
+        assert_eq!(
+            json.get("prompt").and_then(|v| v.as_str()),
+            Some("Test prompt")
+        );
+        assert_eq!(
+            json.get("system_addon").and_then(|v| v.as_str()),
+            Some("Addon text")
+        );
+        assert_eq!(json.get("timeout_secs").and_then(|v| v.as_u64()), Some(90));
+    }
+
+    #[test]
+    fn conversation_trigger_to_json_minimal() {
+        let trigger = ConversationTrigger::new("Minimal");
+        let json = trigger.to_json().expect("to_json");
+
+        assert_eq!(json.get("prompt").and_then(|v| v.as_str()), Some("Minimal"));
+        assert!(json.get("system_addon").is_none());
+        assert!(json.get("timeout_secs").is_none());
+    }
+
+    #[test]
+    fn conversation_trigger_round_trip_via_json() {
+        let original = ConversationTrigger::new("Round trip test")
+            .with_system_addon("System text")
+            .with_timeout_secs(45);
+
+        let json = original.to_json().expect("to_json");
+        let payload = Some(json);
+        let parsed = ConversationTrigger::from_task_payload(&payload).expect("from_task_payload");
+
+        assert_eq!(original, parsed);
     }
 }

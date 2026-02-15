@@ -12,4 +12,7 @@ pub use runner::{
     mark_persisted_task_due_now, remove_persisted_task, save_persisted_snapshot,
     set_persisted_task_enabled, upsert_persisted_user_task,
 };
-pub use tasks::{Schedule, ScheduledTask, TaskResult, TaskRunOutcome, TaskRunRecord, Weekday};
+pub use tasks::{
+    ConversationTrigger, Schedule, ScheduledTask, TaskResult, TaskRunOutcome, TaskRunRecord,
+    Weekday,
+};
