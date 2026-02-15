@@ -44,7 +44,7 @@ impl TaskExecutorBridge {
             };
 
             // Create oneshot channel for response
-            let (response_tx, _response_rx) = oneshot::channel();
+            let (response_tx, response_rx) = oneshot::channel();
 
             // Build conversation request
             let request = ConversationRequest {
@@ -55,19 +55,78 @@ impl TaskExecutorBridge {
             };
 
             // Send request to pipeline
-            match self.request_tx.send(request) {
-                Ok(()) => {
-                    debug!("ConversationRequest sent for task {}", task.id);
-                    // For now, return success immediately. Later tasks will handle
-                    // waiting for the response and capturing the result.
-                    TaskResult::Success(format!("Conversation triggered: {}", trigger.prompt))
+            if self.request_tx.send(request).is_err() {
+                warn!(
+                    "Failed to send ConversationRequest for task {}: channel closed",
+                    task.id
+                );
+                return TaskResult::Error("Conversation channel closed".to_owned());
+            }
+
+            debug!(
+                "ConversationRequest sent for task {}, waiting for response",
+                task.id
+            );
+
+            // Wait for response from conversation handler
+            // We need to block on an async operation from a sync context.
+            // The scheduler runner calls this from a tokio::task::spawn_blocking context,
+            // so we can safely use block_on here.
+            let response = match tokio::runtime::Handle::try_current() {
+                Ok(_handle) => {
+                    // We're inside a tokio runtime. Since the scheduler spawns task execution
+                    // in spawn_blocking, we create a new runtime to avoid blocking issues.
+                    match tokio::runtime::Runtime::new() {
+                        Ok(rt) => match rt.block_on(response_rx) {
+                            Ok(resp) => resp,
+                            Err(_) => {
+                                warn!(
+                                    "ConversationRequest response channel closed for task {}",
+                                    task.id
+                                );
+                                return TaskResult::Error("Response channel closed".to_owned());
+                            }
+                        },
+                        Err(e) => {
+                            warn!("Failed to create runtime for task {}: {e}", task.id);
+                            return TaskResult::Error(format!("Runtime creation failed: {e}"));
+                        }
+                    }
                 }
                 Err(_) => {
-                    warn!(
-                        "Failed to send ConversationRequest for task {}: channel closed",
-                        task.id
-                    );
-                    TaskResult::Error("Conversation channel closed".to_owned())
+                    // No tokio runtime - create one
+                    match tokio::runtime::Runtime::new() {
+                        Ok(rt) => match rt.block_on(response_rx) {
+                            Ok(resp) => resp,
+                            Err(_) => {
+                                warn!(
+                                    "ConversationRequest response channel closed for task {}",
+                                    task.id
+                                );
+                                return TaskResult::Error("Response channel closed".to_owned());
+                            }
+                        },
+                        Err(e) => {
+                            warn!("Failed to create runtime for task {}: {e}", task.id);
+                            return TaskResult::Error(format!("Runtime creation failed: {e}"));
+                        }
+                    }
+                }
+            };
+
+            // Map ConversationResponse to TaskResult
+            match response {
+                crate::pipeline::messages::ConversationResponse::Success(text) => {
+                    debug!("Task {} completed successfully: {}", task.id, text);
+                    TaskResult::Success(text)
+                }
+                crate::pipeline::messages::ConversationResponse::Error(err) => {
+                    warn!("Task {} failed: {}", task.id, err);
+                    TaskResult::Error(err)
+                }
+                crate::pipeline::messages::ConversationResponse::Timeout => {
+                    warn!("Task {} timed out", task.id);
+                    TaskResult::Error("Conversation timed out".to_owned())
                 }
             }
         })
@@ -99,42 +158,61 @@ mod tests {
 
     #[test]
     fn executor_parses_valid_payload_and_sends_request() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TaskExecutorBridge::new(tx);
-        let executor = bridge.into_executor();
+        // Create a new runtime for this test
+        let rt = tokio::runtime::Runtime::new().expect("create runtime");
 
-        // Create task with valid ConversationTrigger payload
-        let trigger = ConversationTrigger::new("Test prompt")
-            .with_system_addon("Test addon")
-            .with_timeout_secs(60);
-        let payload = trigger.to_json().expect("to_json");
+        // Run the test logic in the runtime
+        rt.block_on(async {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let bridge = TaskExecutorBridge::new(tx);
+            let executor = bridge.into_executor();
 
-        let mut task =
-            ScheduledTask::new("test_task", "Test Task", Schedule::Interval { secs: 3600 });
-        task.payload = Some(payload);
+            // Create task with valid ConversationTrigger payload
+            let trigger = ConversationTrigger::new("Test prompt")
+                .with_system_addon("Test addon")
+                .with_timeout_secs(60);
+            let payload = trigger.to_json().expect("to_json");
 
-        // Execute task
-        let result = executor(&task);
+            let mut task =
+                ScheduledTask::new("test_task", "Test Task", Schedule::Interval { secs: 3600 });
+            task.payload = Some(payload);
 
-        // Should return success
-        match result {
-            TaskResult::Success(msg) => {
-                assert!(
-                    msg.contains("Conversation triggered"),
-                    "Expected success message"
-                );
+            // Spawn a task to respond to the conversation request
+            tokio::spawn(async move {
+                if let Some(request) = rx.recv().await {
+                    // Validate the request
+                    assert_eq!(request.task_id, "test_task");
+                    assert_eq!(request.prompt, "Test prompt");
+                    match request.system_addon {
+                        Some(ref addon) => assert_eq!(addon, "Test addon"),
+                        None => panic!("Expected system_addon"),
+                    }
+
+                    // Send success response
+                    let _ = request
+                        .response_tx
+                        .send(crate::pipeline::messages::ConversationResponse::Success(
+                            "Test response".to_owned(),
+                        ));
+                }
+            });
+
+            // Execute task in a spawn_blocking (simulating scheduler behavior)
+            let result = tokio::task::spawn_blocking(move || executor(&task))
+                .await
+                .expect("spawn_blocking failed");
+
+            // Should return success
+            match result {
+                TaskResult::Success(msg) => {
+                    assert!(
+                        msg.contains("Test response"),
+                        "Expected response text, got: {msg}"
+                    );
+                }
+                other => panic!("Expected Success, got: {other:?}"),
             }
-            other => panic!("Expected Success, got: {other:?}"),
-        }
-
-        // Should have sent request
-        let request = rx.try_recv().expect("Should have sent request");
-        assert_eq!(request.task_id, "test_task");
-        assert_eq!(request.prompt, "Test prompt");
-        match request.system_addon {
-            Some(ref addon) => assert_eq!(addon, "Test addon"),
-            None => panic!("Expected system_addon"),
-        }
+        });
     }
 
     #[test]
@@ -236,29 +314,46 @@ mod tests {
 
     #[test]
     fn executor_handles_minimal_trigger() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let bridge = TaskExecutorBridge::new(tx);
-        let executor = bridge.into_executor();
+        let rt = tokio::runtime::Runtime::new().expect("create runtime");
 
-        // Create task with minimal trigger (no addon, no timeout)
-        let trigger = ConversationTrigger::new("Minimal prompt");
-        let payload = trigger.to_json().expect("to_json");
+        rt.block_on(async {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let bridge = TaskExecutorBridge::new(tx);
+            let executor = bridge.into_executor();
 
-        let mut task = ScheduledTask::new("minimal", "Minimal", Schedule::Interval { secs: 60 });
-        task.payload = Some(payload);
+            // Create task with minimal trigger (no addon, no timeout)
+            let trigger = ConversationTrigger::new("Minimal prompt");
+            let payload = trigger.to_json().expect("to_json");
 
-        // Execute task
-        let result = executor(&task);
+            let mut task =
+                ScheduledTask::new("minimal", "Minimal", Schedule::Interval { secs: 60 });
+            task.payload = Some(payload);
 
-        // Should return success
-        match result {
-            TaskResult::Success(_) => {}
-            other => panic!("Expected Success, got: {other:?}"),
-        }
+            // Spawn a task to respond
+            tokio::spawn(async move {
+                if let Some(request) = rx.recv().await {
+                    assert_eq!(request.prompt, "Minimal prompt");
+                    assert!(request.system_addon.is_none());
 
-        // Should have sent request with no addon
-        let request = rx.try_recv().expect("Should have sent request");
-        assert_eq!(request.prompt, "Minimal prompt");
-        assert!(request.system_addon.is_none());
+                    // Send success response
+                    let _ = request
+                        .response_tx
+                        .send(crate::pipeline::messages::ConversationResponse::Success(
+                            "Minimal response".to_owned(),
+                        ));
+                }
+            });
+
+            // Execute task in spawn_blocking
+            let result = tokio::task::spawn_blocking(move || executor(&task))
+                .await
+                .expect("spawn_blocking failed");
+
+            // Should return success
+            match result {
+                TaskResult::Success(_) => {}
+                other => panic!("Expected Success, got: {other:?}"),
+            }
+        });
     }
 }
