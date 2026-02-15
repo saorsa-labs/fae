@@ -35,21 +35,72 @@ fn ensure_versions_dir() -> Result<PathBuf> {
 }
 
 /// Generate a version ID from current timestamp.
-#[allow(dead_code)] // Used in Task 2
 fn generate_version_id() -> String {
     chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f").to_string()
 }
 
 /// Get the file path for a specific version ID.
-#[allow(dead_code)] // Used in Task 2
+#[allow(dead_code)] // Will be used in Task 4 (load_version)
 fn version_path(version_id: &str) -> PathBuf {
     versions_dir().join(format!("{version_id}.md"))
 }
 
 /// Get the metadata file path for a specific version ID.
-#[allow(dead_code)] // Used in Task 2
+#[allow(dead_code)] // Will be used in Task 4 if needed
 fn version_metadata_path(version_id: &str) -> PathBuf {
     versions_dir().join(format!("{version_id}.json"))
+}
+
+/// Calculate BLAKE3 hash of content.
+fn calculate_hash(content: &str) -> String {
+    blake3::hash(content.as_bytes()).to_hex().to_string()
+}
+
+/// Get the most recent version, if any exists.
+fn get_latest_version() -> Result<Option<SoulVersion>> {
+    let versions = list_versions()?;
+    Ok(versions.into_iter().next())
+}
+
+/// Create a backup of SOUL.md content.
+///
+/// Returns None if the content is identical to the most recent backup (by hash).
+/// Otherwise creates a new timestamped backup and returns the version info.
+pub fn create_backup(soul_content: &str) -> Result<Option<SoulVersion>> {
+    let content_hash = calculate_hash(soul_content);
+
+    // Check if content matches the most recent version
+    if let Some(latest) = get_latest_version()?
+        && latest.content_hash == content_hash
+    {
+        // Content unchanged, skip backup
+        return Ok(None);
+    }
+
+    // Create new backup
+    let version_id = generate_version_id();
+    let timestamp = chrono::Utc::now();
+
+    let dir = ensure_versions_dir()?;
+    let backup_path = dir.join(format!("{}.md", version_id));
+    let metadata_path = dir.join(format!("{}.json", version_id));
+
+    // Write content
+    std::fs::write(&backup_path, soul_content)?;
+
+    // Write metadata
+    let version = SoulVersion {
+        id: version_id,
+        timestamp,
+        content_hash,
+        path: backup_path,
+    };
+
+    let metadata_json = serde_json::to_string_pretty(&version)
+        .map_err(|e| crate::error::SpeechError::Config(format!("JSON serialization: {}", e)))?;
+    std::fs::write(metadata_path, metadata_json)?;
+
+    Ok(Some(version))
 }
 
 /// Lists all SOUL.md versions in chronological order (newest first).
@@ -186,5 +237,85 @@ mod tests {
 
         let dir = result.expect("get dir");
         assert!(dir.exists());
+    }
+
+    #[test]
+    fn test_calculate_hash() {
+        let content1 = "Hello world";
+        let content2 = "Hello world";
+        let content3 = "Hello world!";
+
+        let hash1 = calculate_hash(content1);
+        let hash2 = calculate_hash(content2);
+        let hash3 = calculate_hash(content3);
+
+        // Same content = same hash
+        assert_eq!(hash1, hash2);
+
+        // Different content = different hash
+        assert_ne!(hash1, hash3);
+
+        // Hash should be hex string
+        assert!(hash1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_create_backup_success() {
+        // This test creates a real backup in the actual data directory
+        // Clean up is not guaranteed, but versions are small
+        let content = format!("# Test SOUL.md\nTest backup at {}", chrono::Utc::now());
+
+        let result = create_backup(&content);
+        assert!(result.is_ok());
+
+        let version_opt = result.expect("create backup");
+        assert!(version_opt.is_some());
+
+        let version = version_opt.expect("get version");
+        assert!(version.path.exists());
+        assert_eq!(version.content_hash, calculate_hash(&content));
+
+        // Verify content was written correctly
+        let written_content = std::fs::read_to_string(&version.path).expect("read backup");
+        assert_eq!(written_content, content);
+    }
+
+    #[test]
+    fn test_create_backup_duplicate_content() {
+        // First backup with unique content (timestamp ensures uniqueness)
+        let content = format!("# Duplicate test {}", chrono::Utc::now());
+
+        let result1 = create_backup(&content);
+        assert!(result1.is_ok());
+        let version1_opt = result1.expect("first backup");
+        assert!(version1_opt.is_some());
+
+        // Immediate second backup with same content should return None
+        let result2 = create_backup(&content);
+        assert!(result2.is_ok());
+        let version2_opt = result2.expect("second backup");
+        assert!(
+            version2_opt.is_none(),
+            "duplicate content should skip backup"
+        );
+    }
+
+    #[test]
+    fn test_create_backup_different_content() {
+        // Create two backups with different content
+        let content1 = format!("# First backup {}", chrono::Utc::now());
+        let content2 = format!("# Second backup {}", chrono::Utc::now());
+
+        let result1 = create_backup(&content1);
+        assert!(result1.is_ok());
+        assert!(result1.expect("first").is_some());
+
+        // Give it a tiny delay to ensure different timestamp
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let result2 = create_backup(&content2);
+        assert!(result2.is_ok());
+        let version2 = result2.expect("second");
+        assert!(version2.is_some(), "different content should create backup");
     }
 }
