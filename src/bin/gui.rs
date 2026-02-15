@@ -3868,6 +3868,14 @@ fn app() -> Element {
     let mut voice_permissions_granted = use_signal(|| false);
     let mut config_state = use_signal(read_config_or_default);
 
+    // Theme state: mode from config, effective theme based on mode + system
+    let theme_mode = use_memo(move || config_state.read().theme.mode);
+    let _effective_theme = use_memo(move || match theme_mode() {
+        fae::config::ThemeMode::Auto => fae::theme::SystemTheme::current(),
+        fae::config::ThemeMode::Light => fae::theme::SystemTheme::Light,
+        fae::config::ThemeMode::Dark => fae::theme::SystemTheme::Dark,
+    });
+
     let mut stt_stage = use_signal(|| StagePhase::Pending);
     let mut llm_stage = use_signal(|| StagePhase::Pending);
     let mut tts_stage = use_signal(|| StagePhase::Pending);
