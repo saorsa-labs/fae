@@ -4,6 +4,7 @@
 //! Discord and WhatsApp configurations, viewing message history, and
 //! monitoring channel health.
 
+use crate::channels::history::{ChannelMessage, MessageDirection};
 use crate::config::{DiscordChannelConfig, WhatsAppChannelConfig};
 use crate::credentials::CredentialRef;
 use chrono::{DateTime, Utc};
@@ -421,6 +422,138 @@ pub fn render_whatsapp_form(form: &WhatsAppEditForm) -> String {
     html
 }
 
+/// Channel filter for message history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryChannelFilter {
+    /// Show all messages from all channels.
+    All,
+    /// Show only Discord messages.
+    Discord,
+    /// Show only WhatsApp messages.
+    WhatsApp,
+}
+
+/// Render message history viewer with channel filtering.
+///
+/// Returns HTML string for message history display.
+#[must_use]
+pub fn render_message_history(messages: &[ChannelMessage], filter: HistoryChannelFilter) -> String {
+    let mut html = String::new();
+    html.push_str(r#"<div class="message-history">"#);
+    html.push_str(r#"<h3>Message History</h3>"#);
+
+    // Channel filter tabs
+    html.push_str(r#"<div class="history-filters">"#);
+    let all_active = if filter == HistoryChannelFilter::All {
+        " active"
+    } else {
+        ""
+    };
+    let discord_active = if filter == HistoryChannelFilter::Discord {
+        " active"
+    } else {
+        ""
+    };
+    let whatsapp_active = if filter == HistoryChannelFilter::WhatsApp {
+        " active"
+    } else {
+        ""
+    };
+
+    html.push_str(&format!(
+        r#"<button class="filter-btn{}" data-filter="all">All</button>"#,
+        all_active
+    ));
+    html.push_str(&format!(
+        r#"<button class="filter-btn{}" data-filter="discord">Discord</button>"#,
+        discord_active
+    ));
+    html.push_str(&format!(
+        r#"<button class="filter-btn{}" data-filter="whatsapp">WhatsApp</button>"#,
+        whatsapp_active
+    ));
+    html.push_str(r#"</div>"#); // history-filters
+
+    // Filter messages by channel
+    let filtered_messages: Vec<&ChannelMessage> = messages
+        .iter()
+        .filter(|msg| match filter {
+            HistoryChannelFilter::All => true,
+            HistoryChannelFilter::Discord => msg.channel == "discord",
+            HistoryChannelFilter::WhatsApp => msg.channel == "whatsapp",
+        })
+        .collect();
+
+    if filtered_messages.is_empty() {
+        html.push_str(
+            r#"<div class="history-empty">
+            <p>No messages yet</p>
+            <p class="hint">Messages will appear here once channels start communicating.</p>
+        </div>"#,
+        );
+    } else {
+        html.push_str(r#"<div class="message-list">"#);
+
+        for message in &filtered_messages {
+            let alignment = match message.direction {
+                MessageDirection::Inbound => "inbound",
+                MessageDirection::Outbound => "outbound",
+            };
+
+            let direction_label = match message.direction {
+                MessageDirection::Inbound => "Received",
+                MessageDirection::Outbound => "Sent",
+            };
+
+            let timestamp = message.timestamp.format("%Y-%m-%d %H:%M:%S UTC");
+
+            html.push_str(&format!(
+                r#"<div class="message-item {}">
+                    <div class="message-header">
+                        <span class="channel-badge">{}</span>
+                        <span class="direction">{}</span>
+                        <span class="sender">{}</span>
+                        <span class="timestamp">{}</span>
+                    </div>
+                    <div class="message-text">{}</div>
+                </div>"#,
+                alignment,
+                html_escape(&message.channel),
+                direction_label,
+                html_escape(&message.sender),
+                timestamp,
+                html_escape(&message.text).replace('\n', "<br>")
+            ));
+        }
+
+        html.push_str(r#"</div>"#); // message-list
+    }
+
+    // Clear history buttons
+    html.push_str(r#"<div class="history-actions">"#);
+    match filter {
+        HistoryChannelFilter::All => {
+            html.push_str(
+                r#"<button class="clear-history-btn" data-channel="all">Clear All History</button>"#,
+            );
+        }
+        HistoryChannelFilter::Discord => {
+            html.push_str(
+                r#"<button class="clear-history-btn" data-channel="discord">Clear Discord History</button>"#,
+            );
+        }
+        HistoryChannelFilter::WhatsApp => {
+            html.push_str(
+                r#"<button class="clear-history-btn" data-channel="whatsapp">Clear WhatsApp History</button>"#,
+            );
+        }
+    }
+    html.push_str(r#"</div>"#); // history-actions
+
+    html.push_str(r#"</div>"#); // message-history
+    html
+}
+
 /// Escape HTML special characters.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -786,5 +919,111 @@ mod tests {
         assert!(html_escape("<script>") == "&lt;script&gt;");
         assert!(html_escape("a & b") == "a &amp; b");
         assert!(html_escape("\"quote\"") == "&quot;quote&quot;");
+    }
+
+    #[test]
+    fn render_history_empty() {
+        let html = render_message_history(&[], HistoryChannelFilter::All);
+        assert!(html.contains("No messages yet"));
+        assert!(html.contains("history-empty"));
+        assert!(html.contains("Clear All History"));
+    }
+
+    #[test]
+    fn render_history_with_messages() {
+        let messages = vec![
+            ChannelMessage {
+                id: "1".to_owned(),
+                channel: "discord".to_owned(),
+                direction: MessageDirection::Inbound,
+                sender: "user123".to_owned(),
+                text: "Hello!".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "chan1".to_owned(),
+            },
+            ChannelMessage {
+                id: "2".to_owned(),
+                channel: "discord".to_owned(),
+                direction: MessageDirection::Outbound,
+                sender: "fae".to_owned(),
+                text: "Hi there!".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "chan1".to_owned(),
+            },
+        ];
+
+        let html = render_message_history(&messages, HistoryChannelFilter::All);
+        assert!(html.contains("Hello!"));
+        assert!(html.contains("Hi there!"));
+        assert!(html.contains("user123"));
+        assert!(html.contains("discord"));
+        assert!(html.contains("inbound"));
+        assert!(html.contains("outbound"));
+    }
+
+    #[test]
+    fn render_history_filter_by_channel() {
+        let messages = vec![
+            ChannelMessage {
+                id: "1".to_owned(),
+                channel: "discord".to_owned(),
+                direction: MessageDirection::Inbound,
+                sender: "user123".to_owned(),
+                text: "Discord message".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "chan1".to_owned(),
+            },
+            ChannelMessage {
+                id: "2".to_owned(),
+                channel: "whatsapp".to_owned(),
+                direction: MessageDirection::Inbound,
+                sender: "+14155551234".to_owned(),
+                text: "WhatsApp message".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "+14155555678".to_owned(),
+            },
+        ];
+
+        // Filter Discord only
+        let html_discord = render_message_history(&messages, HistoryChannelFilter::Discord);
+        assert!(html_discord.contains("Discord message"));
+        assert!(!html_discord.contains("WhatsApp message"));
+        assert!(html_discord.contains("Clear Discord History"));
+
+        // Filter WhatsApp only
+        let html_whatsapp = render_message_history(&messages, HistoryChannelFilter::WhatsApp);
+        assert!(!html_whatsapp.contains("Discord message"));
+        assert!(html_whatsapp.contains("WhatsApp message"));
+        assert!(html_whatsapp.contains("Clear WhatsApp History"));
+    }
+
+    #[test]
+    fn render_history_direction_styling() {
+        let messages = vec![
+            ChannelMessage {
+                id: "1".to_owned(),
+                channel: "discord".to_owned(),
+                direction: MessageDirection::Inbound,
+                sender: "user123".to_owned(),
+                text: "Inbound".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "chan1".to_owned(),
+            },
+            ChannelMessage {
+                id: "2".to_owned(),
+                channel: "discord".to_owned(),
+                direction: MessageDirection::Outbound,
+                sender: "fae".to_owned(),
+                text: "Outbound".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "chan1".to_owned(),
+            },
+        ];
+
+        let html = render_message_history(&messages, HistoryChannelFilter::All);
+        assert!(html.contains(r#"message-item inbound"#));
+        assert!(html.contains(r#"message-item outbound"#));
+        assert!(html.contains("Received"));
+        assert!(html.contains("Sent"));
     }
 }
