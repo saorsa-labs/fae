@@ -3773,8 +3773,10 @@ fn apply_and_relaunch(
             Ok(Err(e)) => {
                 let msg = format!("{e}");
                 update_install_error.set(Some(msg.clone()));
-                let was_installing =
-                    matches!(*update_gate.read(), Some(UpdateGatePhase::Installing { .. }));
+                let was_installing = matches!(
+                    *update_gate.read(),
+                    Some(UpdateGatePhase::Installing { .. })
+                );
                 if was_installing {
                     update_gate.set(Some(UpdateGatePhase::Failed { error: msg }));
                 }
@@ -3782,8 +3784,10 @@ fn apply_and_relaunch(
             Err(e) => {
                 let msg = format!("{e}");
                 update_install_error.set(Some(msg.clone()));
-                let was_installing =
-                    matches!(*update_gate.read(), Some(UpdateGatePhase::Installing { .. }));
+                let was_installing = matches!(
+                    *update_gate.read(),
+                    Some(UpdateGatePhase::Installing { .. })
+                );
                 if was_installing {
                     update_gate.set(Some(UpdateGatePhase::Failed { error: msg }));
                 }
@@ -3934,6 +3938,16 @@ fn app() -> Element {
             }
         });
     }
+
+    // --- Restore security-scoped bookmarks (App Sandbox) ---
+    // Must run early, before any file-access hooks, to regain access to
+    // user-selected files/folders from previous sessions.
+    use_hook(|| {
+        let restored = fae::platform::restore_all_bookmarks();
+        if !restored.is_empty() {
+            tracing::debug!("restored {} bookmarks for sandbox access", restored.len());
+        }
+    });
 
     // --- External channels runtime manager ---
     use_hook(move || {
@@ -5792,6 +5806,9 @@ fn app() -> Element {
                                         return;
                                     };
 
+                                    // Best-effort bookmark for App Sandbox persistence.
+                                    fae::platform::bookmark_and_persist(&path, "voice-sample");
+
                                     let name = if name.trim().is_empty() {
                                         path.file_stem()
                                             .and_then(|s| s.to_str())
@@ -6684,6 +6701,7 @@ fn ingestion_window() -> Element {
                                         .await;
                                         match picked {
                                             Ok(Some(path)) => {
+                                                fae::platform::bookmark_and_persist(&path, "ingestion-file");
                                                 target_path.set(path.display().to_string());
                                                 action_status.set("Selected file target.".to_owned());
                                             }
@@ -6706,6 +6724,7 @@ fn ingestion_window() -> Element {
                                         .await;
                                         match picked {
                                             Ok(Some(path)) => {
+                                                fae::platform::bookmark_and_persist(&path, "ingestion-folder");
                                                 target_path.set(path.display().to_string());
                                                 action_status.set("Selected folder target.".to_owned());
                                             }
