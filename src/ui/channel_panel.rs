@@ -1026,4 +1026,107 @@ mod tests {
         assert!(html.contains("Received"));
         assert!(html.contains("Sent"));
     }
+
+    #[test]
+    fn integration_workflow_configure_discord() {
+        // Step 1: Create a new form
+        let mut form = DiscordEditForm::new();
+        assert!(form.bot_token.is_empty());
+
+        // Step 2: Fill in configuration
+        form.bot_token = "test_bot_token_123".to_owned();
+        form.guild_id = "987654321".to_owned();
+        form.allowed_user_ids.push("user1".to_owned());
+        form.allowed_user_ids.push("user2".to_owned());
+
+        // Step 3: Validate
+        assert!(form.validate().is_none());
+
+        // Step 4: Convert to config
+        let config = form.to_config();
+        assert!(config.bot_token.resolve_plaintext() == "test_bot_token_123");
+        assert!(config.guild_id == Some("987654321".to_owned()));
+        assert!(config.allowed_user_ids.len() == 2);
+
+        // Step 5: Render the form HTML
+        let html = render_discord_form(&form);
+        assert!(html.contains("test_bot_token_123"));
+        assert!(html.contains("user1"));
+
+        // Step 6: Round-trip back to form
+        let form2 = DiscordEditForm::from_config(&config);
+        assert!(form2.bot_token == form.bot_token);
+        assert!(form2.guild_id == form.guild_id);
+        assert!(form2.allowed_user_ids == form.allowed_user_ids);
+    }
+
+    #[test]
+    fn integration_workflow_view_history() {
+        // Step 1: Create some messages
+        let messages = vec![
+            ChannelMessage {
+                id: "1".to_owned(),
+                channel: "discord".to_owned(),
+                direction: MessageDirection::Inbound,
+                sender: "user123".to_owned(),
+                text: "Hello Fae!".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "chan1".to_owned(),
+            },
+            ChannelMessage {
+                id: "2".to_owned(),
+                channel: "discord".to_owned(),
+                direction: MessageDirection::Outbound,
+                sender: "fae".to_owned(),
+                text: "Hello! How can I help?".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "chan1".to_owned(),
+            },
+            ChannelMessage {
+                id: "3".to_owned(),
+                channel: "whatsapp".to_owned(),
+                direction: MessageDirection::Inbound,
+                sender: "+14155551234".to_owned(),
+                text: "Test message".to_owned(),
+                timestamp: Utc::now(),
+                reply_target: "+14155555678".to_owned(),
+            },
+        ];
+
+        // Step 2: Render all messages
+        let html_all = render_message_history(&messages, HistoryChannelFilter::All);
+        assert!(html_all.contains("Hello Fae!"));
+        assert!(html_all.contains("Test message"));
+
+        // Step 3: Filter by Discord
+        let html_discord = render_message_history(&messages, HistoryChannelFilter::Discord);
+        assert!(html_discord.contains("Hello Fae!"));
+        assert!(!html_discord.contains("Test message"));
+
+        // Step 4: Filter by WhatsApp
+        let html_whatsapp = render_message_history(&messages, HistoryChannelFilter::WhatsApp);
+        assert!(!html_whatsapp.contains("Hello Fae!"));
+        assert!(html_whatsapp.contains("Test message"));
+    }
+
+    #[test]
+    fn integration_validation_errors() {
+        // Discord form with empty token
+        let discord_form = DiscordEditForm {
+            bot_token: String::new(),
+            guild_id: "123".to_owned(),
+            allowed_user_ids: vec!["user1".to_owned()],
+            allowed_channel_ids: Vec::new(),
+        };
+        assert!(discord_form.validate().is_some());
+
+        // WhatsApp form with invalid phone number
+        let whatsapp_form = WhatsAppEditForm {
+            access_token: "token".to_owned(),
+            phone_number_id: "phone123".to_owned(),
+            verify_token: "verify".to_owned(),
+            allowed_numbers: vec!["4155551234".to_owned()], // Missing +
+        };
+        assert!(whatsapp_form.validate().is_some());
+    }
 }

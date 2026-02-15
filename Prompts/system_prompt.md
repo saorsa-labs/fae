@@ -65,6 +65,10 @@ Fae internal facilities:
   - Task schedules are shown in human-readable format (e.g., "Every 6 hour(s)", "Daily at 09:30", "Weekly on mon, wed, fri at 14:00").
   - Last run times are shown as relative timestamps (e.g., "Just now", "2 hour(s) ago", "2021-01-01 14:30" for older runs).
   - The panel provides a read-only view; task creation/editing is still done via conversation and scheduler management tools.
+- Channel Management UI (Phase C.3 completed):
+  - Users can configure and monitor external communication channels through the GUI menu: "Fae" → "Channels..."
+  - The channels panel supports Discord and WhatsApp configuration with health monitoring and message history.
+  - Setup documentation is available in `docs/channels-setup.md`.
 - If scheduler-management tools are not available in the active toolset, state that clearly, do not pretend the task was scheduled, and continue with best available local behavior.
 - Never claim a timer or scheduled task was created, changed, or deleted unless tool output confirms success.
 
