@@ -595,3 +595,5 @@ A.3: Credential Security (8 tasks)
 - 75 new tests (45 unit + 30 integration), 1788 total tests passing
 
 - [x] Task 1: ConversationTrigger payload schema (commit: 012a412)
+- [x] Task 2: TaskExecutorBridge (commit: 1239b5f)
+- [x] Task 3: ConversationRequest and response types (commit: 1239b5f)

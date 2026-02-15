@@ -643,12 +643,28 @@ pub fn start_scheduler_with_memory(
     tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // Create channel for conversation requests from scheduled tasks
+    let (conversation_req_tx, conversation_req_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // Create task executor bridge
+    let bridge = crate::scheduler::executor_bridge::TaskExecutorBridge::new(conversation_req_tx);
+
     let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
     scheduler.with_update_checks();
     scheduler.with_memory_maintenance();
     let memory_root = memory.root_dir.clone();
     let retention_days = memory.retention_days;
+
+    // Wrap the bridge executor to also handle built-in tasks
+    let bridge_executor = bridge.into_executor();
     scheduler = scheduler.with_executor(Box::new(move |task| {
+        // User tasks with ConversationTrigger payloads go through bridge
+        if task.kind == crate::scheduler::tasks::TaskKind::User {
+            return bridge_executor(task);
+        }
+
+        // Built-in tasks use the existing executor
         execute_scheduler_task(task, &memory_root, retention_days)
     }));
 
@@ -657,7 +673,35 @@ pub fn start_scheduler_with_memory(
         scheduler.tasks().len()
     );
     let handle = scheduler.run();
+
+    // Spawn background task to handle conversation requests
+    tokio::spawn(async move {
+        handle_conversation_requests(conversation_req_rx).await;
+    });
+
     (handle, rx)
+}
+
+/// Background task to handle conversation requests from the scheduler.
+async fn handle_conversation_requests(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::pipeline::messages::ConversationRequest>,
+) {
+    use tracing::warn;
+
+    while let Some(request) = rx.recv().await {
+        warn!(
+            "Received conversation request for task {}: {} (handler not yet implemented)",
+            request.task_id, request.prompt
+        );
+
+        // For now, send a placeholder response
+        // Task 5 will implement the actual pipeline integration
+        let _ = request
+            .response_tx
+            .send(crate::pipeline::messages::ConversationResponse::Error(
+                "Conversation handler not yet wired to pipeline".to_owned(),
+            ));
+    }
 }
 
 fn execute_scheduler_task(
