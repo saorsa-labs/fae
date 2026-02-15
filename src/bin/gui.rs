@@ -24,9 +24,9 @@ fn main() {
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     // Dual-output tracing. Respect `RUST_LOG` when set; otherwise default to
-    // very verbose logging during pre-1.0 release testing.
+    // a verbose debug profile during pre-1.0 release testing.
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("trace"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug"));
 
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stdout)
@@ -1097,28 +1097,20 @@ mod gui {
         }
 
         #[test]
-        fn privacy_settings_urls_include_mic_and_speech() {
-            let urls = super::super::macos_privacy_settings_urls();
+        fn privacy_settings_url_targets_microphone() {
+            let url = super::super::macos_microphone_settings_url();
             assert!(
-                urls.iter().any(|u| u.contains("Privacy_Microphone")),
+                url.contains("Privacy_Microphone"),
                 "missing microphone privacy deep link"
-            );
-            assert!(
-                urls.iter().any(|u| u.contains("Privacy_SpeechRecognition")),
-                "missing speech recognition privacy deep link"
             );
         }
 
         #[test]
-        fn windows_settings_urls_include_mic_and_speech() {
-            let urls = super::super::windows_privacy_settings_urls();
+        fn windows_settings_url_targets_microphone() {
+            let url = super::super::windows_microphone_settings_url();
             assert!(
-                urls.iter().any(|u| u.contains("privacy-microphone")),
+                url.contains("privacy-microphone"),
                 "missing Windows microphone settings uri"
-            );
-            assert!(
-                urls.iter().any(|u| u.contains("privacy-speech")),
-                "missing Windows speech settings uri"
             );
         }
 
@@ -1375,9 +1367,6 @@ const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
 #[cfg(feature = "gui")]
 const FAE_MENU_CHECK_UPDATES: &str = "fae-check-updates";
 
-#[cfg(all(feature = "gui", target_os = "macos"))]
-const FAE_BUNDLE_ID: &str = "com.saorsalabs.fae";
-
 /// A subtitle bubble that auto-expires after a timeout.
 #[cfg(feature = "gui")]
 #[derive(Clone, Default)]
@@ -1425,6 +1414,124 @@ enum SettingsMode {
     Basic,
     Advanced,
 }
+
+#[cfg(all(feature = "gui", target_os = "macos"))]
+const PANEL_CSS: &str = r#"
+    body {
+        background: #f5f5f7;
+        color: #1d1d1f;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    .panel-window {
+        align-items: stretch;
+        min-height: 100vh;
+        padding: 0.8rem 1rem 1.2rem;
+        gap: 0.7rem;
+        background: #f5f5f7;
+    }
+    .panel-window .topbar {
+        position: static;
+        top: auto;
+        max-width: none;
+        width: 100%;
+        padding: 0.1rem 0 0.65rem;
+        border-bottom: 1px solid #d2d2d7;
+        background: transparent;
+        z-index: 1;
+    }
+    .panel-window .topbar-title {
+        color: #1d1d1f;
+        font-size: 0.9rem;
+        letter-spacing: 0;
+        text-transform: none;
+        font-weight: 600;
+    }
+    .panel-window .topbar-btn {
+        color: #1d1d1f;
+        background: #ffffff;
+        border: 1px solid #d2d2d7;
+        font-size: 0.78rem;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .panel-window .topbar-btn:hover:not(:disabled) {
+        background: #f0f2f5;
+        color: #1d1d1f;
+        transform: none;
+    }
+    .panel-window .settings,
+    .panel-window .model-picker {
+        max-width: none;
+        width: 100%;
+        background: #ffffff;
+        border: 1px solid #d2d2d7;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        padding: 0.9rem;
+    }
+    .panel-window .settings-section {
+        border-color: #d2d2d7;
+        background: #fbfbfd;
+    }
+    .panel-window .settings-section[open] {
+        border-color: #babac0;
+    }
+    .panel-window .settings-section-summary {
+        color: #1d1d1f;
+    }
+    .panel-window .settings-section-summary:hover {
+        color: #1d1d1f;
+        background: #f2f2f7;
+    }
+    .panel-window .settings-label,
+    .panel-window .settings-h3 {
+        color: #1d1d1f;
+    }
+    .panel-window .settings-sub,
+    .panel-window .settings-value,
+    .panel-window .settings-status,
+    .panel-window .note {
+        color: #6e6e73;
+    }
+    .panel-window .settings-select,
+    .panel-window .settings-textarea,
+    .panel-window .details-pre {
+        background: #ffffff;
+        color: #1d1d1f;
+        border-color: #d2d2d7;
+    }
+    .panel-window .settings-save {
+        background: #0071e3;
+        color: #ffffff;
+    }
+    .panel-window .progress-container {
+        width: 100%;
+        max-width: none;
+    }
+    .panel-window .mic-help-card {
+        width: 100%;
+        max-width: none;
+        border-color: #f5b9b2;
+        background: #fff1ef;
+    }
+    .panel-window .mic-help-title {
+        color: #b42318;
+    }
+    .panel-window .mic-help-copy,
+    .panel-window .mic-help-status {
+        color: #6e6e73;
+    }
+    .panel-window .mic-help-btn {
+        background: #0071e3;
+        color: #ffffff;
+    }
+    .panel-window .mic-help-btn-secondary {
+        background: #f2f2f7;
+        color: #1d1d1f;
+    }
+"#;
+
+#[cfg(all(feature = "gui", not(target_os = "macos")))]
+const PANEL_CSS: &str = "";
 
 /// Build the messages HTML from the current canvas bridge state.
 #[cfg(feature = "gui")]
@@ -3303,7 +3410,7 @@ fn mic_problem_status_text() -> &'static str {
 #[cfg(feature = "gui")]
 fn mic_help_copy_text() -> &'static str {
     if cfg!(target_os = "macos") {
-        "Fae can reset this app's microphone permissions and open the correct macOS privacy panels."
+        "Fae can request microphone access and open Privacy > Microphone in System Settings."
     } else if cfg!(target_os = "windows") {
         "Fae can open Windows microphone privacy settings so you can allow microphone access."
     } else if cfg!(target_os = "linux") {
@@ -3331,27 +3438,6 @@ fn current_macos_bundle_root() -> Option<PathBuf> {
 }
 
 #[cfg(all(feature = "gui", target_os = "macos"))]
-fn read_bundle_identifier_from_plist(plist_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(plist_path).ok()?;
-    let key = "<key>CFBundleIdentifier</key>";
-    let after_key = content.split_once(key)?.1;
-    let after_start = after_key.split_once("<string>")?.1;
-    let id = after_start.split_once("</string>")?.0.trim();
-    if id.is_empty() {
-        None
-    } else {
-        Some(id.to_owned())
-    }
-}
-
-#[cfg(all(feature = "gui", target_os = "macos"))]
-fn current_macos_bundle_identifier() -> Option<String> {
-    let bundle_root = current_macos_bundle_root()?;
-    let plist = bundle_root.join("Contents").join("Info.plist");
-    read_bundle_identifier_from_plist(&plist)
-}
-
-#[cfg(all(feature = "gui", target_os = "macos"))]
 fn macos_mic_launch_context_warning() -> Option<String> {
     if current_macos_bundle_root().is_some() {
         return None;
@@ -3371,7 +3457,7 @@ fn macos_mic_launch_context_warning() -> Option<String> {
 #[cfg(feature = "gui")]
 fn mic_primary_action_label() -> &'static str {
     if cfg!(target_os = "macos") {
-        "Fix Microphone"
+        "Request Mic Access"
     } else {
         "Open Mic Settings"
     }
@@ -3380,7 +3466,7 @@ fn mic_primary_action_label() -> &'static str {
 #[cfg(feature = "gui")]
 fn mic_primary_action_progress_label() -> &'static str {
     if cfg!(target_os = "macos") {
-        "Fixing..."
+        "Requesting..."
     } else {
         "Opening..."
     }
@@ -3444,39 +3530,23 @@ fn open_external_target(target: &str) -> Result<(), String> {
 }
 
 #[cfg(feature = "gui")]
-fn macos_privacy_settings_urls() -> [&'static str; 2] {
-    [
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
-    ]
+fn macos_microphone_settings_url() -> &'static str {
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
 }
 
 #[cfg(all(feature = "gui", any(target_os = "windows", test)))]
-fn windows_privacy_settings_urls() -> [&'static str; 2] {
-    [
-        "ms-settings:privacy-microphone",
-        "ms-settings:privacy-speech",
-    ]
+fn windows_microphone_settings_url() -> &'static str {
+    "ms-settings:privacy-microphone"
 }
 
 #[cfg(all(feature = "gui", target_os = "macos"))]
 fn open_mic_permission_settings() -> Result<(), String> {
-    let mut errors = Vec::new();
-    for target in macos_privacy_settings_urls() {
-        if let Err(e) = open_external_target(target) {
-            errors.push(e);
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        // Fallback to the Privacy & Security pane if deep links fail.
-        match open_external_target("x-apple.systempreferences:com.apple.preference.security") {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                errors.push(e);
-                Err(errors.join("; "))
+    match open_external_target(macos_microphone_settings_url()) {
+        Ok(()) => Ok(()),
+        Err(primary_err) => {
+            match open_external_target("x-apple.systempreferences:com.apple.preference.security") {
+                Ok(()) => Ok(()),
+                Err(fallback_err) => Err(format!("{primary_err}; {fallback_err}")),
             }
         }
     }
@@ -3484,18 +3554,60 @@ fn open_mic_permission_settings() -> Result<(), String> {
 
 #[cfg(all(feature = "gui", target_os = "windows"))]
 fn open_mic_permission_settings() -> Result<(), String> {
-    let mut errors = Vec::new();
-    for target in windows_privacy_settings_urls() {
-        if let Err(e) = open_external_target(target) {
-            errors.push(e);
-        }
-    }
+    open_external_target(windows_microphone_settings_url())
+}
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn probe_macos_microphone_access() -> Result<(), String> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| "no default microphone device found".to_owned())?;
+    let supported = device
+        .default_input_config()
+        .map_err(|e| format!("could not read microphone format: {e}"))?;
+    let stream_config: cpal::StreamConfig = supported.config();
+
+    let stream = match supported.sample_format() {
+        cpal::SampleFormat::F32 => device
+            .build_input_stream(
+                &stream_config,
+                |_data: &[f32], _| {},
+                |_err: cpal::StreamError| {},
+                None,
+            )
+            .map_err(|e| format!("could not build f32 microphone probe stream: {e}"))?,
+        cpal::SampleFormat::I16 => device
+            .build_input_stream(
+                &stream_config,
+                |_data: &[i16], _| {},
+                |_err: cpal::StreamError| {},
+                None,
+            )
+            .map_err(|e| format!("could not build i16 microphone probe stream: {e}"))?,
+        cpal::SampleFormat::U16 => device
+            .build_input_stream(
+                &stream_config,
+                |_data: &[u16], _| {},
+                |_err: cpal::StreamError| {},
+                None,
+            )
+            .map_err(|e| format!("could not build u16 microphone probe stream: {e}"))?,
+        other => {
+            return Err(format!(
+                "unsupported microphone sample format during probe: {other:?}"
+            ));
+        }
+    };
+
+    stream
+        .play()
+        .map_err(|e| format!("could not start microphone probe stream: {e}"))?;
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    drop(stream);
+    Ok(())
 }
 
 #[cfg(all(feature = "gui", target_os = "linux"))]
@@ -3533,58 +3645,23 @@ fn run_mic_permission_repair() -> String {
         );
     }
 
-    let mut warnings = Vec::new();
+    let probe_result = probe_macos_microphone_access();
+    let settings_result = open_mic_permission_settings();
 
-    for service in ["Microphone", "SpeechRecognition"] {
-        if let Err(e) = reset_macos_tcc_service(service) {
-            warnings.push(format!("could not reset {service}: {e}"));
+    match (probe_result, settings_result) {
+        (Ok(()), Ok(())) => {
+            "Requested microphone access and opened Privacy > Microphone. If prompted, click Allow, then restart Fae."
+                .to_owned()
         }
-    }
-
-    if let Err(e) = open_mic_permission_settings() {
-        warnings.push(format!("could not open macOS privacy settings: {e}"));
-    }
-
-    if warnings.is_empty() {
-        "Reset access for Microphone and Speech Recognition. Enable Fae in macOS settings, then click Restart Fae.".to_owned()
-    } else {
-        format!(
-            "Repair attempted, but some steps failed: {}",
-            warnings.join(" | ")
-        )
-    }
-}
-
-#[cfg(all(feature = "gui", target_os = "macos"))]
-fn reset_macos_tcc_service(service: &str) -> Result<(), String> {
-    let mut attempted = Vec::new();
-    let mut bundle_ids = Vec::<String>::new();
-    if let Some(current) = current_macos_bundle_identifier() {
-        bundle_ids.push(current);
-    }
-    if !bundle_ids.iter().any(|id| id == FAE_BUNDLE_ID) {
-        bundle_ids.push(FAE_BUNDLE_ID.to_owned());
-    }
-
-    for bundle_id in bundle_ids {
-        match run_system_command("/usr/bin/tccutil", &["reset", service, &bundle_id]) {
-            Ok(()) => return Ok(()),
-            Err(err) => attempted.push(format!("{bundle_id}: {err}")),
-        }
-    }
-
-    match run_system_command("/usr/bin/tccutil", &["reset", service]) {
-        Ok(()) => Ok(()),
-        Err(global_err) => {
-            if attempted.is_empty() {
-                Err(global_err)
-            } else {
-                Err(format!(
-                    "{} | fallback failed: {global_err}",
-                    attempted.join(" | ")
-                ))
-            }
-        }
+        (Ok(()), Err(e)) => format!(
+            "Requested microphone access, but could not open Privacy > Microphone automatically: {e}"
+        ),
+        (Err(e), Ok(())) => format!(
+            "Could not trigger microphone permission prompt directly: {e}. Opened Privacy > Microphone so you can enable Fae manually."
+        ),
+        (Err(probe_err), Err(open_err)) => format!(
+            "Could not trigger microphone access ({probe_err}) and could not open Privacy settings automatically ({open_err}). Open System Settings > Privacy & Security > Microphone and enable Fae."
+        ),
     }
 }
 
@@ -3765,9 +3842,9 @@ fn app() -> Element {
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
-    use_hook(move || {
+    {
         let mut config_state = config_state;
-        spawn(async move {
+        use_future(move || async move {
             let mut rx = ui_bus().subscribe();
             loop {
                 match rx.recv().await {
@@ -3782,7 +3859,7 @@ fn app() -> Element {
                 }
             }
         });
-    });
+    }
 
     // --- External channels runtime manager ---
     use_hook(move || {
@@ -6101,7 +6178,8 @@ fn fae_guide_window() -> Element {
 
     rsx! {
         style { {GLOBAL_CSS} }
-        div { class: "container",
+        style { {PANEL_CSS} }
+        div { class: "container panel-window",
             div { class: "topbar",
                 button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
                 p { class: "topbar-title", "Fae Guide" }
@@ -6203,7 +6281,8 @@ fn soul_window() -> Element {
 
     rsx! {
         style { {GLOBAL_CSS} }
-        div { class: "container",
+        style { {PANEL_CSS} }
+        div { class: "container panel-window",
             div { class: "topbar",
                 button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
                 p { class: "topbar-title", "Soul" }
@@ -6345,7 +6424,8 @@ fn skills_window() -> Element {
 
     rsx! {
         style { {GLOBAL_CSS} }
-        div { class: "container",
+        style { {PANEL_CSS} }
+        div { class: "container panel-window",
             div { class: "topbar",
                 button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
                 p { class: "topbar-title", "Skills" }
@@ -6563,7 +6643,8 @@ fn ingestion_window() -> Element {
 
     rsx! {
         style { {GLOBAL_CSS} }
-        div { class: "container",
+        style { {PANEL_CSS} }
+        div { class: "container panel-window",
             div { class: "topbar",
                 button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
                 p { class: "topbar-title", "Ingestion" }
@@ -6775,7 +6856,8 @@ fn memories_window() -> Element {
 
     rsx! {
         style { {GLOBAL_CSS} }
-        div { class: "container",
+        style { {PANEL_CSS} }
+        div { class: "container panel-window",
             div { class: "topbar",
                 button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
                 p { class: "topbar-title", "Memories" }
@@ -7070,23 +7152,20 @@ fn preferences_window() -> Element {
     let mut reset_status = use_signal(String::new);
     let mut reset_in_progress = use_signal(|| false);
 
-    use_hook(move || {
-        let mut config_state = config_state;
-        spawn(async move {
-            let mut rx = ui_bus().subscribe();
-            loop {
-                match rx.recv().await {
-                    Ok(UiBusEvent::ConfigUpdated) => {
-                        let res = tokio::task::spawn_blocking(read_config_or_default).await;
-                        if let Ok(cfg) = res {
-                            config_state.set(cfg);
-                        }
+    use_future(move || async move {
+        let mut rx = ui_bus().subscribe();
+        loop {
+            match rx.recv().await {
+                Ok(UiBusEvent::ConfigUpdated) => {
+                    let res = tokio::task::spawn_blocking(read_config_or_default).await;
+                    if let Ok(cfg) = res {
+                        config_state.set(cfg);
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             }
-        });
+        }
     });
 
     let open_models_window = {
@@ -7120,8 +7199,9 @@ fn preferences_window() -> Element {
 
     rsx! {
         style { {GLOBAL_CSS} }
+        style { {PANEL_CSS} }
 
-        div { class: "container",
+        div { class: "container panel-window",
             div { class: "topbar",
                 button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
                 p { class: "topbar-title", "Settings" }
@@ -7759,8 +7839,9 @@ fn models_window() -> Element {
 
     rsx! {
         style { {GLOBAL_CSS} }
+        style { {PANEL_CSS} }
 
-        div { class: "container",
+        div { class: "container panel-window",
             div { class: "topbar",
                 button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
                 p { class: "topbar-title", "Models" }
