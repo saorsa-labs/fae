@@ -19,7 +19,7 @@ fn main() {
     let log_dir = fae::diagnostics::fae_log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
 
-    // File appender: daily rotating log files in ~/.fae/logs/
+    // File appender: daily rotating log files
     let file_appender = tracing_appender::rolling::daily(&log_dir, "fae.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
@@ -2878,7 +2878,7 @@ fn archive_path_if_exists(source: &Path, destination: &Path) -> Result<(), Strin
 
 #[cfg(feature = "gui")]
 fn archive_and_reset_user_state(current_config: fae::SpeechConfig) -> Result<PathBuf, String> {
-    let archive_root = fae::personality::fae_home_dir()
+    let archive_root = fae::fae_dirs::data_dir()
         .join("archives")
         .join(format!("session-reset-{}", now_ts_millis()));
     std::fs::create_dir_all(&archive_root)
@@ -7567,7 +7567,7 @@ fn preferences_window() -> Element {
                                 "Archive current memories/settings, then reset to defaults so next launch starts onboarding from a clean state."
                             }
                             p { class: "settings-sub",
-                                "Archive location: {fae::personality::fae_home_dir().join(\"archives\").display()}"
+                                "Archive location: {fae::fae_dirs::data_dir().join(\"archives\").display()}"
                             }
                             div { class: "settings-row",
                                 button {

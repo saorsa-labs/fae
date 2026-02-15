@@ -21,15 +21,6 @@ pub const DEFAULT_SOUL: &str = include_str!("../SOUL.md");
 /// Default onboarding checklist installed to the app data directory.
 pub const DEFAULT_ONBOARDING_CHECKLIST: &str = include_str!("../Prompts/onboarding.md");
 
-/// Returns the Fae data directory.
-///
-/// Delegates to [`crate::fae_dirs::data_dir`] for sandbox-safe resolution.
-/// Retained as a convenience alias used by GUI code.
-#[must_use]
-pub fn fae_home_dir() -> PathBuf {
-    crate::fae_dirs::data_dir()
-}
-
 /// Returns the user SOUL file path (inside the app data directory).
 #[must_use]
 pub fn soul_path() -> PathBuf {

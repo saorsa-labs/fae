@@ -298,7 +298,7 @@ pub struct LlmConfig {
     pub clear_queue_on_stop: bool,
     /// Legacy personality profile name (deprecated).
     ///
-    /// Prompt assembly now uses: core prompt + `~/.fae/SOUL.md` + optional
+    /// Prompt assembly now uses: core prompt + SOUL.md + optional
     /// add-on prompt. This field is retained for backward compatibility.
     pub personality: String,
     /// User add-on prompt appended after core prompt + SOUL.
@@ -316,7 +316,7 @@ pub struct LlmConfig {
     /// When set, overrides `api_model` for the cloud provider.
     #[serde(default)]
     pub cloud_model: Option<String>,
-    /// Optional external LLM profile ID stored in `~/.fae/external_apis/`.
+    /// Optional external LLM profile ID (see [`crate::fae_dirs::external_apis_dir`]).
     ///
     /// When set, runtime loads `<profile>.toml` and overlays API fields.
     #[serde(default)]

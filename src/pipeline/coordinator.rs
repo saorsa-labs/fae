@@ -1643,7 +1643,7 @@ async fn run_llm_stage(
     use crate::agent::FaeAgentLlm;
 
     if let Err(e) = crate::personality::ensure_prompt_assets() {
-        warn!("failed to ensure prompt assets in ~/.fae: {e}");
+        warn!("failed to ensure prompt assets: {e}");
     }
 
     let mut config = config;

@@ -3,7 +3,7 @@
 //! Usage: `cargo run --bin fae-record-wakeword`
 //!
 //! Records 5 samples of the wake word (default "Fae"), saves them as
-//! 16kHz mono WAV files in `~/.fae/wakeword/`.
+//! 16kHz mono WAV files in the wakeword directory (see [`fae::fae_dirs::wakeword_dir`]).
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
