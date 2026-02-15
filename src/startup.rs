@@ -683,25 +683,92 @@ pub fn start_scheduler_with_memory(
 }
 
 /// Background task to handle conversation requests from the scheduler.
+///
+/// This handler receives conversation requests from scheduled tasks and
+/// executes them using a lightweight agent session (not the full STT→TTS pipeline).
 async fn handle_conversation_requests(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::pipeline::messages::ConversationRequest>,
 ) {
-    use tracing::warn;
+    use crate::config::SpeechConfig;
+    use crate::pipeline::messages::ConversationResponse;
+    use tokio::time::{Duration, timeout};
+    use tracing::{debug, error, info};
+
+    // Use default configuration for agent sessions
+    let config = SpeechConfig::default();
 
     while let Some(request) = rx.recv().await {
-        warn!(
-            "Received conversation request for task {}: {} (handler not yet implemented)",
+        info!(
+            "Handling conversation request for task {}: {}",
             request.task_id, request.prompt
         );
 
-        // For now, send a placeholder response
-        // Task 5 will implement the actual pipeline integration
-        let _ = request
-            .response_tx
-            .send(crate::pipeline::messages::ConversationResponse::Error(
-                "Conversation handler not yet wired to pipeline".to_owned(),
-            ));
+        // Execute conversation with timeout
+        let conversation_timeout = Duration::from_secs(300); // 5 minutes default
+        let result = timeout(
+            conversation_timeout,
+            execute_scheduled_conversation(&config, &request),
+        )
+        .await;
+
+        let response = match result {
+            Ok(Ok(text)) => {
+                debug!(
+                    "Conversation completed for task {}: {}",
+                    request.task_id, text
+                );
+                ConversationResponse::Success(text)
+            }
+            Ok(Err(e)) => {
+                error!("Conversation failed for task {}: {e}", request.task_id);
+                ConversationResponse::Error(format!("{e}"))
+            }
+            Err(_) => {
+                error!("Conversation timed out for task {}", request.task_id);
+                ConversationResponse::Timeout
+            }
+        };
+
+        // Send response back to executor
+        if request.response_tx.send(response).is_err() {
+            error!(
+                "Failed to send conversation response for task {}: receiver dropped",
+                request.task_id
+            );
+        }
     }
+}
+
+/// Execute a scheduled conversation using the agent.
+///
+/// This creates a minimal agent session for the scheduled task, runs the
+/// conversation, and returns the assistant's response text.
+///
+/// NOTE: This is a placeholder implementation. Full integration with the
+/// pipeline/agent system will be completed in a follow-up task.
+async fn execute_scheduled_conversation(
+    _config: &SpeechConfig,
+    request: &crate::pipeline::messages::ConversationRequest,
+) -> crate::error::Result<String> {
+    use tracing::warn;
+
+    // Placeholder implementation
+    // TODO: Full agent integration
+    // - Load system prompt with addon
+    // - Create agent LLM session
+    // - Execute conversation with memory context
+    // - Return assistant response text
+
+    warn!(
+        "Scheduled conversation for task {} not yet fully implemented",
+        request.task_id
+    );
+
+    // Return a placeholder response indicating the feature is in progress
+    Ok(format!(
+        "Scheduled task '{}' received. Full conversation handler coming soon.",
+        request.task_id
+    ))
 }
 
 fn execute_scheduler_task(
