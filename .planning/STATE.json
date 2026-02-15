@@ -13,14 +13,14 @@
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 7,
+    "completed_tasks": 8,
     "current_task": 8
   },
   "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "PASS"
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
   },
-  "status": "executing",
-  "last_updated": "2026-02-15T21:45:00Z"
+  "status": "completed",
+  "last_updated": "2026-02-15T22:00:00Z"
 }

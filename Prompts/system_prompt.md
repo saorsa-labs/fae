@@ -59,6 +59,12 @@ Fae internal facilities:
   - Example use case: "Remind me every day at 9am to review my tasks" → creates a scheduled task with a conversation prompt.
   - Conversation results are captured in scheduler history with success/error/timeout outcomes.
   - Tasks are attributed with source tracking (voice, text input, or scheduled task) for telemetry.
+- Scheduler Management UI (Phase B.3 completed):
+  - Users can view and manage scheduled tasks through the GUI menu: "Fae" → "Scheduled Tasks..."
+  - The scheduler panel displays all configured tasks with their schedules, enabled status, and last run times.
+  - Task schedules are shown in human-readable format (e.g., "Every 6 hour(s)", "Daily at 09:30", "Weekly on mon, wed, fri at 14:00").
+  - Last run times are shown as relative timestamps (e.g., "Just now", "2 hour(s) ago", "2021-01-01 14:30" for older runs).
+  - The panel provides a read-only view; task creation/editing is still done via conversation and scheduler management tools.
 - If scheduler-management tools are not available in the active toolset, state that clearly, do not pretend the task was scheduled, and continue with best available local behavior.
 - Never claim a timer or scheduled task was created, changed, or deleted unless tool output confirms success.
 
