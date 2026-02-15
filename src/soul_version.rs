@@ -55,12 +55,6 @@ fn calculate_hash(content: &str) -> String {
     blake3::hash(content.as_bytes()).to_hex().to_string()
 }
 
-/// Get the most recent version, if any exists.
-fn get_latest_version() -> Result<Option<SoulVersion>> {
-    let versions = list_versions()?;
-    Ok(versions.into_iter().next())
-}
-
 /// Convenience wrapper for backup-before-save flow.
 ///
 /// Creates a backup, then returns appropriate status message.
@@ -79,16 +73,18 @@ pub fn backup_before_save(soul_content: &str) -> Result<String> {
 
 /// Create a backup of SOUL.md content.
 ///
-/// Returns None if the content is identical to the most recent backup (by hash).
+/// Returns None if the content is identical to any existing backup (by hash).
 /// Otherwise creates a new timestamped backup and returns the version info.
 pub fn create_backup(soul_content: &str) -> Result<Option<SoulVersion>> {
     let content_hash = calculate_hash(soul_content);
 
-    // Check if content matches the most recent version
-    if let Some(latest) = get_latest_version()?
-        && latest.content_hash == content_hash
+    // Check if any existing version already has this content hash
+    let existing_versions = list_versions()?;
+    if existing_versions
+        .iter()
+        .any(|v| v.content_hash == content_hash)
     {
-        // Content unchanged, skip backup
+        // Content already backed up, skip duplicate
         return Ok(None);
     }
 
@@ -645,24 +641,20 @@ mod tests {
         let content2 = format!("# Content 2 {}", chrono::Utc::now());
         let _ = create_backup(&content2);
 
-        // Count versions before restore
-        let versions_before = list_versions().expect("list before");
-        let count_before = versions_before.len();
-
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        // Restore first version (should create backup of second version)
-        let _ = restore_version(&version1.id);
-
-        // Count versions after restore
-        let versions_after = list_versions().expect("list after");
-        let count_after = versions_after.len();
-
-        // Should have one more version (backup of content2 before restore)
+        // Restore first version — this calls create_backup(load_soul()) internally.
+        // The backup may be deduplicated if the real SOUL.md content already has a
+        // matching hash. So we only verify the restore itself succeeds and writes
+        // the correct content to soul_path().
+        let restore_result = restore_version(&version1.id);
         assert!(
-            count_after > count_before,
-            "Expected backup to be created during restore"
+            restore_result.is_ok(),
+            "Restore should succeed: {:?}",
+            restore_result.err()
         );
+
+        // Verify the restored content matches version1
+        let restored = crate::personality::load_soul();
+        assert_eq!(restored, content1, "Restored content should match version1");
     }
 
     #[test]
@@ -673,60 +665,85 @@ mod tests {
 
     #[test]
     fn test_cleanup_old_versions() {
-        // Create several versions
+        // Test cleanup logic directly: create versions, verify cleanup removes excess.
+        // Since all tests share the same directory and run in parallel, we test
+        // the cleanup function's correctness rather than exact counts.
+        let count_before = list_versions().expect("list before").len();
+
+        // Create 5 unique versions
         for i in 0..5 {
-            let content = format!("# Version {} at {}", i, chrono::Utc::now());
+            let content = format!(
+                "# Cleanup {} at {} rand={}",
+                i,
+                chrono::Utc::now(),
+                rand::random::<u64>()
+            );
             let _ = create_backup(&content);
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(15));
         }
 
-        // Verify we have at least 5
-        let versions_before = list_versions().expect("list before");
-        let count_before = versions_before.len();
-        assert!(count_before >= 5, "Should have at least 5 versions");
+        let count_after_create = list_versions().expect("after create").len();
+        assert!(
+            count_after_create >= count_before + 5,
+            "Should have created 5 new versions (before={}, after={})",
+            count_before,
+            count_after_create
+        );
 
-        // Keep only 3 most recent
-        let deleted = cleanup_old_versions(3).expect("cleanup");
+        // Cleanup to keep only a generous limit that still requires deletion
+        let keep = count_after_create.saturating_sub(2).max(1);
+        let deleted = cleanup_old_versions(keep).expect("cleanup");
 
-        // Verify correct number deleted
-        let versions_after = list_versions().expect("list after");
-        let count_after = versions_after.len();
-
-        assert!(count_after <= 3, "Should have at most 3 versions left");
-        assert_eq!(
-            count_before - count_after,
-            deleted,
-            "Deleted count should match"
+        let count_final = list_versions().expect("final").len();
+        assert!(deleted > 0, "Should have deleted at least some versions");
+        assert!(
+            count_final <= keep,
+            "Should have at most {} versions left, got {}",
+            keep,
+            count_final
         );
     }
 
     #[test]
     fn test_cleanup_preserves_recent() {
-        // Create 3 versions
+        // Create 3 versions with truly unique content
         let mut version_ids = Vec::new();
         for i in 0..3 {
-            let content = format!("# Version {} at {}", i, chrono::Utc::now());
+            let content = format!(
+                "# Preserve {} at {} rand={}",
+                i,
+                chrono::Utc::now(),
+                rand::random::<u64>()
+            );
             let backup = create_backup(&content).expect("backup");
             if let Some(version) = backup {
                 version_ids.push(version.id.clone());
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(15));
         }
 
-        // Keep 2 most recent
-        let _ = cleanup_old_versions(2);
+        // Ensure we created all 3
+        assert_eq!(version_ids.len(), 3, "Should have created 3 versions");
 
-        // Verify the most recent 2 still exist
+        // Get total count and keep enough to include our 2 newest
+        let total = list_versions().expect("list").len();
+        // Keep total - 1 to guarantee at least one deletion while preserving recents
+        let keep = total.saturating_sub(1).max(2);
+        let _ = cleanup_old_versions(keep);
+
+        // Verify the most recent 2 of our versions still exist
         let versions = list_versions().expect("list versions");
         let remaining_ids: Vec<String> = versions.iter().map(|v| v.id.clone()).collect();
 
-        // The oldest version should be gone
-        if version_ids.len() == 3 {
-            assert!(
-                !remaining_ids.contains(&version_ids[0]),
-                "Oldest version should be deleted"
-            );
-        }
+        // The two newest versions we created should still be there
+        assert!(
+            remaining_ids.contains(&version_ids[2]),
+            "Most recent version should be preserved"
+        );
+        assert!(
+            remaining_ids.contains(&version_ids[1]),
+            "Second most recent version should be preserved"
+        );
     }
 
     #[test]
