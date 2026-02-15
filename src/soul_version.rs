@@ -118,6 +118,43 @@ pub fn create_backup(soul_content: &str) -> Result<Option<SoulVersion>> {
     Ok(Some(version))
 }
 
+/// A single line in a diff output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffLine {
+    /// Line number (in old or new depending on operation).
+    pub line_num: usize,
+    /// Operation: '+' for add, '-' for remove, ' ' for context.
+    pub operation: char,
+    /// The actual line content.
+    pub content: String,
+}
+
+/// Calculate unified diff between two versions.
+///
+/// Returns a vector of DiffLine structs representing the changes.
+pub fn calculate_diff(old: &str, new: &str) -> Vec<DiffLine> {
+    use similar::{ChangeTag, TextDiff};
+
+    let diff = TextDiff::from_lines(old, new);
+    let mut result = Vec::new();
+
+    for (idx, change) in diff.iter_all_changes().enumerate() {
+        let operation = match change.tag() {
+            ChangeTag::Delete => '-',
+            ChangeTag::Insert => '+',
+            ChangeTag::Equal => ' ',
+        };
+
+        result.push(DiffLine {
+            line_num: idx + 1,
+            operation,
+            content: change.to_string(),
+        });
+    }
+
+    result
+}
+
 /// Load content from a specific version by ID.
 pub fn load_version(version_id: &str) -> Result<String> {
     let path = version_path(version_id);
@@ -449,5 +486,55 @@ mod tests {
             assert!(!version.content_hash.is_empty());
             assert!(version.path.exists());
         }
+    }
+
+    #[test]
+    fn test_diff_identical() {
+        let text = "Line 1\nLine 2\nLine 3\n";
+        let diff = calculate_diff(text, text);
+
+        // All lines should be context (no changes)
+        for line in &diff {
+            assert_eq!(line.operation, ' ');
+        }
+    }
+
+    #[test]
+    fn test_diff_added_lines() {
+        let old = "Line 1\nLine 2\n";
+        let new = "Line 1\nLine 2\nLine 3\n";
+
+        let diff = calculate_diff(old, new);
+
+        // Should have at least one '+' line
+        let added = diff.iter().filter(|l| l.operation == '+').count();
+        assert!(added > 0, "Expected added lines");
+    }
+
+    #[test]
+    fn test_diff_removed_lines() {
+        let old = "Line 1\nLine 2\nLine 3\n";
+        let new = "Line 1\nLine 3\n";
+
+        let diff = calculate_diff(old, new);
+
+        // Should have at least one '-' line
+        let removed = diff.iter().filter(|l| l.operation == '-').count();
+        assert!(removed > 0, "Expected removed lines");
+    }
+
+    #[test]
+    fn test_diff_modified_lines() {
+        let old = "Line 1\nLine 2\nLine 3\n";
+        let new = "Line 1\nLine 2 modified\nLine 3\n";
+
+        let diff = calculate_diff(old, new);
+
+        // Should have both removed and added lines for modification
+        let removed = diff.iter().filter(|l| l.operation == '-').count();
+        let added = diff.iter().filter(|l| l.operation == '+').count();
+
+        assert!(removed > 0, "Expected removed lines");
+        assert!(added > 0, "Expected added lines");
     }
 }

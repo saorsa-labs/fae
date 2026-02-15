@@ -109,6 +109,7 @@ chrono = { version = "0.4", features = ["clock", "serde"] }
 urlencoding = "2"
 base64 = "0.22"
 blake3 = "1.5"
+similar = "2"
 
 # Progress indicators
 indicatif = "0.17"
