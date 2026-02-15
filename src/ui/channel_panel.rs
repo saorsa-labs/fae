@@ -67,6 +67,7 @@ impl DiscordEditForm {
 
     /// Create a form from existing configuration.
     #[must_use]
+    #[allow(deprecated)] // UI displays plaintext values for Plaintext variant
     pub fn from_config(config: &DiscordChannelConfig) -> Self {
         Self {
             bot_token: config.bot_token.resolve_plaintext(),
@@ -134,6 +135,7 @@ impl WhatsAppEditForm {
 
     /// Create a form from existing configuration.
     #[must_use]
+    #[allow(deprecated)] // UI displays plaintext values for Plaintext variant
     pub fn from_config(config: &WhatsAppChannelConfig) -> Self {
         Self {
             access_token: config.access_token.resolve_plaintext(),
@@ -629,7 +631,7 @@ pub fn render_channel_overview(channels: &[ChannelStatus], auto_start: bool) -> 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
 
     use super::*;
 
