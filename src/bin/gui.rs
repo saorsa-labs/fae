@@ -5142,6 +5142,73 @@ fn app() -> Element {
                 }
             }
 
+            // --- Scheduler panel modal ---
+            if *show_scheduler_panel.read() {
+                div {
+                    class: "drawer-overlay",
+                    onclick: move |_| show_scheduler_panel.set(false),
+                    div {
+                        class: "scheduler-modal",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "scheduler-modal-header",
+                            h2 { "Scheduled Tasks" }
+                            button {
+                                class: "scheduler-modal-close",
+                                onclick: move |_| show_scheduler_panel.set(false),
+                                "\u{2715}"
+                            }
+                        }
+                        div { class: "scheduler-modal-body",
+                            {
+                                // Load tasks from scheduler
+                                let snapshot_result = fae::scheduler::load_persisted_snapshot();
+                                match snapshot_result {
+                                    Ok(snapshot) => {
+                                        let tasks = snapshot.tasks;
+                                        if tasks.is_empty() {
+                                            rsx! {
+                                                p { class: "scheduler-empty", "No scheduled tasks configured." }
+                                            }
+                                        } else {
+                                            rsx! {
+                                                div { class: "scheduler-task-list",
+                                                    for task in tasks {
+                                                        div { class: "scheduler-task-item",
+                                                            div { class: "scheduler-task-header",
+                                                                span { class: "scheduler-task-name", "{task.name}" }
+                                                                span {
+                                                                    class: if task.enabled { "scheduler-task-enabled" } else { "scheduler-task-disabled" },
+                                                                    if task.enabled { "●" } else { "○" }
+                                                                }
+                                                            }
+                                                            div { class: "scheduler-task-details",
+                                                                span { class: "scheduler-task-schedule",
+                                                                    "Schedule: {fae::ui::scheduler_panel::format_schedule(&task.schedule)}"
+                                                                }
+                                                            }
+                                                            if let Some(last_run) = task.last_run {
+                                                                div { class: "scheduler-task-last-run",
+                                                                    "Last run: {fae::ui::scheduler_panel::format_timestamp(last_run)}"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        rsx! {
+                                            p { class: "scheduler-error", "Error loading tasks: {e}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // --- Update notification banner ---
             {
                 let has_update = update_available.read().is_some()
@@ -8372,6 +8439,125 @@ const GLOBAL_CSS: &str = r#"
     }
     .drawer-item:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); }
     .drawer-item:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* --- Scheduler Modal --- */
+    .scheduler-modal {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 90%;
+        max-width: 600px;
+        max-height: 80vh;
+        border-radius: var(--radius-lg);
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-medium);
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        animation: slideIn 0.2s ease;
+        overflow: hidden;
+    }
+
+    .scheduler-modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .scheduler-modal-header h2 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .scheduler-modal-close {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 1.2rem;
+        cursor: pointer;
+        padding: 0.25rem 0.5rem;
+        border-radius: var(--radius-sm);
+        transition: background 0.12s, color 0.12s;
+    }
+    .scheduler-modal-close:hover {
+        background: var(--bg-elevated);
+        color: var(--text-primary);
+    }
+
+    .scheduler-modal-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem 1.25rem;
+    }
+
+    .scheduler-task-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .scheduler-task-item {
+        padding: 0.75rem 0.875rem;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        background: var(--bg-card);
+        transition: border-color 0.12s;
+    }
+    .scheduler-task-item:hover {
+        border-color: var(--border-medium);
+    }
+
+    .scheduler-task-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 0.5rem;
+    }
+
+    .scheduler-task-name {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .scheduler-task-enabled {
+        color: var(--green);
+        font-size: 1rem;
+    }
+
+    .scheduler-task-disabled {
+        color: var(--text-tertiary);
+        font-size: 1rem;
+    }
+
+    .scheduler-task-details {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.25rem;
+    }
+
+    .scheduler-task-last-run {
+        font-size: 0.75rem;
+        color: var(--text-tertiary);
+    }
+
+    .scheduler-empty {
+        text-align: center;
+        color: var(--text-secondary);
+        padding: 2rem 1rem;
+        font-size: 0.9rem;
+    }
+
+    .scheduler-error {
+        text-align: center;
+        color: var(--red);
+        padding: 2rem 1rem;
+        font-size: 0.9rem;
+    }
 
     /* --- Settings Sections (collapsible) --- */
     .settings-section {

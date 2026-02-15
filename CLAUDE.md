@@ -41,7 +41,7 @@ Implementation touchpoints (not behavioral truth):
 - Memory migrate: every 1h
 - Memory reindex: every 3h
 - Memory reflect: every 6h
-- Memory GC: daily at 03:30 UTC
+- Memory GC: daily at 03:30 local time
 
 ## Quiet operation policy
 
