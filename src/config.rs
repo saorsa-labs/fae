@@ -705,7 +705,7 @@ impl Default for WakewordConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            references_dir: default_memory_root_dir().join("wakeword"),
+            references_dir: crate::fae_dirs::wakeword_dir(),
             threshold: 0.5,
             num_mfcc: 13,
         }
@@ -723,12 +723,12 @@ pub struct ModelConfig {
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            cache_dir: dirs_cache_dir(),
+            cache_dir: crate::fae_dirs::cache_dir(),
         }
     }
 }
 
-/// Persistent memory configuration (stored in `~/.fae` by default).
+/// Persistent memory configuration (stored in the app data directory by default).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
@@ -755,7 +755,7 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            root_dir: default_memory_root_dir(),
+            root_dir: crate::fae_dirs::memory_dir(),
             enabled: true,
             auto_capture: true,
             auto_recall: true,
@@ -765,17 +765,6 @@ impl Default for MemoryConfig {
             retention_days: 365,
             schema_auto_migrate: true,
         }
-    }
-}
-
-/// Returns the default model cache directory.
-fn dirs_cache_dir() -> PathBuf {
-    if let Some(cache) = std::env::var_os("XDG_CACHE_HOME") {
-        PathBuf::from(cache).join("fae")
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".cache").join("fae")
-    } else {
-        PathBuf::from("/tmp/fae-cache")
     }
 }
 
@@ -902,14 +891,6 @@ impl Default for ChannelExtensionConfig {
     }
 }
 
-fn default_memory_root_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae")
-    } else {
-        PathBuf::from("/tmp").join(".fae")
-    }
-}
-
 impl SpeechConfig {
     /// Load configuration from a TOML file, falling back to defaults for missing fields.
     ///
@@ -936,18 +917,11 @@ impl SpeechConfig {
         Ok(())
     }
 
-    /// Returns the default config file path: `~/.config/fae/config.toml`.
+    /// Returns the default config file path.
+    ///
+    /// Delegates to [`crate::fae_dirs::config_file`] for sandbox-safe resolution.
     pub fn default_config_path() -> PathBuf {
-        if let Some(config) = std::env::var_os("XDG_CONFIG_HOME") {
-            PathBuf::from(config).join("fae").join("config.toml")
-        } else if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home)
-                .join(".config")
-                .join("fae")
-                .join("config.toml")
-        } else {
-            PathBuf::from("/tmp/fae-config/config.toml")
-        }
+        crate::fae_dirs::config_file()
     }
 
     /// Add a security-scoped bookmark to the config.
