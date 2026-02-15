@@ -571,3 +571,26 @@ A.1: Apple Sandbox & Entitlements (8 tasks)
 A.2: Path & Permission Hardening (8 tasks)
 A.3: Credential Security (8 tasks)
 
+---
+
+## Milestone B: Scheduler Completeness
+
+### Phase B.1: Scheduler LLM Tools — COMPLETE
+- [x] Task 1: SchedulerListTool — list_scheduled_tasks (commit: f5c4341)
+- [x] Task 2: SchedulerCreateTool — create_scheduled_task (commit: f5c4341)
+- [x] Task 3: SchedulerUpdateTool — update_scheduled_task (commit: f5c4341)
+- [x] Task 4: SchedulerDeleteTool — delete_scheduled_task (commit: f5c4341)
+- [x] Task 5: SchedulerTriggerTool — trigger_scheduled_task (commit: f5c4341)
+- [x] Task 6: Registry wiring in build_registry() (commit: f5c4341)
+- [x] Task 7: System prompt updated with scheduler tool docs (commit: f5c4341)
+- [x] Task 8: Integration tests — 30 tests (commit: 5de1efb)
+
+**Phase B.1 COMPLETE** — Scheduler LLM Tools
+- 5 scheduler tools: list, create, update, delete, trigger
+- Mode gating: list (read-only, all modes), mutations (Full only)
+- Schedule types: interval, daily, weekly with full validation
+- Builtin task protection (cannot delete, only enable/disable)
+- Registered in build_registry() for all non-Off tool modes
+- System prompt updated with tool documentation and JSON examples
+- 75 new tests (45 unit + 30 integration), 1788 total tests passing
+
