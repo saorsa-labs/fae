@@ -1,7 +1,7 @@
 //! Diagnostic bundle creation for user-facing log gathering.
 //!
-//! Creates a timestamped zip file on the user's Desktop containing:
-//! - Log files from `~/.fae/logs/`
+//! Creates a timestamped zip file in the diagnostics directory containing:
+//! - Log files
 //! - Configuration files (no secrets)
 //! - Basic system information
 //!
@@ -14,43 +14,46 @@ use std::path::{Path, PathBuf};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-/// Gathers diagnostic information into a zip file on the user's Desktop.
+/// Gathers diagnostic information into a zip file.
 ///
-/// Returns the path to the created zip file.
+/// The bundle is written to [`crate::fae_dirs::diagnostics_dir()`], which is
+/// sandbox-safe on macOS.  Returns the path to the created zip file.
 ///
 /// # Errors
 ///
 /// Returns an error if the zip file cannot be created or written.
 pub fn gather_diagnostic_bundle() -> Result<PathBuf> {
-    let desktop = desktop_dir()?;
+    let output_dir = crate::fae_dirs::diagnostics_dir();
+    fs::create_dir_all(&output_dir)?;
+
     let timestamp = chrono_timestamp();
     let filename = format!("fae-diagnostics-{timestamp}.zip");
-    let zip_path = desktop.join(&filename);
+    let zip_path = output_dir.join(&filename);
 
     let file = fs::File::create(&zip_path)?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    // 1. Log files from ~/.fae/logs/
+    // 1. Log files
     let log_dir = fae_log_dir();
     if log_dir.is_dir() {
         add_directory_to_zip(&mut zip, &log_dir, "logs", options)?;
     }
 
-    // 2. Config file (~/.config/fae/config.toml)
-    let config_path = crate::SpeechConfig::default_config_path();
+    // 2. Config file
+    let config_path = crate::fae_dirs::config_file();
     if config_path.is_file() {
         add_file_to_zip(&mut zip, &config_path, "config.toml", options)?;
     }
 
-    // 3. Scheduler state (~/.config/fae/scheduler.json)
-    let scheduler_path = scheduler_json_path();
+    // 3. Scheduler state
+    let scheduler_path = crate::fae_dirs::scheduler_file();
     if scheduler_path.is_file() {
         add_file_to_zip(&mut zip, &scheduler_path, "scheduler.json", options)?;
     }
 
-    // 4. Memory manifest (~/.fae/manifest.toml) — metadata only, no records
-    let manifest_path = fae_data_dir().join("manifest.toml");
+    // 4. Memory manifest — metadata only, no records
+    let manifest_path = crate::fae_dirs::data_dir().join("manifest.toml");
     if manifest_path.is_file() {
         add_file_to_zip(&mut zip, &manifest_path, "manifest.toml", options)?;
     }
@@ -67,43 +70,11 @@ pub fn gather_diagnostic_bundle() -> Result<PathBuf> {
     Ok(zip_path)
 }
 
-/// Returns the log directory path (`~/.fae/logs/`).
+/// Returns the log directory path.
+///
+/// Delegates to [`crate::fae_dirs::logs_dir`].
 pub fn fae_log_dir() -> PathBuf {
-    fae_data_dir().join("logs")
-}
-
-/// Returns `~/.fae/`.
-fn fae_data_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae")
-    } else {
-        PathBuf::from("/tmp").join(".fae")
-    }
-}
-
-/// Returns `~/Desktop/`.
-fn desktop_dir() -> Result<PathBuf> {
-    let home =
-        std::env::var_os("HOME").ok_or_else(|| SpeechError::Pipeline("HOME not set".into()))?;
-    let desktop = PathBuf::from(home).join("Desktop");
-    if !desktop.is_dir() {
-        fs::create_dir_all(&desktop)?;
-    }
-    Ok(desktop)
-}
-
-/// Returns `~/.config/fae/scheduler.json`.
-fn scheduler_json_path() -> PathBuf {
-    if let Some(config) = std::env::var_os("XDG_CONFIG_HOME") {
-        PathBuf::from(config).join("fae").join("scheduler.json")
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home)
-            .join(".config")
-            .join("fae")
-            .join("scheduler.json")
-    } else {
-        PathBuf::from("/tmp/fae-config/scheduler.json")
-    }
+    crate::fae_dirs::logs_dir()
 }
 
 /// Generates a simple timestamp string for filenames.
@@ -283,7 +254,7 @@ mod tests {
     fn test_fae_log_dir_path() {
         let dir = fae_log_dir();
         let path_str = dir.to_string_lossy();
-        assert!(path_str.contains(".fae"));
+        assert!(path_str.contains("fae"));
         assert!(path_str.ends_with("logs"));
     }
 
