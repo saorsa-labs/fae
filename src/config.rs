@@ -34,6 +34,8 @@ pub struct SpeechConfig {
     pub canvas: CanvasConfig,
     /// External communication channel settings (Discord, WhatsApp, webhooks).
     pub channels: ChannelsConfig,
+    /// UI theme settings (light/dark/auto).
+    pub theme: ThemeConfig,
     /// Security-scoped bookmarks for persistent file access under App Sandbox.
     pub bookmarks: Vec<BookmarkEntry>,
 }
@@ -785,6 +787,35 @@ pub struct CanvasConfig {
     pub auth_token: Option<String>,
 }
 
+/// Theme mode for UI appearance.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    /// Follow system theme (macOS dark/light mode).
+    #[default]
+    Auto,
+    /// Force light theme.
+    Light,
+    /// Force dark theme.
+    Dark,
+}
+
+/// UI theme configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThemeConfig {
+    /// Theme mode (auto/light/dark).
+    pub mode: ThemeMode,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            mode: ThemeMode::Auto,
+        }
+    }
+}
+
 /// External communication channels configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1321,5 +1352,65 @@ enable_local_fallback = false
         let toml_str = "[audio]\ninput_sample_rate = 16000";
         let config: SpeechConfig = toml::from_str(toml_str).unwrap();
         assert!(config.bookmarks.is_empty());
+    }
+
+    #[test]
+    fn theme_mode_default_is_auto() {
+        assert_eq!(ThemeMode::default(), ThemeMode::Auto);
+    }
+
+    #[test]
+    fn theme_config_default_is_auto() {
+        let theme = ThemeConfig::default();
+        assert_eq!(theme.mode, ThemeMode::Auto);
+    }
+
+    #[test]
+    fn theme_mode_serializes_to_lowercase() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize)]
+        struct Wrapper {
+            mode: ThemeMode,
+        }
+
+        let auto: Wrapper = toml::from_str(r#"mode = "auto""#).unwrap();
+        assert_eq!(auto.mode, ThemeMode::Auto);
+
+        let light: Wrapper = toml::from_str(r#"mode = "light""#).unwrap();
+        assert_eq!(light.mode, ThemeMode::Light);
+
+        let dark: Wrapper = toml::from_str(r#"mode = "dark""#).unwrap();
+        assert_eq!(dark.mode, ThemeMode::Dark);
+    }
+
+    #[test]
+    fn theme_config_deserializes_from_toml() {
+        let toml_str = r#"
+[theme]
+mode = "light"
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.theme.mode, ThemeMode::Light);
+    }
+
+    #[test]
+    fn theme_config_missing_uses_default() {
+        let toml_str = "[audio]";
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.theme.mode, ThemeMode::Auto);
+    }
+
+    #[test]
+    fn theme_config_serializes_to_toml() {
+        let mut config = SpeechConfig::default();
+        config.theme.mode = ThemeMode::Dark;
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(toml_str.contains("[theme]"));
+        assert!(toml_str.contains("dark"));
+
+        // Round-trip
+        let loaded: SpeechConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(loaded.theme.mode, ThemeMode::Dark);
     }
 }
