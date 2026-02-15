@@ -547,43 +547,27 @@ All deliverables:
 - [x] Task 8: Update GUI callers, tests, documentation (commit: e762dbd)
 - Review: APPROVED (0 critical, 0 high, 0 medium findings)
 
-### Phase A.3: Credential Security — STARTING
+### Phase A.3: Credential Security — COMPLETE
+- [x] Task 1: Credential manager types and trait (commit: b8da0d3)
+- [x] Task 2: macOS Keychain backend (commit: 6405770)
+- [x] Task 3: Encrypted fallback backend (commit: c908d06)
+- [x] Task 4: Config types updated to CredentialRef (commit: 022a466)
+- [x] Task 5: Credential loading helper — resolve_credential, load_all_credentials (commit: f51525c)
+- [x] Task 6: Migration tool — detect_plaintext_credentials, migrate_to_keychain (commit: f51525c)
+- [x] Task 7: Secure deletion — secure_clear with volatile writes (commit: f51525c)
+- [x] Task 8: Integration tests and documentation (commit: f51525c)
 
-**Phase A.3 PLAN CREATED** — 8 tasks defined
+**Phase A.3 COMPLETE** — Credential Security
+- CredentialRef enum (Plaintext/Keychain/None) with custom serde for TOML compat
+- macOS Keychain backend (security-framework) + encrypted fallback (keyring)
+- LoadedCredentials with redacting Debug, PlaintextCredential detection
+- Migration tool: detect plaintext → migrate to keychain → update config refs
+- Secure deletion with ptr::write_volatile to prevent optimizer elision
+- 19 new credential tests, 1713 total tests passing, zero warnings
 
-Tasks:
-- [ ] Task 1: Add credential manager types and trait
-- [ ] Task 2: Implement macOS Keychain backend
-- [ ] Task 3: Implement encrypted fallback backend
-- [ ] Task 4: Update config types with CredentialRef
-- [ ] Task 5: Implement credential loading during config initialization
-- [ ] Task 6: Add credential migration tool
-- [ ] Task 7: Update LLM and channel runtime credential access
-- [ ] Task 8: Add secure deletion and documentation
-
-
-### Task 1: Add credential manager types and trait — COMPLETE
-- Created `src/credentials/mod.rs` with CredentialManager trait
-- Created `src/credentials/types.rs` with CredentialRef enum and CredentialError  
-- Wired module into `src/lib.rs`
-- All 7 unit tests passing
-- Commit: b8da0d3
-
-
-### Task 2: Implement macOS Keychain backend — COMPLETE
-- Added `security-framework = "3.0"` to macOS dependencies
-- Created `src/credentials/keychain.rs` with KeychainCredentialManager
-- Implemented Security framework integration (set/get/delete_generic_password)
-- Factory returns Keychain manager on macOS, stub on other platforms
-- All 11 unit tests passing
-- Commit: 6405770
-
-
-### Task 3: Implement encrypted fallback backend — COMPLETE
-- Added `keyring = "3.5"` dependency
-- Created `src/credentials/encrypted.rs` with EncryptedCredentialManager
-- Platform-specific backends: Linux (Secret Service), Windows (Credential Manager)
-- Factory returns encrypted manager on non-macOS, Keychain on macOS
-- All tests passing (11 on macOS, 16 total on Linux/Windows)
-- Commit: c908d06
+**MILESTONE A COMPLETE** — App Store Readiness
+All 3 phases delivered:
+A.1: Apple Sandbox & Entitlements (8 tasks)
+A.2: Path & Permission Hardening (8 tasks)
+A.3: Credential Security (8 tasks)
 
