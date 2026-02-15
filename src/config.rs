@@ -33,6 +33,24 @@ pub struct SpeechConfig {
     pub canvas: CanvasConfig,
     /// External communication channel settings (Discord, WhatsApp, webhooks).
     pub channels: ChannelsConfig,
+    /// Security-scoped bookmarks for persistent file access under App Sandbox.
+    pub bookmarks: Vec<BookmarkEntry>,
+}
+
+/// A persisted security-scoped bookmark for App Sandbox file access.
+///
+/// Bookmarks allow the app to regain access to user-selected files/folders
+/// across restarts without re-prompting the user via a file picker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookmarkEntry {
+    /// Human-readable label (e.g. "voice-sample", "ingestion-folder").
+    pub label: String,
+    /// Original file/folder path at the time the bookmark was created.
+    pub path: String,
+    /// Base64-encoded security-scoped bookmark data (opaque, macOS-specific).
+    pub bookmark_data: String,
+    /// Unix timestamp (seconds) when the bookmark was created.
+    pub created_at: u64,
 }
 
 /// Audio I/O configuration.
@@ -931,6 +949,54 @@ impl SpeechConfig {
             PathBuf::from("/tmp/fae-config/config.toml")
         }
     }
+
+    /// Add a security-scoped bookmark to the config.
+    ///
+    /// If a bookmark with the same label already exists, it is replaced.
+    pub fn save_bookmark(&mut self, label: &str, path: &str, bookmark_data: &[u8]) {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bookmark_data);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Remove existing bookmark with same label.
+        self.bookmarks.retain(|b| b.label != label);
+
+        self.bookmarks.push(BookmarkEntry {
+            label: label.to_string(),
+            path: path.to_string(),
+            bookmark_data: encoded,
+            created_at: now,
+        });
+    }
+
+    /// Load all bookmark entries, decoding base64 data.
+    ///
+    /// Returns `(label, path, decoded_bookmark_data)` for each entry.
+    /// Entries with invalid base64 are silently skipped.
+    pub fn load_bookmarks(&self) -> Vec<(&str, &str, Vec<u8>)> {
+        use base64::Engine;
+        self.bookmarks
+            .iter()
+            .filter_map(|entry| {
+                let data = base64::engine::general_purpose::STANDARD
+                    .decode(&entry.bookmark_data)
+                    .ok()?;
+                Some((entry.label.as_str(), entry.path.as_str(), data))
+            })
+            .collect()
+    }
+
+    /// Remove a bookmark by label.
+    ///
+    /// Returns `true` if a bookmark was found and removed.
+    pub fn remove_bookmark(&mut self, label: &str) -> bool {
+        let before = self.bookmarks.len();
+        self.bookmarks.retain(|b| b.label != label);
+        self.bookmarks.len() < before
+    }
 }
 
 #[cfg(test)]
@@ -1174,5 +1240,93 @@ enable_local_fallback = false
         let toml_str = "[llm]";
         let config: SpeechConfig = toml::from_str(toml_str).unwrap();
         assert!(config.llm.enable_local_fallback);
+    }
+
+    #[test]
+    fn bookmarks_default_empty() {
+        let config = SpeechConfig::default();
+        assert!(config.bookmarks.is_empty());
+    }
+
+    #[test]
+    fn save_and_load_bookmark() {
+        let mut config = SpeechConfig::default();
+        config.save_bookmark("test-file", "/tmp/test.txt", &[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(config.bookmarks.len(), 1);
+        assert_eq!(config.bookmarks[0].label, "test-file");
+        assert_eq!(config.bookmarks[0].path, "/tmp/test.txt");
+        assert!(config.bookmarks[0].created_at > 0);
+
+        let loaded = config.load_bookmarks();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, "test-file");
+        assert_eq!(loaded[0].1, "/tmp/test.txt");
+        assert_eq!(loaded[0].2, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn save_bookmark_replaces_same_label() {
+        let mut config = SpeechConfig::default();
+        config.save_bookmark("voice", "/old/path.wav", &[1, 2, 3]);
+        config.save_bookmark("voice", "/new/path.wav", &[4, 5, 6]);
+        assert_eq!(config.bookmarks.len(), 1);
+        assert_eq!(config.bookmarks[0].path, "/new/path.wav");
+
+        let loaded = config.load_bookmarks();
+        assert_eq!(loaded[0].2, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn remove_bookmark_by_label() {
+        let mut config = SpeechConfig::default();
+        config.save_bookmark("a", "/a", &[1]);
+        config.save_bookmark("b", "/b", &[2]);
+        assert_eq!(config.bookmarks.len(), 2);
+
+        assert!(config.remove_bookmark("a"));
+        assert_eq!(config.bookmarks.len(), 1);
+        assert_eq!(config.bookmarks[0].label, "b");
+
+        assert!(!config.remove_bookmark("nonexistent"));
+    }
+
+    #[test]
+    fn bookmark_toml_round_trip() {
+        let mut config = SpeechConfig::default();
+        config.save_bookmark("demo", "/demo/file.txt", &[10, 20, 30]);
+
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(toml_str.contains("[[bookmarks]]"));
+        assert!(toml_str.contains("demo"));
+
+        let loaded: SpeechConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(loaded.bookmarks.len(), 1);
+        assert_eq!(loaded.bookmarks[0].label, "demo");
+
+        let decoded = loaded.load_bookmarks();
+        assert_eq!(decoded[0].2, vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn bookmark_invalid_base64_skipped_in_load() {
+        let mut config = SpeechConfig::default();
+        config.bookmarks.push(BookmarkEntry {
+            label: "bad".to_string(),
+            path: "/bad".to_string(),
+            bookmark_data: "not-valid-base64!!!".to_string(),
+            created_at: 0,
+        });
+        config.save_bookmark("good", "/good", &[42]);
+
+        let loaded = config.load_bookmarks();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, "good");
+    }
+
+    #[test]
+    fn bookmarks_missing_from_toml_defaults_empty() {
+        let toml_str = "[audio]\ninput_sample_rate = 16000";
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.bookmarks.is_empty());
     }
 }
