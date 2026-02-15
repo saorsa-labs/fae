@@ -832,6 +832,8 @@ pub struct ChannelsConfig {
     pub discord: Option<DiscordChannelConfig>,
     /// WhatsApp Business Cloud API adapter configuration.
     pub whatsapp: Option<WhatsAppChannelConfig>,
+    /// Rate limiting configuration for outbound messages.
+    pub rate_limits: crate::channels::rate_limit::ChannelRateLimits,
     /// Future external adapters (plugin scaffolding).
     pub extensions: Vec<ChannelExtensionConfig>,
 }
@@ -845,6 +847,7 @@ impl Default for ChannelsConfig {
             gateway: ChannelGatewayConfig::default(),
             discord: None,
             whatsapp: None,
+            rate_limits: crate::channels::rate_limit::ChannelRateLimits::default(),
             extensions: Vec::new(),
         }
     }

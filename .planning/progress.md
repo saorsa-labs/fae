@@ -662,7 +662,22 @@ A.3: Credential Security (8 tasks)
 - 25 comprehensive tests, all passing
 - Zero compilation errors, zero warnings, zero clippy issues
 
-- [x] Task 1: Add theme configuration types (2026-02-15 21:35)
-- [x] Task 2: Add macOS system theme detection (2026-02-15 21:41)
-- [x] Task 3: Add theme CSS variable generation (2026-02-15 21:45)
-- [x] Task 4: Wire theme config into GUI state (2026-02-15 21:47)
+### Phase C.2: System Theme & Tray — COMPLETE
+- [x] Task 1: Add theme configuration types (commit: 26a81da)
+- [x] Task 2: Add macOS system theme detection (commit: 701eaf2)
+- [x] Task 3: Add theme CSS variable generation (commit: 5674e87)
+- [x] Task 4: Wire theme config into GUI state (commit: e1f77ec)
+- [x] Task 5: Inject theme CSS dynamically (commit: a314689)
+- [x] Task 6: Theme selection UI (commit: cd102f7)
+- [x] Task 7: System theme change listener (commit: 2310aa2)
+- [x] Task 8: Menu bar validation and documentation (commit: 52ac800)
+
+**Phase C.2 Complete** (2026-02-15)
+- System theme detection via NSAppearance (macOS)
+- ThemeMode: Auto/Light/Dark with user override
+- Dynamic CSS injection with reactive signals/memos
+- Theme selection radio buttons in preferences
+- Polling-based system theme watcher (1Hz)
+- Menu bar documentation and validation
+- 1936 tests passing, zero warnings
+- Review: PASS (A grade, 7/7 consensus)

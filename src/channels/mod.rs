@@ -6,17 +6,19 @@
 mod brain;
 mod discord;
 mod gateway;
+pub mod rate_limit;
 pub mod traits;
 mod whatsapp;
 
 use crate::channels::brain::ChannelBrain;
 use crate::channels::discord::DiscordAdapter;
 use crate::channels::gateway::run_gateway;
+use crate::channels::rate_limit::ChannelRateLimiters;
 use crate::channels::traits::{ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage};
 use crate::channels::whatsapp::WhatsAppAdapter;
 use crate::config::SpeechConfig;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinSet;
 
 /// Runtime event emitted by channel manager.
@@ -284,6 +286,10 @@ async fn run_runtime(
 
     let brain = ChannelBrain::from_config(&config).await?;
 
+    let rate_limiters = Arc::new(Mutex::new(ChannelRateLimiters::new(
+        &config.channels.rate_limits,
+    )));
+
     let mut adapters: HashMap<String, Arc<dyn ChannelAdapter>> = HashMap::new();
     let mut active_channels = Vec::new();
 
@@ -383,21 +389,39 @@ async fn run_runtime(
         };
 
         if let Some(adapter) = adapters.get(&message.channel) {
-            let send_result = adapter
-                .send(ChannelOutboundMessage {
-                    reply_target: message.reply_target.clone(),
-                    text: response,
-                })
-                .await;
-            match send_result {
+            // Check rate limit before sending
+            let rate_limit_check = {
+                let mut limiters = rate_limiters
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("rate limiter lock poisoned"))?;
+                limiters.try_send(&message.channel)
+            };
+
+            match rate_limit_check {
                 Ok(()) => {
-                    let _ = event_tx.send(ChannelRuntimeEvent::Outbound {
-                        channel: message.channel,
-                        reply_target: message.reply_target,
-                    });
+                    let send_result = adapter
+                        .send(ChannelOutboundMessage {
+                            reply_target: message.reply_target.clone(),
+                            text: response,
+                        })
+                        .await;
+                    match send_result {
+                        Ok(()) => {
+                            let _ = event_tx.send(ChannelRuntimeEvent::Outbound {
+                                channel: message.channel,
+                                reply_target: message.reply_target,
+                            });
+                        }
+                        Err(err) => {
+                            let warning =
+                                format!("failed to send {} response: {err}", adapter.id());
+                            let _ = event_tx.send(ChannelRuntimeEvent::Warning(warning.clone()));
+                            tracing::warn!("{warning}");
+                        }
+                    }
                 }
                 Err(err) => {
-                    let warning = format!("failed to send {} response: {err}", adapter.id());
+                    let warning = format!("rate limit exceeded for {}: {}", message.channel, err);
                     let _ = event_tx.send(ChannelRuntimeEvent::Warning(warning.clone()));
                     tracing::warn!("{warning}");
                 }
@@ -431,6 +455,7 @@ mod tests {
                 gateway: Default::default(),
                 discord: Some(DiscordChannelConfig::default()),
                 whatsapp: None,
+                rate_limits: Default::default(),
                 extensions: Vec::new(),
             },
             ..Default::default()
