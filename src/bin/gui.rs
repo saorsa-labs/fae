@@ -74,6 +74,9 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         true,
         Some(Accelerator::new(Some(CMD_OR_CTRL), Code::Comma)),
     );
+    let open_soul_item = MenuItem::with_id(FAE_MENU_OPEN_SOUL, "Soul...", true, None);
+    let open_skills_item = MenuItem::with_id(FAE_MENU_OPEN_SKILLS, "Skills...", true, None);
+    let open_memories_item = MenuItem::with_id(FAE_MENU_OPEN_MEMORIES, "Memories...", true, None);
     let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
     let check_updates_item =
         MenuItem::with_id(FAE_MENU_CHECK_UPDATES, "Check for Updates...", true, None);
@@ -89,6 +92,10 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &PredefinedMenuItem::about(None, Some(about_metadata)),
         &PredefinedMenuItem::separator(),
         &open_settings_item,
+        &open_soul_item,
+        &open_skills_item,
+        &open_memories_item,
+        &PredefinedMenuItem::separator(),
         &open_guide_item,
         &check_updates_item,
         &PredefinedMenuItem::separator(),
@@ -1170,6 +1177,31 @@ mod gui {
             let _ = std::fs::remove_dir_all(dir);
         }
 
+        #[test]
+        fn normalize_skill_id_compacts_and_lowercases() {
+            assert_eq!(
+                super::super::normalize_skill_id("  My Skill v1.2  "),
+                "my-skill-v1-2"
+            );
+            assert_eq!(super::super::normalize_skill_id("___"), "skill");
+        }
+
+        #[test]
+        fn derive_skill_id_prefers_heading_text() {
+            let markdown = "# Discord Bridge Skill\n\nSome content.";
+            let id = super::super::derive_skill_id_from_source(
+                "https://example.com/whatever.md",
+                markdown,
+            );
+            assert_eq!(id, "discord-bridge-skill");
+        }
+
+        #[test]
+        fn analyze_skill_markdown_reports_missing_headings() {
+            let report = super::super::analyze_skill_markdown("test-skill", "just body text");
+            assert!(report.contains("No markdown headings"));
+        }
+
         // --- format_bytes_short ---
 
         #[test]
@@ -1252,6 +1284,12 @@ const STARTUP_UPDATE_STALE_HOURS: u64 = 1;
 
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_SETTINGS: &str = "fae-open-settings";
+#[cfg(feature = "gui")]
+const FAE_MENU_OPEN_SOUL: &str = "fae-open-soul";
+#[cfg(feature = "gui")]
+const FAE_MENU_OPEN_SKILLS: &str = "fae-open-skills";
+#[cfg(feature = "gui")]
+const FAE_MENU_OPEN_MEMORIES: &str = "fae-open-memories";
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
 #[cfg(feature = "gui")]
@@ -2039,6 +2077,495 @@ struct ModelDetails {
 }
 
 #[cfg(feature = "gui")]
+#[derive(Clone, Default)]
+struct BehaviorFilesSnapshot {
+    soul: String,
+    onboarding: String,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Debug)]
+struct SkillInventoryEntry {
+    id: String,
+    path: PathBuf,
+    bytes: u64,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Default)]
+struct MemoryWindowSnapshot {
+    primary_user: Option<fae::memory::PrimaryUser>,
+    records: Vec<fae::memory::MemoryRecord>,
+}
+
+#[cfg(feature = "gui")]
+fn write_text_file(path: &Path, body: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "could not create directory {}: {e}",
+                parent.to_string_lossy()
+            )
+        })?;
+    }
+    std::fs::write(path, body)
+        .map_err(|e| format!("could not write {}: {e}", path.to_string_lossy()))
+}
+
+#[cfg(feature = "gui")]
+fn load_behavior_files_snapshot() -> Result<BehaviorFilesSnapshot, String> {
+    fae::personality::ensure_prompt_assets()
+        .map_err(|e| format!("could not prepare behavior files: {e}"))?;
+
+    let soul_path = fae::personality::soul_path();
+    let onboarding_path = fae::personality::onboarding_path();
+
+    let soul = std::fs::read_to_string(&soul_path)
+        .unwrap_or_else(|_| fae::personality::DEFAULT_SOUL.to_owned());
+    let onboarding = std::fs::read_to_string(&onboarding_path)
+        .unwrap_or_else(|_| fae::personality::DEFAULT_ONBOARDING_CHECKLIST.to_owned());
+
+    Ok(BehaviorFilesSnapshot { soul, onboarding })
+}
+
+#[cfg(feature = "gui")]
+fn normalize_skill_id(input: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+
+    for ch in input.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else if ch == '-' || ch == '_' || ch == ' ' || ch == '.' {
+            '-'
+        } else {
+            continue;
+        };
+
+        if mapped == '-' {
+            if out.is_empty() || prev_dash {
+                continue;
+            }
+            prev_dash = true;
+        } else {
+            prev_dash = false;
+        }
+        out.push(mapped);
+    }
+
+    while out.ends_with('-') {
+        out.pop();
+    }
+
+    if out.is_empty() {
+        "skill".to_owned()
+    } else {
+        out
+    }
+}
+
+#[cfg(feature = "gui")]
+fn derive_skill_id_from_source(source_url: &str, markdown: &str) -> String {
+    if let Some(heading) = markdown.lines().find_map(|line| {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('#') {
+            return None;
+        }
+        let text = trimmed.trim_start_matches('#').trim();
+        if text.is_empty() {
+            None
+        } else {
+            Some(text.to_owned())
+        }
+    }) {
+        return normalize_skill_id(&heading);
+    }
+
+    let base = source_url
+        .split(['?', '#'])
+        .next()
+        .and_then(|value| value.rsplit('/').next())
+        .map(|value| value.trim())
+        .unwrap_or_default();
+    let stem = base
+        .rsplit_once('.')
+        .map(|(left, _right)| left)
+        .unwrap_or(base);
+
+    normalize_skill_id(stem)
+}
+
+#[cfg(feature = "gui")]
+fn analyze_skill_markdown(skill_id: &str, markdown: &str) -> String {
+    let total_lines = markdown.lines().count();
+    let non_empty_lines = markdown
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    let heading_count = markdown
+        .lines()
+        .filter(|line| line.trim_start().starts_with('#'))
+        .count();
+    let lower = markdown.to_ascii_lowercase();
+
+    let tool_tokens = [
+        ("read", "`read`"),
+        ("write", "`write`"),
+        ("edit", "`edit`"),
+        ("bash", "`bash`"),
+        ("web_search", "`web_search`"),
+        ("fetch_url", "`fetch_url`"),
+        ("canvas", "`canvas_*`"),
+    ];
+    let referenced_tools = tool_tokens
+        .iter()
+        .filter_map(|(needle, label)| lower.contains(needle).then_some(*label))
+        .collect::<Vec<_>>();
+
+    let mut warnings = Vec::<String>::new();
+    if markdown.trim().is_empty() {
+        warnings.push("Draft is empty.".to_owned());
+    }
+    if heading_count == 0 {
+        warnings.push("No markdown headings found; add a title and sections.".to_owned());
+    }
+    if !lower.contains("when") && !lower.contains("trigger") {
+        warnings.push(
+            "No explicit trigger guidance found (for example: \"When to use this skill\")."
+                .to_owned(),
+        );
+    }
+    if markdown.len() > 120_000 {
+        warnings.push(
+            "Draft exceeds 120k characters and is likely too large to keep as a single skill."
+                .to_owned(),
+        );
+    }
+
+    let warnings_block = if warnings.is_empty() {
+        "No obvious issues found.".to_owned()
+    } else {
+        warnings.join("\n- ")
+    };
+
+    let tool_block = if referenced_tools.is_empty() {
+        "none detected".to_owned()
+    } else {
+        referenced_tools.join(", ")
+    };
+
+    format!(
+        "Skill ID: {skill_id}\nLines: {total_lines} ({non_empty_lines} non-empty)\nHeadings: {heading_count}\nTool refs: {tool_block}\nWarnings:\n- {warnings_block}"
+    )
+}
+
+#[cfg(feature = "gui")]
+fn download_skill_markdown(url: &str) -> Result<String, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("enter a URL first".to_owned());
+    }
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err("skill URL must start with http:// or https://".to_owned());
+    }
+
+    let response = ureq::get(trimmed)
+        .call()
+        .map_err(|e| format!("download failed: {e}"))?;
+
+    let mut reader = response.into_reader();
+    let mut body = String::new();
+    use std::io::Read as _;
+    reader
+        .read_to_string(&mut body)
+        .map_err(|e| format!("could not read response body: {e}"))?;
+
+    if body.trim().is_empty() {
+        return Err("downloaded file is empty".to_owned());
+    }
+    Ok(body)
+}
+
+#[cfg(feature = "gui")]
+fn save_user_skill_markdown(skill_id: &str, markdown: &str) -> Result<PathBuf, String> {
+    let normalized = normalize_skill_id(skill_id);
+    if markdown.trim().is_empty() {
+        return Err("skill draft is empty".to_owned());
+    }
+
+    let root = fae::skills::skills_dir();
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("could not create skills directory {}: {e}", root.display()))?;
+    let path = root.join(format!("{normalized}.md"));
+    write_text_file(&path, markdown)?;
+    Ok(path)
+}
+
+#[cfg(feature = "gui")]
+fn list_skill_inventory() -> Result<Vec<SkillInventoryEntry>, String> {
+    let root = fae::skills::skills_dir();
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("could not create skills directory {}: {e}", root.display()))?;
+
+    let mut skills = Vec::<SkillInventoryEntry>::new();
+    let read_dir = std::fs::read_dir(&root)
+        .map_err(|e| format!("could not read skills directory {}: {e}", root.display()))?;
+
+    for dir_entry in read_dir {
+        let entry = dir_entry.map_err(|e| format!("could not inspect skills directory: {e}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default();
+        if !extension.eq_ignore_ascii_case("md") {
+            continue;
+        }
+
+        let stem = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("skill");
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("could not read metadata for {}: {e}", path.display()))?;
+
+        skills.push(SkillInventoryEntry {
+            id: stem.to_owned(),
+            path,
+            bytes: metadata.len(),
+        });
+    }
+
+    skills.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(skills)
+}
+
+#[cfg(feature = "gui")]
+fn load_memory_window_snapshot(root_dir: &Path) -> Result<MemoryWindowSnapshot, String> {
+    let store = fae::memory::MemoryStore::new(root_dir);
+    let repo = fae::memory::MemoryRepository::new(root_dir);
+    let primary_user = store
+        .load_primary_user()
+        .map_err(|e| format!("could not load primary user memory: {e}"))?;
+    let mut records = repo
+        .list_records()
+        .map_err(|e| format!("could not load memory records: {e}"))?;
+
+    records.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    Ok(MemoryWindowSnapshot {
+        primary_user,
+        records,
+    })
+}
+
+#[cfg(feature = "gui")]
+fn save_primary_user_profile(
+    root_dir: &Path,
+    name: &str,
+    voice_sample_wav: Option<String>,
+) -> Result<(), String> {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() {
+        return Err("primary user name cannot be empty".to_owned());
+    }
+
+    let store = fae::memory::MemoryStore::new(root_dir);
+    let mut primary = match store
+        .load_primary_user()
+        .map_err(|e| format!("could not load primary user memory: {e}"))?
+    {
+        Some(existing) => existing,
+        None => fae::memory::PrimaryUser {
+            name: String::new(),
+            voiceprint: None,
+            voice_sample_wav: None,
+        },
+    };
+
+    primary.name = trimmed_name.to_owned();
+    primary.voice_sample_wav = voice_sample_wav;
+    store
+        .save_primary_user(&primary)
+        .map_err(|e| format!("could not save primary user memory: {e}"))
+}
+
+#[cfg(feature = "gui")]
+fn patch_memory_record_text(root_dir: &Path, record_id: &str, body: &str) -> Result<(), String> {
+    let trimmed_id = record_id.trim();
+    if trimmed_id.is_empty() {
+        return Err("select a memory record first".to_owned());
+    }
+    if body.trim().is_empty() {
+        return Err("memory text cannot be empty".to_owned());
+    }
+
+    let repo = fae::memory::MemoryRepository::new(root_dir);
+    repo.patch_record(trimmed_id, body, "edited from Memories window")
+        .map_err(|e| format!("could not update memory record: {e}"))
+}
+
+#[cfg(feature = "gui")]
+fn forget_memory_record(root_dir: &Path, record_id: &str) -> Result<(), String> {
+    let trimmed_id = record_id.trim();
+    if trimmed_id.is_empty() {
+        return Err("select a memory record first".to_owned());
+    }
+    let repo = fae::memory::MemoryRepository::new(root_dir);
+    repo.forget_soft_record(trimmed_id, "user-requested forget from Memories window")
+        .map_err(|e| format!("could not forget memory record: {e}"))
+}
+
+#[cfg(feature = "gui")]
+fn invalidate_memory_record(root_dir: &Path, record_id: &str) -> Result<(), String> {
+    let trimmed_id = record_id.trim();
+    if trimmed_id.is_empty() {
+        return Err("select a memory record first".to_owned());
+    }
+    let repo = fae::memory::MemoryRepository::new(root_dir);
+    repo.invalidate_record(trimmed_id, "user-requested invalidate from Memories window")
+        .map_err(|e| format!("could not invalidate memory record: {e}"))
+}
+
+#[cfg(feature = "gui")]
+fn memory_kind_label(kind: fae::memory::MemoryKind) -> &'static str {
+    match kind {
+        fae::memory::MemoryKind::Profile => "profile",
+        fae::memory::MemoryKind::Episode => "episode",
+        fae::memory::MemoryKind::Fact => "fact",
+    }
+}
+
+#[cfg(feature = "gui")]
+fn memory_status_label(status: fae::memory::MemoryStatus) -> &'static str {
+    match status {
+        fae::memory::MemoryStatus::Active => "active",
+        fae::memory::MemoryStatus::Superseded => "superseded",
+        fae::memory::MemoryStatus::Invalidated => "invalidated",
+        fae::memory::MemoryStatus::Forgotten => "forgotten",
+    }
+}
+
+#[cfg(feature = "gui")]
+fn truncate_single_line(value: &str, max_chars: usize) -> String {
+    let single = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::new();
+    for (idx, ch) in single.chars().enumerate() {
+        if idx >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+#[cfg(feature = "gui")]
+fn refresh_behavior_files_ui(
+    mut soul_text: Signal<String>,
+    mut onboarding_text: Signal<String>,
+    mut status: Signal<String>,
+) {
+    status.set("Loading behavior files...".to_owned());
+    spawn(async move {
+        let result = tokio::task::spawn_blocking(load_behavior_files_snapshot).await;
+        match result {
+            Ok(Ok(snapshot)) => {
+                soul_text.set(snapshot.soul);
+                onboarding_text.set(snapshot.onboarding);
+                status.set("Loaded SOUL and onboarding files.".to_owned());
+            }
+            Ok(Err(e)) => status.set(e),
+            Err(e) => status.set(format!("could not load behavior files: {e}")),
+        }
+    });
+}
+
+#[cfg(feature = "gui")]
+fn refresh_skill_inventory_ui(
+    mut inventory: Signal<Vec<SkillInventoryEntry>>,
+    mut status: Signal<String>,
+) {
+    status.set("Loading installed skills...".to_owned());
+    spawn(async move {
+        let result = tokio::task::spawn_blocking(list_skill_inventory).await;
+        match result {
+            Ok(Ok(items)) => {
+                inventory.set(items);
+                status.set("Loaded installed skills.".to_owned());
+            }
+            Ok(Err(e)) => status.set(e),
+            Err(e) => status.set(format!("could not load installed skills: {e}")),
+        }
+    });
+}
+
+#[cfg(feature = "gui")]
+#[allow(clippy::too_many_arguments)]
+fn refresh_memories_ui(
+    root: PathBuf,
+    preferred_id: Option<String>,
+    mut primary_name: Signal<String>,
+    mut primary_voice_sample: Signal<String>,
+    mut records: Signal<Vec<fae::memory::MemoryRecord>>,
+    mut selected_record_id: Signal<String>,
+    mut selected_record_text: Signal<String>,
+    mut status: Signal<String>,
+) {
+    status.set("Loading memories...".to_owned());
+    spawn(async move {
+        let result = tokio::task::spawn_blocking(move || load_memory_window_snapshot(&root)).await;
+        match result {
+            Ok(Ok(snapshot)) => {
+                if let Some(user) = snapshot.primary_user {
+                    primary_name.set(user.name);
+                    primary_voice_sample.set(user.voice_sample_wav.unwrap_or_default());
+                } else {
+                    primary_name.set(String::new());
+                    primary_voice_sample.set(String::new());
+                }
+
+                let mut next_selected = preferred_id.unwrap_or_default();
+                if next_selected.is_empty()
+                    || !snapshot
+                        .records
+                        .iter()
+                        .any(|record| record.id == next_selected)
+                {
+                    next_selected = snapshot
+                        .records
+                        .first()
+                        .map(|record| record.id.clone())
+                        .unwrap_or_default();
+                }
+                let text = snapshot
+                    .records
+                    .iter()
+                    .find(|record| record.id == next_selected)
+                    .map(|record| record.text.clone())
+                    .unwrap_or_default();
+
+                records.set(snapshot.records);
+                selected_record_id.set(next_selected);
+                selected_record_text.set(text);
+                status.set("Loaded memories.".to_owned());
+            }
+            Ok(Err(e)) => status.set(e),
+            Err(e) => status.set(format!("could not load memories: {e}")),
+        }
+    });
+}
+
+#[cfg(feature = "gui")]
 fn fmt_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -2724,7 +3251,6 @@ fn app() -> Element {
         let mut canvas_visible = canvas_visible;
         let mut scheduler_notification = scheduler_notification;
         let mut update_available = update_available;
-        let update_state = update_state;
         let mut config_state = config_state;
 
         spawn(async move {
@@ -3480,6 +4006,51 @@ fn app() -> Element {
         })
     };
 
+    let open_soul_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(soul_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Soul")
+                    .with_inner_size(LogicalSize::new(760.0, 820.0))
+                    .with_min_inner_size(LogicalSize::new(560.0, 640.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
+    let open_skills_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(skills_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Skills")
+                    .with_inner_size(LogicalSize::new(760.0, 820.0))
+                    .with_min_inner_size(LogicalSize::new(560.0, 640.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
+    let open_memories_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(memories_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Memories")
+                    .with_inner_size(LogicalSize::new(820.0, 860.0))
+                    .with_min_inner_size(LogicalSize::new(620.0, 680.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
     let open_guide_window = {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
@@ -3497,14 +4068,19 @@ fn app() -> Element {
 
     let _menu_handler = {
         let open_preferences_window = open_preferences_window.clone();
+        let open_soul_window = open_soul_window.clone();
+        let open_skills_window = open_skills_window.clone();
+        let open_memories_window = open_memories_window.clone();
         let open_guide_window = open_guide_window.clone();
-        let update_check_status = update_check_status;
-        let update_available = update_available;
-        let update_state = update_state;
-        let update_banner_dismissed = update_banner_dismissed;
         use_muda_event_handler(move |event| {
             if event.id() == FAE_MENU_OPEN_SETTINGS {
                 open_preferences_window();
+            } else if event.id() == FAE_MENU_OPEN_SOUL {
+                open_soul_window();
+            } else if event.id() == FAE_MENU_OPEN_SKILLS {
+                open_skills_window();
+            } else if event.id() == FAE_MENU_OPEN_MEMORIES {
+                open_memories_window();
             } else if event.id() == FAE_MENU_OPEN_GUIDE {
                 open_guide_window();
             } else if event.id() == FAE_MENU_CHECK_UPDATES {
@@ -4899,6 +5475,686 @@ fn fae_guide_window() -> Element {
 }
 
 #[cfg(feature = "gui")]
+fn soul_window() -> Element {
+    let desktop = use_window();
+
+    let mut soul_text = use_signal(String::new);
+    let mut onboarding_text = use_signal(String::new);
+    let mut status = use_signal(String::new);
+
+    {
+        let soul_text = soul_text;
+        let onboarding_text = onboarding_text;
+        let status = status;
+        use_hook(move || refresh_behavior_files_ui(soul_text, onboarding_text, status));
+    }
+
+    let soul_path = fae::personality::soul_path();
+    let onboarding_path = fae::personality::onboarding_path();
+
+    rsx! {
+        style { {GLOBAL_CSS} }
+        div { class: "container",
+            div { class: "topbar",
+                button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
+                p { class: "topbar-title", "Soul" }
+                button {
+                    class: "topbar-btn",
+                    onclick: move |_| refresh_behavior_files_ui(soul_text, onboarding_text, status),
+                    "Reload"
+                }
+            }
+
+            div { class: "settings", style: "max-width: 760px; width: 100%;",
+                p { class: "settings-sub", "SOUL path: {soul_path.display()}" }
+                p { class: "settings-sub", "Onboarding path: {onboarding_path.display()}" }
+                p { class: "note",
+                    "These files define Fae's behavior scaffolding. Keep them clear and concise."
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "SOUL.md" }
+                    div { class: "settings-section-body",
+                        textarea {
+                            class: "settings-textarea",
+                            style: "min-height: 360px;",
+                            value: "{soul_text.read()}",
+                            oninput: move |evt| soul_text.set(evt.value()),
+                        }
+                        div { class: "settings-actions",
+                            button {
+                                class: "settings-save",
+                                onclick: move |_| {
+                                    soul_text.set(fae::personality::DEFAULT_SOUL.to_owned());
+                                    status.set("SOUL reset in editor (not saved yet).".to_owned());
+                                },
+                                "Restore Default"
+                            }
+                            button {
+                                class: "settings-save",
+                                onclick: move |_| {
+                                    let body = soul_text.read().to_string();
+                                    status.set("Saving SOUL.md...".to_owned());
+                                    spawn(async move {
+                                        let result = tokio::task::spawn_blocking(move || {
+                                            write_text_file(&fae::personality::soul_path(), &body)
+                                        })
+                                        .await;
+                                        match result {
+                                            Ok(Ok(())) => status.set("Saved SOUL.md.".to_owned()),
+                                            Ok(Err(e)) => status.set(e),
+                                            Err(e) => status.set(format!("could not save SOUL.md: {e}")),
+                                        }
+                                    });
+                                },
+                                "Save SOUL"
+                            }
+                        }
+                    }
+                }
+
+                details { class: "settings-section",
+                    summary { class: "settings-section-summary", "Onboarding (Behavior File)" }
+                    div { class: "settings-section-body",
+                        textarea {
+                            class: "settings-textarea",
+                            style: "min-height: 220px;",
+                            value: "{onboarding_text.read()}",
+                            oninput: move |evt| onboarding_text.set(evt.value()),
+                        }
+                        div { class: "settings-actions",
+                            button {
+                                class: "settings-save",
+                                onclick: move |_| {
+                                    onboarding_text
+                                        .set(fae::personality::DEFAULT_ONBOARDING_CHECKLIST.to_owned());
+                                    status.set("Onboarding reset in editor (not saved yet).".to_owned());
+                                },
+                                "Restore Default"
+                            }
+                            button {
+                                class: "settings-save",
+                                onclick: move |_| {
+                                    let body = onboarding_text.read().to_string();
+                                    status.set("Saving onboarding file...".to_owned());
+                                    spawn(async move {
+                                        let result = tokio::task::spawn_blocking(move || {
+                                            write_text_file(&fae::personality::onboarding_path(), &body)
+                                        })
+                                        .await;
+                                        match result {
+                                            Ok(Ok(())) => status.set("Saved onboarding file.".to_owned()),
+                                            Ok(Err(e)) => status.set(e),
+                                            Err(e) => {
+                                                status.set(format!(
+                                                    "could not save onboarding file: {e}"
+                                                ))
+                                            }
+                                        }
+                                    });
+                                },
+                                "Save Onboarding"
+                            }
+                        }
+                    }
+                }
+
+                p { class: "settings-status", "{status.read()}" }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn skills_window() -> Element {
+    let desktop = use_window();
+    let skills_dir = fae::skills::skills_dir();
+
+    let mut source_url = use_signal(String::new);
+    let mut skill_id = use_signal(String::new);
+    let mut draft = use_signal(String::new);
+    let mut analysis = use_signal(String::new);
+    let mut status = use_signal(String::new);
+    let inventory = use_signal(Vec::<SkillInventoryEntry>::new);
+
+    {
+        use_hook(move || refresh_skill_inventory_ui(inventory, status));
+    }
+
+    let inventory_rows = inventory
+        .read()
+        .iter()
+        .map(|item| {
+            format!(
+                "{}  ({} · {})",
+                item.id,
+                fmt_bytes(item.bytes),
+                item.path.display()
+            )
+        })
+        .collect::<Vec<_>>();
+
+    rsx! {
+        style { {GLOBAL_CSS} }
+        div { class: "container",
+            div { class: "topbar",
+                button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
+                p { class: "topbar-title", "Skills" }
+                button {
+                    class: "topbar-btn",
+                    onclick: move |_| refresh_skill_inventory_ui(inventory, status),
+                    "Refresh"
+                }
+            }
+
+            div { class: "settings", style: "max-width: 760px; width: 100%;",
+                p { class: "settings-sub", "Skills directory: {skills_dir.display()}" }
+                p { class: "note",
+                    "Download a skill draft, review it, edit it, and install only when approved."
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Download + Review" }
+                    div { class: "settings-section-body",
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Skill URL" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                placeholder: "https://.../SKILL.md",
+                                value: "{source_url.read()}",
+                                oninput: move |evt| source_url.set(evt.value()),
+                            }
+                        }
+                        div { class: "details-actions",
+                            button {
+                                class: "settings-save",
+                                onclick: move |_| {
+                                    let url = source_url.read().trim().to_owned();
+                                    if url.is_empty() {
+                                        status.set("Enter a skill URL first.".to_owned());
+                                        return;
+                                    }
+                                    status.set("Downloading skill draft...".to_owned());
+                                    let fetch_url = url.clone();
+                                    spawn(async move {
+                                        let result = tokio::task::spawn_blocking(move || {
+                                            download_skill_markdown(&fetch_url)
+                                        })
+                                        .await;
+
+                                        match result {
+                                            Ok(Ok(markdown)) => {
+                                                let suggested = derive_skill_id_from_source(&url, &markdown);
+                                                let report = analyze_skill_markdown(&suggested, &markdown);
+                                                skill_id.set(suggested);
+                                                draft.set(markdown);
+                                                analysis.set(report);
+                                                status.set(
+                                                    "Draft downloaded. Review, edit, then install.".to_owned(),
+                                                );
+                                            }
+                                            Ok(Err(e)) => status.set(e),
+                                            Err(e) => status.set(format!("download failed: {e}")),
+                                        }
+                                    });
+                                },
+                                "Download"
+                            }
+                            button {
+                                class: "settings-save",
+                                onclick: {
+                                    let path = skills_dir.clone();
+                                    move |_| match open_external_target(path.to_string_lossy().as_ref()) {
+                                        Ok(()) => status.set("Opened skills folder.".to_owned()),
+                                        Err(e) => status.set(format!("could not open skills folder: {e}")),
+                                    }
+                                },
+                                "Open Folder"
+                            }
+                        }
+                    }
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Draft Editor" }
+                    div { class: "settings-section-body",
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Skill ID" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                value: "{skill_id.read()}",
+                                oninput: move |evt| skill_id.set(evt.value()),
+                            }
+                        }
+                        textarea {
+                            class: "settings-textarea",
+                            style: "min-height: 320px;",
+                            value: "{draft.read()}",
+                            oninput: move |evt| draft.set(evt.value()),
+                        }
+                        div { class: "details-actions",
+                            button {
+                                class: "settings-save",
+                                onclick: move |_| {
+                                    let body = draft.read().to_string();
+                                    if body.trim().is_empty() {
+                                        status.set("Skill draft is empty.".to_owned());
+                                        return;
+                                    }
+                                    let normalized = normalize_skill_id(skill_id.read().as_str());
+                                    skill_id.set(normalized.clone());
+                                    analysis.set(analyze_skill_markdown(&normalized, &body));
+                                    status.set("Analysis refreshed.".to_owned());
+                                },
+                                "Analyze"
+                            }
+                            button {
+                                class: "settings-save",
+                                onclick: move |_| {
+                                    let normalized = normalize_skill_id(skill_id.read().as_str());
+                                    let body = draft.read().to_string();
+                                    if body.trim().is_empty() {
+                                        status.set("Skill draft is empty.".to_owned());
+                                        return;
+                                    }
+                                    skill_id.set(normalized.clone());
+                                    status.set("Installing skill...".to_owned());
+                                    spawn(async move {
+                                        let result = tokio::task::spawn_blocking(move || {
+                                            save_user_skill_markdown(&normalized, &body)
+                                        })
+                                        .await;
+                                        match result {
+                                            Ok(Ok(path)) => {
+                                                status.set(format!("Installed: {}", path.display()));
+                                                refresh_skill_inventory_ui(inventory, status);
+                                            }
+                                            Ok(Err(e)) => status.set(e),
+                                            Err(e) => status.set(format!("install failed: {e}")),
+                                        }
+                                    });
+                                },
+                                "Install / Update"
+                            }
+                        }
+                        if !analysis.read().is_empty() {
+                            pre { class: "details-pre", "{analysis.read()}" }
+                        }
+                    }
+                }
+
+                details { class: "settings-section",
+                    summary { class: "settings-section-summary", "Installed Skills" }
+                    div { class: "settings-section-body",
+                        if inventory_rows.is_empty() {
+                            p { class: "note", "No user skills installed yet." }
+                        } else {
+                            div { class: "model-list",
+                                for row in inventory_rows {
+                                    p { class: "settings-sub", "{row}" }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                p { class: "settings-status", "{status.read()}" }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn memories_window() -> Element {
+    let desktop = use_window();
+    let memory_root = read_config_or_default().memory.root_dir;
+
+    let mut primary_name = use_signal(String::new);
+    let mut primary_voice_sample = use_signal(String::new);
+    let records = use_signal(Vec::<fae::memory::MemoryRecord>::new);
+    let mut selected_record_id = use_signal(String::new);
+    let mut selected_record_text = use_signal(String::new);
+    let mut status = use_signal(String::new);
+
+    {
+        let root = memory_root.clone();
+        use_hook(move || {
+            refresh_memories_ui(
+                root,
+                None,
+                primary_name,
+                primary_voice_sample,
+                records,
+                selected_record_id,
+                selected_record_text,
+                status,
+            )
+        });
+    }
+
+    let record_options = records
+        .read()
+        .iter()
+        .map(|record| {
+            (
+                record.id.clone(),
+                format!(
+                    "{} · {} · {}",
+                    memory_kind_label(record.kind),
+                    memory_status_label(record.status),
+                    truncate_single_line(&record.text, 72)
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let selected_record_meta = records
+        .read()
+        .iter()
+        .find(|record| record.id == *selected_record_id.read())
+        .cloned();
+    let selected_record_summary = selected_record_meta.as_ref().map(|meta| {
+        let tags = if meta.tags.is_empty() {
+            "(none)".to_owned()
+        } else {
+            meta.tags.join(", ")
+        };
+        format!(
+            "ID: {} · kind: {} · status: {} · confidence: {:.2} · tags: {}",
+            meta.id,
+            memory_kind_label(meta.kind),
+            memory_status_label(meta.status),
+            meta.confidence,
+            tags
+        )
+    });
+
+    rsx! {
+        style { {GLOBAL_CSS} }
+        div { class: "container",
+            div { class: "topbar",
+                button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
+                p { class: "topbar-title", "Memories" }
+                button {
+                    class: "topbar-btn",
+                    onclick: {
+                        let root = memory_root.clone();
+                        move |_| {
+                            let preferred = selected_record_id.read().clone();
+                            refresh_memories_ui(
+                                root.clone(),
+                                Some(preferred),
+                                primary_name,
+                                primary_voice_sample,
+                                records,
+                                selected_record_id,
+                                selected_record_text,
+                                status,
+                            );
+                        }
+                    },
+                    "Reload"
+                }
+            }
+
+            div { class: "settings", style: "max-width: 820px; width: 100%;",
+                p { class: "settings-sub", "Memory root: {memory_root.display()}" }
+                p { class: "note",
+                    "Edit carefully. Record updates are audited and status changes are reversible with future tools."
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Primary User Profile" }
+                    div { class: "settings-section-body",
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Name" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                value: "{primary_name.read()}",
+                                oninput: move |evt| primary_name.set(evt.value()),
+                            }
+                        }
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Voice sample WAV" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                value: "{primary_voice_sample.read()}",
+                                oninput: move |evt| primary_voice_sample.set(evt.value()),
+                            }
+                        }
+                        div { class: "details-actions",
+                            button {
+                                class: "settings-save",
+                                onclick: {
+                                    let root = memory_root.clone();
+                                    move |_| {
+                                        let name = primary_name.read().trim().to_owned();
+                                        let sample = primary_voice_sample.read().trim().to_owned();
+                                        let sample_opt = if sample.is_empty() {
+                                            None
+                                        } else {
+                                            Some(sample)
+                                        };
+                                        let preferred = selected_record_id.read().clone();
+                                        status.set("Saving primary profile...".to_owned());
+                                        let root_for_save = root.clone();
+                                        let root_for_reload = root.clone();
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(move || {
+                                                save_primary_user_profile(
+                                                    &root_for_save,
+                                                    &name,
+                                                    sample_opt,
+                                                )
+                                            })
+                                            .await;
+                                            match result {
+                                                Ok(Ok(())) => {
+                                                    status.set("Saved primary profile.".to_owned());
+                                                    refresh_memories_ui(
+                                                        root_for_reload,
+                                                        Some(preferred),
+                                                        primary_name,
+                                                        primary_voice_sample,
+                                                        records,
+                                                        selected_record_id,
+                                                        selected_record_text,
+                                                        status,
+                                                    );
+                                                }
+                                                Ok(Err(e)) => status.set(e),
+                                                Err(e) => status.set(format!(
+                                                    "could not save primary profile: {e}"
+                                                )),
+                                            }
+                                        });
+                                    }
+                                },
+                                "Save Profile"
+                            }
+                        }
+                    }
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Durable Memory Records" }
+                    div { class: "settings-section-body",
+                        if record_options.is_empty() {
+                            p { class: "note", "No durable records found yet." }
+                        } else {
+                            div { class: "settings-row",
+                                label { class: "settings-label", "Record" }
+                                select {
+                                    class: "settings-select",
+                                    value: "{selected_record_id.read()}",
+                                    onchange: move |evt| {
+                                        let next_id = evt.value();
+                                        selected_record_id.set(next_id.clone());
+                                        let text = records
+                                            .read()
+                                            .iter()
+                                            .find(|record| record.id == next_id)
+                                            .map(|record| record.text.clone())
+                                            .unwrap_or_default();
+                                        selected_record_text.set(text);
+                                    },
+                                    for (id, label) in record_options {
+                                        option { value: "{id}", "{label}" }
+                                    }
+                                }
+                            }
+
+                            if let Some(summary) = selected_record_summary {
+                                p { class: "settings-sub",
+                                    "{summary}"
+                                }
+                            }
+
+                            textarea {
+                                class: "settings-textarea",
+                                style: "min-height: 260px;",
+                                value: "{selected_record_text.read()}",
+                                oninput: move |evt| selected_record_text.set(evt.value()),
+                            }
+                            div { class: "details-actions",
+                                button {
+                                    class: "settings-save",
+                                    onclick: {
+                                        let root = memory_root.clone();
+                                        move |_| {
+                                            let record_id = selected_record_id.read().clone();
+                                            let body = selected_record_text.read().to_string();
+                                            let preferred = record_id.clone();
+                                            status.set("Saving memory edit...".to_owned());
+                                            let root_for_save = root.clone();
+                                            let root_for_reload = root.clone();
+                                            spawn(async move {
+                                                let result = tokio::task::spawn_blocking(move || {
+                                                    patch_memory_record_text(
+                                                        &root_for_save,
+                                                        &record_id,
+                                                        &body,
+                                                    )
+                                                })
+                                                .await;
+                                                match result {
+                                                    Ok(Ok(())) => {
+                                                        status.set("Saved memory edit.".to_owned());
+                                                        refresh_memories_ui(
+                                                            root_for_reload,
+                                                            Some(preferred),
+                                                            primary_name,
+                                                            primary_voice_sample,
+                                                            records,
+                                                            selected_record_id,
+                                                            selected_record_text,
+                                                            status,
+                                                        );
+                                                    }
+                                                    Ok(Err(e)) => status.set(e),
+                                                    Err(e) => {
+                                                        status.set(format!("could not save memory edit: {e}"))
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    },
+                                    "Save Edit"
+                                }
+                                button {
+                                    class: "settings-save",
+                                    onclick: {
+                                        let root = memory_root.clone();
+                                        move |_| {
+                                            let record_id = selected_record_id.read().clone();
+                                            let preferred = record_id.clone();
+                                            status.set("Marking memory as forgotten...".to_owned());
+                                            let root_for_save = root.clone();
+                                            let root_for_reload = root.clone();
+                                            spawn(async move {
+                                                let result = tokio::task::spawn_blocking(move || {
+                                                    forget_memory_record(&root_for_save, &record_id)
+                                                })
+                                                .await;
+                                                match result {
+                                                    Ok(Ok(())) => {
+                                                        status.set("Memory marked forgotten.".to_owned());
+                                                        refresh_memories_ui(
+                                                            root_for_reload,
+                                                            Some(preferred),
+                                                            primary_name,
+                                                            primary_voice_sample,
+                                                            records,
+                                                            selected_record_id,
+                                                            selected_record_text,
+                                                            status,
+                                                        );
+                                                    }
+                                                    Ok(Err(e)) => status.set(e),
+                                                    Err(e) => status.set(format!(
+                                                        "could not update memory status: {e}"
+                                                    )),
+                                                }
+                                            });
+                                        }
+                                    },
+                                    "Forget"
+                                }
+                                button {
+                                    class: "settings-save",
+                                    onclick: {
+                                        let root = memory_root.clone();
+                                        move |_| {
+                                            let record_id = selected_record_id.read().clone();
+                                            let preferred = record_id.clone();
+                                            status.set("Invalidating memory record...".to_owned());
+                                            let root_for_save = root.clone();
+                                            let root_for_reload = root.clone();
+                                            spawn(async move {
+                                                let result = tokio::task::spawn_blocking(move || {
+                                                    invalidate_memory_record(&root_for_save, &record_id)
+                                                })
+                                                .await;
+                                                match result {
+                                                    Ok(Ok(())) => {
+                                                        status.set("Memory invalidated.".to_owned());
+                                                        refresh_memories_ui(
+                                                            root_for_reload,
+                                                            Some(preferred),
+                                                            primary_name,
+                                                            primary_voice_sample,
+                                                            records,
+                                                            selected_record_id,
+                                                            selected_record_text,
+                                                            status,
+                                                        );
+                                                    }
+                                                    Ok(Err(e)) => status.set(e),
+                                                    Err(e) => status.set(format!(
+                                                        "could not invalidate memory: {e}"
+                                                    )),
+                                                }
+                                            });
+                                        }
+                                    },
+                                    "Invalidate"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                p { class: "settings-status", "{status.read()}" }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
 fn preferences_window() -> Element {
     let desktop = use_window();
     let mut config_state = use_signal(read_config_or_default);
@@ -5254,19 +6510,13 @@ fn preferences_window() -> Element {
                         div { class: "settings-row",
                             button {
                                 class: "settings-save",
-                                onclick: {
-                                    let update_check_status = update_check_status;
-                                    let update_available = update_available;
-                                    let update_state = update_state;
-                                    let update_banner_dismissed = update_banner_dismissed;
-                                    move |_| {
-                                        run_manual_update_check(
-                                            update_check_status,
-                                            update_available,
-                                            update_state,
-                                            update_banner_dismissed,
-                                        );
-                                    }
+                                onclick: move |_| {
+                                    run_manual_update_check(
+                                        update_check_status,
+                                        update_available,
+                                        update_state,
+                                        update_banner_dismissed,
+                                    );
                                 },
                                 "Check now"
                             }
