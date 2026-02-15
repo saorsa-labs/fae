@@ -597,4 +597,47 @@ A.3: Credential Security (8 tasks)
 - [x] Task 1: ConversationTrigger payload schema (commit: 012a412)
 - [x] Task 2: TaskExecutorBridge (commit: 1239b5f)
 - [x] Task 3: ConversationRequest and response types (commit: 1239b5f)
+- [x] Task 4: Wire executor in startup (commit: ec41117)
+- [x] Task 5: Handle ConversationRequest in runtime loop (commit: c445be1)
+- [x] Task 6: ConversationSource attribution (commit: a6388f9)
+- [x] Task 7: Capture and persist task execution results (commit: 3ba8b1f)
+- [x] Task 8: Integration tests and documentation (commit: 5bf9b20)
+
+**Phase B.2 COMPLETE** — Scheduler Conversation Bridge
+- ConversationTrigger payload schema for scheduler→conversation
+- TaskExecutorBridge connecting scheduler to pipeline via mpsc channel
+- ConversationRequest/Response types with oneshot response channel
+- Executor wired in startup with conversation handler
+- ConversationSource attribution for task-triggered turns
+- Result capture and persistence via response channel
+- 1820 total tests passing
+
+### Phase B.3: Scheduler Management UI
 - [x] Task 1: Add 'Scheduled Tasks' menu item (commit: 85a44e9)
+- [x] Task 2: Scheduler panel types and state (commit: a6f24b2)
+- [x] Task 3: Task list view component (commit: a6f24b2)
+- [x] Task 4: Task edit form component (commit: 5ffaeb0)
+- [x] Task 5: Execution history viewer (commit: 5ffaeb0)
+- [x] Task 6: Wire scheduler panel into GUI (commit: 736e5b4)
+- [x] Task 7: Fix CLAUDE.md scheduler timing docs (commit: 736e5b4)
+- [x] Task 8: Integration tests and documentation (commit: a07f936)
+
+**Phase B.3 COMPLETE** — Scheduler Management UI
+- Full GUI scheduler panel (list, edit, history, toggle enabled)
+- SchedulerPanelState, EditingTask, ScheduleForm types
+- TaskListView with formatters (schedule, timestamp, enabled status)
+- TaskEditForm with real-time validation
+- ExecutionHistoryView with outcome filtering
+- Modal overlay wired into GUI app
+- 75 new tests, 1895 total tests passing
+
+## Milestone B COMPLETE — Scheduler Completeness
+- 3 phases (B.1, B.2, B.3), 24 tasks total
+- LLM tools, conversation bridge, management UI
+- Zero warnings, zero errors, all reviews APPROVED
+
+---
+
+## Milestone 3: UI Polish & Missing Features
+
+### Phase C.1: SOUL.md Version Control — STARTING

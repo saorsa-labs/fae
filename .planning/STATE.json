@@ -3,24 +3,25 @@
   "project": "fae-production-hardening",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "Scheduler Completeness"
+    "number": 3,
+    "name": "UI Polish & Missing Features"
   },
   "phase": {
-    "number": "B.3",
-    "name": "Scheduler Management UI",
-    "plan": "PLAN-phase-B.3.md"
+    "number": "C.1",
+    "name": "SOUL.md Version Control",
+    "plan": "PLAN-phase-C.1.md",
+    "status": "executing"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 8,
-    "current_task": 8
+    "completed_tasks": 0,
+    "current_task": 1
   },
   "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "PASS"
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
   },
-  "status": "completed",
-  "last_updated": "2026-02-15T22:00:00Z"
+  "status": "executing",
+  "last_updated": "2026-02-15T22:15:00Z"
 }

@@ -50,6 +50,7 @@ pub mod progress;
 pub mod runtime;
 pub mod scheduler;
 pub mod skills;
+pub mod soul_version;
 pub mod startup;
 pub mod stt;
 pub mod system_profile;
