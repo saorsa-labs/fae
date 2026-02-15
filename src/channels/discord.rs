@@ -21,14 +21,10 @@ impl DiscordAdapter {
         config: &DiscordChannelConfig,
         manager: &dyn crate::credentials::CredentialManager,
     ) -> Self {
-        let bot_token = config
-            .bot_token
-            .resolve(manager)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!("failed to resolve Discord bot token: {}", e);
-                String::new()
-            });
+        let bot_token = config.bot_token.resolve(manager).await.unwrap_or_else(|e| {
+            tracing::warn!("failed to resolve Discord bot token: {}", e);
+            String::new()
+        });
 
         Self {
             bot_token,

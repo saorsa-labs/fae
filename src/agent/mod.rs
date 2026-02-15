@@ -341,14 +341,10 @@ async fn build_remote_provider(
     };
 
     // Resolve API key using the credential manager
-    let api_key = config
-        .api_key
-        .resolve(manager)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!("failed to resolve API key: {}", e);
-            String::new()
-        });
+    let api_key = config.api_key.resolve(manager).await.unwrap_or_else(|e| {
+        tracing::warn!("failed to resolve API key: {}", e);
+        String::new()
+    });
 
     match resolved_api_type {
         LlmApiType::AnthropicMessages => {

@@ -152,13 +152,15 @@ impl CredentialRef {
     ///
     /// Returns `CredentialError::NotFound` if the credential is `None` or not found in storage.
     /// Returns `CredentialError::KeychainAccess` if platform storage access fails.
-    pub async fn resolve(&self, manager: &dyn super::CredentialManager) -> Result<String, CredentialError> {
+    pub async fn resolve(
+        &self,
+        manager: &dyn super::CredentialManager,
+    ) -> Result<String, CredentialError> {
         match self {
             CredentialRef::Plaintext(value) => Ok(value.clone()),
             CredentialRef::Keychain { .. } => {
                 // Use direct retrieve with the keychain reference
-                manager.retrieve(self)?
-                    .ok_or(CredentialError::NotFound)
+                manager.retrieve(self)?.ok_or(CredentialError::NotFound)
             }
             CredentialRef::None => Err(CredentialError::NotFound),
         }
@@ -363,10 +365,17 @@ mod tests {
 
         struct MockManager;
         impl CredentialManager for MockManager {
-            fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
+            fn store(
+                &self,
+                _account: &str,
+                _value: &str,
+            ) -> Result<CredentialRef, CredentialError> {
                 unimplemented!()
             }
-            fn retrieve(&self, _cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
+            fn retrieve(
+                &self,
+                _cred_ref: &CredentialRef,
+            ) -> Result<Option<String>, CredentialError> {
                 unimplemented!()
             }
             fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
@@ -390,10 +399,17 @@ mod tests {
 
         struct MockManager;
         impl CredentialManager for MockManager {
-            fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
+            fn store(
+                &self,
+                _account: &str,
+                _value: &str,
+            ) -> Result<CredentialRef, CredentialError> {
                 unimplemented!()
             }
-            fn retrieve(&self, _cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
+            fn retrieve(
+                &self,
+                _cred_ref: &CredentialRef,
+            ) -> Result<Option<String>, CredentialError> {
                 unimplemented!()
             }
             fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
@@ -406,7 +422,7 @@ mod tests {
         let result = cred_ref.resolve(&manager).await;
         assert!(result.is_err());
         match result {
-            Err(CredentialError::NotFound) => {},
+            Err(CredentialError::NotFound) => {}
             _ => unreachable!(),
         }
     }
@@ -417,12 +433,21 @@ mod tests {
 
         struct MockManager;
         impl CredentialManager for MockManager {
-            fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
+            fn store(
+                &self,
+                _account: &str,
+                _value: &str,
+            ) -> Result<CredentialRef, CredentialError> {
                 unimplemented!()
             }
-            fn retrieve(&self, cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
+            fn retrieve(
+                &self,
+                cred_ref: &CredentialRef,
+            ) -> Result<Option<String>, CredentialError> {
                 match cred_ref {
-                    CredentialRef::Keychain { service, account } if service == "test-svc" && account == "test-acc" => {
+                    CredentialRef::Keychain { service, account }
+                        if service == "test-svc" && account == "test-acc" =>
+                    {
                         Ok(Some("retrieved-value".to_owned()))
                     }
                     _ => Ok(Option::None),

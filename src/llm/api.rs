@@ -338,14 +338,10 @@ async fn resolve_connection(
         .clone()
         .unwrap_or_else(|| config.api_model.clone());
 
-    let api_key = config
-        .api_key
-        .resolve(manager)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!("failed to resolve API key in ApiLlm: {}", e);
-            String::new()
-        });
+    let api_key = config.api_key.resolve(manager).await.unwrap_or_else(|e| {
+        tracing::warn!("failed to resolve API key in ApiLlm: {}", e);
+        String::new()
+    });
 
     Ok(ResolvedConnection {
         api_url: config.api_url.clone(),

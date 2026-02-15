@@ -213,7 +213,8 @@ mod tests {
             &self,
             _account: &str,
             _value: &str,
-        ) -> Result<crate::credentials::CredentialRef, crate::credentials::CredentialError> {
+        ) -> Result<crate::credentials::CredentialRef, crate::credentials::CredentialError>
+        {
             unimplemented!()
         }
         fn retrieve(

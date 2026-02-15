@@ -743,32 +743,140 @@ async fn handle_conversation_requests(
 ///
 /// This creates a minimal agent session for the scheduled task, runs the
 /// conversation, and returns the assistant's response text.
-///
-/// NOTE: This is a placeholder implementation. Full integration with the
-/// pipeline/agent system will be completed in a follow-up task.
 async fn execute_scheduled_conversation(
-    _config: &SpeechConfig,
+    config: &SpeechConfig,
     request: &crate::pipeline::messages::ConversationRequest,
 ) -> crate::error::Result<String> {
-    use tracing::warn;
+    use crate::config::LlmApiType;
+    use crate::fae_llm::provider::ProviderAdapter;
+    use crate::fae_llm::providers::anthropic::{AnthropicAdapter, AnthropicConfig};
+    use crate::fae_llm::providers::message::Message;
+    use crate::fae_llm::providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
+    use crate::fae_llm::types::RequestOptions;
+    use futures_util::StreamExt;
+    use std::sync::Arc;
+    use tracing::{debug, info, warn};
 
-    // Placeholder implementation
-    // TODO: Full agent integration
-    // - Load system prompt with addon
-    // - Create agent LLM session
-    // - Execute conversation with memory context
-    // - Return assistant response text
+    // Build system prompt with optional addon
+    let mut system_prompt = config.llm.effective_system_prompt();
+    if let Some(addon) = &request.system_addon {
+        system_prompt.push('\n');
+        system_prompt.push_str(addon);
+    }
 
-    warn!(
-        "Scheduled conversation for task {} not yet fully implemented",
-        request.task_id
+    // Prepare messages
+    let messages = vec![
+        Message::system(system_prompt),
+        Message::user(&request.prompt),
+    ];
+
+    // Create credential manager and resolve API key
+    let credential_manager = crate::credentials::create_manager();
+    let api_key = config
+        .llm
+        .api_key
+        .resolve(credential_manager.as_ref())
+        .await
+        .unwrap_or_else(|e| {
+            warn!("Failed to resolve API key: {e}");
+            String::new()
+        });
+
+    if api_key.is_empty() {
+        return Err(SpeechError::Config(
+            "No API key configured for scheduled conversations".to_string(),
+        ));
+    }
+
+    // Determine model to use
+    let model_id = config
+        .llm
+        .cloud_model
+        .clone()
+        .unwrap_or_else(|| config.llm.api_model.clone());
+
+    // Build provider based on API type
+    let provider_hint = config
+        .llm
+        .cloud_provider
+        .clone()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    let resolved_api_type = match config.llm.api_type {
+        LlmApiType::Auto => {
+            if provider_hint == "anthropic" || config.llm.api_url.contains("anthropic.com") {
+                LlmApiType::AnthropicMessages
+            } else {
+                LlmApiType::OpenAiCompletions
+            }
+        }
+        explicit => explicit,
+    };
+
+    let provider: Arc<dyn ProviderAdapter> = match resolved_api_type {
+        LlmApiType::AnthropicMessages => {
+            let mut provider_cfg =
+                AnthropicConfig::new(api_key, model_id).with_max_tokens(config.llm.max_tokens);
+
+            if !config.llm.api_url.trim().is_empty() {
+                provider_cfg = provider_cfg
+                    .with_base_url(config.llm.api_url.trim().trim_end_matches('/').to_string());
+            }
+
+            Arc::new(AnthropicAdapter::new(provider_cfg))
+        }
+        LlmApiType::OpenAiCompletions | LlmApiType::OpenAiResponses | LlmApiType::Auto => {
+            let mut provider_cfg = if let Some(provider_name) = config.llm.cloud_provider.as_deref()
+            {
+                OpenAiConfig::for_provider(provider_name, api_key.clone(), model_id)
+            } else {
+                OpenAiConfig::new(api_key.clone(), model_id)
+            };
+
+            if !config.llm.api_url.trim().is_empty() {
+                provider_cfg = provider_cfg
+                    .with_base_url(config.llm.api_url.trim().trim_end_matches('/').to_string());
+            }
+
+            if matches!(resolved_api_type, LlmApiType::OpenAiResponses) {
+                provider_cfg = provider_cfg.with_api_mode(OpenAiApiMode::Responses);
+            }
+
+            Arc::new(OpenAiAdapter::new(provider_cfg))
+        }
+    };
+
+    info!(
+        "Executing scheduled conversation for task {} with provider {:?}",
+        request.task_id, resolved_api_type
     );
 
-    // Return a placeholder response indicating the feature is in progress
-    Ok(format!(
-        "Scheduled task '{}' received. Full conversation handler coming soon.",
-        request.task_id
-    ))
+    // Make streaming request
+    let options = RequestOptions::default().with_stream(true);
+
+    let mut stream = provider.send(&messages, &options, &[]).await.map_err(|e| {
+        SpeechError::Llm(format!(
+            "Failed to start conversation stream for task {}: {e}",
+            request.task_id
+        ))
+    })?;
+
+    // Collect text from stream
+    let mut response_text = String::new();
+    while let Some(event) = stream.next().await {
+        if let crate::fae_llm::events::LlmEvent::TextDelta { text } = event {
+            response_text.push_str(&text);
+        }
+    }
+
+    debug!(
+        "Scheduled conversation completed for task {}: {} chars",
+        request.task_id,
+        response_text.len()
+    );
+
+    Ok(response_text)
 }
 
 fn execute_scheduler_task(
