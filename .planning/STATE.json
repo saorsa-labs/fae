@@ -1,27 +1,27 @@
 {
   "version": 1,
-  "project": "fae-production-hardening",
-  "active": false,
+  "project": "fae-bugfixes-v0.3.1",
+  "active": true,
   "milestone": {
-    "number": 3,
-    "name": "UI Polish & Missing Features"
+    "number": 4,
+    "name": "Post-Release Bug Fixes"
   },
   "phase": {
-    "number": "C.3",
-    "name": "Channel UI Enhancement",
-    "plan": "PLAN-phase-C.3.md",
-    "status": "complete"
+    "number": "D.1",
+    "name": "Critical Fixes (P0 + P1)",
+    "plan": "PLAN-phase-D.1.md",
+    "status": "in_progress"
   },
   "progress": {
-    "total_tasks": 8,
-    "completed_tasks": 8,
-    "current_task": 8
+    "total_tasks": 5,
+    "completed_tasks": 0,
+    "current_task": 1
   },
   "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "APPROVED"
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
   },
-  "status": "milestone_complete",
-  "last_updated": 1771196400
+  "status": "executing",
+  "last_updated": 1771197300
 }

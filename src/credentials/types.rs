@@ -136,15 +136,52 @@ impl CredentialRef {
         }
     }
 
+    /// Resolve the credential to a string value asynchronously.
+    ///
+    /// # Arguments
+    ///
+    /// * `manager` - The credential manager to use for retrieving keychain credentials
+    ///
+    /// # Returns
+    ///
+    /// - For `Plaintext`: returns the stored value directly
+    /// - For `Keychain`: retrieves the value from the credential manager
+    /// - For `None`: returns `CredentialError::NotFound`
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialError::NotFound` if the credential is `None` or not found in storage.
+    /// Returns `CredentialError::KeychainAccess` if platform storage access fails.
+    pub async fn resolve(&self, manager: &dyn super::CredentialManager) -> Result<String, CredentialError> {
+        match self {
+            CredentialRef::Plaintext(value) => Ok(value.clone()),
+            CredentialRef::Keychain { .. } => {
+                // Use direct retrieve with the keychain reference
+                manager.retrieve(self)?
+                    .ok_or(CredentialError::NotFound)
+            }
+            CredentialRef::None => Err(CredentialError::NotFound),
+        }
+    }
+
     /// Resolve the credential to a string value.
     ///
     /// For `Plaintext` variants, returns the stored value.
     /// For `Keychain` and `None` variants, returns an empty string.
     ///
+    /// # Deprecated
+    ///
+    /// This method returns empty strings for keychain references, causing silent
+    /// authentication failures. Use `resolve()` with a `CredentialManager` instead.
+    ///
     /// This is a transitional method for callers that need a `String`
     /// while the full `CredentialManager::retrieve()` infrastructure
     /// is wired through the runtime. New code should prefer
     /// `CredentialManager::retrieve()` for secure keychain resolution.
+    #[deprecated(
+        since = "0.3.1",
+        note = "Use resolve() with CredentialManager instead - this returns empty strings for keychain refs"
+    )]
     #[must_use]
     pub fn resolve_plaintext(&self) -> String {
         match self {
@@ -318,5 +355,94 @@ mod tests {
     #[test]
     fn credential_ref_default() {
         assert_eq!(CredentialRef::default(), CredentialRef::None);
+    }
+
+    #[tokio::test]
+    async fn credential_ref_resolve_plaintext() {
+        use crate::credentials::CredentialManager;
+
+        struct MockManager;
+        impl CredentialManager for MockManager {
+            fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
+                unimplemented!()
+            }
+            fn retrieve(&self, _cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
+                unimplemented!()
+            }
+            fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
+                unimplemented!()
+            }
+        }
+
+        let manager = MockManager;
+        let cred_ref = CredentialRef::Plaintext("test-value".to_owned());
+        let result = cred_ref.resolve(&manager).await;
+        assert!(result.is_ok());
+        match result {
+            Ok(value) => assert_eq!(value, "test-value"),
+            Err(_) => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_ref_resolve_none() {
+        use crate::credentials::CredentialManager;
+
+        struct MockManager;
+        impl CredentialManager for MockManager {
+            fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
+                unimplemented!()
+            }
+            fn retrieve(&self, _cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
+                unimplemented!()
+            }
+            fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
+                unimplemented!()
+            }
+        }
+
+        let manager = MockManager;
+        let cred_ref = CredentialRef::None;
+        let result = cred_ref.resolve(&manager).await;
+        assert!(result.is_err());
+        match result {
+            Err(CredentialError::NotFound) => {},
+            _ => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_ref_resolve_keychain() {
+        use crate::credentials::CredentialManager;
+
+        struct MockManager;
+        impl CredentialManager for MockManager {
+            fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
+                unimplemented!()
+            }
+            fn retrieve(&self, cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
+                match cred_ref {
+                    CredentialRef::Keychain { service, account } if service == "test-svc" && account == "test-acc" => {
+                        Ok(Some("retrieved-value".to_owned()))
+                    }
+                    _ => Ok(Option::None),
+                }
+            }
+            fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
+                unimplemented!()
+            }
+        }
+
+        let manager = MockManager;
+        let cred_ref = CredentialRef::Keychain {
+            service: "test-svc".to_owned(),
+            account: "test-acc".to_owned(),
+        };
+        let result = cred_ref.resolve(&manager).await;
+        assert!(result.is_ok());
+        match result {
+            Ok(value) => assert_eq!(value, "retrieved-value"),
+            Err(_) => unreachable!(),
+        }
     }
 }

@@ -13,6 +13,9 @@
 //! - **TTS**: Synthesizes speech using Kokoro-82M (ONNX)
 //! - **Audio playback**: Plays synthesized audio via `cpal`
 
+// Temporarily allow deprecated during Task 1-3 migration
+#![allow(deprecated)]
+
 // Fail early with a clear message when the metal feature is enabled but the
 // Metal Toolchain is not installed. Without this, mistralrs panics deep in a
 // build script with an opaque error.
