@@ -43,6 +43,7 @@ pub mod model_tier;
 pub mod models;
 pub mod personality;
 pub mod pipeline;
+pub mod platform;
 pub mod progress;
 pub mod runtime;
 pub mod scheduler;

@@ -3,6 +3,23 @@
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- App Sandbox (required for App Store) -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+
+  <!-- User-selected file access via file pickers -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+
+  <!-- Security-scoped bookmarks for persistent file access across restarts -->
+  <key>com.apple.security.files.bookmarks.app-scope</key>
+  <true/>
+
+  <!-- Network client access (LLM API calls, web search, update checks) -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+
+  <!-- Microphone access for voice input -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
 </dict>

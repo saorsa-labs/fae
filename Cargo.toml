@@ -26,7 +26,7 @@ path = "src/bin/avatar_slicer.rs"
 required-features = ["tools"]
 
 [features]
-default = ["gui", "web-search"]
+default = ["gui"]
 metal = ["mistralrs/metal"]
 gui = ["dioxus"]
 tools = []
@@ -36,8 +36,8 @@ directml = ["ort/directml"]
 cuda = ["ort/cuda"]
 # Voice cloning TTS backend (Fish Speech).
 fish-speech = []
-# Embedded web search (fae-search crate).
-web-search = ["dep:fae-search"]
+# Embedded web search (fae-search crate) — always compiled.
+
 
 [dependencies]
 # Audio I/O
@@ -143,7 +143,7 @@ rand = "0.8"
 zip = "2"
 
 # Embedded web search (optional, behind `web-search` feature)
-fae-search = { path = "fae-search", optional = true }
+fae-search = { path = "fae-search" }
 
 # Filesystem utilities (disk space check via statvfs)
 libc = "0.2"
@@ -152,6 +152,10 @@ libc = "0.2"
 # This is equivalent to `--features metal` but happens automatically.
 [target.'cfg(target_os = "macos")'.dependencies]
 mistralrs = { version = "0.7", features = ["metal"] }
+# Security-scoped bookmarks for App Sandbox file access persistence.
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-foundation = "0.3"
 
 [package.metadata.bundle]
 name = "Fae"
