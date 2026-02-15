@@ -87,6 +87,8 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     let open_soul_item = MenuItem::with_id(FAE_MENU_OPEN_SOUL, "Soul...", true, None);
     let open_skills_item = MenuItem::with_id(FAE_MENU_OPEN_SKILLS, "Skills...", true, None);
     let open_memories_item = MenuItem::with_id(FAE_MENU_OPEN_MEMORIES, "Memories...", true, None);
+    let open_scheduler_item =
+        MenuItem::with_id(FAE_MENU_OPEN_SCHEDULER, "Scheduled Tasks...", true, None);
     let open_ingestion_item =
         MenuItem::with_id(FAE_MENU_OPEN_INGESTION, "Ingestion...", true, None);
     let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
@@ -107,6 +109,7 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &open_soul_item,
         &open_skills_item,
         &open_memories_item,
+        &open_scheduler_item,
         &open_ingestion_item,
         &PredefinedMenuItem::separator(),
         &open_guide_item,
@@ -1362,6 +1365,8 @@ const FAE_MENU_OPEN_SKILLS: &str = "fae-open-skills";
 const FAE_MENU_OPEN_MEMORIES: &str = "fae-open-memories";
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_INGESTION: &str = "fae-open-ingestion";
+#[cfg(feature = "gui")]
+const FAE_MENU_OPEN_SCHEDULER: &str = "fae-menu-scheduler";
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
 #[cfg(feature = "gui")]
@@ -3912,6 +3917,7 @@ fn app() -> Element {
     let mut update_install_error = use_signal(|| None::<String>);
     let mut update_gate = use_signal(|| None::<UpdateGatePhase>);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
+    let mut show_scheduler_panel = use_signal(|| false);
     let mut active_model = use_signal(|| None::<String>);
     let mut mic_active = use_signal(|| None::<bool>);
     let mut mic_repair_busy = use_signal(|| false);
@@ -4946,6 +4952,8 @@ fn app() -> Element {
                 open_skills_window();
             } else if event.id() == FAE_MENU_OPEN_MEMORIES {
                 open_memories_window();
+            } else if event.id() == FAE_MENU_OPEN_SCHEDULER {
+                show_scheduler_panel.set(true);
             } else if event.id() == FAE_MENU_OPEN_INGESTION {
                 open_ingestion_window();
             } else if event.id() == FAE_MENU_OPEN_GUIDE {
