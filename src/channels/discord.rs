@@ -17,9 +17,21 @@ pub struct DiscordAdapter {
 }
 
 impl DiscordAdapter {
-    pub fn new(config: &DiscordChannelConfig) -> Self {
+    pub async fn new(
+        config: &DiscordChannelConfig,
+        manager: &dyn crate::credentials::CredentialManager,
+    ) -> Self {
+        let bot_token = config
+            .bot_token
+            .resolve(manager)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("failed to resolve Discord bot token: {}", e);
+                String::new()
+            });
+
         Self {
-            bot_token: config.bot_token.resolve_plaintext(),
+            bot_token,
             guild_id: config.guild_id.clone(),
             allowed_user_ids: config.allowed_user_ids.clone(),
             allowed_channel_ids: config.allowed_channel_ids.clone(),

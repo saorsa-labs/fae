@@ -217,7 +217,7 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
                 .gateway
                 .bearer_token
                 .as_ref()
-                .is_none_or(|token| token.resolve_plaintext().trim().is_empty())
+                .is_none_or(|token| !token.is_set())
         {
             issues.push(ChannelValidationIssue {
                 id: "gateway-public-without-auth".to_owned(),
@@ -236,9 +236,10 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
 /// Best-effort async health checks for configured adapters.
 pub async fn check_health(config: &SpeechConfig) -> HashMap<String, bool> {
     let mut health = HashMap::new();
+    let credential_manager = crate::credentials::create_manager();
 
     if let Some(discord_cfg) = &config.channels.discord {
-        let adapter = DiscordAdapter::new(discord_cfg);
+        let adapter = DiscordAdapter::new(discord_cfg, credential_manager.as_ref()).await;
         match adapter.health_check().await {
             Ok(ok) => {
                 health.insert("discord".to_owned(), ok);
@@ -250,7 +251,7 @@ pub async fn check_health(config: &SpeechConfig) -> HashMap<String, bool> {
     }
 
     if let Some(whatsapp_cfg) = &config.channels.whatsapp {
-        let adapter = WhatsAppAdapter::new(whatsapp_cfg);
+        let adapter = WhatsAppAdapter::new(whatsapp_cfg, credential_manager.as_ref()).await;
         match adapter.health_check().await {
             Ok(ok) => {
                 health.insert("whatsapp".to_owned(), ok);
@@ -290,6 +291,7 @@ async fn run_runtime(
     }
 
     let brain = ChannelBrain::from_config(&config).await?;
+    let credential_manager = crate::credentials::create_manager();
 
     let rate_limiters = Arc::new(Mutex::new(ChannelRateLimiters::new(
         &config.channels.rate_limits,
@@ -303,7 +305,8 @@ async fn run_runtime(
     if let Some(discord_cfg) = &config.channels.discord
         && discord_cfg.bot_token.is_set()
     {
-        let adapter: Arc<dyn ChannelAdapter> = Arc::new(DiscordAdapter::new(discord_cfg));
+        let adapter: Arc<dyn ChannelAdapter> =
+            Arc::new(DiscordAdapter::new(discord_cfg, credential_manager.as_ref()).await);
         adapters.insert(adapter.id().to_owned(), Arc::clone(&adapter));
         active_channels.push(adapter.id().to_owned());
     }
@@ -313,7 +316,7 @@ async fn run_runtime(
         && whatsapp_cfg.access_token.is_set()
         && !whatsapp_cfg.phone_number_id.trim().is_empty()
     {
-        let wa = Arc::new(WhatsAppAdapter::new(whatsapp_cfg));
+        let wa = Arc::new(WhatsAppAdapter::new(whatsapp_cfg, credential_manager.as_ref()).await);
         let adapter: Arc<dyn ChannelAdapter> = wa.clone();
         adapters.insert(adapter.id().to_owned(), Arc::clone(&adapter));
         active_channels.push(adapter.id().to_owned());
@@ -368,8 +371,11 @@ async fn run_runtime(
     if config.channels.gateway.enabled || whatsapp_adapter.is_some() {
         let gateway_cfg = config.channels.gateway.clone();
         let gateway_tx = inbound_tx.clone();
+        let gateway_manager = crate::credentials::create_manager();
         workers.spawn(async move {
-            if let Err(err) = run_gateway(gateway_cfg, whatsapp_adapter, gateway_tx).await {
+            if let Err(err) =
+                run_gateway(gateway_cfg, whatsapp_adapter, gateway_tx, gateway_manager).await
+            {
                 tracing::error!("channels gateway stopped: {err}");
             }
         });

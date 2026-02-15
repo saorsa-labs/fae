@@ -42,7 +42,7 @@ pub use types::{CredentialError, CredentialRef};
 ///
 /// Implementations are platform-specific but provide a consistent interface
 /// for credential lifecycle operations.
-pub trait CredentialManager {
+pub trait CredentialManager: Send + Sync {
     /// Store a credential securely and return a reference to it.
     ///
     /// # Arguments

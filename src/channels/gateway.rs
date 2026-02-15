@@ -44,14 +44,25 @@ pub async fn run_gateway(
     config: ChannelGatewayConfig,
     whatsapp: Option<Arc<WhatsAppAdapter>>,
     inbound_tx: mpsc::Sender<ChannelInboundMessage>,
+    manager: Box<dyn crate::credentials::CredentialManager>,
 ) -> anyhow::Result<()> {
+    let bearer_token = if let Some(ref cred_ref) = config.bearer_token {
+        cred_ref
+            .resolve(manager.as_ref())
+            .await
+            .ok()
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
 
     let state = GatewayState {
         inbound_tx,
-        bearer_token: config.bearer_token.map(|c| c.resolve_plaintext()),
+        bearer_token,
         whatsapp,
     };
 

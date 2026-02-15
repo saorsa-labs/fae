@@ -17,11 +17,32 @@ pub struct WhatsAppAdapter {
 }
 
 impl WhatsAppAdapter {
-    pub fn new(config: &WhatsAppChannelConfig) -> Self {
+    pub async fn new(
+        config: &WhatsAppChannelConfig,
+        manager: &dyn crate::credentials::CredentialManager,
+    ) -> Self {
+        let access_token = config
+            .access_token
+            .resolve(manager)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("failed to resolve WhatsApp access token: {}", e);
+                String::new()
+            });
+
+        let verify_token = config
+            .verify_token
+            .resolve(manager)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("failed to resolve WhatsApp verify token: {}", e);
+                String::new()
+            });
+
         Self {
-            access_token: config.access_token.resolve_plaintext(),
+            access_token,
             phone_number_id: config.phone_number_id.clone(),
-            verify_token: config.verify_token.resolve_plaintext(),
+            verify_token,
             allowed_numbers: config.allowed_numbers.clone(),
             client: reqwest::Client::new(),
         }
@@ -183,20 +204,46 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::credentials::CredentialManager;
 
-    fn make_adapter() -> WhatsAppAdapter {
+    struct MockManager;
+
+    impl CredentialManager for MockManager {
+        fn store(
+            &self,
+            _account: &str,
+            _value: &str,
+        ) -> Result<crate::credentials::CredentialRef, crate::credentials::CredentialError> {
+            unimplemented!()
+        }
+        fn retrieve(
+            &self,
+            _cred_ref: &crate::credentials::CredentialRef,
+        ) -> Result<Option<String>, crate::credentials::CredentialError> {
+            Ok(Some("mock_value".to_owned()))
+        }
+        fn delete(
+            &self,
+            _cred_ref: &crate::credentials::CredentialRef,
+        ) -> Result<(), crate::credentials::CredentialError> {
+            unimplemented!()
+        }
+    }
+
+    async fn make_adapter() -> WhatsAppAdapter {
         let cfg = WhatsAppChannelConfig {
             access_token: crate::credentials::CredentialRef::Plaintext("token".to_owned()),
             phone_number_id: "123".to_owned(),
             verify_token: crate::credentials::CredentialRef::Plaintext("verify".to_owned()),
             allowed_numbers: vec!["+1234567890".to_owned()],
         };
-        WhatsAppAdapter::new(&cfg)
+        let manager = MockManager;
+        WhatsAppAdapter::new(&cfg, &manager).await
     }
 
-    #[test]
-    fn parse_webhook_filters_unauthorized_numbers() {
-        let adapter = make_adapter();
+    #[tokio::test]
+    async fn parse_webhook_filters_unauthorized_numbers() {
+        let adapter = make_adapter().await;
         let payload = serde_json::json!({
             "entry": [{
                 "changes": [{
@@ -213,9 +260,9 @@ mod tests {
         assert!(msgs.is_empty());
     }
 
-    #[test]
-    fn parse_webhook_accepts_allowed_number() {
-        let adapter = make_adapter();
+    #[tokio::test]
+    async fn parse_webhook_accepts_allowed_number() {
+        let adapter = make_adapter().await;
         let payload = serde_json::json!({
             "entry": [{
                 "changes": [{
