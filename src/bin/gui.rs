@@ -100,6 +100,7 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     let open_memories_item = MenuItem::with_id(FAE_MENU_OPEN_MEMORIES, "Memories...", true, None);
     let open_scheduler_item =
         MenuItem::with_id(FAE_MENU_OPEN_SCHEDULER, "Scheduled Tasks...", true, None);
+    let open_channels_item = MenuItem::with_id(FAE_MENU_OPEN_CHANNELS, "Channels...", true, None);
     let open_ingestion_item =
         MenuItem::with_id(FAE_MENU_OPEN_INGESTION, "Ingestion...", true, None);
     let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
@@ -121,6 +122,7 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &open_skills_item,
         &open_memories_item,
         &open_scheduler_item,
+        &open_channels_item,
         &open_ingestion_item,
         &PredefinedMenuItem::separator(),
         &open_guide_item,
@@ -1378,6 +1380,8 @@ const FAE_MENU_OPEN_MEMORIES: &str = "fae-open-memories";
 const FAE_MENU_OPEN_INGESTION: &str = "fae-open-ingestion";
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_SCHEDULER: &str = "fae-menu-scheduler";
+#[cfg(feature = "gui")]
+const FAE_MENU_OPEN_CHANNELS: &str = "fae-menu-channels";
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
 #[cfg(feature = "gui")]
@@ -3941,6 +3945,7 @@ fn app() -> Element {
     let mut update_gate = use_signal(|| None::<UpdateGatePhase>);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut show_scheduler_panel = use_signal(|| false);
+    let mut show_channels_panel = use_signal(|| false);
     let mut active_model = use_signal(|| None::<String>);
     let mut mic_active = use_signal(|| None::<bool>);
     let mut mic_repair_busy = use_signal(|| false);
@@ -5001,6 +5006,8 @@ fn app() -> Element {
                 open_memories_window();
             } else if event.id() == FAE_MENU_OPEN_SCHEDULER {
                 show_scheduler_panel.set(true);
+            } else if event.id() == FAE_MENU_OPEN_CHANNELS {
+                show_channels_panel.set(true);
             } else if event.id() == FAE_MENU_OPEN_INGESTION {
                 open_ingestion_window();
             } else if event.id() == FAE_MENU_OPEN_GUIDE {
@@ -5251,6 +5258,30 @@ fn app() -> Element {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // --- Channels panel modal ---
+            if *show_channels_panel.read() {
+                div {
+                    class: "drawer-overlay",
+                    onclick: move |_| show_channels_panel.set(false),
+                    div {
+                        class: "scheduler-modal",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "scheduler-modal-header",
+                            h2 { "Channel Management" }
+                            button {
+                                class: "scheduler-modal-close",
+                                onclick: move |_| show_channels_panel.set(false),
+                                "\u{2715}"
+                            }
+                        }
+                        div { class: "scheduler-modal-body",
+                            p { "Channel configuration panel - coming soon" }
+                            p { "Configure Discord and WhatsApp channels here." }
                         }
                     }
                 }
