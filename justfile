@@ -55,6 +55,10 @@ test:
 test-verbose:
     cargo test --all-features -- --nocapture
 
+# Run comprehensive tool-calling judgment eval suite
+tool-judgment-eval:
+    cargo test --all-features tool_judgment_ -- --nocapture
+
 # Scan for forbidden patterns (.unwrap, .expect, panic!, etc.)
 panic-scan:
     @! grep -rn '\.unwrap()\|\.expect(\|panic!(\|todo!(\|unimplemented!(' src/ --include='*.rs' | grep -v '// SAFETY:' | grep -v '#\[cfg(test)\]' || true

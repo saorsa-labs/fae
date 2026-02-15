@@ -95,7 +95,7 @@ impl ProviderAdapter for LocalMistralrsAdapter {
     async fn send(
         &self,
         messages: &[Message],
-        _options: &RequestOptions,
+        options: &RequestOptions,
         tools: &[crate::fae_llm::provider::ToolDefinition],
     ) -> std::result::Result<LlmEventStream, FaeLlmError> {
         // Build request directly via RequestBuilder to support tool messages
@@ -178,11 +178,20 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             }
         }
 
-        // Apply sampling parameters
+        // Apply per-request sampling, falling back to provider defaults.
+        let temperature = options
+            .temperature
+            .unwrap_or(self.config.temperature as f64);
+        let top_p = options.top_p.unwrap_or(self.config.top_p as f64);
+        let max_tokens = options
+            .max_tokens
+            .map(|v| v as usize)
+            .unwrap_or(self.config.max_tokens);
+
         request = request
-            .set_sampler_temperature(self.config.temperature as f64)
-            .set_sampler_topp(self.config.top_p as f64)
-            .set_sampler_max_len(self.config.max_tokens)
+            .set_sampler_temperature(temperature)
+            .set_sampler_topp(top_p)
+            .set_sampler_max_len(max_tokens)
             .enable_thinking(false);
 
         // Convert fae_llm tool definitions to mistralrs format

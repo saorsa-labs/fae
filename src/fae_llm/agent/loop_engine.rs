@@ -24,6 +24,9 @@ use crate::fae_llm::tools::types::DEFAULT_MAX_BYTES;
 use crate::fae_llm::types::RequestOptions;
 use crate::fae_llm::usage::TokenUsage;
 
+/// Lower temperature improves tool-calling judgment on smaller local models.
+const TOOL_JUDGMENT_TEMPERATURE: f64 = 0.2;
+
 /// The core agent loop engine.
 ///
 /// Drives multi-turn LLM interactions with tool calling. Each iteration
@@ -185,7 +188,10 @@ impl AgentLoop {
         let mut turns = Vec::new();
         let total_usage = TokenUsage::default();
         let request_timeout = tokio::time::Duration::from_secs(self.config.request_timeout_secs);
-        let options = RequestOptions::new().with_stream(true);
+        let mut options = RequestOptions::new().with_stream(true);
+        if !self.tool_definitions.is_empty() {
+            options = options.with_temperature(TOOL_JUDGMENT_TEMPERATURE);
+        }
         let loop_start = std::time::Instant::now();
         let mut circuit_breaker = self.config.circuit_breaker.clone();
 
@@ -750,6 +756,39 @@ mod tests {
         }
     }
 
+    /// Provider that records request options from each `send` call.
+    struct RecordingProvider {
+        seen: Arc<Mutex<Vec<RequestOptions>>>,
+    }
+
+    impl RecordingProvider {
+        fn new(seen: Arc<Mutex<Vec<RequestOptions>>>) -> Self {
+            Self { seen }
+        }
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for RecordingProvider {
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        async fn send(
+            &self,
+            _messages: &[Message],
+            options: &RequestOptions,
+            _tools: &[ToolDefinition],
+        ) -> Result<LlmEventStream, FaeLlmError> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(options.clone());
+
+            let events = MockProvider::text_response("ok");
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
     // ── Mock Tool ────────────────────────────────────────────
 
     struct MockTool {
@@ -1048,6 +1087,38 @@ mod tests {
         assert!(matches!(result.stop_reason, StopReason::Error(_)));
         // Failure threshold is 2, so retries should be short-circuited quickly.
         assert!(call_count.load(Ordering::Relaxed) <= 2);
+    }
+
+    #[tokio::test]
+    async fn agent_loop_uses_low_temp_when_tools_available() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(RecordingProvider::new(Arc::clone(&seen)));
+        let registry = make_registry_with_mock();
+        let config = AgentConfig::new();
+
+        let agent = AgentLoop::new(config, provider, registry);
+        let result = agent.run("temperature check").await;
+        assert!(result.is_ok());
+
+        let seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].temperature, Some(TOOL_JUDGMENT_TEMPERATURE));
+    }
+
+    #[tokio::test]
+    async fn agent_loop_keeps_default_temp_without_tools() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(RecordingProvider::new(Arc::clone(&seen)));
+        let registry = Arc::new(ToolRegistry::new(ToolMode::ReadOnly));
+        let config = AgentConfig::new();
+
+        let agent = AgentLoop::new(config, provider, registry);
+        let result = agent.run("temperature check").await;
+        assert!(result.is_ok());
+
+        let seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].temperature, Some(0.7));
     }
 
     // ── System prompt ────────────────────────────────────────
