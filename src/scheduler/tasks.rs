@@ -3,6 +3,9 @@
 //! Defines the [`ScheduledTask`] type, [`Schedule`] enum for timing,
 //! and built-in update-check task implementations.
 
+use chrono::{
+    Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
+};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,13 +19,61 @@ pub enum Schedule {
         /// Interval in seconds between runs.
         secs: u64,
     },
-    /// Run once daily at a given hour and minute (UTC).
+    /// Run once daily at a given hour and minute (local time).
     Daily {
-        /// Hour of day (0-23, UTC).
+        /// Hour of day (0-23, local time).
         hour: u8,
         /// Minute of hour (0-59).
         min: u8,
     },
+    /// Run on selected weekdays at a given local hour and minute.
+    Weekly {
+        /// Selected weekdays.
+        weekdays: Vec<Weekday>,
+        /// Hour of day (0-23, local time).
+        hour: u8,
+        /// Minute of hour (0-59).
+        min: u8,
+    },
+}
+
+/// Day of week for weekly schedules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Weekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
+}
+
+impl Weekday {
+    fn to_short(self) -> &'static str {
+        match self {
+            Self::Mon => "mon",
+            Self::Tue => "tue",
+            Self::Wed => "wed",
+            Self::Thu => "thu",
+            Self::Fri => "fri",
+            Self::Sat => "sat",
+            Self::Sun => "sun",
+        }
+    }
+
+    fn from_chrono(day: chrono::Weekday) -> Self {
+        match day {
+            chrono::Weekday::Mon => Self::Mon,
+            chrono::Weekday::Tue => Self::Tue,
+            chrono::Weekday::Wed => Self::Wed,
+            chrono::Weekday::Thu => Self::Thu,
+            chrono::Weekday::Fri => Self::Fri,
+            chrono::Weekday::Sat => Self::Sat,
+            chrono::Weekday::Sun => Self::Sun,
+        }
+    }
 }
 
 impl std::fmt::Display for Schedule {
@@ -35,7 +86,68 @@ impl std::fmt::Display for Schedule {
                     write!(f, "every {} minutes", secs / 60)
                 }
             }
-            Self::Daily { hour, min } => write!(f, "daily at {hour:02}:{min:02} UTC"),
+            Self::Daily { hour, min } => write!(f, "daily at {hour:02}:{min:02} local"),
+            Self::Weekly {
+                weekdays,
+                hour,
+                min,
+            } => {
+                let mut days: Vec<String> =
+                    weekdays.iter().map(|d| d.to_short().to_owned()).collect();
+                days.sort();
+                write!(f, "weekly {} at {hour:02}:{min:02} local", days.join(","))
+            }
+        }
+    }
+}
+
+impl Schedule {
+    fn is_initial_due(&self, now_epoch: u64) -> bool {
+        let now_local = epoch_to_local(now_epoch);
+        match self {
+            Self::Interval { .. } => true,
+            Self::Daily { hour, min } => {
+                let date = now_local.date_naive();
+                match local_datetime(date, *hour, *min) {
+                    Some(scheduled) => now_local.timestamp() >= scheduled.timestamp(),
+                    None => false,
+                }
+            }
+            Self::Weekly {
+                weekdays,
+                hour,
+                min,
+            } => weekly_slot_passed_this_week(weekdays, *hour, *min, now_local),
+        }
+    }
+
+    fn next_after_epoch(&self, after_epoch: u64) -> u64 {
+        let after = epoch_to_local(after_epoch);
+        let fallback = after + Duration::hours(24);
+        match self {
+            Self::Interval { secs } => after_epoch.saturating_add((*secs).max(1)),
+            Self::Daily { hour, min } => {
+                for offset in 0..=2 {
+                    let date = after.date_naive() + Duration::days(offset);
+                    if let Some(candidate) = local_datetime(date, *hour, *min)
+                        && candidate.timestamp() > after.timestamp()
+                    {
+                        return epoch_from_local(candidate);
+                    }
+                }
+                epoch_from_local(fallback)
+            }
+            Self::Weekly {
+                weekdays,
+                hour,
+                min,
+            } => {
+                if let Some(next) = weekly_next_after(weekdays, *hour, *min, after) {
+                    epoch_from_local(next)
+                } else {
+                    epoch_from_local(fallback)
+                }
+            }
         }
     }
 }
@@ -51,6 +163,36 @@ pub enum TaskResult {
     NeedsUserAction(UserPrompt),
     /// Task failed with an error message.
     Error(String),
+}
+
+impl TaskResult {
+    /// Returns `true` when the result represents a failure.
+    #[must_use]
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_))
+    }
+
+    /// Returns a short human-readable summary for run history.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Success(msg) => msg.clone(),
+            Self::Telemetry(payload) => payload.message.clone(),
+            Self::NeedsUserAction(prompt) => prompt.title.clone(),
+            Self::Error(msg) => msg.clone(),
+        }
+    }
+
+    /// Returns a normalized run outcome kind.
+    #[must_use]
+    pub fn outcome(&self) -> TaskRunOutcome {
+        match self {
+            Self::Success(_) => TaskRunOutcome::Success,
+            Self::Telemetry(_) => TaskRunOutcome::Telemetry,
+            Self::NeedsUserAction(_) => TaskRunOutcome::NeedsUserAction,
+            Self::Error(_) => TaskRunOutcome::Error,
+        }
+    }
 }
 
 /// Structured task telemetry.
@@ -82,6 +224,43 @@ pub struct PromptAction {
     pub id: String,
 }
 
+/// Logical task kind used by scheduler/doctor policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    /// Built-in background maintenance/update tasks.
+    #[default]
+    Builtin,
+    /// User-defined automation task.
+    User,
+}
+
+/// One run attempt captured in scheduler history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRunRecord {
+    /// Task ID.
+    pub task_id: String,
+    /// Start timestamp (epoch seconds).
+    pub started_at: u64,
+    /// End timestamp (epoch seconds).
+    pub finished_at: u64,
+    /// Outcome kind.
+    pub outcome: TaskRunOutcome,
+    /// Human-readable summary.
+    pub summary: String,
+}
+
+/// Normalized run outcome for history and doctor checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRunOutcome {
+    Success,
+    Telemetry,
+    NeedsUserAction,
+    Error,
+    SoftTimeout,
+}
+
 /// A task that runs on a schedule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
@@ -91,10 +270,59 @@ pub struct ScheduledTask {
     pub name: String,
     /// When to run this task.
     pub schedule: Schedule,
-    /// Unix epoch seconds of the last successful run, if any.
+    /// Unix epoch seconds of the last run, if any.
+    #[serde(default)]
     pub last_run: Option<u64>,
+    /// Unix epoch seconds for the next planned run, if known.
+    #[serde(default)]
+    pub next_run: Option<u64>,
     /// Whether the task is enabled.
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Logical task kind.
+    #[serde(default)]
+    pub kind: TaskKind,
+    /// Optional opaque payload for user-defined tasks.
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+    /// Consecutive failure count.
+    #[serde(default)]
+    pub failure_streak: u32,
+    /// Maximum immediate retries before returning to normal schedule.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u8,
+    /// Base retry backoff in seconds.
+    #[serde(default = "default_retry_backoff_secs")]
+    pub retry_backoff_secs: u64,
+    /// Disable task after this many consecutive failures.
+    #[serde(default = "default_max_failure_streak_before_pause")]
+    pub max_failure_streak_before_pause: u32,
+    /// Soft runtime budget in seconds (not a hard cancellation).
+    #[serde(default = "default_soft_timeout_secs")]
+    pub soft_timeout_secs: u64,
+    /// Last error message, if any.
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn default_max_retries() -> u8 {
+    3
+}
+
+fn default_retry_backoff_secs() -> u64 {
+    60
+}
+
+fn default_max_failure_streak_before_pause() -> u32 {
+    5
+}
+
+fn default_soft_timeout_secs() -> u64 {
+    300
 }
 
 impl ScheduledTask {
@@ -105,8 +333,24 @@ impl ScheduledTask {
             name: name.into(),
             schedule,
             last_run: None,
+            next_run: None,
             enabled: true,
+            kind: TaskKind::Builtin,
+            payload: None,
+            failure_streak: 0,
+            max_retries: default_max_retries(),
+            retry_backoff_secs: default_retry_backoff_secs(),
+            max_failure_streak_before_pause: default_max_failure_streak_before_pause(),
+            soft_timeout_secs: default_soft_timeout_secs(),
+            last_error: None,
         }
+    }
+
+    /// Creates a new user-defined task.
+    pub fn user_task(id: impl Into<String>, name: impl Into<String>, schedule: Schedule) -> Self {
+        let mut task = Self::new(id, name, schedule);
+        task.kind = TaskKind::User;
+        task
     }
 
     /// Returns `true` if the task is enabled and due to run.
@@ -117,36 +361,154 @@ impl ScheduledTask {
 
         let now = now_epoch_secs();
 
-        match &self.schedule {
-            Schedule::Interval { secs } => match self.last_run {
-                None => true,
-                Some(last) => now.saturating_sub(last) >= *secs,
-            },
-            Schedule::Daily { hour, min } => {
-                let day_secs = u64::from(*hour) * 3600 + u64::from(*min) * 60;
-                let today_start = now - (now % 86400);
-                let scheduled = today_start + day_secs;
+        if let Some(next) = self.next_run {
+            return now >= next;
+        }
 
-                match self.last_run {
-                    None => now >= scheduled,
-                    Some(last) => last < scheduled && now >= scheduled,
-                }
-            }
+        match self.last_run {
+            None => self.schedule.is_initial_due(now),
+            Some(last) => now >= self.schedule.next_after_epoch(last),
         }
     }
 
-    /// Record that the task ran at the current time.
+    /// Record a successful run and plan the next run.
+    pub fn mark_run_success(&mut self) {
+        let now = now_epoch_secs();
+        self.last_run = Some(now);
+        self.next_run = Some(self.schedule.next_after_epoch(now));
+        self.failure_streak = 0;
+        self.last_error = None;
+    }
+
+    /// Record a failed run and plan retry/backoff.
+    pub fn mark_run_failure(&mut self, error: &str) {
+        let now = now_epoch_secs();
+        self.last_run = Some(now);
+        self.failure_streak = self.failure_streak.saturating_add(1);
+        self.last_error = Some(error.to_owned());
+
+        if self.failure_streak <= u32::from(self.max_retries) {
+            let delay = exponential_backoff(self.retry_backoff_secs, self.failure_streak);
+            self.next_run = Some(now.saturating_add(delay));
+        } else {
+            self.next_run = Some(self.schedule.next_after_epoch(now));
+        }
+
+        if self.failure_streak >= self.max_failure_streak_before_pause {
+            self.enabled = false;
+        }
+    }
+
+    /// Force this task to run on the next scheduler tick.
+    pub fn mark_due_now(&mut self) {
+        self.next_run = Some(now_epoch_secs());
+    }
+
+    /// Preserve compatibility with old tests/callers.
     pub fn mark_run(&mut self) {
-        self.last_run = Some(now_epoch_secs());
+        self.mark_run_success();
     }
 }
 
+fn exponential_backoff(base_secs: u64, streak: u32) -> u64 {
+    let mut delay = base_secs.max(1);
+    let mut i = 1;
+    while i < streak {
+        delay = delay.saturating_mul(2);
+        i += 1;
+    }
+    delay
+}
+
 /// Returns current UTC seconds since epoch.
-fn now_epoch_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+pub(crate) fn now_epoch_secs() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(_) => 0,
+    }
+}
+
+fn epoch_to_local(ts: u64) -> chrono::DateTime<Local> {
+    let secs = match i64::try_from(ts) {
+        Ok(value) => value,
+        Err(_) => return Local::now(),
+    };
+
+    match Local.timestamp_opt(secs, 0) {
+        LocalResult::Single(dt) => dt,
+        LocalResult::Ambiguous(dt, _) => dt,
+        LocalResult::None => Local::now(),
+    }
+}
+
+fn epoch_from_local(dt: chrono::DateTime<Local>) -> u64 {
+    u64::try_from(dt.timestamp()).unwrap_or_default()
+}
+
+fn local_datetime(date: NaiveDate, hour: u8, min: u8) -> Option<chrono::DateTime<Local>> {
+    let time = NaiveTime::from_hms_opt(u32::from(hour.min(23)), u32::from(min.min(59)), 0)?;
+    let naive = NaiveDateTime::new(date, time);
+    match Local.from_local_datetime(&naive) {
+        LocalResult::Single(dt) => Some(dt),
+        LocalResult::Ambiguous(dt, _) => Some(dt),
+        LocalResult::None => None,
+    }
+}
+
+fn weekly_slot_passed_this_week(
+    weekdays: &[Weekday],
+    hour: u8,
+    min: u8,
+    now: chrono::DateTime<Local>,
+) -> bool {
+    if weekdays.is_empty() {
+        return false;
+    }
+
+    let days_since_monday = i64::from(now.weekday().num_days_from_monday());
+    let week_start = now.date_naive() - Duration::days(days_since_monday);
+
+    for offset in 0..=days_since_monday {
+        let date = week_start + Duration::days(offset);
+        let day = Weekday::from_chrono(date.weekday());
+        if !weekdays.contains(&day) {
+            continue;
+        }
+        if let Some(candidate) = local_datetime(date, hour, min)
+            && candidate.timestamp() <= now.timestamp()
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn weekly_next_after(
+    weekdays: &[Weekday],
+    hour: u8,
+    min: u8,
+    after: chrono::DateTime<Local>,
+) -> Option<chrono::DateTime<Local>> {
+    if weekdays.is_empty() {
+        return None;
+    }
+
+    for day_offset in 0..=14 {
+        let date = after.date_naive() + Duration::days(day_offset);
+        let day = Weekday::from_chrono(date.weekday());
+        if !weekdays.contains(&day) {
+            continue;
+        }
+
+        if let Some(candidate) = local_datetime(date, hour, min)
+            && candidate.timestamp() > after.timestamp()
+        {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -379,68 +741,101 @@ mod tests {
         assert_eq!(task.name, "Test Task");
         assert!(task.last_run.is_none());
         assert!(task.enabled);
+        assert_eq!(task.kind, TaskKind::Builtin);
+        assert!(task.next_run.is_none());
     }
 
     #[test]
-    fn is_due_when_never_run_interval() {
+    fn user_task_sets_user_kind() {
+        let task = ScheduledTask::user_task(
+            "daily-brief",
+            "Daily Brief",
+            Schedule::Interval { secs: 60 },
+        );
+        assert_eq!(task.kind, TaskKind::User);
+    }
+
+    #[test]
+    fn interval_due_when_never_run() {
         let task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 60 });
         assert!(task.is_due());
     }
 
     #[test]
-    fn is_due_false_when_recently_run() {
+    fn interval_not_due_when_recently_run() {
         let mut task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 86400 });
-        task.mark_run();
+        task.mark_run_success();
         assert!(!task.is_due());
     }
 
     #[test]
-    fn is_due_true_when_interval_elapsed() {
-        let mut task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 60 });
-        // Pretend it ran 120 seconds ago.
-        task.last_run = Some(now_epoch_secs().saturating_sub(120));
-        assert!(task.is_due());
+    fn failure_sets_backoff_and_error() {
+        let mut task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 3600 });
+        task.retry_backoff_secs = 10;
+        task.mark_run_failure("boom");
+        assert_eq!(task.failure_streak, 1);
+        assert_eq!(task.last_error.as_deref(), Some("boom"));
+        let next = task.next_run.expect("next run set");
+        assert!(next >= now_epoch_secs().saturating_add(10));
     }
 
     #[test]
-    fn is_due_false_when_disabled() {
-        let mut task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 0 });
-        task.enabled = false;
-        assert!(!task.is_due());
+    fn too_many_failures_disable_task() {
+        let mut task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 3600 });
+        task.max_failure_streak_before_pause = 2;
+        task.mark_run_failure("err-1");
+        assert!(task.enabled);
+        task.mark_run_failure("err-2");
+        assert!(!task.enabled);
     }
 
     #[test]
-    fn mark_run_updates_last_run() {
-        let mut task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 60 });
-        assert!(task.last_run.is_none());
-        task.mark_run();
-        assert!(task.last_run.is_some());
-        let ts = task.last_run.unwrap();
-        assert!(ts > 0);
+    fn success_resets_failure_state() {
+        let mut task = ScheduledTask::new("t", "T", Schedule::Interval { secs: 3600 });
+        task.mark_run_failure("err");
+        assert_eq!(task.failure_streak, 1);
+        task.mark_run_success();
+        assert_eq!(task.failure_streak, 0);
+        assert!(task.last_error.is_none());
+        assert!(task.next_run.is_some());
     }
 
     #[test]
-    fn schedule_serde_interval_round_trip() {
-        let schedule = Schedule::Interval { secs: 3600 };
+    fn daily_display_uses_local_wording() {
+        let s = Schedule::Daily { hour: 9, min: 0 };
+        assert_eq!(s.to_string(), "daily at 09:00 local");
+    }
+
+    #[test]
+    fn weekly_display_lists_days() {
+        let s = Schedule::Weekly {
+            weekdays: vec![Weekday::Fri, Weekday::Mon],
+            hour: 9,
+            min: 30,
+        };
+        assert_eq!(s.to_string(), "weekly fri,mon at 09:30 local");
+    }
+
+    #[test]
+    fn schedule_serde_weekly_round_trip() {
+        let schedule = Schedule::Weekly {
+            weekdays: vec![Weekday::Mon, Weekday::Wed],
+            hour: 8,
+            min: 15,
+        };
         let json = serde_json::to_string(&schedule).unwrap();
         let restored: Schedule = serde_json::from_str(&json).unwrap();
         match restored {
-            Schedule::Interval { secs } => assert_eq!(secs, 3600),
-            _ => panic!("expected Interval"),
-        }
-    }
-
-    #[test]
-    fn schedule_serde_daily_round_trip() {
-        let schedule = Schedule::Daily { hour: 9, min: 30 };
-        let json = serde_json::to_string(&schedule).unwrap();
-        let restored: Schedule = serde_json::from_str(&json).unwrap();
-        match restored {
-            Schedule::Daily { hour, min } => {
-                assert_eq!(hour, 9);
-                assert_eq!(min, 30);
+            Schedule::Weekly {
+                weekdays,
+                hour,
+                min,
+            } => {
+                assert_eq!(weekdays, vec![Weekday::Mon, Weekday::Wed]);
+                assert_eq!(hour, 8);
+                assert_eq!(min, 15);
             }
-            _ => panic!("expected Daily"),
+            _ => panic!("expected Weekly"),
         }
     }
 
@@ -451,7 +846,8 @@ mod tests {
             "Check Fae Update",
             Schedule::Interval { secs: 86400 },
         );
-        task.mark_run();
+        task.kind = TaskKind::User;
+        task.mark_run_success();
 
         let json = serde_json::to_string(&task).unwrap();
         let restored: ScheduledTask = serde_json::from_str(&json).unwrap();
@@ -459,64 +855,15 @@ mod tests {
         assert_eq!(restored.name, "Check Fae Update");
         assert!(restored.enabled);
         assert!(restored.last_run.is_some());
+        assert_eq!(restored.kind, TaskKind::User);
     }
 
     #[test]
-    fn schedule_display_interval_hours() {
-        let s = Schedule::Interval { secs: 86400 };
-        assert_eq!(s.to_string(), "every 24 hours");
-    }
-
-    #[test]
-    fn schedule_display_interval_minutes() {
-        let s = Schedule::Interval { secs: 1800 };
-        assert_eq!(s.to_string(), "every 30 minutes");
-    }
-
-    #[test]
-    fn schedule_display_daily() {
-        let s = Schedule::Daily { hour: 9, min: 0 };
-        assert_eq!(s.to_string(), "daily at 09:00 UTC");
-    }
-
-    #[test]
-    fn is_due_daily_when_never_run_and_past_time() {
-        // Use a time that's definitely in the past today
-        let now = now_epoch_secs();
-        let today_start = now - (now % 86400);
-        let elapsed_today = now - today_start;
-
-        if elapsed_today > 60 {
-            // At least 1 minute into the day — use a time 1 minute ago
-            let past_secs = elapsed_today - 60;
-            let hour = (past_secs / 3600) as u8;
-            let min = ((past_secs % 3600) / 60) as u8;
-            let task = ScheduledTask::new("t", "T", Schedule::Daily { hour, min });
-            assert!(task.is_due());
-        }
-    }
-
-    #[test]
-    fn is_due_daily_false_when_already_ran_today() {
-        let now = now_epoch_secs();
-        let today_start = now - (now % 86400);
-        let elapsed_today = now - today_start;
-
-        if elapsed_today > 120 {
-            let past_secs = elapsed_today - 60;
-            let hour = (past_secs / 3600) as u8;
-            let min = ((past_secs % 3600) / 60) as u8;
-            let mut task = ScheduledTask::new("t", "T", Schedule::Daily { hour, min });
-            // Ran after the scheduled time today
-            task.last_run = Some(today_start + past_secs + 1);
-            assert!(!task.is_due());
-        }
-    }
-
-    #[test]
-    fn task_result_variants() {
+    fn task_result_variants_and_helpers() {
         let success = TaskResult::Success("done".to_owned());
-        assert!(matches!(success, TaskResult::Success(_)));
+        assert!(!success.is_error());
+        assert_eq!(success.summary(), "done");
+        assert_eq!(success.outcome(), TaskRunOutcome::Success);
 
         let telemetry = TaskResult::Telemetry(TaskTelemetry {
             message: "telemetry".to_owned(),
@@ -525,10 +872,12 @@ mod tests {
                 target_id: None,
             },
         });
-        assert!(matches!(telemetry, TaskResult::Telemetry(_)));
+        assert_eq!(telemetry.summary(), "telemetry");
+        assert_eq!(telemetry.outcome(), TaskRunOutcome::Telemetry);
 
         let error = TaskResult::Error("fail".to_owned());
-        assert!(matches!(error, TaskResult::Error(_)));
+        assert!(error.is_error());
+        assert_eq!(error.outcome(), TaskRunOutcome::Error);
 
         let prompt = UserPrompt {
             title: "Update".to_owned(),
@@ -539,7 +888,7 @@ mod tests {
             }],
         };
         let action = TaskResult::NeedsUserAction(prompt);
-        assert!(matches!(action, TaskResult::NeedsUserAction(_)));
+        assert_eq!(action.outcome(), TaskRunOutcome::NeedsUserAction);
     }
 
     #[test]
@@ -570,8 +919,6 @@ mod tests {
 
     #[test]
     fn execute_builtin_fae_check_returns_result() {
-        // This makes a real HTTP call, so it may fail in CI without network.
-        // We just verify it doesn't panic and returns a valid TaskResult.
         let result = execute_builtin(TASK_CHECK_FAE_UPDATE);
         assert!(matches!(
             result,

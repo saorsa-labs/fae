@@ -3,7 +3,7 @@ members = ["fae-search"]
 
 [package]
 name = "fae"
-version = "0.2.14"
+version = "0.2.15"
 edition = "2024"
 description = "Real-time speech-to-speech AI conversation system"
 license = "AGPL-3.0"
@@ -26,7 +26,7 @@ path = "src/bin/avatar_slicer.rs"
 required-features = ["tools"]
 
 [features]
-default = ["gui"]
+default = ["gui", "web-search"]
 metal = ["mistralrs/metal"]
 gui = ["dioxus"]
 tools = []
@@ -57,7 +57,8 @@ ort = { version = "2.0.0-rc.11", features = ["half"] }
 half = "2"
 hound = "3"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
-misaki-rs = "0.3"
+# Avoid hard dependency on system espeak; use built-in G2P path only.
+misaki-rs = { version = "0.3", default-features = false }
 
 # Model management
 hf-hub = "0.4"
@@ -68,6 +69,7 @@ ureq = "2"
 # HTTP client for LLM provider APIs (SSE streaming)
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 bytes = "1"
+axum = "0.8"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -97,6 +99,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 toml_edit = "0.22"
+chrono = { version = "0.4", features = ["clock", "serde"] }
 urlencoding = "2"
 base64 = "0.22"
 
@@ -165,7 +168,6 @@ NSDownloadsFolderUsageDescription = "Fae needs access to your Downloads to help 
 
 [dev-dependencies]
 # Mock HTTP server for API integration tests
-axum = "0.8"
 wiremock = "0.6"
 # Temp directories for config persistence tests
 tempfile = "3"

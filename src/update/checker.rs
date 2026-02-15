@@ -97,9 +97,10 @@ impl UpdateChecker {
 
         let resp = match req.call() {
             Ok(r) => r,
-            Err(ureq::Error::Status(304, _)) => {
+            Err(ureq::Error::Status(304, r)) => {
                 // Not modified — still on the same release.
-                return Ok((None, etag.map(String::from)));
+                let returned_etag = r.header("ETag").map(String::from);
+                return Ok((None, returned_etag.or_else(|| etag.map(String::from))));
             }
             Err(e) => {
                 return Err(SpeechError::Update(format!(
@@ -109,12 +110,55 @@ impl UpdateChecker {
             }
         };
 
+        let status = resp.status();
         // Capture the new ETag header.
         let new_etag = resp.header("ETag").map(String::from);
 
-        let body: serde_json::Value = resp
-            .into_json()
-            .map_err(|e| SpeechError::Update(format!("cannot parse GitHub release JSON: {e}")))?;
+        // Some HTTP client paths can surface 304 as an Ok response with no body.
+        if status == 304 {
+            return Ok((None, new_etag.or_else(|| etag.map(String::from))));
+        }
+
+        if !(200..300).contains(&status) {
+            let body = resp.into_string().unwrap_or_default();
+            let preview = body
+                .trim()
+                .chars()
+                .take(180)
+                .collect::<String>()
+                .replace('\n', " ");
+            let suffix = if preview.is_empty() {
+                String::new()
+            } else {
+                format!(": {preview}")
+            };
+            return Err(SpeechError::Update(format!(
+                "GitHub API returned HTTP {status} for {}{suffix}",
+                self.repo
+            )));
+        }
+
+        let body_text = resp.into_string().map_err(|e| {
+            SpeechError::Update(format!("cannot read GitHub release response body: {e}"))
+        })?;
+
+        if body_text.trim().is_empty() {
+            return Err(SpeechError::Update(format!(
+                "GitHub API returned an empty response body for {} (HTTP {status})",
+                self.repo
+            )));
+        }
+
+        let body: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+            let preview = body_text
+                .chars()
+                .take(180)
+                .collect::<String>()
+                .replace('\n', " ");
+            SpeechError::Update(format!(
+                "cannot parse GitHub release JSON: {e}; response preview: {preview}"
+            ))
+        })?;
 
         let release = parse_github_release(&body)?;
 

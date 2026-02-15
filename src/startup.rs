@@ -645,12 +645,8 @@ pub fn start_scheduler_with_memory(
     scheduler.with_memory_maintenance();
     let memory_root = memory.root_dir.clone();
     let retention_days = memory.retention_days;
-    scheduler = scheduler.with_executor(Box::new(move |task_id| {
-        crate::scheduler::tasks::execute_builtin_with_memory_root(
-            task_id,
-            &memory_root,
-            retention_days,
-        )
+    scheduler = scheduler.with_executor(Box::new(move |task| {
+        execute_scheduler_task(task, &memory_root, retention_days)
     }));
 
     info!(
@@ -659,6 +655,55 @@ pub fn start_scheduler_with_memory(
     );
     let handle = scheduler.run();
     (handle, rx)
+}
+
+fn execute_scheduler_task(
+    task: &crate::scheduler::ScheduledTask,
+    memory_root: &Path,
+    retention_days: u32,
+) -> crate::scheduler::tasks::TaskResult {
+    if task.kind == crate::scheduler::tasks::TaskKind::Builtin {
+        return crate::scheduler::tasks::execute_builtin_with_memory_root(
+            &task.id,
+            memory_root,
+            retention_days,
+        );
+    }
+
+    execute_user_scheduler_task(task)
+}
+
+fn execute_user_scheduler_task(
+    task: &crate::scheduler::ScheduledTask,
+) -> crate::scheduler::tasks::TaskResult {
+    let title = task
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.get("title"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("Reminder: {}", task.name));
+
+    let message = task
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.get("message"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("Scheduled task `{}` is ready.", task.name));
+
+    crate::scheduler::tasks::TaskResult::NeedsUserAction(crate::scheduler::tasks::UserPrompt {
+        title,
+        message,
+        actions: vec![crate::scheduler::tasks::PromptAction {
+            label: "Acknowledge".to_owned(),
+            id: "acknowledge_scheduler_prompt".to_owned(),
+        }],
+    })
 }
 
 #[cfg(test)]
@@ -799,5 +844,46 @@ mod tests {
     #[test]
     fn disk_space_headroom_constant_is_500mb() {
         assert_eq!(DISK_SPACE_HEADROOM, 500 * 1024 * 1024);
+    }
+
+    #[test]
+    fn user_scheduler_task_emits_prompt_from_payload() {
+        let mut task = crate::scheduler::ScheduledTask::user_task(
+            "reminder-test",
+            "Reminder test",
+            crate::scheduler::Schedule::Interval { secs: 3600 },
+        );
+        task.payload = Some(serde_json::json!({
+            "title": "Stand up",
+            "message": "Time to take a short break."
+        }));
+
+        let result = execute_scheduler_task(&task, Path::new("/tmp"), 30);
+        match result {
+            crate::scheduler::tasks::TaskResult::NeedsUserAction(prompt) => {
+                assert_eq!(prompt.title, "Stand up");
+                assert_eq!(prompt.message, "Time to take a short break.");
+                assert!(!prompt.actions.is_empty());
+            }
+            other => panic!("unexpected task result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_scheduler_task_falls_back_to_default_message() {
+        let task = crate::scheduler::ScheduledTask::user_task(
+            "reminder-fallback",
+            "Water",
+            crate::scheduler::Schedule::Interval { secs: 3600 },
+        );
+
+        let result = execute_scheduler_task(&task, Path::new("/tmp"), 30);
+        match result {
+            crate::scheduler::tasks::TaskResult::NeedsUserAction(prompt) => {
+                assert!(prompt.title.contains("Reminder"));
+                assert!(prompt.message.contains("Scheduled task"));
+            }
+            other => panic!("unexpected task result: {other:?}"),
+        }
     }
 }

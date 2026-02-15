@@ -31,6 +31,8 @@ pub struct SpeechConfig {
     pub wakeword: WakewordConfig,
     /// Canvas visual output settings.
     pub canvas: CanvasConfig,
+    /// External communication channel settings (Discord, WhatsApp, webhooks).
+    pub channels: ChannelsConfig,
 }
 
 /// Audio I/O configuration.
@@ -773,6 +775,115 @@ pub struct CanvasConfig {
     pub auth_token: Option<String>,
 }
 
+/// External communication channels configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelsConfig {
+    /// Master switch for external communication channels.
+    pub enabled: bool,
+    /// Auto-start channels runtime at app launch.
+    pub auto_start: bool,
+    /// Queue size for inbound channel messages.
+    pub inbound_queue_size: usize,
+    /// HTTP gateway settings used for inbound webhooks.
+    pub gateway: ChannelGatewayConfig,
+    /// Discord adapter configuration.
+    pub discord: Option<DiscordChannelConfig>,
+    /// WhatsApp Business Cloud API adapter configuration.
+    pub whatsapp: Option<WhatsAppChannelConfig>,
+    /// Future external adapters (plugin scaffolding).
+    pub extensions: Vec<ChannelExtensionConfig>,
+}
+
+impl Default for ChannelsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_start: true,
+            inbound_queue_size: 128,
+            gateway: ChannelGatewayConfig::default(),
+            discord: None,
+            whatsapp: None,
+            extensions: Vec::new(),
+        }
+    }
+}
+
+/// Shared gateway settings for channel webhooks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelGatewayConfig {
+    /// Whether webhook gateway endpoints are enabled.
+    pub enabled: bool,
+    /// Bind host for the channel gateway (default: localhost).
+    pub host: String,
+    /// Bind port for the channel gateway.
+    pub port: u16,
+    /// Optional bearer token for generic webhook authentication.
+    pub bearer_token: Option<String>,
+}
+
+impl Default for ChannelGatewayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: "127.0.0.1".to_owned(),
+            port: 4088,
+            bearer_token: None,
+        }
+    }
+}
+
+/// Discord channel settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiscordChannelConfig {
+    /// Discord bot token.
+    pub bot_token: String,
+    /// Optional guild filter. If set, only this guild is processed.
+    pub guild_id: Option<String>,
+    /// Allowed Discord user IDs. Empty means deny all.
+    pub allowed_user_ids: Vec<String>,
+    /// Allowed channel IDs. Empty means all channels allowed.
+    pub allowed_channel_ids: Vec<String>,
+}
+
+/// WhatsApp Business Cloud API channel settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WhatsAppChannelConfig {
+    /// Access token from Meta.
+    pub access_token: String,
+    /// Phone number ID from Meta.
+    pub phone_number_id: String,
+    /// Verification token used by Meta webhook challenge.
+    pub verify_token: String,
+    /// Allowed sender phone numbers in E.164 format (e.g. +44123...).
+    pub allowed_numbers: Vec<String>,
+}
+
+/// Generic extension adapter scaffolding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelExtensionConfig {
+    /// Unique extension id.
+    pub id: String,
+    /// Adapter kind identifier.
+    pub kind: String,
+    /// Arbitrary adapter configuration payload.
+    pub config: serde_json::Value,
+}
+
+impl Default for ChannelExtensionConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            kind: String::new(),
+            config: serde_json::json!({}),
+        }
+    }
+}
+
 fn default_memory_root_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
         PathBuf::from(home).join(".fae")
@@ -843,6 +954,7 @@ mod tests {
         assert!(config.llm.top_p >= 0.0 && config.llm.top_p <= 1.0);
         assert!(config.tts.speed > 0.0);
         assert!(config.tts.sample_rate > 0);
+        assert!(config.channels.inbound_queue_size > 0);
     }
 
     #[test]

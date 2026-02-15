@@ -57,26 +57,28 @@ fn main() {
 /// Build the native menu bar with About, Edit, and Window submenus.
 #[cfg(feature = "gui")]
 fn build_menu_bar() -> dioxus::desktop::muda::Menu {
-    use dioxus::desktop::muda::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
+    use dioxus::desktop::muda::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
     let menu = Menu::new();
 
     // App submenu ("Fae" on macOS — first submenu becomes the app menu).
     let app_menu = Submenu::new("Fae", true);
+    let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
+    let check_updates_item =
+        MenuItem::with_id(FAE_MENU_CHECK_UPDATES, "Check for Updates...", true, None);
     let about_metadata = AboutMetadata {
         name: Some("Fae".to_owned()),
         version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-        short_version: Some(format!(
-            "{}.{}",
-            env!("CARGO_PKG_VERSION_MAJOR"),
-            env!("CARGO_PKG_VERSION_MINOR")
-        )),
+        short_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         comments: Some("Speech-to-speech AI companion".to_owned()),
         website: Some("https://github.com/saorsa-labs/fae".to_owned()),
         ..Default::default()
     };
     let _ = app_menu.append_items(&[
         &PredefinedMenuItem::about(None, Some(about_metadata)),
+        &PredefinedMenuItem::separator(),
+        &open_guide_item,
+        &check_updates_item,
         &PredefinedMenuItem::separator(),
         &PredefinedMenuItem::hide(None),
         &PredefinedMenuItem::hide_others(None),
@@ -1100,6 +1102,62 @@ mod gui {
             );
         }
 
+        #[test]
+        fn avatar_cache_includes_embedded_pose_defaults() {
+            let cache = super::super::load_avatar_cache(&None);
+            for pose in [
+                "fae_base.png",
+                "fae_centered.png",
+                "eyes_blink.png",
+                "eyes_open.png",
+                "eyes_open_2.png",
+                "eyes_look_left.png",
+                "eyes_look_left_2.png",
+                "eyes_look_right.png",
+                "mouth_open_small.png",
+                "mouth_open_medium.png",
+                "mouth_open_wide.png",
+                "mouth_smile_talk.png",
+                "mouth_fv.png",
+                "mouth_th.png",
+                "mouth_mbp.png",
+                "mouth_surprised.png",
+                "mouth_sad.png",
+                "mouth_angry.png",
+            ] {
+                let uri = cache.get(pose).expect("embedded pose missing");
+                assert!(
+                    uri.starts_with("data:image/png;base64,"),
+                    "pose uri must be a PNG data URI"
+                );
+            }
+        }
+
+        #[test]
+        fn avatar_cache_prefers_disk_pose_override() {
+            use base64::Engine as _;
+
+            let unique = format!(
+                "fae-avatar-override-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos()
+            );
+            let dir = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&dir).expect("create temp avatar dir");
+            std::fs::write(dir.join("fae_base.png"), [0u8, 1u8, 2u8]).expect("write override pose");
+
+            let cache = super::super::load_avatar_cache(&Some(dir.clone()));
+            let expected = format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode([0u8, 1u8, 2u8])
+            );
+            assert_eq!(cache.get("fae_base.png"), Some(&expected));
+
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
         // --- format_bytes_short ---
 
         #[test]
@@ -1163,12 +1221,12 @@ mod gui {
 use dioxus::prelude::*;
 
 #[cfg(feature = "gui")]
-use dioxus::desktop::{Config, LogicalSize, WindowBuilder, use_window};
+use dioxus::desktop::{Config, LogicalSize, WindowBuilder, use_muda_event_handler, use_window};
 
 #[cfg(feature = "gui")]
 use gui::{AppStatus, SharedState, UpdateGatePhase};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "gui")]
 use std::process::Command;
 #[cfg(feature = "gui")]
@@ -1177,6 +1235,13 @@ use std::sync::OnceLock;
 /// Fae version from Cargo.toml
 #[cfg(feature = "gui")]
 const FAE_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(feature = "gui")]
+const STARTUP_UPDATE_STALE_HOURS: u64 = 1;
+
+#[cfg(feature = "gui")]
+const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
+#[cfg(feature = "gui")]
+const FAE_MENU_CHECK_UPDATES: &str = "fae-check-updates";
 
 #[cfg(all(feature = "gui", target_os = "macos"))]
 const FAE_BUNDLE_ID: &str = "com.saorsalabs.fae";
@@ -1221,6 +1286,71 @@ enum MainView {
     Home,
     Settings,
     Voices,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsMode {
+    Basic,
+    Advanced,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReminderPreset {
+    Hourly,
+    DailyMorning,
+    DailyEvening,
+    WeekdayMorning,
+}
+
+#[cfg(feature = "gui")]
+impl ReminderPreset {
+    fn as_value(self) -> &'static str {
+        match self {
+            Self::Hourly => "hourly",
+            Self::DailyMorning => "daily_morning",
+            Self::DailyEvening => "daily_evening",
+            Self::WeekdayMorning => "weekday_morning",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Hourly => "Every hour",
+            Self::DailyMorning => "Daily 09:00",
+            Self::DailyEvening => "Daily 18:00",
+            Self::WeekdayMorning => "Weekdays 09:00",
+        }
+    }
+
+    fn from_value(value: &str) -> Self {
+        match value {
+            "hourly" => Self::Hourly,
+            "daily_evening" => Self::DailyEvening,
+            "weekday_morning" => Self::WeekdayMorning,
+            _ => Self::DailyMorning,
+        }
+    }
+
+    fn schedule(self) -> fae::scheduler::Schedule {
+        match self {
+            Self::Hourly => fae::scheduler::Schedule::Interval { secs: 3600 },
+            Self::DailyMorning => fae::scheduler::Schedule::Daily { hour: 9, min: 0 },
+            Self::DailyEvening => fae::scheduler::Schedule::Daily { hour: 18, min: 0 },
+            Self::WeekdayMorning => fae::scheduler::Schedule::Weekly {
+                weekdays: vec![
+                    fae::scheduler::Weekday::Mon,
+                    fae::scheduler::Weekday::Tue,
+                    fae::scheduler::Weekday::Wed,
+                    fae::scheduler::Weekday::Thu,
+                    fae::scheduler::Weekday::Fri,
+                ],
+                hour: 9,
+                min: 0,
+            },
+        }
+    }
 }
 
 /// Build the messages HTML from the current canvas bridge state.
@@ -1526,22 +1656,110 @@ fn resolve_avatar_dir(memory_root: &Path) -> Option<std::path::PathBuf> {
 /// HTML pages. By converting PNGs to data URIs once, we avoid repeated file I/O
 /// and work around the WebKit restriction.
 #[cfg(feature = "gui")]
+fn embedded_avatar_pose_specs() -> &'static [(&'static str, &'static [u8])] {
+    &[
+        (
+            "fae_base.png",
+            include_bytes!("../../assets/avatar/fae_base.png"),
+        ),
+        (
+            "fae_centered.png",
+            include_bytes!("../../assets/avatar/fae_centered.png"),
+        ),
+        (
+            "eyes_blink.png",
+            include_bytes!("../../assets/avatar/eyes_blink.png"),
+        ),
+        (
+            "eyes_open.png",
+            include_bytes!("../../assets/avatar/eyes_open.png"),
+        ),
+        (
+            "eyes_open_2.png",
+            include_bytes!("../../assets/avatar/eyes_open_2.png"),
+        ),
+        (
+            "eyes_look_left.png",
+            include_bytes!("../../assets/avatar/eyes_look_left.png"),
+        ),
+        (
+            "eyes_look_left_2.png",
+            include_bytes!("../../assets/avatar/eyes_look_left_2.png"),
+        ),
+        (
+            "eyes_look_right.png",
+            include_bytes!("../../assets/avatar/eyes_look_right.png"),
+        ),
+        (
+            "mouth_open_small.png",
+            include_bytes!("../../assets/avatar/mouth_open_small.png"),
+        ),
+        (
+            "mouth_open_medium.png",
+            include_bytes!("../../assets/avatar/mouth_open_medium.png"),
+        ),
+        (
+            "mouth_open_wide.png",
+            include_bytes!("../../assets/avatar/mouth_open_wide.png"),
+        ),
+        (
+            "mouth_smile_talk.png",
+            include_bytes!("../../assets/avatar/mouth_smile_talk.png"),
+        ),
+        (
+            "mouth_fv.png",
+            include_bytes!("../../assets/avatar/mouth_fv.png"),
+        ),
+        (
+            "mouth_th.png",
+            include_bytes!("../../assets/avatar/mouth_th.png"),
+        ),
+        (
+            "mouth_mbp.png",
+            include_bytes!("../../assets/avatar/mouth_mbp.png"),
+        ),
+        (
+            "mouth_surprised.png",
+            include_bytes!("../../assets/avatar/mouth_surprised.png"),
+        ),
+        (
+            "mouth_sad.png",
+            include_bytes!("../../assets/avatar/mouth_sad.png"),
+        ),
+        (
+            "mouth_angry.png",
+            include_bytes!("../../assets/avatar/mouth_angry.png"),
+        ),
+    ]
+}
+
+#[cfg(feature = "gui")]
+fn embedded_avatar_pose_cache() -> std::collections::HashMap<String, String> {
+    use base64::Engine as _;
+
+    static CACHE: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let mut map = std::collections::HashMap::new();
+            for (name, bytes) in embedded_avatar_pose_specs() {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                map.insert((*name).to_owned(), format!("data:image/png;base64,{b64}"));
+            }
+            map
+        })
+        .clone()
+}
+
+#[cfg(feature = "gui")]
 fn load_avatar_cache(
     avatar_dir: &Option<std::path::PathBuf>,
 ) -> std::collections::HashMap<String, String> {
     use base64::Engine as _;
-    let mut map = std::collections::HashMap::new();
+    let mut map = embedded_avatar_pose_cache();
     let Some(dir) = avatar_dir else {
         return map;
     };
-    let poses = [
-        "fae_base.png",
-        "eyes_blink.png",
-        "mouth_open_small.png",
-        "mouth_open_medium.png",
-        "mouth_open_wide.png",
-    ];
-    for name in poses {
+    for name in embedded_avatar_pose_specs().iter().map(|(name, _)| *name) {
         let path = dir.join(name);
         if let Ok(bytes) = std::fs::read(&path) {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -1829,6 +2047,7 @@ enum ModelPickerTab {
 #[derive(Clone, Debug)]
 enum UiBusEvent {
     ConfigUpdated,
+    SchedulerStateUpdated,
 }
 
 #[cfg(feature = "gui")]
@@ -1848,6 +2067,49 @@ fn read_config_or_default() -> fae::SpeechConfig {
         fae::SpeechConfig::from_file(&path).unwrap_or_default()
     } else {
         fae::SpeechConfig::default()
+    }
+}
+
+#[cfg(feature = "gui")]
+fn create_reminder_task(message: &str, preset: ReminderPreset) -> fae::scheduler::ScheduledTask {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let trimmed = message.trim();
+    let task_name = if trimmed.is_empty() {
+        "Reminder".to_owned()
+    } else {
+        let mut title: String = trimmed.chars().take(40).collect();
+        if trimmed.chars().count() > 40 {
+            title.push_str("...");
+        }
+        format!("Reminder: {title}")
+    };
+
+    let mut task = fae::scheduler::ScheduledTask::user_task(
+        format!("reminder-{now_secs}"),
+        task_name,
+        preset.schedule(),
+    );
+    task.payload = Some(serde_json::json!({
+        "type": "reminder",
+        "title": task.name,
+        "message": if trimmed.is_empty() {
+            "Your reminder is due.".to_owned()
+        } else {
+            trimmed.to_owned()
+        }
+    }));
+    task
+}
+
+#[cfg(feature = "gui")]
+fn managed_skill_state_label(state: fae::skills::ManagedSkillState) -> &'static str {
+    match state {
+        fae::skills::ManagedSkillState::Active => "Active",
+        fae::skills::ManagedSkillState::Disabled => "Disabled",
+        fae::skills::ManagedSkillState::Quarantined => "Quarantined",
     }
 }
 
@@ -1929,6 +2191,61 @@ fn mic_help_copy_text() -> &'static str {
     }
 }
 
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn current_macos_bundle_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut current = exe.as_path();
+    while let Some(parent) = current.parent() {
+        if parent
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+        {
+            return Some(parent.to_path_buf());
+        }
+        current = parent;
+    }
+    None
+}
+
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn read_bundle_identifier_from_plist(plist_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(plist_path).ok()?;
+    let key = "<key>CFBundleIdentifier</key>";
+    let after_key = content.split_once(key)?.1;
+    let after_start = after_key.split_once("<string>")?.1;
+    let id = after_start.split_once("</string>")?.0.trim();
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_owned())
+    }
+}
+
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn current_macos_bundle_identifier() -> Option<String> {
+    let bundle_root = current_macos_bundle_root()?;
+    let plist = bundle_root.join("Contents").join("Info.plist");
+    read_bundle_identifier_from_plist(&plist)
+}
+
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn macos_mic_launch_context_warning() -> Option<String> {
+    if current_macos_bundle_root().is_some() {
+        return None;
+    }
+    let exe = std::env::current_exe().ok()?;
+    Some(format!(
+        "Fae is running from `{}` (not from Fae.app). macOS usually only lists bundled apps under Privacy > Microphone.",
+        exe.display()
+    ))
+}
+
+#[cfg(all(feature = "gui", not(target_os = "macos")))]
+fn macos_mic_launch_context_warning() -> Option<String> {
+    None
+}
+
 #[cfg(feature = "gui")]
 fn mic_primary_action_label() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -1954,15 +2271,30 @@ fn show_mic_secondary_open_button() -> bool {
 
 #[cfg(feature = "gui")]
 fn run_system_command(program: &str, args: &[&str]) -> Result<(), String> {
-    let status = Command::new(program)
+    let output = Command::new(program)
         .args(args)
-        .status()
+        .output()
         .map_err(|e| format!("failed to launch {program}: {e}"))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        Err(format!("{program} exited with status {status}"))
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let mut details = String::new();
+        if !stderr.is_empty() {
+            details = stderr;
+        } else if !stdout.is_empty() {
+            details = stdout;
+        }
+        if details.is_empty() {
+            Err(format!("{program} exited with status {}", output.status))
+        } else {
+            Err(format!(
+                "{program} exited with status {}: {details}",
+                output.status
+            ))
+        }
     }
 }
 
@@ -2069,10 +2401,20 @@ fn open_mic_permission_settings() -> Result<(), String> {
 
 #[cfg(all(feature = "gui", target_os = "macos"))]
 fn run_mic_permission_repair() -> String {
+    if let Some(warning) = macos_mic_launch_context_warning() {
+        let open_hint = match open_mic_permission_settings() {
+            Ok(()) => "Opened macOS Privacy settings.",
+            Err(_) => "Could not open macOS Privacy settings automatically.",
+        };
+        return format!(
+            "{warning} {open_hint} If you're running from Terminal/iTerm, allow that app under Privacy > Microphone, or launch Fae.app to get a direct Fae entry."
+        );
+    }
+
     let mut warnings = Vec::new();
 
     for service in ["Microphone", "SpeechRecognition"] {
-        if let Err(e) = run_system_command("tccutil", &["reset", service, FAE_BUNDLE_ID]) {
+        if let Err(e) = reset_macos_tcc_service(service) {
             warnings.push(format!("could not reset {service}: {e}"));
         }
     }
@@ -2088,6 +2430,39 @@ fn run_mic_permission_repair() -> String {
             "Repair attempted, but some steps failed: {}",
             warnings.join(" | ")
         )
+    }
+}
+
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn reset_macos_tcc_service(service: &str) -> Result<(), String> {
+    let mut attempted = Vec::new();
+    let mut bundle_ids = Vec::<String>::new();
+    if let Some(current) = current_macos_bundle_identifier() {
+        bundle_ids.push(current);
+    }
+    if !bundle_ids.iter().any(|id| id == FAE_BUNDLE_ID) {
+        bundle_ids.push(FAE_BUNDLE_ID.to_owned());
+    }
+
+    for bundle_id in bundle_ids {
+        match run_system_command("/usr/bin/tccutil", &["reset", service, &bundle_id]) {
+            Ok(()) => return Ok(()),
+            Err(err) => attempted.push(format!("{bundle_id}: {err}")),
+        }
+    }
+
+    match run_system_command("/usr/bin/tccutil", &["reset", service]) {
+        Ok(()) => Ok(()),
+        Err(global_err) => {
+            if attempted.is_empty() {
+                Err(global_err)
+            } else {
+                Err(format!(
+                    "{} | fallback failed: {global_err}",
+                    attempted.join(" | ")
+                ))
+            }
+        }
     }
 }
 
@@ -2126,10 +2501,65 @@ fn run_mic_permission_repair() -> String {
 #[cfg(feature = "gui")]
 fn spawn_current_exe() -> Result<(), String> {
     let current = std::env::current_exe().map_err(|e| format!("cannot locate executable: {e}"))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_bundle) = current_macos_bundle_root() {
+            return run_system_command(
+                "/usr/bin/open",
+                &["-n", app_bundle.to_string_lossy().as_ref()],
+            );
+        }
+    }
+
     Command::new(&current)
         .spawn()
         .map_err(|e| format!("cannot restart executable {}: {e}", current.display()))?;
     Ok(())
+}
+
+#[cfg(feature = "gui")]
+fn run_manual_update_check(
+    mut update_check_status: Signal<String>,
+    mut update_available: Signal<Option<fae::update::Release>>,
+    mut update_state: Signal<fae::update::UpdateState>,
+    mut update_banner_dismissed: Signal<bool>,
+) {
+    update_check_status.set("Checking...".to_owned());
+    let etag = update_state.read().etag_fae.clone();
+    spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            let checker = fae::update::UpdateChecker::for_fae();
+            checker.check(etag.as_deref())
+        })
+        .await;
+
+        match result {
+            Ok(Ok((Some(release), new_etag))) => {
+                let msg = format!("v{} available!", release.version);
+                update_check_status.set(msg);
+                update_available.set(Some(release));
+                update_banner_dismissed.set(false);
+                update_state.write().etag_fae = new_etag;
+                update_state.write().mark_checked();
+                let state = update_state.read().clone();
+                let _ = tokio::task::spawn_blocking(move || state.save()).await;
+            }
+            Ok(Ok((None, new_etag))) => {
+                update_check_status.set("Up to date.".to_owned());
+                update_state.write().etag_fae = new_etag;
+                update_state.write().mark_checked();
+                let state = update_state.read().clone();
+                let _ = tokio::task::spawn_blocking(move || state.save()).await;
+            }
+            Ok(Err(e)) => {
+                update_check_status.set(format!("Error: {e}"));
+            }
+            Err(e) => {
+                update_check_status.set(format!("Error: {e}"));
+            }
+        }
+    });
 }
 
 /// Root application component.
@@ -2210,7 +2640,18 @@ fn app() -> Element {
     let mut mic_active = use_signal(|| None::<bool>);
     let mut mic_repair_busy = use_signal(|| false);
     let mut mic_repair_status = use_signal(String::new);
+    let mut skills_busy = use_signal(|| false);
+    let mut skills_status = use_signal(String::new);
+    let mut scheduler_busy = use_signal(|| false);
+    let mut scheduler_status = use_signal(String::new);
+    let channels_runtime_status = use_signal(|| "Channels runtime: disabled".to_owned());
+    let mut reminder_text = use_signal(String::new);
+    let mut reminder_preset = use_signal(|| ReminderPreset::DailyMorning.as_value().to_owned());
     let mut diagnostics_status = use_signal(String::new);
+    let mut settings_mode = use_signal(|| SettingsMode::Basic);
+    let mut doctor_findings = use_signal(Vec::<fae::doctor::DoctorFinding>::new);
+    let mut doctor_status = use_signal(String::new);
+    let mut doctor_busy = use_signal(|| false);
     // (avatar_base_ok signal removed — no longer needed since poses are cached
     // as data URIs and never use file:// URLs that can fail.)
 
@@ -2226,7 +2667,72 @@ fn app() -> Element {
                             config_state.set(cfg);
                         }
                     }
+                    Ok(UiBusEvent::SchedulerStateUpdated) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    });
+
+    // --- External channels runtime manager ---
+    use_hook(move || {
+        let mut config_state = config_state;
+        let mut channels_runtime_status = channels_runtime_status;
+        spawn(async move {
+            let mut cfg_rx = ui_bus().subscribe();
+            let mut runtime_handle: Option<fae::channels::ChannelRuntimeHandle> = None;
+
+            let mut launch_runtime = |cfg: &fae::SpeechConfig| {
+                if let Some(mut handle) = runtime_handle.take() {
+                    handle.abort();
+                }
+
+                if let Some((handle, _events_rx)) = fae::channels::start_runtime(cfg.clone()) {
+                    let mut active = Vec::new();
+                    if cfg.channels.discord.is_some() {
+                        active.push("discord");
+                    }
+                    if cfg.channels.whatsapp.is_some() {
+                        active.push("whatsapp");
+                    }
+                    if active.is_empty() {
+                        active.push("gateway");
+                    }
+                    channels_runtime_status
+                        .set(format!("Channels runtime: running ({})", active.join(", ")));
+                    runtime_handle = Some(handle);
+                } else {
+                    channels_runtime_status.set("Channels runtime: disabled".to_owned());
+                }
+            };
+
+            let initial_cfg = config_state.read().clone();
+            launch_runtime(&initial_cfg);
+
+            loop {
+                match cfg_rx.recv().await {
+                    Ok(UiBusEvent::ConfigUpdated) => {
+                        let cfg_res = tokio::task::spawn_blocking(read_config_or_default).await;
+                        let cfg = match cfg_res {
+                            Ok(cfg) => cfg,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "config reload for channels failed: {e}; using in-memory config"
+                                );
+                                config_state.read().clone()
+                            }
+                        };
+                        launch_runtime(&cfg);
+                        config_state.set(cfg);
+                    }
+                    Ok(UiBusEvent::SchedulerStateUpdated) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        if let Some(mut handle) = runtime_handle.take() {
+                            handle.abort();
+                        }
+                        break;
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 }
             }
@@ -2251,7 +2757,9 @@ fn app() -> Element {
     // in parallel during an upgrade.
     use_hook(move || {
         spawn(async move {
-            let is_stale = update_state.read().check_is_stale(24);
+            let is_stale = update_state
+                .read()
+                .check_is_stale(STARTUP_UPDATE_STALE_HOURS);
             let pref = update_state.read().auto_update;
             if !is_stale || pref == fae::update::AutoUpdatePreference::Never {
                 // No check needed — clear gate immediately.
@@ -2439,6 +2947,15 @@ fn app() -> Element {
                                     active_binding = next_binding;
                                 }
                                 config_state.set(cfg);
+                            }
+                            Ok(UiBusEvent::SchedulerStateUpdated) => {
+                                let cfg = config_state.read().memory.clone();
+                                tracing::info!("scheduler state changed; restarting scheduler runtime");
+                                scheduler_handle.abort();
+                                let launched = fae::startup::start_scheduler_with_memory(&cfg);
+                                scheduler_handle = launched.0;
+                                scheduler_rx = launched.1;
+                                active_binding = gui::scheduler_memory_binding(&cfg);
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                                 tracing::debug!("ui bus closed; stopping scheduler manager");
@@ -3091,6 +3608,41 @@ fn app() -> Element {
         })
     };
 
+    let open_guide_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(fae_guide_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Guide")
+                    .with_inner_size(LogicalSize::new(760.0, 800.0))
+                    .with_min_inner_size(LogicalSize::new(520.0, 620.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
+    let _menu_handler = {
+        let open_guide_window = open_guide_window.clone();
+        let update_check_status = update_check_status;
+        let update_available = update_available;
+        let update_state = update_state;
+        let update_banner_dismissed = update_banner_dismissed;
+        use_muda_event_handler(move |event| {
+            if event.id() == FAE_MENU_OPEN_GUIDE {
+                open_guide_window();
+            } else if event.id() == FAE_MENU_CHECK_UPDATES {
+                run_manual_update_check(
+                    update_check_status,
+                    update_available,
+                    update_state,
+                    update_banner_dismissed,
+                );
+            }
+        })
+    };
+
     let memory_root = config_state.read().memory.root_dir.clone();
     let avatar_dir = resolve_avatar_dir(&memory_root);
     // Cache avatar pose data URIs once (avoids per-render file I/O and works
@@ -3125,6 +3677,66 @@ fn app() -> Element {
 
     // For the idle/stopped portrait: always use the full uncropped woodland image.
     let portrait_src = embedded_fae_jpg_data_uri();
+    let doctor_summary = {
+        doctor_findings
+            .read()
+            .iter()
+            .map(|finding| {
+                format!(
+                    "{} [{:?}]\n{}",
+                    finding.title, finding.severity, finding.summary
+                )
+            })
+            .collect::<Vec<String>>()
+            .join("\n\n")
+    };
+    let doctor_findings_count = doctor_findings.read().len();
+    let doctor_actions = doctor_findings
+        .read()
+        .iter()
+        .flat_map(|finding| {
+            finding.actions.iter().map(move |action| {
+                (
+                    format!("{}: {}", finding.title, action.label),
+                    action.kind.clone(),
+                )
+            })
+        })
+        .collect::<Vec<(String, fae::doctor::DoctorActionKind)>>();
+    let managed_skills = fae::skills::list_managed_skills();
+    let managed_skill_count = managed_skills.len();
+    let managed_skill_active_count = managed_skills
+        .iter()
+        .filter(|skill| skill.state == fae::skills::ManagedSkillState::Active)
+        .count();
+    let scheduler_snapshot = fae::scheduler::load_persisted_snapshot().ok();
+    let user_scheduler_tasks = scheduler_snapshot
+        .as_ref()
+        .map(|snapshot| {
+            snapshot
+                .tasks
+                .iter()
+                .filter(|task| task.kind == fae::scheduler::tasks::TaskKind::User)
+                .cloned()
+                .collect::<Vec<fae::scheduler::ScheduledTask>>()
+        })
+        .unwrap_or_default();
+    let scheduler_task_count = scheduler_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.tasks.len())
+        .unwrap_or(0);
+    let scheduler_recent_errors = scheduler_snapshot
+        .as_ref()
+        .map(|snapshot| {
+            snapshot
+                .history
+                .iter()
+                .rev()
+                .take(20)
+                .filter(|run| run.outcome == fae::scheduler::TaskRunOutcome::Error)
+                .count()
+        })
+        .unwrap_or(0);
 
     // Resize the main window when the canvas panel opens/closes.
     // Poll the signal on a short timer so the resize happens regardless
@@ -3591,6 +4203,9 @@ fn app() -> Element {
                         p { class: "mic-help-copy",
                             "{mic_help_copy_text()}"
                         }
+                        if let Some(context_warning) = macos_mic_launch_context_warning() {
+                            p { class: "note", "{context_warning}" }
+                        }
                         div { class: "mic-help-actions",
                             button {
                                 class: "mic-help-btn",
@@ -3956,6 +4571,21 @@ fn app() -> Element {
                     p { class: "settings-sub",
                         "Saved at: {config_path.display()}"
                     }
+                    div { class: "settings-row",
+                        label { class: "settings-label", "Mode" }
+                        div { class: "details-actions",
+                            button {
+                                class: if *settings_mode.read() == SettingsMode::Basic { "pill pill-primary" } else { "pill" },
+                                onclick: move |_| settings_mode.set(SettingsMode::Basic),
+                                "Basic"
+                            }
+                            button {
+                                class: if *settings_mode.read() == SettingsMode::Advanced { "pill pill-primary" } else { "pill" },
+                                onclick: move |_| settings_mode.set(SettingsMode::Advanced),
+                                "Advanced"
+                            }
+                        }
+                    }
 
                     // --- Models in use (read-only summary) ---
                     div { class: "settings-block",
@@ -3977,6 +4607,616 @@ fn app() -> Element {
                         }
                     }
 
+                    if *settings_mode.read() == SettingsMode::Basic {
+                        div {
+                        details { class: "settings-section", open: true,
+                            summary { class: "settings-section-summary", "Assistant" }
+                            div { class: "settings-section-body",
+                                p { class: "note", "Simple setup for everyday use. Switch to Advanced for all technical controls." }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Tool mode" }
+                                    select {
+                                        class: "settings-select",
+                                        disabled: !tool_mode_select_enabled,
+                                        value: "{tool_mode_value}",
+                                        onchange: move |evt| {
+                                            let mode = match evt.value().as_str() {
+                                                "off" => fae::config::AgentToolMode::Off,
+                                                "read_only" => fae::config::AgentToolMode::ReadOnly,
+                                                "read_write" => fae::config::AgentToolMode::ReadWrite,
+                                                "full" => fae::config::AgentToolMode::Full,
+                                                "full_no_approval" => fae::config::AgentToolMode::FullNoApproval,
+                                                _ => fae::config::AgentToolMode::ReadOnly,
+                                            };
+                                            config_state.write().llm.tool_mode = mode;
+                                        },
+                                        option { value: "off", "Off" }
+                                        option { value: "read_only", "Read-only" }
+                                        option { value: "read_write", "Read/write (ask first)" }
+                                        option { value: "full", "Full (ask first)" }
+                                        option { value: "full_no_approval", "Full (no approval)" }
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Wake word" }
+                                    input {
+                                        class: "settings-select",
+                                        r#type: "text",
+                                        disabled: !settings_enabled,
+                                        value: "{config_state.read().conversation.wake_word}",
+                                        oninput: move |evt| config_state.write().conversation.wake_word = evt.value(),
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Stop phrase" }
+                                    input {
+                                        class: "settings-select",
+                                        r#type: "text",
+                                        disabled: !settings_enabled,
+                                        value: "{config_state.read().conversation.stop_phrase}",
+                                        oninput: move |evt| config_state.write().conversation.stop_phrase = evt.value(),
+                                    }
+                                }
+                            }
+                        }
+
+                        details { class: "settings-section",
+                            summary { class: "settings-section-summary", "Channels" }
+                            div { class: "settings-section-body",
+                                p { class: "note",
+                                    "Connect Discord or WhatsApp. Keep it simple: enable only the channels you use."
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Channels enabled" }
+                                    input {
+                                        class: "settings-checkbox",
+                                        r#type: "checkbox",
+                                        disabled: !settings_enabled,
+                                        checked: config_state.read().channels.enabled,
+                                        onchange: move |evt| {
+                                            config_state.write().channels.enabled = evt.checked();
+                                        },
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Auto-start on launch" }
+                                    input {
+                                        class: "settings-checkbox",
+                                        r#type: "checkbox",
+                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                        checked: config_state.read().channels.auto_start,
+                                        onchange: move |evt| {
+                                            config_state.write().channels.auto_start = evt.checked();
+                                        },
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Runtime" }
+                                    p { class: "settings-value", "{channels_runtime_status.read()}" }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Discord enabled" }
+                                    input {
+                                        class: "settings-checkbox",
+                                        r#type: "checkbox",
+                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                        checked: config_state.read().channels.discord.is_some(),
+                                        onchange: move |evt| {
+                                            let checked = evt.checked();
+                                            let mut cfg = config_state.write();
+                                            if checked {
+                                                if cfg.channels.discord.is_none() {
+                                                    cfg.channels.discord = Some(fae::config::DiscordChannelConfig::default());
+                                                }
+                                            } else {
+                                                cfg.channels.discord = None;
+                                            }
+                                        },
+                                    }
+                                }
+                                if config_state.read().channels.discord.is_some() {
+                                    div { class: "settings-row",
+                                        label { class: "settings-label", "Discord bot token" }
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "password",
+                                            placeholder: "Bot token",
+                                            disabled: !settings_enabled,
+                                            value: "{config_state.read().channels.discord.as_ref().map(|d| d.bot_token.as_str()).unwrap_or_default()}",
+                                            oninput: move |evt| {
+                                                if let Some(discord) = config_state.write().channels.discord.as_mut() {
+                                                    discord.bot_token = evt.value();
+                                                }
+                                            },
+                                        }
+                                    }
+                                    div { class: "settings-row",
+                                        label { class: "settings-label", "Discord allowlist" }
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "text",
+                                            placeholder: "user IDs, comma-separated",
+                                            disabled: !settings_enabled,
+                                            value: "{config_state.read().channels.discord.as_ref().map(|d| d.allowed_user_ids.join(\", \")).unwrap_or_default()}",
+                                            oninput: move |evt| {
+                                                let parsed = evt
+                                                    .value()
+                                                    .split(',')
+                                                    .map(str::trim)
+                                                    .filter(|s| !s.is_empty())
+                                                    .map(ToOwned::to_owned)
+                                                    .collect::<Vec<_>>();
+                                                if let Some(discord) = config_state.write().channels.discord.as_mut() {
+                                                    discord.allowed_user_ids = parsed;
+                                                }
+                                            },
+                                        }
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "WhatsApp enabled" }
+                                    input {
+                                        class: "settings-checkbox",
+                                        r#type: "checkbox",
+                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                        checked: config_state.read().channels.whatsapp.is_some(),
+                                        onchange: move |evt| {
+                                            let checked = evt.checked();
+                                            let mut cfg = config_state.write();
+                                            if checked {
+                                                if cfg.channels.whatsapp.is_none() {
+                                                    cfg.channels.whatsapp = Some(fae::config::WhatsAppChannelConfig::default());
+                                                }
+                                                cfg.channels.gateway.enabled = true;
+                                            } else {
+                                                cfg.channels.whatsapp = None;
+                                            }
+                                        },
+                                    }
+                                }
+                                if config_state.read().channels.whatsapp.is_some() {
+                                    div { class: "settings-row",
+                                        label { class: "settings-label", "WhatsApp access token" }
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "password",
+                                            placeholder: "Meta access token",
+                                            disabled: !settings_enabled,
+                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.access_token.as_str()).unwrap_or_default()}",
+                                            oninput: move |evt| {
+                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                                    wa.access_token = evt.value();
+                                                }
+                                            },
+                                        }
+                                    }
+                                    div { class: "settings-row",
+                                        label { class: "settings-label", "WhatsApp phone number ID" }
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "text",
+                                            placeholder: "Phone number ID",
+                                            disabled: !settings_enabled,
+                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.phone_number_id.as_str()).unwrap_or_default()}",
+                                            oninput: move |evt| {
+                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                                    wa.phone_number_id = evt.value();
+                                                }
+                                            },
+                                        }
+                                    }
+                                    div { class: "settings-row",
+                                        label { class: "settings-label", "WhatsApp verify token" }
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "text",
+                                            placeholder: "Webhook verify token",
+                                            disabled: !settings_enabled,
+                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.verify_token.as_str()).unwrap_or_default()}",
+                                            oninput: move |evt| {
+                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                                    wa.verify_token = evt.value();
+                                                }
+                                            },
+                                        }
+                                    }
+                                    div { class: "settings-row",
+                                        label { class: "settings-label", "WhatsApp allowlist" }
+                                        input {
+                                            class: "settings-select",
+                                            r#type: "text",
+                                            placeholder: "+15551234567, comma-separated",
+                                            disabled: !settings_enabled,
+                                            value: "{config_state.read().channels.whatsapp.as_ref().map(|w| w.allowed_numbers.join(\", \")).unwrap_or_default()}",
+                                            oninput: move |evt| {
+                                                let parsed = evt
+                                                    .value()
+                                                    .split(',')
+                                                    .map(str::trim)
+                                                    .filter(|s| !s.is_empty())
+                                                    .map(ToOwned::to_owned)
+                                                    .collect::<Vec<_>>();
+                                                if let Some(wa) = config_state.write().channels.whatsapp.as_mut() {
+                                                    wa.allowed_numbers = parsed;
+                                                }
+                                            },
+                                        }
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Gateway enabled" }
+                                    input {
+                                        class: "settings-checkbox",
+                                        r#type: "checkbox",
+                                        disabled: !settings_enabled || !config_state.read().channels.enabled,
+                                        checked: config_state.read().channels.gateway.enabled,
+                                        onchange: move |evt| {
+                                            config_state.write().channels.gateway.enabled = evt.checked();
+                                        },
+                                    }
+                                }
+                            }
+                        }
+
+                        details { class: "settings-section",
+                            summary { class: "settings-section-summary", "Skills" }
+                            div { class: "settings-section-body",
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Active skills" }
+                                    p { class: "settings-value", "{fae::skills::list_skills().join(\", \")}" }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Managed skills" }
+                                    p { class: "settings-value", "{managed_skill_active_count}/{managed_skill_count} active" }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Custom skills folder" }
+                                    p { class: "settings-value", "{fae::skills::skills_dir().display()}/" }
+                                }
+                                div { class: "details-actions",
+                                    button {
+                                        class: "pill pill-primary",
+                                        disabled: *skills_busy.read(),
+                                        onclick: move |_| {
+                                            skills_busy.set(true);
+                                            skills_status.set("Choose a skill package folder...".to_owned());
+                                            spawn(async move {
+                                                let picked = tokio::task::spawn_blocking(|| {
+                                                    rfd::FileDialog::new()
+                                                        .set_directory(fae::skills::skills_dir())
+                                                        .pick_folder()
+                                                }).await;
+
+                                                let Some(path) = (match picked {
+                                                    Ok(path) => path,
+                                                    Err(e) => {
+                                                        skills_status.set(format!("Folder picker failed: {e}"));
+                                                        skills_busy.set(false);
+                                                        return;
+                                                    }
+                                                }) else {
+                                                    skills_status.set("Cancelled.".to_owned());
+                                                    skills_busy.set(false);
+                                                    return;
+                                                };
+
+                                                skills_status.set(format!("Installing from {}...", path.display()));
+                                                let install = tokio::task::spawn_blocking(move || {
+                                                    fae::skills::install_skill_package(&path)
+                                                }).await;
+                                                match install {
+                                                    Ok(Ok(info)) => {
+                                                        skills_status.set(format!(
+                                                            "Installed `{}` v{}.",
+                                                            info.id, info.version
+                                                        ));
+                                                    }
+                                                    Ok(Err(e)) => skills_status.set(format!("Install failed: {e}")),
+                                                    Err(e) => skills_status.set(format!("Install failed: {e}")),
+                                                }
+                                                skills_busy.set(false);
+                                            });
+                                        },
+                                        "Install package..."
+                                    }
+                                }
+                                if !skills_status.read().is_empty() {
+                                    p { class: "settings-value", "{skills_status.read()}" }
+                                }
+                                if managed_skills.is_empty() {
+                                    p { class: "note", "No managed skills installed yet." }
+                                } else {
+                                    div { class: "settings-block",
+                                        for skill in managed_skills.clone() {
+                                            div { class: "settings-row",
+                                                label { class: "settings-label", "{skill.name}" }
+                                                p { class: "settings-value", "{managed_skill_state_label(skill.state)}" }
+                                            }
+                                            div { class: "details-actions",
+                                                button {
+                                                    class: "pill",
+                                                    disabled: *skills_busy.read(),
+                                                    onclick: {
+                                                        let skill_id = skill.id.clone();
+                                                        let activate = skill.state != fae::skills::ManagedSkillState::Active;
+                                                        move |_| {
+                                                            skills_busy.set(true);
+                                                            let skill_id = skill_id.clone();
+                                                            spawn(async move {
+                                                                let skill_id_for_call = skill_id.clone();
+                                                                let result = tokio::task::spawn_blocking(move || {
+                                                                    if activate {
+                                                                        fae::skills::activate_skill(&skill_id_for_call)
+                                                                    } else {
+                                                                        fae::skills::disable_skill(&skill_id_for_call)
+                                                                    }
+                                                                }).await;
+                                                                match result {
+                                                                    Ok(Ok(())) => {
+                                                                        let action = if activate { "Activated" } else { "Disabled" };
+                                                                        skills_status.set(format!("{action} `{skill_id}`."));
+                                                                    }
+                                                                    Ok(Err(e)) => skills_status.set(format!("Skill update failed: {e}")),
+                                                                    Err(e) => skills_status.set(format!("Skill update failed: {e}")),
+                                                                }
+                                                                skills_busy.set(false);
+                                                            });
+                                                        }
+                                                    },
+                                                    if skill.state == fae::skills::ManagedSkillState::Active { "Disable" } else { "Activate" }
+                                                }
+                                                button {
+                                                    class: "pill",
+                                                    disabled: *skills_busy.read(),
+                                                    onclick: {
+                                                        let skill_id = skill.id.clone();
+                                                        move |_| {
+                                                            skills_busy.set(true);
+                                                            let skill_id = skill_id.clone();
+                                                            spawn(async move {
+                                                                let skill_id_for_call = skill_id.clone();
+                                                                let result = tokio::task::spawn_blocking(move || {
+                                                                    fae::skills::rollback_skill(&skill_id_for_call)
+                                                                }).await;
+                                                                match result {
+                                                                    Ok(Ok(())) => skills_status.set(format!("Rolled back `{skill_id}`.")),
+                                                                    Ok(Err(e)) => skills_status.set(format!("Rollback failed: {e}")),
+                                                                    Err(e) => skills_status.set(format!("Rollback failed: {e}")),
+                                                                }
+                                                                skills_busy.set(false);
+                                                            });
+                                                        }
+                                                    },
+                                                    "Rollback"
+                                                }
+                                            }
+                                            if let Some(err) = skill.last_error {
+                                                p { class: "note", "Last error: {err}" }
+                                            }
+                                        }
+                                    }
+                                }
+                                p { class: "note", "For web skills: Fae should fetch via tools, render full draft to Canvas, then wait for your accept/edit/reject decision before install." }
+                            }
+                        }
+
+                        details { class: "settings-section",
+                            summary { class: "settings-section-summary", "Updates" }
+                            div { class: "settings-section-body",
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Fae version" }
+                                    p { class: "settings-value", "{update_state.read().fae_version}" }
+                                }
+                                div { class: "settings-row",
+                                    button {
+                                        class: "settings-save",
+                                        onclick: {
+                                            let update_check_status = update_check_status;
+                                            let update_available = update_available;
+                                            let update_state = update_state;
+                                            let update_banner_dismissed = update_banner_dismissed;
+                                            move |_| {
+                                                run_manual_update_check(
+                                                    update_check_status,
+                                                    update_available,
+                                                    update_state,
+                                                    update_banner_dismissed,
+                                                );
+                                            }
+                                        },
+                                        "Check now"
+                                    }
+                                    p { class: "settings-value", "{update_check_status.read()}" }
+                                }
+                            }
+                        }
+
+                        details { class: "settings-section",
+                            summary { class: "settings-section-summary", "Scheduler" }
+                            div { class: "settings-section-body",
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Scheduled jobs" }
+                                    p { class: "settings-value", "{scheduler_task_count}" }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Recent errors (last 20 runs)" }
+                                    p { class: "settings-value", "{scheduler_recent_errors}" }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Reminder text" }
+                                    input {
+                                        class: "settings-select",
+                                        r#type: "text",
+                                        disabled: *scheduler_busy.read(),
+                                        placeholder: "Example: Drink water",
+                                        value: "{reminder_text.read()}",
+                                        oninput: move |evt| reminder_text.set(evt.value()),
+                                    }
+                                }
+                                div { class: "settings-row",
+                                    label { class: "settings-label", "Cadence" }
+                                    select {
+                                        class: "settings-select",
+                                        disabled: *scheduler_busy.read(),
+                                        value: "{reminder_preset.read()}",
+                                        onchange: move |evt| reminder_preset.set(evt.value()),
+                                        option {
+                                            value: "{ReminderPreset::Hourly.as_value()}",
+                                            "{ReminderPreset::Hourly.label()}"
+                                        }
+                                        option {
+                                            value: "{ReminderPreset::DailyMorning.as_value()}",
+                                            "{ReminderPreset::DailyMorning.label()}"
+                                        }
+                                        option {
+                                            value: "{ReminderPreset::DailyEvening.as_value()}",
+                                            "{ReminderPreset::DailyEvening.label()}"
+                                        }
+                                        option {
+                                            value: "{ReminderPreset::WeekdayMorning.as_value()}",
+                                            "{ReminderPreset::WeekdayMorning.label()}"
+                                        }
+                                    }
+                                }
+                                div { class: "details-actions",
+                                    button {
+                                        class: "pill pill-primary",
+                                        disabled: *scheduler_busy.read(),
+                                        onclick: move |_| {
+                                            scheduler_busy.set(true);
+                                            scheduler_status.set("Saving reminder...".to_owned());
+                                            let message = reminder_text.read().to_string();
+                                            let preset = ReminderPreset::from_value(&reminder_preset.read());
+                                            spawn(async move {
+                                                let result = tokio::task::spawn_blocking(move || {
+                                                    let task = create_reminder_task(&message, preset);
+                                                    let task_name = task.name.clone();
+                                                    fae::scheduler::upsert_persisted_user_task(task)?;
+                                                    Ok::<String, fae::SpeechError>(task_name)
+                                                }).await;
+                                                match result {
+                                                    Ok(Ok(task_name)) => {
+                                                        scheduler_status.set(format!("Scheduled `{task_name}`."));
+                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
+                                                    }
+                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not save reminder: {e}")),
+                                                    Err(e) => scheduler_status.set(format!("Could not save reminder: {e}")),
+                                                }
+                                                scheduler_busy.set(false);
+                                            });
+                                        },
+                                        "Schedule reminder"
+                                    }
+                                }
+                                if !scheduler_status.read().is_empty() {
+                                    p { class: "settings-value", "{scheduler_status.read()}" }
+                                }
+                                if user_scheduler_tasks.is_empty() {
+                                    p { class: "note", "No user reminders yet." }
+                                } else {
+                                    div { class: "settings-block",
+                                        for task in user_scheduler_tasks.clone() {
+                                            div { class: "settings-row",
+                                                label { class: "settings-label", "{task.name}" }
+                                                p { class: "settings-value", "{task.schedule}" }
+                                            }
+                                            div { class: "details-actions",
+                                                button {
+                                                    class: "pill",
+                                                    disabled: *scheduler_busy.read(),
+                                                    onclick: {
+                                                        let task_id = task.id.clone();
+                                                        move |_| {
+                                                            scheduler_busy.set(true);
+                                                            let task_id = task_id.clone();
+                                                            spawn(async move {
+                                                                let task_id_for_call = task_id.clone();
+                                                                let result = tokio::task::spawn_blocking(move || {
+                                                                    fae::scheduler::mark_persisted_task_due_now(&task_id_for_call)
+                                                                }).await;
+                                                                match result {
+                                                                    Ok(Ok(true)) => {
+                                                                        scheduler_status.set(format!("Queued `{task_id}` for next tick."));
+                                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
+                                                                    }
+                                                                    Ok(Ok(false)) => scheduler_status.set(format!("Task `{task_id}` was not found.")),
+                                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not run now: {e}")),
+                                                                    Err(e) => scheduler_status.set(format!("Could not run now: {e}")),
+                                                                }
+                                                                scheduler_busy.set(false);
+                                                            });
+                                                        }
+                                                    },
+                                                    "Run now"
+                                                }
+                                                button {
+                                                    class: "pill",
+                                                    disabled: *scheduler_busy.read(),
+                                                    onclick: {
+                                                        let task_id = task.id.clone();
+                                                        let next_enabled = !task.enabled;
+                                                        move |_| {
+                                                            scheduler_busy.set(true);
+                                                            let task_id = task_id.clone();
+                                                            spawn(async move {
+                                                                let task_id_for_call = task_id.clone();
+                                                                let result = tokio::task::spawn_blocking(move || {
+                                                                    fae::scheduler::set_persisted_task_enabled(&task_id_for_call, next_enabled)
+                                                                }).await;
+                                                                match result {
+                                                                    Ok(Ok(true)) => {
+                                                                        let label = if next_enabled { "Enabled" } else { "Paused" };
+                                                                        scheduler_status.set(format!("{label} `{task_id}`."));
+                                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
+                                                                    }
+                                                                    Ok(Ok(false)) => scheduler_status.set(format!("Task `{task_id}` was not found.")),
+                                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not update task: {e}")),
+                                                                    Err(e) => scheduler_status.set(format!("Could not update task: {e}")),
+                                                                }
+                                                                scheduler_busy.set(false);
+                                                            });
+                                                        }
+                                                    },
+                                                    if task.enabled { "Pause" } else { "Enable" }
+                                                }
+                                                button {
+                                                    class: "pill",
+                                                    disabled: *scheduler_busy.read(),
+                                                    onclick: {
+                                                        let task_id = task.id.clone();
+                                                        move |_| {
+                                                            scheduler_busy.set(true);
+                                                            let task_id = task_id.clone();
+                                                            spawn(async move {
+                                                                let task_id_for_call = task_id.clone();
+                                                                let result = tokio::task::spawn_blocking(move || {
+                                                                    fae::scheduler::remove_persisted_task(&task_id_for_call)
+                                                                }).await;
+                                                                match result {
+                                                                    Ok(Ok(true)) => {
+                                                                        scheduler_status.set(format!("Deleted `{task_id}`."));
+                                                                        let _ = ui_bus().send(UiBusEvent::SchedulerStateUpdated);
+                                                                    }
+                                                                    Ok(Ok(false)) => scheduler_status.set(format!("Task `{task_id}` was not found.")),
+                                                                    Ok(Err(e)) => scheduler_status.set(format!("Could not delete task: {e}")),
+                                                                    Err(e) => scheduler_status.set(format!("Could not delete task: {e}")),
+                                                                }
+                                                                scheduler_busy.set(false);
+                                                            });
+                                                        }
+                                                    },
+                                                    "Delete"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                p { class: "note", "Doctor can reset scheduler state if jobs become unhealthy." }
+                            }
+                        }
+                        }
+                    } else {
+                    div {
                     // --- LLM ---
                     details { class: "settings-section",
                         summary { class: "settings-section-summary", "LLM / Intelligence" }
@@ -4605,40 +5845,19 @@ fn app() -> Element {
                             div { class: "settings-row",
                                 button {
                                     class: "settings-save",
-                                    onclick: move |_| {
-                                        update_check_status.set("Checking...".to_owned());
-                                        let etag = update_state.read().etag_fae.clone();
-                                        spawn(async move {
-                                            let result = tokio::task::spawn_blocking(move || {
-                                                let checker = fae::update::UpdateChecker::for_fae();
-                                                checker.check(etag.as_deref())
-                                            }).await;
-
-                                            match result {
-                                                Ok(Ok((Some(release), new_etag))) => {
-                                                    let msg = format!("v{} available!", release.version);
-                                                    update_check_status.set(msg);
-                                                    update_available.set(Some(release));
-                                                    update_state.write().etag_fae = new_etag;
-                                                    update_state.write().mark_checked();
-                                                    let state = update_state.read().clone();
-                                                    let _ = tokio::task::spawn_blocking(move || state.save()).await;
-                                                }
-                                                Ok(Ok((None, new_etag))) => {
-                                                    update_check_status.set("Up to date.".to_owned());
-                                                    update_state.write().etag_fae = new_etag;
-                                                    update_state.write().mark_checked();
-                                                    let state = update_state.read().clone();
-                                                    let _ = tokio::task::spawn_blocking(move || state.save()).await;
-                                                }
-                                                Ok(Err(e)) => {
-                                                    update_check_status.set(format!("Error: {e}"));
-                                                }
-                                                Err(e) => {
-                                                    update_check_status.set(format!("Error: {e}"));
-                                                }
-                                            }
-                                        });
+                                    onclick: {
+                                        let update_check_status = update_check_status;
+                                        let update_available = update_available;
+                                        let update_state = update_state;
+                                        let update_banner_dismissed = update_banner_dismissed;
+                                        move |_| {
+                                            run_manual_update_check(
+                                                update_check_status,
+                                                update_available,
+                                                update_state,
+                                                update_banner_dismissed,
+                                            );
+                                        }
                                     },
                                     "Check now"
                                 }
@@ -4695,47 +5914,6 @@ fn app() -> Element {
                         }
                     }
 
-                    // --- Updates ---
-                    details { class: "settings-section",
-                        summary { class: "settings-section-summary", "Updates" }
-                        div { class: "settings-section-body",
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Current version" }
-                                p { class: "settings-value", "{FAE_VERSION}" }
-                            }
-                            div { class: "settings-row",
-                                label { class: "settings-label", "Auto-check" }
-                                p { class: "settings-value", "daily at 09:00 UTC" }
-                            }
-                            div { class: "settings-row",
-                                button {
-                                    class: "settings-save",
-                                    onclick: move |_| {
-                                        spawn(async move {
-                                            let checker = fae::update::UpdateChecker::for_fae();
-                                            match checker.check(None) {
-                                                Ok((Some(release), _)) => {
-                                                    config_save_status.set(format!(
-                                                        "Update available: v{} (current: {})",
-                                                        release.version,
-                                                        checker.current_version()
-                                                    ));
-                                                }
-                                                Ok((None, _)) => {
-                                                    config_save_status.set("You're on the latest version!".to_owned());
-                                                }
-                                                Err(e) => {
-                                                    config_save_status.set(format!("Check failed: {e}"));
-                                                }
-                                            }
-                                        });
-                                    },
-                                    "Check for Updates"
-                                }
-                            }
-                        }
-                    }
-
                     // --- Diagnostics ---
                     details { class: "settings-section",
                         summary { class: "settings-section-summary", "Diagnostics" }
@@ -4780,6 +5958,128 @@ fn app() -> Element {
                                     "{diagnostics_status.read()}"
                                 }
                             }
+                        }
+                    }
+                    }
+                    }
+
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Doctor" }
+                        div { class: "settings-section-body",
+                            p { class: "note",
+                                "Health checks and repair actions for scheduler and managed skills."
+                            }
+                            div { class: "settings-row",
+                                button {
+                                    class: "settings-save",
+                                    disabled: *doctor_busy.read(),
+                                    onclick: move |_| {
+                                        doctor_busy.set(true);
+                                        doctor_status.set("Running checks...".to_owned());
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(fae::doctor::run_checks).await;
+                                            doctor_busy.set(false);
+                                            match result {
+                                                Ok(findings) => {
+                                                    let count = findings.iter().filter(|f| f.severity != fae::doctor::DoctorSeverity::Info).count();
+                                                    doctor_status.set(format!("Doctor finished. {} actionable finding(s).", count));
+                                                    doctor_findings.set(findings);
+                                                }
+                                                Err(e) => {
+                                                    doctor_status.set(format!("Doctor failed: {e}"));
+                                                }
+                                            }
+                                        });
+                                    },
+                                    if *doctor_busy.read() { "Running..." } else { "Run Doctor" }
+                                }
+                                p { class: "settings-value", "{doctor_status.read()}" }
+                            }
+                            div { class: "details-actions",
+                                button {
+                                    class: "pill",
+                                    disabled: *doctor_busy.read(),
+                                    onclick: move |_| {
+                                        doctor_busy.set(true);
+                                        doctor_status.set("Gathering diagnostics...".to_owned());
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(|| {
+                                                fae::doctor::apply_action(&fae::doctor::DoctorActionKind::GatherDiagnostics)
+                                            }).await;
+                                            doctor_busy.set(false);
+                                            match result {
+                                                Ok(Ok(msg)) => doctor_status.set(msg),
+                                                Ok(Err(e)) => doctor_status.set(format!("Action failed: {e}")),
+                                                Err(e) => doctor_status.set(format!("Action failed: {e}")),
+                                            }
+                                        });
+                                    },
+                                    "Gather diagnostics"
+                                }
+                                button {
+                                    class: "pill",
+                                    disabled: *doctor_busy.read(),
+                                    onclick: move |_| {
+                                        doctor_busy.set(true);
+                                        doctor_status.set("Resetting scheduler state...".to_owned());
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(|| {
+                                                fae::doctor::apply_action(&fae::doctor::DoctorActionKind::ClearSchedulerState)
+                                            }).await;
+                                            doctor_busy.set(false);
+                                            match result {
+                                                Ok(Ok(msg)) => doctor_status.set(msg),
+                                                Ok(Err(e)) => doctor_status.set(format!("Action failed: {e}")),
+                                                Err(e) => doctor_status.set(format!("Action failed: {e}")),
+                                            }
+                                        });
+                                    },
+                                    "Reset scheduler state"
+                                }
+                            }
+                            if doctor_actions.is_empty() {
+                                p { class: "note", "No repair actions yet. Run Doctor to generate findings." }
+                            } else {
+                                div { class: "details-actions",
+                                    for (action_label, action_kind) in doctor_actions {
+                                        button {
+                                            class: "pill",
+                                            disabled: *doctor_busy.read(),
+                                            onclick: {
+                                                let action_kind = action_kind.clone();
+                                                let action_label = action_label.clone();
+                                                move |_| {
+                                                    let action_kind = action_kind.clone();
+                                                    let action_label = action_label.clone();
+                                                    doctor_busy.set(true);
+                                                    doctor_status.set(format!("Applying {action_label}..."));
+                                                    spawn(async move {
+                                                        let result = tokio::task::spawn_blocking(move || {
+                                                            fae::doctor::apply_action(&action_kind)
+                                                        }).await;
+                                                        match result {
+                                                            Ok(Ok(msg)) => {
+                                                                doctor_status.set(msg);
+                                                                let refresh = tokio::task::spawn_blocking(fae::doctor::run_checks).await;
+                                                                match refresh {
+                                                                    Ok(findings) => doctor_findings.set(findings),
+                                                                    Err(e) => doctor_status.set(format!("Action succeeded, but refresh failed: {e}")),
+                                                                }
+                                                            }
+                                                            Ok(Err(e)) => doctor_status.set(format!("Action failed: {e}")),
+                                                            Err(e) => doctor_status.set(format!("Action failed: {e}")),
+                                                        }
+                                                        doctor_busy.set(false);
+                                                    });
+                                                }
+                                            },
+                                            "{action_label}"
+                                        }
+                                    }
+                                }
+                            }
+                            p { class: "note", "Findings: {doctor_findings_count}" }
+                            pre { class: "details-pre", "{doctor_summary}" }
                         }
                     }
 
@@ -5269,6 +6569,87 @@ fn app() -> Element {
                 }
             } else {
                 rsx! {}
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn fae_guide_window() -> Element {
+    let desktop = use_window();
+
+    rsx! {
+        style { {GLOBAL_CSS} }
+        div { class: "container",
+            div { class: "topbar",
+                button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
+                p { class: "topbar-title", "Fae Guide" }
+                p { class: "topbar-model-indicator", "v{FAE_VERSION}" }
+            }
+            div { class: "settings", style: "max-width: 720px; width: 100%;",
+                h2 { class: "settings-title", "How to Work with Fae" }
+                p { class: "settings-sub",
+                    "Fae is a local-first voice assistant. Speak naturally, ask for concrete outcomes, and let her use tools when needed."
+                }
+
+                div { class: "settings-block",
+                    h3 { class: "settings-h3", "1) Start a conversation" }
+                    p { class: "settings-sub", "Press Start Listening, then talk in short, clear requests." }
+                    p { class: "settings-sub", "Good prompts:" }
+                    pre { class: "details-pre",
+                        "\"Summarize today's build logs and list failures.\"\n\
+                         \"Open my config and switch backend to local.\"\n\
+                         \"Create a skill draft for external LLM setup and show it on canvas first.\""
+                    }
+                }
+
+                div { class: "settings-block",
+                    h3 { class: "settings-h3", "2) Tool use and approvals" }
+                    p { class: "settings-sub",
+                        "Fae can use local tools (`read`, `write`, `edit`, `bash`) and canvas tools. When approvals are enabled, sensitive actions pause for your confirmation."
+                    }
+                    p { class: "settings-sub",
+                        "Ask explicitly when you want tools: \"Use tools to inspect the repo and apply the fix.\""
+                    }
+                    p { class: "settings-sub",
+                        "For skill installs from links: ask Fae to fetch via tools, show the full draft in canvas, then wait for your accept/edit/reject decision before writing to skills."
+                    }
+                }
+
+                div { class: "settings-block",
+                    h3 { class: "settings-h3", "3) Web search" }
+                    p { class: "settings-sub",
+                        "Fae has built-in web tools: `web_search` (find sources) and `fetch_url` (read a page)."
+                    }
+                    p { class: "settings-sub",
+                        "Example prompts:"
+                    }
+                    pre { class: "details-pre",
+                        "\"Search the web for the latest provider API changes and cite links.\"\n\
+                         \"Fetch this URL and extract the key setup steps.\""
+                    }
+                    p { class: "settings-sub",
+                        "If tools are unavailable, check Settings -> LLM backend/tool mode and confirm Fae is running with web-search enabled."
+                    }
+                }
+
+                div { class: "settings-block",
+                    h3 { class: "settings-h3", "4) Best practices" }
+                    ul {
+                        style: "padding-left: 1.15rem; margin-top: 0.2rem; display: grid; gap: 0.2rem; color: var(--text-secondary); font-size: 0.8rem;",
+                        li { "State the goal first, then constraints (security, local-only, file paths)." }
+                        li { "Ask for plans when the task is complex: \"Plan first, then implement.\"" }
+                        li { "For risky changes, ask Fae to test and report findings before finalizing." }
+                        li { "Use canvas when you want drafts or skills reviewed before applying." }
+                    }
+                }
+
+                div { class: "settings-block",
+                    h3 { class: "settings-h3", "5) Updates" }
+                    p { class: "settings-sub",
+                        "Use Fae -> Check for Updates from the macOS menu bar, or open Settings -> Updates in the main window."
+                    }
+                }
             }
         }
     }

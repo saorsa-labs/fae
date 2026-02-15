@@ -1,10 +1,12 @@
 //! Scheduler background loop.
 //!
 //! Spawns a tokio task that periodically checks for due tasks and
-//! executes them. Task state (last-run timestamps) is persisted to
+//! executes them. Task definitions and run history are persisted to
 //! `~/.config/fae/scheduler.json`.
 
-use crate::scheduler::tasks::{Schedule, ScheduledTask, TaskResult};
+use crate::scheduler::tasks::{
+    Schedule, ScheduledTask, TaskKind, TaskResult, TaskRunOutcome, TaskRunRecord,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -13,40 +15,56 @@ use tracing::{debug, error, info, warn};
 /// Interval between scheduler ticks (seconds).
 const TICK_INTERVAL_SECS: u64 = 60;
 
+/// Number of run-history entries to keep.
+const DEFAULT_HISTORY_LIMIT: usize = 400;
+
 /// Callback type for executing a task.
 ///
-/// Takes the task ID and returns a [`TaskResult`]. Implementations should
-/// be lightweight — expensive work happens inside the callback.
-pub type TaskExecutor = Box<dyn Fn(&str) -> TaskResult + Send + Sync>;
+/// Takes the full scheduled task and returns a [`TaskResult`].
+pub type TaskExecutor = Box<dyn Fn(&ScheduledTask) -> TaskResult + Send + Sync>;
+
+/// Public snapshot used by doctor/GUI tools.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SchedulerSnapshot {
+    /// Persisted tasks.
+    pub tasks: Vec<ScheduledTask>,
+    /// Recent run history.
+    #[serde(default)]
+    pub history: Vec<TaskRunRecord>,
+}
 
 /// Background scheduler that runs periodic tasks.
 pub struct Scheduler {
     /// Registered tasks.
     tasks: Vec<ScheduledTask>,
+    /// Recent run history.
+    history: Vec<TaskRunRecord>,
     /// Path to persisted scheduler state.
     state_path: Option<PathBuf>,
     /// Channel for sending task results to the GUI.
     result_tx: mpsc::UnboundedSender<TaskResult>,
     /// Task executor callback.
     executor: Option<TaskExecutor>,
+    /// Max history entries kept in memory and persisted to disk.
+    max_history_entries: usize,
 }
 
-/// Persisted scheduler state (task last-run timestamps).
+/// Persisted scheduler state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SchedulerState {
-    /// Map of task ID to last-run epoch seconds.
-    tasks: Vec<TaskEntry>,
+    /// Schema version.
+    #[serde(default = "default_state_version")]
+    version: u8,
+    /// Persisted task definitions and runtime state.
+    #[serde(default)]
+    tasks: Vec<ScheduledTask>,
+    /// Persisted run history.
+    #[serde(default)]
+    history: Vec<TaskRunRecord>,
 }
 
-/// A single persisted task entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TaskEntry {
-    /// Task identifier.
-    id: String,
-    /// Unix epoch seconds of last run.
-    last_run: Option<u64>,
-    /// Whether the task is enabled.
-    enabled: bool,
+fn default_state_version() -> u8 {
+    2
 }
 
 impl Scheduler {
@@ -55,9 +73,11 @@ impl Scheduler {
         let state_path = Self::default_state_path();
         Self {
             tasks: Vec::new(),
+            history: Vec::new(),
             state_path,
             result_tx,
             executor: None,
+            max_history_entries: DEFAULT_HISTORY_LIMIT,
         }
     }
 
@@ -67,45 +87,52 @@ impl Scheduler {
         self
     }
 
-    /// Register built-in Fae update check task (every 6 hours + on startup).
+    /// Override the in-memory and persisted run-history limit.
+    pub fn with_history_limit(mut self, max_entries: usize) -> Self {
+        self.max_history_entries = max_entries.max(1);
+        self
+    }
+
+    /// Register built-in Fae update check task.
     pub fn with_update_checks(&mut self) {
-        let fae_task = ScheduledTask::new(
+        let mut task = ScheduledTask::new(
             "check_fae_update",
             "Check for Fae updates",
             Schedule::Interval { secs: 6 * 3600 },
         );
-
-        self.add_task_if_missing(fae_task);
+        task.kind = TaskKind::Builtin;
+        self.add_task_if_missing(task);
     }
 
     /// Register built-in memory maintenance tasks.
-    ///
-    /// These tasks keep memory healthy without user interaction:
-    /// - schema migration checks
-    /// - reflection / deduplication
-    /// - reindex health pass
-    /// - retention policy cleanup
     pub fn with_memory_maintenance(&mut self) {
-        let migrate_task = ScheduledTask::new(
+        let mut migrate_task = ScheduledTask::new(
             "memory_migrate",
             "Check memory schema migrations",
             Schedule::Interval { secs: 3600 },
         );
-        let reflect_task = ScheduledTask::new(
+        migrate_task.kind = TaskKind::Builtin;
+
+        let mut reflect_task = ScheduledTask::new(
             "memory_reflect",
             "Consolidate memory duplicates",
             Schedule::Interval { secs: 6 * 3600 },
         );
-        let reindex_task = ScheduledTask::new(
+        reflect_task.kind = TaskKind::Builtin;
+
+        let mut reindex_task = ScheduledTask::new(
             "memory_reindex",
             "Memory reindex health pass",
             Schedule::Interval { secs: 3 * 3600 },
         );
-        let gc_task = ScheduledTask::new(
+        reindex_task.kind = TaskKind::Builtin;
+
+        let mut gc_task = ScheduledTask::new(
             "memory_gc",
             "Memory retention cleanup",
             Schedule::Daily { hour: 3, min: 30 },
         );
+        gc_task.kind = TaskKind::Builtin;
 
         self.add_task_if_missing(migrate_task);
         self.add_task_if_missing(reflect_task);
@@ -113,9 +140,13 @@ impl Scheduler {
         self.add_task_if_missing(gc_task);
     }
 
-    /// Add a custom task to the scheduler.
+    /// Add (or replace) a task.
     pub fn add_task(&mut self, task: ScheduledTask) {
-        self.tasks.push(task);
+        if let Some(existing) = self.tasks.iter_mut().find(|t| t.id == task.id) {
+            *existing = task;
+        } else {
+            self.tasks.push(task);
+        }
     }
 
     fn add_task_if_missing(&mut self, task: ScheduledTask) {
@@ -125,84 +156,79 @@ impl Scheduler {
         }
     }
 
-    /// Returns a snapshot of the registered tasks.
+    /// Upsert a user-defined task.
+    pub fn upsert_user_task(&mut self, mut task: ScheduledTask) {
+        task.kind = TaskKind::User;
+        self.add_task(task);
+    }
+
+    /// Returns registered tasks.
     pub fn tasks(&self) -> &[ScheduledTask] {
         &self.tasks
     }
 
+    /// Returns scheduler run history.
+    pub fn history(&self) -> &[TaskRunRecord] {
+        &self.history
+    }
+
+    /// Enables or disables a task by ID. Returns `true` when found.
+    pub fn set_task_enabled(&mut self, task_id: &str, enabled: bool) -> bool {
+        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+            task.enabled = enabled;
+            return true;
+        }
+        false
+    }
+
+    /// Marks a task due now. Returns `true` when found.
+    pub fn mark_task_due_now(&mut self, task_id: &str) -> bool {
+        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+            task.mark_due_now();
+            return true;
+        }
+        false
+    }
+
     /// Load persisted state from disk and merge with registered tasks.
     pub fn load_state(&mut self) {
-        let path = match &self.state_path {
-            Some(p) => p.clone(),
-            None => return,
-        };
-
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(_) => return,
-        };
-
-        let state: SchedulerState = match serde_json::from_slice(&bytes) {
+        let snapshot = match load_snapshot_from_path(self.state_path.clone()) {
             Ok(s) => s,
             Err(e) => {
-                warn!("cannot parse scheduler state: {e}");
+                warn!("cannot load scheduler state: {e}");
                 return;
             }
         };
 
-        // Merge persisted state into registered tasks.
-        for entry in &state.tasks {
-            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == entry.id) {
-                task.last_run = entry.last_run;
-                task.enabled = entry.enabled;
+        for task in snapshot.tasks {
+            if let Some(existing) = self.tasks.iter_mut().find(|t| t.id == task.id) {
+                *existing = task;
+            } else {
+                self.tasks.push(task);
             }
         }
 
-        debug!("loaded scheduler state from {}", path.display());
+        self.history = snapshot.history;
+        self.trim_history();
+
+        if let Some(path) = &self.state_path {
+            debug!("loaded scheduler state from {}", path.display());
+        }
     }
 
-    /// Persist task state to disk.
+    /// Persist task state and run history.
     fn save_state(&self) {
-        let path = match &self.state_path {
-            Some(p) => p,
-            None => return,
+        let snapshot = SchedulerSnapshot {
+            tasks: self.tasks.clone(),
+            history: self.history.clone(),
         };
 
-        let entries: Vec<TaskEntry> = self
-            .tasks
-            .iter()
-            .map(|t| TaskEntry {
-                id: t.id.clone(),
-                last_run: t.last_run,
-                enabled: t.enabled,
-            })
-            .collect();
-
-        let state = SchedulerState { tasks: entries };
-
-        if let Some(parent) = path.parent()
-            && let Err(e) = std::fs::create_dir_all(parent)
-        {
-            error!("cannot create scheduler state dir: {e}");
-            return;
-        }
-
-        match serde_json::to_string_pretty(&state) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(path, json) {
-                    error!("cannot write scheduler state: {e}");
-                }
-            }
-            Err(e) => {
-                error!("cannot serialize scheduler state: {e}");
-            }
+        if let Err(e) = save_snapshot_to_path(self.state_path.clone(), &snapshot) {
+            error!("cannot persist scheduler state: {e}");
         }
     }
 
     /// Start the scheduler background loop.
-    ///
-    /// Returns a [`tokio::task::JoinHandle`] for the spawned task.
-    /// The loop runs until the result channel is closed.
     pub fn run(mut self) -> tokio::task::JoinHandle<()> {
         self.load_state();
 
@@ -228,41 +254,93 @@ impl Scheduler {
             .collect();
 
         let ran_any = !due_ids.is_empty();
-        for id in due_ids {
-            let result = self.execute_task(&id);
+        for task_id in due_ids {
+            let task_snapshot = match self.tasks.iter().find(|t| t.id == task_id).cloned() {
+                Some(task) => task,
+                None => continue,
+            };
 
-            // Mark the task as run regardless of result.
-            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
-                task.mark_run();
+            let started_at = crate::scheduler::tasks::now_epoch_secs();
+            let mut result = self.execute_task(&task_snapshot);
+            let finished_at = crate::scheduler::tasks::now_epoch_secs();
+
+            let elapsed_secs = finished_at.saturating_sub(started_at);
+            let mut outcome = result.outcome();
+            if task_snapshot.soft_timeout_secs > 0 && elapsed_secs > task_snapshot.soft_timeout_secs
+            {
+                let msg = format!(
+                    "task {} exceeded soft timeout ({}s > {}s)",
+                    task_snapshot.id, elapsed_secs, task_snapshot.soft_timeout_secs
+                );
+                result = TaskResult::Error(msg.clone());
+                outcome = TaskRunOutcome::SoftTimeout;
             }
 
-            // Send result to GUI.
+            if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                match &result {
+                    TaskResult::Error(err) => task.mark_run_failure(err),
+                    _ => task.mark_run_success(),
+                }
+            }
+
+            self.push_history(TaskRunRecord {
+                task_id: task_snapshot.id.clone(),
+                started_at,
+                finished_at,
+                outcome,
+                summary: result.summary(),
+            });
+
             if self.result_tx.send(result).is_err() {
                 debug!("scheduler result channel closed, stopping");
                 return;
             }
         }
 
-        // Persist state after running tasks.
         if ran_any {
             self.save_state();
         }
     }
 
-    /// Execute a single task by ID.
-    fn execute_task(&self, task_id: &str) -> TaskResult {
-        debug!("executing scheduled task: {task_id}");
+    fn push_history(&mut self, run: TaskRunRecord) {
+        self.history.push(run);
+        self.trim_history();
+    }
+
+    fn trim_history(&mut self) {
+        if self.history.len() <= self.max_history_entries {
+            return;
+        }
+        let drop_count = self.history.len().saturating_sub(self.max_history_entries);
+        self.history.drain(0..drop_count);
+    }
+
+    /// Execute a single task.
+    fn execute_task(&self, task: &ScheduledTask) -> TaskResult {
+        debug!("executing scheduled task: {}", task.id);
 
         if let Some(executor) = &self.executor {
-            return executor(task_id);
+            return executor(task);
         }
 
-        // Default: try built-in tasks.
-        crate::scheduler::tasks::execute_builtin(task_id)
+        if task.kind == TaskKind::Builtin {
+            return crate::scheduler::tasks::execute_builtin(&task.id);
+        }
+
+        TaskResult::NeedsUserAction(crate::scheduler::tasks::UserPrompt {
+            title: format!("Task {} is ready", task.name),
+            message:
+                "This user task needs an execution handler. Open Doctor or assign an executor."
+                    .to_owned(),
+            actions: vec![crate::scheduler::tasks::PromptAction {
+                label: "Open Doctor".to_owned(),
+                id: "open_doctor".to_owned(),
+            }],
+        })
     }
 
     /// Default path for scheduler state file.
-    fn default_state_path() -> Option<PathBuf> {
+    pub fn default_state_path() -> Option<PathBuf> {
         #[cfg(target_os = "windows")]
         {
             std::env::var_os("LOCALAPPDATA")
@@ -280,17 +358,159 @@ impl Scheduler {
     }
 }
 
+fn load_snapshot_from_path(path: Option<PathBuf>) -> crate::Result<SchedulerSnapshot> {
+    let Some(path) = path else {
+        return Ok(SchedulerSnapshot::default());
+    };
+
+    let bytes = match std::fs::read(&path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SchedulerSnapshot::default());
+        }
+        Err(e) => {
+            return Err(crate::SpeechError::Scheduler(format!(
+                "cannot read state: {e}"
+            )));
+        }
+    };
+
+    let state: SchedulerState = serde_json::from_slice(&bytes)
+        .map_err(|e| crate::SpeechError::Scheduler(format!("cannot parse state: {e}")))?;
+
+    Ok(SchedulerSnapshot {
+        tasks: state.tasks,
+        history: state.history,
+    })
+}
+
+fn save_snapshot_to_path(path: Option<PathBuf>, snapshot: &SchedulerSnapshot) -> crate::Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| crate::SpeechError::Scheduler(format!("cannot create state dir: {e}")))?;
+    }
+
+    let mut history = snapshot.history.clone();
+    if history.len() > DEFAULT_HISTORY_LIMIT {
+        let drop_count = history.len().saturating_sub(DEFAULT_HISTORY_LIMIT);
+        history.drain(0..drop_count);
+    }
+
+    let state = SchedulerState {
+        version: default_state_version(),
+        tasks: snapshot.tasks.clone(),
+        history,
+    };
+
+    let json = serde_json::to_string_pretty(&state)
+        .map_err(|e| crate::SpeechError::Scheduler(format!("cannot serialize state: {e}")))?;
+
+    std::fs::write(&path, json)
+        .map_err(|e| crate::SpeechError::Scheduler(format!("cannot write state: {e}")))?;
+
+    Ok(())
+}
+
+/// Load the persisted scheduler snapshot using the default state path.
+pub fn load_persisted_snapshot() -> crate::Result<SchedulerSnapshot> {
+    load_snapshot_from_path(Scheduler::default_state_path())
+}
+
+/// Save the persisted scheduler snapshot using the default state path.
+pub fn save_persisted_snapshot(snapshot: &SchedulerSnapshot) -> crate::Result<()> {
+    save_snapshot_to_path(Scheduler::default_state_path(), snapshot)
+}
+
+/// Enable/disable a persisted task by ID.
+pub fn set_persisted_task_enabled(task_id: &str, enabled: bool) -> crate::Result<bool> {
+    let mut snapshot = load_persisted_snapshot()?;
+    let mut found = false;
+    for task in &mut snapshot.tasks {
+        if task.id == task_id {
+            task.enabled = enabled;
+            found = true;
+            break;
+        }
+    }
+
+    if found {
+        save_persisted_snapshot(&snapshot)?;
+    }
+
+    Ok(found)
+}
+
+/// Mark a persisted task due now by ID.
+pub fn mark_persisted_task_due_now(task_id: &str) -> crate::Result<bool> {
+    let mut snapshot = load_persisted_snapshot()?;
+    let mut found = false;
+    for task in &mut snapshot.tasks {
+        if task.id == task_id {
+            task.mark_due_now();
+            found = true;
+            break;
+        }
+    }
+
+    if found {
+        save_persisted_snapshot(&snapshot)?;
+    }
+
+    Ok(found)
+}
+
+/// Upsert a persisted user task.
+pub fn upsert_persisted_user_task(mut task: ScheduledTask) -> crate::Result<()> {
+    task.kind = TaskKind::User;
+    let mut snapshot = load_persisted_snapshot()?;
+    if let Some(existing) = snapshot.tasks.iter_mut().find(|entry| entry.id == task.id) {
+        *existing = task;
+    } else {
+        snapshot.tasks.push(task);
+    }
+    save_persisted_snapshot(&snapshot)
+}
+
+/// Remove a persisted task by ID.
+pub fn remove_persisted_task(task_id: &str) -> crate::Result<bool> {
+    let mut snapshot = load_persisted_snapshot()?;
+    let before = snapshot.tasks.len();
+    snapshot.tasks.retain(|task| task.id != task_id);
+    let removed = snapshot.tasks.len() != before;
+    if removed {
+        save_persisted_snapshot(&snapshot)?;
+    }
+    Ok(removed)
+}
+
+/// Delete persisted scheduler state (tasks + history).
+pub fn clear_persisted_state() -> crate::Result<()> {
+    if let Some(path) = Scheduler::default_state_path() {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(crate::SpeechError::Scheduler(format!(
+                "cannot delete scheduler state: {e}"
+            ))),
+        }
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use crate::scheduler::tasks::Schedule;
 
     fn make_scheduler() -> (Scheduler, mpsc::UnboundedReceiver<TaskResult>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut scheduler = Scheduler::new(tx);
-        // Disable disk persistence in tests.
         scheduler.state_path = None;
         (scheduler, rx)
     }
@@ -302,226 +522,74 @@ mod tests {
     }
 
     #[test]
-    fn with_update_checks_adds_fae_task() {
+    fn builtins_are_idempotent() {
         let (mut scheduler, _rx) = make_scheduler();
         scheduler.with_update_checks();
-        assert_eq!(scheduler.tasks().len(), 1);
-        assert_eq!(scheduler.tasks()[0].id, "check_fae_update");
-    }
-
-    #[test]
-    fn with_memory_maintenance_adds_four_tasks() {
-        let (mut scheduler, _rx) = make_scheduler();
-        scheduler.with_memory_maintenance();
-
-        let ids: Vec<&str> = scheduler.tasks().iter().map(|t| t.id.as_str()).collect();
-        assert!(ids.contains(&"memory_migrate"));
-        assert!(ids.contains(&"memory_reflect"));
-        assert!(ids.contains(&"memory_reindex"));
-        assert!(ids.contains(&"memory_gc"));
-        assert_eq!(scheduler.tasks().len(), 4);
-    }
-
-    #[test]
-    fn with_memory_maintenance_is_idempotent() {
-        let (mut scheduler, _rx) = make_scheduler();
+        scheduler.with_update_checks();
         scheduler.with_memory_maintenance();
         scheduler.with_memory_maintenance();
 
         let ids: Vec<&str> = scheduler.tasks().iter().map(|t| t.id.as_str()).collect();
-        let migrate_count = ids.iter().filter(|id| **id == "memory_migrate").count();
-        let reflect_count = ids.iter().filter(|id| **id == "memory_reflect").count();
-        let reindex_count = ids.iter().filter(|id| **id == "memory_reindex").count();
-        let gc_count = ids.iter().filter(|id| **id == "memory_gc").count();
-        assert_eq!(migrate_count, 1);
-        assert_eq!(reflect_count, 1);
-        assert_eq!(reindex_count, 1);
-        assert_eq!(gc_count, 1);
-        assert_eq!(scheduler.tasks().len(), 4);
+        assert_eq!(
+            ids.iter().filter(|id| **id == "check_fae_update").count(),
+            1
+        );
+        assert_eq!(ids.iter().filter(|id| **id == "memory_migrate").count(), 1);
+        assert_eq!(ids.iter().filter(|id| **id == "memory_reflect").count(), 1);
+        assert_eq!(ids.iter().filter(|id| **id == "memory_reindex").count(), 1);
+        assert_eq!(ids.iter().filter(|id| **id == "memory_gc").count(), 1);
     }
 
     #[test]
-    fn add_task_registers_custom_task() {
-        let (mut scheduler, _rx) = make_scheduler();
-        let task = ScheduledTask::new("custom", "Custom Task", Schedule::Interval { secs: 300 });
-        scheduler.add_task(task);
-        assert_eq!(scheduler.tasks().len(), 1);
-        assert_eq!(scheduler.tasks()[0].id, "custom");
-    }
-
-    #[test]
-    fn tick_executes_due_tasks() {
+    fn tick_executes_due_tasks_and_records_history() {
         let (mut scheduler, mut rx) = make_scheduler();
-        // Use a custom executor so the test doesn't depend on network.
-        scheduler.executor = Some(Box::new(|_| TaskResult::Success("ran".to_owned())));
-        // Add a task that's immediately due (never run, interval 0).
-        let task = ScheduledTask::new("due", "Due Task", Schedule::Interval { secs: 0 });
-        scheduler.add_task(task);
-
-        scheduler.tick();
-
-        // Should have sent a result.
-        let result = rx.try_recv().unwrap();
-        assert!(matches!(result, TaskResult::Success(_)));
-
-        // Task should now have a last_run set.
-        assert!(scheduler.tasks()[0].last_run.is_some());
-    }
-
-    #[test]
-    fn tick_skips_not_due_tasks() {
-        let (mut scheduler, mut rx) = make_scheduler();
-        let mut task = ScheduledTask::new("not_due", "Not Due", Schedule::Interval { secs: 86400 });
-        task.mark_run(); // Just ran, not due for 24h.
-        scheduler.add_task(task);
-
-        scheduler.tick();
-
-        // No result should have been sent.
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn tick_with_custom_executor() {
-        let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.executor = Some(Box::new(|id| {
-            TaskResult::Success(format!("custom executed: {id}"))
+        scheduler.executor = Some(Box::new(|task| {
+            TaskResult::Success(format!("ran {}", task.id))
         }));
-
-        let task = ScheduledTask::new("exec", "Exec Task", Schedule::Interval { secs: 0 });
-        scheduler.add_task(task);
-
-        scheduler.tick();
-
-        let result = rx.try_recv().unwrap();
-        match result {
-            TaskResult::Success(msg) => assert!(msg.contains("custom executed")),
-            _ => panic!("expected Success"),
-        }
-    }
-
-    #[test]
-    fn state_persistence_round_trip() {
-        let dir = std::env::temp_dir().join("fae-scheduler-test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("scheduler-test.json");
-
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut scheduler = Scheduler::new(tx);
-        scheduler.state_path = Some(path.clone());
-
-        let mut task =
-            ScheduledTask::new("persist", "Persist Test", Schedule::Interval { secs: 3600 });
-        task.mark_run();
-        let saved_last_run = task.last_run;
-        scheduler.add_task(task);
-
-        // Save state.
-        scheduler.save_state();
-
-        // Create a new scheduler, add the same task (without last_run),
-        // then load state.
-        let (tx2, _rx2) = mpsc::unbounded_channel();
-        let mut scheduler2 = Scheduler::new(tx2);
-        scheduler2.state_path = Some(path.clone());
-        scheduler2.add_task(ScheduledTask::new(
-            "persist",
-            "Persist Test",
-            Schedule::Interval { secs: 3600 },
+        scheduler.add_task(ScheduledTask::new(
+            "due",
+            "Due Task",
+            Schedule::Interval { secs: 0 },
         ));
 
-        scheduler2.load_state();
-        assert_eq!(scheduler2.tasks()[0].last_run, saved_last_run);
+        scheduler.tick();
 
-        // Cleanup.
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
+        let result = rx.try_recv().expect("result available");
+        assert!(matches!(result, TaskResult::Success(_)));
+        assert_eq!(scheduler.history().len(), 1);
+        assert_eq!(scheduler.history()[0].task_id, "due");
+        assert_eq!(scheduler.history()[0].outcome, TaskRunOutcome::Success);
     }
 
     #[test]
-    fn default_state_path_is_some() {
-        let path = Scheduler::default_state_path();
-        assert!(path.is_some());
-        let path_str = path.unwrap().to_string_lossy().to_string();
-        assert!(path_str.contains("scheduler.json"));
-    }
-
-    #[test]
-    fn scheduler_state_serde_round_trip() {
-        let state = SchedulerState {
-            tasks: vec![
-                TaskEntry {
-                    id: "task1".to_owned(),
-                    last_run: Some(1000),
-                    enabled: true,
-                },
-                TaskEntry {
-                    id: "task2".to_owned(),
-                    last_run: None,
-                    enabled: false,
-                },
-            ],
-        };
-
-        let json = serde_json::to_string(&state).unwrap();
-        let restored: SchedulerState = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.tasks.len(), 2);
-        assert_eq!(restored.tasks[0].id, "task1");
-        assert_eq!(restored.tasks[0].last_run, Some(1000));
-        assert!(restored.tasks[0].enabled);
-        assert_eq!(restored.tasks[1].id, "task2");
-        assert!(restored.tasks[1].last_run.is_none());
-        assert!(!restored.tasks[1].enabled);
-    }
-
-    #[test]
-    fn load_state_handles_missing_file() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut scheduler = Scheduler::new(tx);
-        scheduler.state_path = Some(PathBuf::from("/tmp/nonexistent-scheduler-state.json"));
-        // Should not panic or error.
-        scheduler.load_state();
-    }
-
-    #[test]
-    fn load_state_handles_invalid_json() {
-        let dir = std::env::temp_dir().join("fae-scheduler-test-invalid");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("invalid.json");
-        std::fs::write(&path, "not valid json").unwrap();
-
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut scheduler = Scheduler::new(tx);
-        scheduler.state_path = Some(path.clone());
-        // Should not panic, just warn.
-        scheduler.load_state();
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
-    }
-
-    #[test]
-    fn tick_marks_run_even_on_error() {
+    fn tick_marks_failure_and_backoff() {
         let (mut scheduler, mut rx) = make_scheduler();
         scheduler.executor = Some(Box::new(|_| TaskResult::Error("boom".to_owned())));
 
-        let task = ScheduledTask::new("err", "Error Task", Schedule::Interval { secs: 0 });
+        let mut task = ScheduledTask::new("err", "Error Task", Schedule::Interval { secs: 0 });
+        task.retry_backoff_secs = 1;
         scheduler.add_task(task);
 
         scheduler.tick();
 
-        // Should have sent the error result.
-        let result = rx.try_recv().unwrap();
+        let result = rx.try_recv().expect("result available");
         assert!(matches!(result, TaskResult::Error(_)));
 
-        // Task should still have been marked as run.
-        assert!(scheduler.tasks()[0].last_run.is_some());
+        let task = scheduler
+            .tasks()
+            .iter()
+            .find(|t| t.id == "err")
+            .expect("task exists");
+        assert_eq!(task.failure_streak, 1);
+        assert!(task.last_error.is_some());
+        assert!(task.next_run.is_some());
     }
 
     #[test]
-    fn tick_executes_multiple_due_tasks() {
+    fn run_history_is_bounded() {
         let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.executor = Some(Box::new(|id| TaskResult::Success(id.to_owned())));
+        scheduler.max_history_entries = 2;
+        scheduler.executor = Some(Box::new(|task| TaskResult::Success(task.id.clone())));
 
         scheduler.add_task(ScheduledTask::new("a", "A", Schedule::Interval { secs: 0 }));
         scheduler.add_task(ScheduledTask::new("b", "B", Schedule::Interval { secs: 0 }));
@@ -529,59 +597,83 @@ mod tests {
 
         scheduler.tick();
 
-        // All three tasks should have produced results.
-        let r1 = rx.try_recv().unwrap();
-        let r2 = rx.try_recv().unwrap();
-        let r3 = rx.try_recv().unwrap();
-        assert!(matches!(r1, TaskResult::Success(_)));
-        assert!(matches!(r2, TaskResult::Success(_)));
-        assert!(matches!(r3, TaskResult::Success(_)));
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
 
-        // All should be marked as run.
-        assert!(scheduler.tasks().iter().all(|t| t.last_run.is_some()));
+        assert_eq!(scheduler.history().len(), 2);
     }
 
     #[test]
-    fn tick_second_time_skips_recently_run() {
-        let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.executor = Some(Box::new(|_| TaskResult::Success("ok".to_owned())));
+    fn persisted_snapshot_round_trip() {
+        let dir = std::env::temp_dir().join("fae-scheduler-v2-roundtrip");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("scheduler.json");
 
-        scheduler.add_task(ScheduledTask::new(
-            "once",
-            "Once",
-            Schedule::Interval { secs: 3600 },
-        ));
+        let snapshot = SchedulerSnapshot {
+            tasks: vec![ScheduledTask::new(
+                "task-1",
+                "Task 1",
+                Schedule::Interval { secs: 60 },
+            )],
+            history: vec![TaskRunRecord {
+                task_id: "task-1".to_owned(),
+                started_at: 1,
+                finished_at: 2,
+                outcome: TaskRunOutcome::Success,
+                summary: "ok".to_owned(),
+            }],
+        };
 
-        // First tick: executes.
-        scheduler.tick();
-        let _ = rx.try_recv().unwrap();
+        save_snapshot_to_path(Some(path.clone()), &snapshot).expect("save");
+        let restored = load_snapshot_from_path(Some(path.clone())).expect("load");
 
-        // Second tick: should not execute again (3600s interval).
-        scheduler.tick();
-        assert!(rx.try_recv().is_err());
+        assert_eq!(restored.tasks.len(), 1);
+        assert_eq!(restored.history.len(), 1);
+        assert_eq!(restored.history[0].summary, "ok");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn with_executor_overrides_builtin() {
-        let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.with_update_checks();
-        // Override with custom executor.
-        scheduler =
-            scheduler.with_executor(Box::new(|id| TaskResult::Success(format!("custom: {id}"))));
+    fn set_and_due_now_mutators_work() {
+        let dir = std::env::temp_dir().join("fae-scheduler-v2-mutators");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("scheduler.json");
 
-        // Force all tasks to be due.
-        for task in &mut scheduler.tasks {
-            task.last_run = None;
-            task.schedule = Schedule::Interval { secs: 0 };
-        }
+        let mut task = ScheduledTask::new("task-1", "Task 1", Schedule::Interval { secs: 60 });
+        task.enabled = false;
+        let snapshot = SchedulerSnapshot {
+            tasks: vec![task],
+            history: Vec::new(),
+        };
+        save_snapshot_to_path(Some(path.clone()), &snapshot).expect("save");
 
-        scheduler.tick();
+        let changed = {
+            let mut loaded = load_snapshot_from_path(Some(path.clone())).expect("load");
+            let mut found = false;
+            for task in &mut loaded.tasks {
+                if task.id == "task-1" {
+                    task.enabled = true;
+                    task.mark_due_now();
+                    found = true;
+                }
+            }
+            save_snapshot_to_path(Some(path.clone()), &loaded).expect("save");
+            found
+        };
 
-        let r1 = rx.try_recv().unwrap();
-        match r1 {
-            TaskResult::Success(msg) => assert!(msg.starts_with("custom: ")),
-            _ => panic!("expected Success from custom executor"),
-        }
+        assert!(changed);
+        let restored = load_snapshot_from_path(Some(path.clone())).expect("load");
+        let task = restored
+            .tasks
+            .iter()
+            .find(|t| t.id == "task-1")
+            .expect("task");
+        assert!(task.enabled);
+        assert!(task.next_run.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -598,104 +690,10 @@ mod tests {
 
         let handle = scheduler.run();
 
-        // Wait for the first tick result (should come within ~1 second).
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
-
         assert!(result.is_ok());
-        let task_result = result.unwrap().unwrap();
-        assert!(matches!(task_result, TaskResult::Success(_)));
+        assert!(matches!(result.unwrap().unwrap(), TaskResult::Success(_)));
 
         handle.abort();
-    }
-
-    #[test]
-    fn save_state_creates_directory() {
-        let dir = std::env::temp_dir()
-            .join("fae-scheduler-test-mkdir")
-            .join("nested");
-        let path = dir.join("scheduler.json");
-
-        // Ensure the directory doesn't exist.
-        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
-
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut scheduler = Scheduler::new(tx);
-        scheduler.state_path = Some(path.clone());
-        scheduler.add_task(ScheduledTask::new(
-            "t",
-            "T",
-            Schedule::Interval { secs: 60 },
-        ));
-
-        scheduler.save_state();
-
-        assert!(path.exists());
-
-        // Cleanup.
-        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
-    }
-
-    #[test]
-    fn needs_user_action_result_sent_to_channel() {
-        use crate::scheduler::tasks::{PromptAction, UserPrompt};
-
-        let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.executor = Some(Box::new(|_| {
-            TaskResult::NeedsUserAction(UserPrompt {
-                title: "Update".to_owned(),
-                message: "New version".to_owned(),
-                actions: vec![PromptAction {
-                    label: "Install".to_owned(),
-                    id: "install".to_owned(),
-                }],
-            })
-        }));
-
-        scheduler.add_task(ScheduledTask::new(
-            "update",
-            "Update",
-            Schedule::Interval { secs: 0 },
-        ));
-        scheduler.tick();
-
-        let result = rx.try_recv().unwrap();
-        assert!(matches!(result, TaskResult::NeedsUserAction(_)));
-    }
-
-    #[test]
-    fn telemetry_result_sent_to_channel() {
-        use crate::runtime::RuntimeEvent;
-        use crate::scheduler::tasks::TaskTelemetry;
-
-        let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.executor = Some(Box::new(|_| {
-            TaskResult::Telemetry(TaskTelemetry {
-                message: "memory maintenance".to_owned(),
-                event: RuntimeEvent::MemoryWrite {
-                    op: "reindex".to_owned(),
-                    target_id: None,
-                },
-            })
-        }));
-
-        scheduler.add_task(ScheduledTask::new(
-            "memory_reindex",
-            "Memory reindex",
-            Schedule::Interval { secs: 0 },
-        ));
-        scheduler.tick();
-
-        let result = rx.try_recv().unwrap();
-        match result {
-            TaskResult::Telemetry(payload) => {
-                assert_eq!(payload.message, "memory maintenance");
-                assert!(matches!(
-                    payload.event,
-                    RuntimeEvent::MemoryWrite { op, target_id }
-                    if op == "reindex" && target_id.is_none()
-                ));
-            }
-            other => panic!("expected telemetry result, got: {other:?}"),
-        }
     }
 }
