@@ -3,7 +3,9 @@
 //! Provides types for managing the scheduler UI panel, including editing
 //! tasks, form validation, and state management.
 
-use crate::scheduler::tasks::{Schedule, ScheduledTask, TaskKind, Weekday};
+use crate::scheduler::tasks::{
+    Schedule, ScheduledTask, TaskKind, TaskRunOutcome, TaskRunRecord, Weekday,
+};
 use serde::{Deserialize, Serialize};
 
 /// State for the scheduler management panel.
@@ -484,6 +486,170 @@ pub fn format_timestamp(timestamp: u64) -> String {
         let dt: DateTime<Utc> = DateTime::from_timestamp(timestamp as i64, 0)
             .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap_or_default());
         dt.format("%Y-%m-%d %H:%M").to_string()
+    }
+}
+
+/// Task edit form component — for creating or editing scheduled tasks.
+#[derive(Debug, Clone, Default)]
+pub struct TaskEditForm {
+    /// The task being edited.
+    pub editing_task: EditingTask,
+    /// Validation errors (if any).
+    pub validation_errors: Vec<ValidationError>,
+}
+
+impl TaskEditForm {
+    /// Create a new form for creating a task.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            editing_task: EditingTask::new(),
+            validation_errors: Vec::new(),
+        }
+    }
+
+    /// Create a form for editing an existing task.
+    #[must_use]
+    pub fn from_task(task: &ScheduledTask) -> Self {
+        Self {
+            editing_task: EditingTask::from_scheduled_task(task),
+            validation_errors: Vec::new(),
+        }
+    }
+
+    /// Validate the current form state.
+    ///
+    /// Returns true if valid, false if errors exist.
+    /// Updates `validation_errors` field.
+    pub fn validate(&mut self) -> bool {
+        self.validation_errors.clear();
+        match self.editing_task.validate() {
+            Ok(()) => true,
+            Err(e) => {
+                self.validation_errors.push(e);
+                false
+            }
+        }
+    }
+
+    /// Save the task (convert to ScheduledTask).
+    ///
+    /// # Errors
+    /// Returns validation error if form is invalid.
+    pub fn save(&self) -> Result<ScheduledTask, ValidationError> {
+        self.editing_task.to_scheduled_task()
+    }
+
+    /// Update the task name field.
+    pub fn set_name(&mut self, name: String) {
+        self.editing_task.name = name;
+    }
+
+    /// Update the enabled field.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.editing_task.enabled = enabled;
+    }
+
+    /// Update the payload field.
+    pub fn set_payload(&mut self, payload: Option<String>) {
+        self.editing_task.payload = payload;
+    }
+
+    /// Update the schedule to Interval.
+    pub fn set_schedule_interval(&mut self, secs: String) {
+        self.editing_task.schedule = ScheduleForm::Interval { secs };
+    }
+
+    /// Update the schedule to Daily.
+    pub fn set_schedule_daily(&mut self, hour: String, min: String) {
+        self.editing_task.schedule = ScheduleForm::Daily { hour, min };
+    }
+
+    /// Update the schedule to Weekly.
+    pub fn set_schedule_weekly(&mut self, weekdays: Vec<String>, hour: String, min: String) {
+        self.editing_task.schedule = ScheduleForm::Weekly {
+            weekdays,
+            hour,
+            min,
+        };
+    }
+}
+
+/// Execution history viewer component — displays task run records.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionHistoryView {
+    /// Task run records to display.
+    pub records: Vec<TaskRunRecord>,
+    /// Filter by task ID (None = show all tasks).
+    pub filter_task_id: Option<String>,
+}
+
+impl ExecutionHistoryView {
+    /// Create a new execution history view with all records.
+    #[must_use]
+    pub fn new(records: Vec<TaskRunRecord>) -> Self {
+        Self {
+            records,
+            filter_task_id: None,
+        }
+    }
+
+    /// Create a view filtered to a specific task.
+    #[must_use]
+    pub fn for_task(records: Vec<TaskRunRecord>, task_id: String) -> Self {
+        Self {
+            records,
+            filter_task_id: Some(task_id),
+        }
+    }
+
+    /// Get filtered records based on current filter.
+    #[must_use]
+    pub fn filtered_records(&self) -> Vec<&TaskRunRecord> {
+        match &self.filter_task_id {
+            None => self.records.iter().collect(),
+            Some(id) => self.records.iter().filter(|r| &r.task_id == id).collect(),
+        }
+    }
+
+    /// Format a single record for display.
+    #[must_use]
+    pub fn format_record(&self, record: &TaskRunRecord) -> String {
+        let outcome_symbol = format_outcome(&record.outcome);
+        let started = format_timestamp(record.started_at);
+        let duration = record.finished_at.saturating_sub(record.started_at);
+        let duration_str = format_duration(duration);
+
+        format!(
+            "{} {} | {} | {} | {}",
+            outcome_symbol, record.task_id, started, duration_str, record.summary
+        )
+    }
+}
+
+/// Format a task run outcome as a symbol.
+#[must_use]
+pub fn format_outcome(outcome: &TaskRunOutcome) -> &str {
+    match outcome {
+        TaskRunOutcome::Success => "✓",
+        TaskRunOutcome::Telemetry => "ⓘ",
+        TaskRunOutcome::NeedsUserAction => "⚠",
+        TaskRunOutcome::Error => "✗",
+        TaskRunOutcome::SoftTimeout => "⏱",
+    }
+}
+
+/// Format a duration in seconds as human-readable string.
+#[must_use]
+pub fn format_duration(secs: u64) -> String {
+    if secs < 1 {
+        "< 1s".to_owned()
+    } else if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     }
 }
 
@@ -1089,5 +1255,338 @@ mod tests {
         let timestamp = 1609459200u64; // 2021-01-01 00:00:00 UTC
         let formatted = format_timestamp(timestamp);
         assert!(formatted.contains("2021-01-01"));
+    }
+
+    // Task 4: Task Edit Form Tests
+
+    #[test]
+    fn test_task_edit_form_new() {
+        let form = TaskEditForm::new();
+        assert_eq!(form.editing_task.name, "");
+        assert!(form.editing_task.enabled);
+        assert_eq!(form.editing_task.id, None);
+        assert!(form.validation_errors.is_empty());
+    }
+
+    #[test]
+    fn test_task_edit_form_from_task() {
+        let task = ScheduledTask {
+            id: "test".to_owned(),
+            name: "Test Task".to_owned(),
+            schedule: Schedule::Interval { secs: 3600 },
+            last_run: None,
+            next_run: None,
+            enabled: false,
+            kind: TaskKind::User,
+            payload: None,
+            failure_streak: 0,
+            max_retries: 3,
+            retry_backoff_secs: 60,
+            max_failure_streak_before_pause: 5,
+            soft_timeout_secs: 300,
+            last_error: None,
+        };
+
+        let form = TaskEditForm::from_task(&task);
+        assert_eq!(form.editing_task.id, Some("test".to_owned()));
+        assert_eq!(form.editing_task.name, "Test Task");
+        assert!(!form.editing_task.enabled);
+        assert!(form.validation_errors.is_empty());
+    }
+
+    #[test]
+    fn test_task_edit_form_validate_success() {
+        let mut form = TaskEditForm::new();
+        form.editing_task.name = "Valid Task".to_owned();
+        form.editing_task.schedule = ScheduleForm::Interval {
+            secs: "60".to_owned(),
+        };
+
+        let result = form.validate();
+        assert!(result);
+        assert!(form.validation_errors.is_empty());
+    }
+
+    #[test]
+    fn test_task_edit_form_validate_failure() {
+        let mut form = TaskEditForm::new();
+        form.editing_task.name = "".to_owned(); // Empty name
+        form.editing_task.schedule = ScheduleForm::Interval {
+            secs: "60".to_owned(),
+        };
+
+        let result = form.validate();
+        assert!(!result);
+        assert_eq!(form.validation_errors.len(), 1);
+        assert_eq!(form.validation_errors[0], ValidationError::NameEmpty);
+    }
+
+    #[test]
+    fn test_task_edit_form_save_valid() {
+        let mut form = TaskEditForm::new();
+        form.editing_task.name = "Test".to_owned();
+        form.editing_task.schedule = ScheduleForm::Interval {
+            secs: "120".to_owned(),
+        };
+
+        let result = form.save();
+        assert!(result.is_ok());
+        let task = result.unwrap();
+        assert_eq!(task.name, "Test");
+        assert!(matches!(task.schedule, Schedule::Interval { secs: 120 }));
+    }
+
+    #[test]
+    fn test_task_edit_form_save_invalid() {
+        let mut form = TaskEditForm::new();
+        form.editing_task.name = "".to_owned(); // Empty name
+
+        let result = form.save();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ValidationError::NameEmpty);
+    }
+
+    #[test]
+    fn test_task_edit_form_set_name() {
+        let mut form = TaskEditForm::new();
+        form.set_name("New Name".to_owned());
+        assert_eq!(form.editing_task.name, "New Name");
+    }
+
+    #[test]
+    fn test_task_edit_form_set_enabled() {
+        let mut form = TaskEditForm::new();
+        form.set_enabled(false);
+        assert!(!form.editing_task.enabled);
+    }
+
+    #[test]
+    fn test_task_edit_form_set_payload() {
+        let mut form = TaskEditForm::new();
+        form.set_payload(Some(r#"{"key": "value"}"#.to_owned()));
+        assert!(form.editing_task.payload.is_some());
+        let payload = form.editing_task.payload.unwrap();
+        assert!(payload.contains("key"));
+    }
+
+    #[test]
+    fn test_task_edit_form_set_schedule_interval() {
+        let mut form = TaskEditForm::new();
+        form.set_schedule_interval("7200".to_owned());
+        assert!(matches!(
+            form.editing_task.schedule,
+            ScheduleForm::Interval { ref secs } if secs == "7200"
+        ));
+    }
+
+    #[test]
+    fn test_task_edit_form_set_schedule_daily() {
+        let mut form = TaskEditForm::new();
+        form.set_schedule_daily("9".to_owned(), "30".to_owned());
+        assert!(matches!(
+            form.editing_task.schedule,
+            ScheduleForm::Daily { ref hour, ref min } if hour == "9" && min == "30"
+        ));
+    }
+
+    #[test]
+    fn test_task_edit_form_set_schedule_weekly() {
+        let mut form = TaskEditForm::new();
+        let weekdays = vec!["mon".to_owned(), "wed".to_owned(), "fri".to_owned()];
+        form.set_schedule_weekly(weekdays.clone(), "14".to_owned(), "0".to_owned());
+
+        if let ScheduleForm::Weekly {
+            weekdays: wd,
+            hour,
+            min,
+        } = &form.editing_task.schedule
+        {
+            assert_eq!(wd, &weekdays);
+            assert_eq!(hour, "14");
+            assert_eq!(min, "0");
+        } else {
+            panic!("Expected Weekly schedule");
+        }
+    }
+
+    #[test]
+    fn test_task_edit_form_validate_clears_previous_errors() {
+        let mut form = TaskEditForm::new();
+        form.editing_task.name = "".to_owned();
+        form.validate(); // First validation fails
+        assert_eq!(form.validation_errors.len(), 1);
+
+        form.editing_task.name = "Valid Name".to_owned();
+        form.validate(); // Second validation succeeds
+        assert!(form.validation_errors.is_empty());
+    }
+
+    // Task 5: Execution History Viewer Tests
+
+    #[test]
+    fn test_execution_history_view_new() {
+        let records = vec![TaskRunRecord {
+            task_id: "test".to_owned(),
+            started_at: 1000,
+            finished_at: 1010,
+            outcome: TaskRunOutcome::Success,
+            summary: "Test run".to_owned(),
+        }];
+
+        let view = ExecutionHistoryView::new(records.clone());
+        assert_eq!(view.records.len(), 1);
+        assert_eq!(view.filter_task_id, None);
+    }
+
+    #[test]
+    fn test_execution_history_view_for_task() {
+        let records = vec![
+            TaskRunRecord {
+                task_id: "task1".to_owned(),
+                started_at: 1000,
+                finished_at: 1010,
+                outcome: TaskRunOutcome::Success,
+                summary: "Task 1 run".to_owned(),
+            },
+            TaskRunRecord {
+                task_id: "task2".to_owned(),
+                started_at: 2000,
+                finished_at: 2010,
+                outcome: TaskRunOutcome::Success,
+                summary: "Task 2 run".to_owned(),
+            },
+        ];
+
+        let view = ExecutionHistoryView::for_task(records, "task1".to_owned());
+        assert_eq!(view.filter_task_id, Some("task1".to_owned()));
+    }
+
+    #[test]
+    fn test_execution_history_view_filtered_records_no_filter() {
+        let records = vec![
+            TaskRunRecord {
+                task_id: "task1".to_owned(),
+                started_at: 1000,
+                finished_at: 1010,
+                outcome: TaskRunOutcome::Success,
+                summary: "Task 1".to_owned(),
+            },
+            TaskRunRecord {
+                task_id: "task2".to_owned(),
+                started_at: 2000,
+                finished_at: 2010,
+                outcome: TaskRunOutcome::Success,
+                summary: "Task 2".to_owned(),
+            },
+        ];
+
+        let view = ExecutionHistoryView::new(records);
+        let filtered = view.filtered_records();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_execution_history_view_filtered_records_with_filter() {
+        let records = vec![
+            TaskRunRecord {
+                task_id: "task1".to_owned(),
+                started_at: 1000,
+                finished_at: 1010,
+                outcome: TaskRunOutcome::Success,
+                summary: "Task 1".to_owned(),
+            },
+            TaskRunRecord {
+                task_id: "task2".to_owned(),
+                started_at: 2000,
+                finished_at: 2010,
+                outcome: TaskRunOutcome::Success,
+                summary: "Task 2".to_owned(),
+            },
+            TaskRunRecord {
+                task_id: "task1".to_owned(),
+                started_at: 3000,
+                finished_at: 3010,
+                outcome: TaskRunOutcome::Success,
+                summary: "Task 1 again".to_owned(),
+            },
+        ];
+
+        let view = ExecutionHistoryView::for_task(records, "task1".to_owned());
+        let filtered = view.filtered_records();
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|r| r.task_id == "task1"));
+    }
+
+    #[test]
+    fn test_execution_history_view_format_record() {
+        let record = TaskRunRecord {
+            task_id: "test_task".to_owned(),
+            started_at: 1000,
+            finished_at: 1010,
+            outcome: TaskRunOutcome::Success,
+            summary: "Completed successfully".to_owned(),
+        };
+
+        let view = ExecutionHistoryView::new(vec![record.clone()]);
+        let formatted = view.format_record(&record);
+        assert!(formatted.contains("✓"));
+        assert!(formatted.contains("test_task"));
+        assert!(formatted.contains("10s"));
+        assert!(formatted.contains("Completed successfully"));
+    }
+
+    #[test]
+    fn test_format_outcome_success() {
+        assert_eq!(format_outcome(&TaskRunOutcome::Success), "✓");
+    }
+
+    #[test]
+    fn test_format_outcome_telemetry() {
+        assert_eq!(format_outcome(&TaskRunOutcome::Telemetry), "ⓘ");
+    }
+
+    #[test]
+    fn test_format_outcome_needs_user_action() {
+        assert_eq!(format_outcome(&TaskRunOutcome::NeedsUserAction), "⚠");
+    }
+
+    #[test]
+    fn test_format_outcome_error() {
+        assert_eq!(format_outcome(&TaskRunOutcome::Error), "✗");
+    }
+
+    #[test]
+    fn test_format_outcome_soft_timeout() {
+        assert_eq!(format_outcome(&TaskRunOutcome::SoftTimeout), "⏱");
+    }
+
+    #[test]
+    fn test_format_duration_less_than_1s() {
+        assert_eq!(format_duration(0), "< 1s");
+    }
+
+    #[test]
+    fn test_format_duration_seconds() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[test]
+    fn test_format_duration_minutes() {
+        assert_eq!(format_duration(125), "2m 5s");
+    }
+
+    #[test]
+    fn test_format_duration_hours() {
+        assert_eq!(format_duration(3665), "1h 1m");
+    }
+
+    #[test]
+    fn test_format_duration_exact_minute() {
+        assert_eq!(format_duration(120), "2m 0s");
+    }
+
+    #[test]
+    fn test_format_duration_exact_hour() {
+        assert_eq!(format_duration(3600), "1h 0m");
     }
 }
