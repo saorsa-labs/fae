@@ -29,6 +29,7 @@ pub mod audio;
 pub mod canvas;
 pub mod channels;
 pub mod config;
+pub mod credentials;
 pub mod diagnostics;
 pub mod doctor;
 pub mod error;

@@ -3051,6 +3051,7 @@ dependencies = [
  "cpal",
  "crossbeam-channel",
  "dioxus",
+ "dirs",
  "fae-search",
  "fdaf-aec",
  "futures-util",

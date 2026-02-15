@@ -525,3 +525,39 @@ All deliverables:
 ✓ Complete documentation: operator + developer + architecture
 ✓ 1647 tests passing, zero warnings
 ✓ Production-ready module
+
+---
+
+## Milestone A: App Store Readiness — IN PROGRESS
+
+### Phase A.1: Apple Sandbox & Entitlements — COMPLETE
+- [x] All 8 tasks complete
+- Entitlements.plist with App Sandbox enabled
+- Security-scoped bookmarks module
+- User-selected file access entitlement
+
+### Phase A.2: Path & Permission Hardening — COMPLETE
+- [x] Task 1: Create centralized fae_dirs module (commit: various)
+- [x] Task 2: Migrate personality.rs to fae_dirs (commit: various)
+- [x] Task 3: Remove dead path functions from config.rs (commit: various)
+- [x] Task 4: Fix diagnostics.rs hardcoded paths (commit: 75c4ae6)
+- [x] Task 5: Migrate skills.rs, memory.rs, record_wakeword.rs (commit: b61ab5e)
+- [x] Task 6: Add HuggingFace cache path override (commit: 69ce329)
+- [x] Task 7: Add sandbox-awareness to bash tool (commit: 142719e)
+- [x] Task 8: Update GUI callers, tests, documentation (commit: e762dbd)
+- Review: APPROVED (0 critical, 0 high, 0 medium findings)
+
+### Phase A.3: Credential Security — STARTING
+
+**Phase A.3 PLAN CREATED** — 8 tasks defined
+
+Tasks:
+- [ ] Task 1: Add credential manager types and trait
+- [ ] Task 2: Implement macOS Keychain backend
+- [ ] Task 3: Implement encrypted fallback backend
+- [ ] Task 4: Update config types with CredentialRef
+- [ ] Task 5: Implement credential loading during config initialization
+- [ ] Task 6: Add credential migration tool
+- [ ] Task 7: Update LLM and channel runtime credential access
+- [ ] Task 8: Add secure deletion and documentation
+
