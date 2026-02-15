@@ -24,6 +24,8 @@
 //! # }
 //! ```
 
+#[cfg(target_os = "macos")]
+mod keychain;
 mod types;
 
 pub use types::{CredentialError, CredentialRef};
@@ -83,15 +85,17 @@ pub trait CredentialManager {
     fn delete(&self, cred_ref: &CredentialRef) -> Result<(), CredentialError>;
 }
 
-/// Stub credential manager for testing.
+/// Stub credential manager for non-macOS platforms.
 ///
-/// This will be replaced with platform-specific implementations in Tasks 2 and 3.
+/// This will be replaced with encrypted storage in Task 3.
+#[cfg(not(target_os = "macos"))]
 struct StubCredentialManager;
 
+#[cfg(not(target_os = "macos"))]
 impl CredentialManager for StubCredentialManager {
     fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
         Err(CredentialError::StorageError(
-            "Platform-specific credential manager not yet implemented".to_owned(),
+            "Encrypted credential storage not yet implemented for this platform".to_owned(),
         ))
     }
 
@@ -100,22 +104,22 @@ impl CredentialManager for StubCredentialManager {
             CredentialRef::None => Ok(None),
             CredentialRef::Plaintext(value) => Ok(Some(value.clone())),
             CredentialRef::Keychain { .. } => Err(CredentialError::StorageError(
-                "Platform-specific credential manager not yet implemented".to_owned(),
+                "Encrypted credential storage not yet implemented for this platform".to_owned(),
             )),
         }
     }
 
     fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
         Err(CredentialError::StorageError(
-            "Platform-specific credential manager not yet implemented".to_owned(),
+            "Encrypted credential storage not yet implemented for this platform".to_owned(),
         ))
     }
 }
 
 /// Create a platform-appropriate credential manager.
 ///
-/// - **macOS**: Returns a Keychain Services-backed manager (Task 2)
-/// - **Other platforms**: Returns an encrypted storage manager via `keyring` (Task 3)
+/// - **macOS**: Returns a Keychain Services-backed manager
+/// - **Other platforms**: Returns an encrypted storage manager (Task 3)
 ///
 /// # Example
 ///
@@ -124,6 +128,13 @@ impl CredentialManager for StubCredentialManager {
 /// ```
 #[must_use]
 pub fn create_manager() -> Box<dyn CredentialManager> {
-    // Platform-specific implementations will be added in later tasks
-    Box::new(StubCredentialManager)
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(keychain::KeychainCredentialManager::new())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Box::new(StubCredentialManager)
+    }
 }

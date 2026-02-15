@@ -159,6 +159,8 @@ mistralrs = { version = "0.7", features = ["metal"] }
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+# Keychain Services for secure credential storage.
+security-framework = "3.0"
 
 [package.metadata.bundle]
 name = "Fae"

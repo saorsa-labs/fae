@@ -561,3 +561,11 @@ Tasks:
 - [ ] Task 7: Update LLM and channel runtime credential access
 - [ ] Task 8: Add secure deletion and documentation
 
+
+### Task 1: Add credential manager types and trait — COMPLETE
+- Created `src/credentials/mod.rs` with CredentialManager trait
+- Created `src/credentials/types.rs` with CredentialRef enum and CredentialError  
+- Wired module into `src/lib.rs`
+- All 7 unit tests passing
+- Commit: b8da0d3
+
