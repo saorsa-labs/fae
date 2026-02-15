@@ -116,11 +116,13 @@ jobs:
         run: |
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
+            --entitlements Entitlements.plist \
             --timestamp \
             target/release/fae
 
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
+            --entitlements Entitlements.plist \
             --timestamp \
             target/release/fae-record-wakeword
 
@@ -176,6 +178,7 @@ jobs:
         run: |
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
+            --entitlements Entitlements.plist \
             --timestamp \
             "$PI_BINARY"
 
@@ -263,16 +266,19 @@ jobs:
         run: |
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
+            --entitlements Entitlements.plist \
             --timestamp \
             "$APP_BUNDLE/Contents/Resources/pi"
 
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
+            --entitlements Entitlements.plist \
             --timestamp \
             "$APP_BUNDLE/Contents/MacOS/fae"
 
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
+            --entitlements Entitlements.plist \
             --timestamp \
             "$APP_BUNDLE"
 
