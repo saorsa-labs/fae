@@ -269,9 +269,5 @@ fn wait_for_enter() {
 
 /// Returns the default wakeword references directory.
 fn wakeword_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae").join("wakeword")
-    } else {
-        PathBuf::from("/tmp/.fae/wakeword")
-    }
+    fae::fae_dirs::wakeword_dir()
 }

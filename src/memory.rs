@@ -1596,11 +1596,7 @@ pub fn run_memory_migration(root_dir: &Path) -> Result<String> {
 }
 
 pub fn default_memory_root_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae")
-    } else {
-        PathBuf::from("/tmp").join(".fae")
-    }
+    crate::fae_dirs::memory_dir()
 }
 
 fn display_kind(kind: MemoryKind) -> &'static str {

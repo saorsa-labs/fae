@@ -6,9 +6,9 @@
 //!
 //! Supported skill sources:
 //! 1. Built-in skills compiled into the binary.
-//! 2. User `.md` skills in `~/.fae/skills/`.
+//! 2. User `.md` skills in the skills directory (see [`skills_dir`]).
 //! 3. Managed package skills (`SKILL.toml` + markdown entry) installed into
-//!    the same directory with state tracked in `~/.fae/skills/.state/registry.json`.
+//!    the same directory with state tracked in `.state/registry.json`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -158,17 +158,13 @@ fn now_epoch_secs() -> u64 {
 
 /// Returns the directory where user-created skills are stored.
 ///
-/// Defaults to `~/.fae/skills/`. Override for local tooling via
-/// `FAE_SKILLS_DIR=/path/to/skills`.
+/// Override for local tooling via `FAE_SKILLS_DIR=/path/to/skills`.
+/// Falls back to [`crate::fae_dirs::skills_dir`].
 pub fn skills_dir() -> PathBuf {
     if let Some(override_dir) = std::env::var_os("FAE_SKILLS_DIR") {
         return PathBuf::from(override_dir);
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".fae").join("skills")
-    } else {
-        PathBuf::from("/tmp/.fae/skills")
-    }
+    crate::fae_dirs::skills_dir()
 }
 
 fn default_paths() -> SkillPaths {
