@@ -54,6 +54,7 @@ pub mod soul_version;
 pub mod startup;
 pub mod stt;
 pub mod system_profile;
+pub mod theme;
 pub mod tts;
 pub mod ui;
 pub mod update;
