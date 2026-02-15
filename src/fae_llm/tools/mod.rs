@@ -56,6 +56,9 @@ pub use write::WriteTool;
 mod mode_gating_tests;
 
 #[cfg(test)]
+mod scheduler_integration_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use super::*;
     use crate::fae_llm::config::types::ToolMode;
