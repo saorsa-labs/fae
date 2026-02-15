@@ -6,6 +6,7 @@
 
 use crate::config::{DiscordChannelConfig, WhatsAppChannelConfig};
 use crate::credentials::CredentialRef;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// State for the channel management panel.
@@ -182,6 +183,94 @@ impl Default for WhatsAppEditForm {
     }
 }
 
+/// Channel health status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelHealth {
+    /// Channel is connected and operational.
+    Connected,
+    /// Channel is disconnected or not configured.
+    Disconnected,
+    /// Channel has an error.
+    Error,
+}
+
+/// Channel status for overview display.
+#[derive(Debug, Clone)]
+pub struct ChannelStatus {
+    /// Channel name (e.g., "discord", "whatsapp").
+    pub name: String,
+    /// Health status.
+    pub health: ChannelHealth,
+    /// Last message timestamp (if any).
+    pub last_message_time: Option<DateTime<Utc>>,
+    /// Messages remaining in current rate limit window.
+    pub rate_limit_remaining: Option<u32>,
+}
+
+/// Render channel overview with health indicators and status.
+///
+/// Returns HTML string for display.
+#[must_use]
+pub fn render_channel_overview(channels: &[ChannelStatus], auto_start: bool) -> String {
+    if channels.is_empty() {
+        return r#"<div class="channel-overview-empty">
+            <p>No channels configured</p>
+            <p class="hint">Use the Discord and WhatsApp tabs to configure channels.</p>
+        </div>"#
+            .to_owned();
+    }
+
+    let mut html = String::new();
+    html.push_str(r#"<div class="channel-overview">"#);
+
+    // Auto-start toggle status
+    let auto_start_status = if auto_start { "enabled" } else { "disabled" };
+    html.push_str(&format!(
+        r#"<div class="auto-start-status">Auto-start: <span class="{}">{}</span></div>"#,
+        auto_start_status, auto_start_status
+    ));
+
+    html.push_str(r#"<div class="channel-list">"#);
+
+    for channel in channels {
+        let (health_class, health_text) = match channel.health {
+            ChannelHealth::Connected => ("connected", "Connected"),
+            ChannelHealth::Disconnected => ("disconnected", "Disconnected"),
+            ChannelHealth::Error => ("error", "Error"),
+        };
+
+        let last_message = match &channel.last_message_time {
+            Some(time) => format!("Last message: {}", time.format("%Y-%m-%d %H:%M:%S UTC")),
+            None => "No messages yet".to_owned(),
+        };
+
+        let rate_limit = match channel.rate_limit_remaining {
+            Some(remaining) => format!("Rate limit: {} remaining", remaining),
+            None => String::new(),
+        };
+
+        html.push_str(&format!(
+            r#"<div class="channel-item">
+                <div class="channel-name">{}</div>
+                <div class="channel-health {}">
+                    <span class="status-indicator"></span>
+                    {}
+                </div>
+                <div class="channel-info">{}</div>
+                <div class="channel-rate-limit">{}</div>
+                <button class="configure-btn" data-channel="{}">Configure</button>
+            </div>"#,
+            channel.name, health_class, health_text, last_message, rate_limit, channel.name
+        ));
+    }
+
+    html.push_str(r#"</div>"#); // channel-list
+    html.push_str(r#"<button class="refresh-health-btn">Refresh Health</button>"#);
+    html.push_str(r#"</div>"#); // channel-overview
+
+    html
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -337,5 +426,76 @@ mod tests {
         };
 
         assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn render_overview_no_channels() {
+        let html = render_channel_overview(&[], true);
+        assert!(html.contains("No channels configured"));
+        assert!(html.contains("channel-overview-empty"));
+    }
+
+    #[test]
+    fn render_overview_with_discord_only() {
+        let channels = vec![ChannelStatus {
+            name: "discord".to_owned(),
+            health: ChannelHealth::Connected,
+            last_message_time: Some(Utc::now()),
+            rate_limit_remaining: Some(15),
+        }];
+
+        let html = render_channel_overview(&channels, true);
+        assert!(html.contains("discord"));
+        assert!(html.contains("Connected"));
+        assert!(html.contains("Rate limit: 15 remaining"));
+        assert!(html.contains("Auto-start"));
+    }
+
+    #[test]
+    fn render_overview_with_both_channels() {
+        let channels = vec![
+            ChannelStatus {
+                name: "discord".to_owned(),
+                health: ChannelHealth::Connected,
+                last_message_time: Some(Utc::now()),
+                rate_limit_remaining: Some(15),
+            },
+            ChannelStatus {
+                name: "whatsapp".to_owned(),
+                health: ChannelHealth::Disconnected,
+                last_message_time: None,
+                rate_limit_remaining: Some(10),
+            },
+        ];
+
+        let html = render_channel_overview(&channels, false);
+        assert!(html.contains("discord"));
+        assert!(html.contains("whatsapp"));
+        assert!(html.contains("Connected"));
+        assert!(html.contains("Disconnected"));
+        assert!(html.contains("No messages yet"));
+    }
+
+    #[test]
+    fn render_overview_health_status_display() {
+        let channels = vec![
+            ChannelStatus {
+                name: "discord".to_owned(),
+                health: ChannelHealth::Connected,
+                last_message_time: None,
+                rate_limit_remaining: None,
+            },
+            ChannelStatus {
+                name: "whatsapp".to_owned(),
+                health: ChannelHealth::Error,
+                last_message_time: None,
+                rate_limit_remaining: None,
+            },
+        ];
+
+        let html = render_channel_overview(&channels, true);
+        assert!(html.contains("connected"));
+        assert!(html.contains("error"));
+        assert!(html.contains("Refresh Health"));
     }
 }
