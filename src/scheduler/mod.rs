@@ -4,9 +4,11 @@
 //! Designed for future extensibility with user-defined scheduled tasks
 //! (calendar checks, research, reminders).
 
+pub mod executor_bridge;
 pub mod runner;
 pub mod tasks;
 
+pub use executor_bridge::TaskExecutorBridge;
 pub use runner::{
     Scheduler, SchedulerSnapshot, clear_persisted_state, load_persisted_snapshot,
     mark_persisted_task_due_now, remove_persisted_task, save_persisted_snapshot,

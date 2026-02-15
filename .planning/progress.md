@@ -594,3 +594,4 @@ A.3: Credential Security (8 tasks)
 - System prompt updated with tool documentation and JSON examples
 - 75 new tests (45 unit + 30 integration), 1788 total tests passing
 
+- [x] Task 1: ConversationTrigger payload schema (commit: 012a412)
