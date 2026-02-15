@@ -681,3 +681,47 @@ A.3: Credential Security (8 tasks)
 - Menu bar documentation and validation
 - 1936 tests passing, zero warnings
 - Review: PASS (A grade, 7/7 consensus)
+
+### Phase C.3: Channel UI Enhancement — COMPLETE
+- [x] Task 1: Add rate limiting module for outbound messages (commit: ab49116)
+- [x] Task 2: Add message history storage (commit: 565fdd0)
+- [x] Task 3: Create channel status panel types (commit: bb33f98)
+- [x] Task 4: Create channel overview component (commit: 565e128)
+- [x] Task 5: Create Discord/WhatsApp configuration forms (commit: 3896ba3)
+- [x] Task 6: Create message history viewer (commit: a8d4b79)
+- [x] Task 7: Wire channel panel into GUI (commit: f67b528)
+- [x] Task 8: Add setup documentation and integration tests (commit: 8f05077)
+
+**Phase C.3 Complete** (2026-02-15)
+- Per-channel rate limiting (sliding window: 20/min Discord, 10/min WhatsApp)
+- Message history storage (ring buffer, 500-message capacity)
+- Channel panel with overview, forms, and history viewer
+- Discord/WhatsApp configuration forms with validation
+- Setup documentation (docs/channels-setup.md)
+- 41 new tests, 1976 total tests passing
+- Review: PASS (A grade, all quality gates met)
+
+## Milestone 3 COMPLETE — UI Polish & Missing Features
+- 3 phases (C.1, C.2, C.3), 24 tasks total
+- SOUL.md version control, system theme & tray, channel UI
+- Zero warnings, zero errors, all reviews APPROVED
+
+---
+
+## PROJECT COMPLETE — fae-production-hardening
+
+All 3 milestones delivered:
+- **Milestone A**: App Store Readiness (3 phases, 24 tasks)
+  - A.1: Apple Sandbox & Entitlements
+  - A.2: Path & Permission Hardening
+  - A.3: Credential Security
+- **Milestone B**: Scheduler Completeness (3 phases, 24 tasks)
+  - B.1: Scheduler LLM Tools
+  - B.2: Scheduler Conversation Bridge
+  - B.3: Scheduler Management UI
+- **Milestone C**: UI Polish & Missing Features (3 phases, 24 tasks)
+  - C.1: SOUL.md Version Control
+  - C.2: System Theme & Tray
+  - C.3: Channel UI Enhancement
+
+**Total**: 9 phases, 72 tasks, 1976 tests passing, zero warnings

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "fae-production-hardening",
-  "active": true,
+  "active": false,
   "milestone": {
     "number": 3,
     "name": "UI Polish & Missing Features"
@@ -22,6 +22,6 @@
     "iteration": 1,
     "last_verdict": "APPROVED"
   },
-  "status": "continuation_spawned",
-  "last_updated": 1771194300
+  "status": "milestone_complete",
+  "last_updated": 1771196400
 }
