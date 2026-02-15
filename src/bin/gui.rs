@@ -3868,10 +3868,11 @@ fn app() -> Element {
     let mut voice_permissions_granted = use_signal(|| false);
     let mut config_state = use_signal(read_config_or_default);
 
-    // Theme state: mode from config, effective theme based on mode + system
+    // Theme state: mode from config, system theme from watcher, effective theme based on both
     let theme_mode = use_memo(move || config_state.read().theme.mode);
+    let system_theme = use_signal(fae::theme::SystemTheme::current);
     let effective_theme = use_memo(move || match theme_mode() {
-        fae::config::ThemeMode::Auto => fae::theme::SystemTheme::current(),
+        fae::config::ThemeMode::Auto => system_theme(),
         fae::config::ThemeMode::Light => fae::theme::SystemTheme::Light,
         fae::config::ThemeMode::Dark => fae::theme::SystemTheme::Dark,
     });
@@ -3953,6 +3954,30 @@ fn app() -> Element {
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 }
             }
+        });
+    }
+
+    // --- System theme change listener ---
+    // Watch for macOS system theme changes and update system_theme signal.
+    // The effective_theme memo will automatically recompute when system_theme changes.
+    {
+        let mut system_theme = system_theme;
+        use_hook(move || {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let _watcher = fae::theme::watch_system_theme(tx);
+
+            spawn(async move {
+                let mut last_theme = fae::theme::SystemTheme::current();
+
+                while let Some(theme) = rx.recv().await {
+                    // Only update signal on actual changes
+                    if theme != last_theme {
+                        last_theme = theme;
+                        system_theme.set(theme);
+                        tracing::debug!("System theme changed to {}", theme);
+                    }
+                }
+            });
         });
     }
 

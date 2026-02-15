@@ -152,6 +152,40 @@ fn detect_macos_theme() -> SystemTheme {
     })
 }
 
+/// Watch for system theme changes on macOS.
+///
+/// Spawns a background task that polls for system appearance changes every second.
+/// When the system theme changes, the new theme is sent via the provided channel.
+///
+/// The returned JoinHandle can be used to cancel the watcher.
+#[cfg(target_os = "macos")]
+pub fn watch_system_theme(
+    tx: tokio::sync::mpsc::UnboundedSender<SystemTheme>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        // Poll-based approach: check theme every second
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            let current_theme = detect_macos_theme();
+            if tx.send(current_theme).is_err() {
+                // Receiver dropped, exit
+                break;
+            }
+        }
+    })
+}
+
+/// Watch for system theme changes (no-op on non-macOS platforms).
+#[cfg(not(target_os = "macos"))]
+pub fn watch_system_theme(
+    _tx: tokio::sync::mpsc::UnboundedSender<SystemTheme>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn(async {
+        // No-op on non-macOS
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
