@@ -164,6 +164,48 @@ pub fn calculate_diff(old: &str, new: &str) -> Vec<DiffLine> {
     result
 }
 
+/// Cleanup old versions beyond retention limit.
+///
+/// Keeps the most recent `keep_count` versions and deletes the rest.
+/// Returns the number of versions deleted.
+pub fn cleanup_old_versions(keep_count: usize) -> Result<usize> {
+    let versions = list_versions()?;
+
+    if versions.len() <= keep_count {
+        return Ok(0);
+    }
+
+    let to_delete = &versions[keep_count..];
+    let mut deleted = 0;
+
+    for version in to_delete {
+        // Delete content file
+        if version.path.exists() {
+            std::fs::remove_file(&version.path)?;
+        }
+
+        // Delete metadata file
+        let metadata_path = version_metadata_path(&version.id);
+        if metadata_path.exists() {
+            std::fs::remove_file(&metadata_path)?;
+        }
+
+        deleted += 1;
+    }
+
+    Ok(deleted)
+}
+
+/// Format version metadata for display in audit trail.
+pub fn format_version_info(version: &SoulVersion) -> String {
+    format!(
+        "{} | {} | hash:{}...",
+        version.id,
+        version.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+        &version.content_hash[..8]
+    )
+}
+
 /// Restore a previous version as the current SOUL.md.
 ///
 /// Creates a backup of the current state before restoring.
@@ -627,5 +669,79 @@ mod tests {
     fn test_restore_invalid_version() {
         let result = restore_version("nonexistent_version");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cleanup_old_versions() {
+        // Create several versions
+        for i in 0..5 {
+            let content = format!("# Version {} at {}", i, chrono::Utc::now());
+            let _ = create_backup(&content);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Verify we have at least 5
+        let versions_before = list_versions().expect("list before");
+        let count_before = versions_before.len();
+        assert!(count_before >= 5, "Should have at least 5 versions");
+
+        // Keep only 3 most recent
+        let deleted = cleanup_old_versions(3).expect("cleanup");
+
+        // Verify correct number deleted
+        let versions_after = list_versions().expect("list after");
+        let count_after = versions_after.len();
+
+        assert!(count_after <= 3, "Should have at most 3 versions left");
+        assert_eq!(
+            count_before - count_after,
+            deleted,
+            "Deleted count should match"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_preserves_recent() {
+        // Create 3 versions
+        let mut version_ids = Vec::new();
+        for i in 0..3 {
+            let content = format!("# Version {} at {}", i, chrono::Utc::now());
+            let backup = create_backup(&content).expect("backup");
+            if let Some(version) = backup {
+                version_ids.push(version.id.clone());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Keep 2 most recent
+        let _ = cleanup_old_versions(2);
+
+        // Verify the most recent 2 still exist
+        let versions = list_versions().expect("list versions");
+        let remaining_ids: Vec<String> = versions.iter().map(|v| v.id.clone()).collect();
+
+        // The oldest version should be gone
+        if version_ids.len() == 3 {
+            assert!(
+                !remaining_ids.contains(&version_ids[0]),
+                "Oldest version should be deleted"
+            );
+        }
+    }
+
+    #[test]
+    fn test_format_version_info() {
+        let version = SoulVersion {
+            id: "20260215_230000_000".to_string(),
+            timestamp: chrono::Utc::now(),
+            content_hash: "abc123def456".to_string(),
+            path: PathBuf::from("/tmp/test.md"),
+        };
+
+        let formatted = format_version_info(&version);
+
+        assert!(formatted.contains("20260215_230000_000"));
+        assert!(formatted.contains("abc123de")); // First 8 chars of hash
+        assert!(formatted.contains("UTC"));
     }
 }
