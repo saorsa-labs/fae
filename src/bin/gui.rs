@@ -23,14 +23,24 @@ fn main() {
     let file_appender = tracing_appender::rolling::daily(&log_dir, "fae.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    // Dual-output tracing: stdout (respects RUST_LOG) + file (always info).
+    // Dual-output tracing. Respect `RUST_LOG` when set; otherwise default to
+    // very verbose logging during pre-1.0 release testing.
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("trace"));
 
-    let stdout_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_file(true)
+        .with_line_number(true);
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_ansi(false);
+        .with_ansi(false)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_file(true)
+        .with_line_number(true);
 
     tracing_subscriber::registry()
         .with(env_filter)
@@ -77,6 +87,8 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     let open_soul_item = MenuItem::with_id(FAE_MENU_OPEN_SOUL, "Soul...", true, None);
     let open_skills_item = MenuItem::with_id(FAE_MENU_OPEN_SKILLS, "Skills...", true, None);
     let open_memories_item = MenuItem::with_id(FAE_MENU_OPEN_MEMORIES, "Memories...", true, None);
+    let open_ingestion_item =
+        MenuItem::with_id(FAE_MENU_OPEN_INGESTION, "Ingestion...", true, None);
     let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
     let check_updates_item =
         MenuItem::with_id(FAE_MENU_CHECK_UPDATES, "Check for Updates...", true, None);
@@ -95,6 +107,7 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &open_soul_item,
         &open_skills_item,
         &open_memories_item,
+        &open_ingestion_item,
         &PredefinedMenuItem::separator(),
         &open_guide_item,
         &check_updates_item,
@@ -1202,6 +1215,71 @@ mod gui {
             assert!(report.contains("No markdown headings"));
         }
 
+        #[test]
+        fn parse_ingestion_candidates_accepts_strict_json() {
+            let raw = r#"{
+                "records": [
+                    {"kind":"fact","text":"User likes Earl Grey tea.","confidence":0.88,"tags":["preference"]}
+                ]
+            }"#;
+            let candidates = super::super::parse_ingestion_candidates(raw);
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].kind, "fact");
+            assert!(candidates[0].text.contains("Earl Grey"));
+        }
+
+        #[test]
+        fn parse_ingestion_candidates_extracts_json_from_wrapped_output() {
+            let raw = "Here is the result:\n{\"records\":[{\"kind\":\"profile\",\"text\":\"User name is David.\"}]}\nDone.";
+            let candidates = super::super::parse_ingestion_candidates(raw);
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].kind, "profile");
+            assert_eq!(candidates[0].text, "User name is David.");
+        }
+
+        #[test]
+        fn sanitize_ingestion_tags_adds_ingestion_and_dedupes() {
+            let tags = vec![
+                "memory".to_owned(),
+                " Memory ".to_owned(),
+                "".to_owned(),
+                "profile".to_owned(),
+            ];
+            let out = super::super::sanitize_ingestion_tags(&tags);
+            assert_eq!(out[0], "ingestion");
+            assert!(out.iter().any(|tag| tag == "memory"));
+            assert!(out.iter().any(|tag| tag == "profile"));
+            assert_eq!(
+                out.iter()
+                    .filter(|tag| tag.eq_ignore_ascii_case("memory"))
+                    .count(),
+                1
+            );
+        }
+
+        #[test]
+        fn collect_ingestion_files_returns_nested_files() {
+            let unique = format!(
+                "fae-ingestion-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos()
+            );
+            let root = std::env::temp_dir().join(unique);
+            let nested = root.join("nested");
+            std::fs::create_dir_all(&nested).expect("create nested dirs");
+            std::fs::write(root.join("a.txt"), "alpha").expect("write file a");
+            std::fs::write(nested.join("b.txt"), "beta").expect("write file b");
+
+            let files = super::super::collect_ingestion_files(&root).expect("collect files");
+            assert_eq!(files.len(), 2);
+            assert!(files.iter().any(|p| p.ends_with("a.txt")));
+            assert!(files.iter().any(|p| p.ends_with("b.txt")));
+
+            let _ = std::fs::remove_dir_all(root);
+        }
+
         // --- format_bytes_short ---
 
         #[test]
@@ -1290,6 +1368,8 @@ const FAE_MENU_OPEN_SOUL: &str = "fae-open-soul";
 const FAE_MENU_OPEN_SKILLS: &str = "fae-open-skills";
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_MEMORIES: &str = "fae-open-memories";
+#[cfg(feature = "gui")]
+const FAE_MENU_OPEN_INGESTION: &str = "fae-open-ingestion";
 #[cfg(feature = "gui")]
 const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
 #[cfg(feature = "gui")]
@@ -2563,6 +2643,610 @@ fn refresh_memories_ui(
             Err(e) => status.set(format!("could not load memories: {e}")),
         }
     });
+}
+
+#[cfg(feature = "gui")]
+const MAX_INGESTION_FILES: usize = 2048;
+#[cfg(feature = "gui")]
+const MAX_INGESTION_BYTES_PER_FILE: usize = 24 * 1024;
+#[cfg(feature = "gui")]
+const MAX_INGESTION_RECORDS_PER_FILE: usize = 8;
+
+#[cfg(feature = "gui")]
+#[derive(Clone, Debug, Default)]
+struct IngestionStateSnapshot {
+    running: bool,
+    target: String,
+    status: String,
+    total_files: usize,
+    processed_files: usize,
+    inserted_records: usize,
+    skipped_files: usize,
+    error: Option<String>,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Debug)]
+struct IngestionDocumentPayload {
+    path: PathBuf,
+    file_size_bytes: usize,
+    excerpt: String,
+    truncated: bool,
+    binary_fallback: bool,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, serde::Deserialize)]
+struct IngestionCandidateRecord {
+    kind: String,
+    text: String,
+    #[serde(default)]
+    confidence: Option<f32>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, serde::Deserialize)]
+struct IngestionCandidateEnvelope {
+    #[serde(default)]
+    records: Vec<IngestionCandidateRecord>,
+}
+
+#[cfg(feature = "gui")]
+fn ingestion_state_store() -> std::sync::Arc<std::sync::Mutex<IngestionStateSnapshot>> {
+    static STORE: OnceLock<std::sync::Arc<std::sync::Mutex<IngestionStateSnapshot>>> =
+        OnceLock::new();
+    STORE
+        .get_or_init(|| {
+            std::sync::Arc::new(std::sync::Mutex::new(IngestionStateSnapshot::default()))
+        })
+        .clone()
+}
+
+#[cfg(feature = "gui")]
+fn with_ingestion_state(mutator: impl FnOnce(&mut IngestionStateSnapshot)) {
+    let store = ingestion_state_store();
+    let mut guard = match store.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    mutator(&mut guard);
+}
+
+#[cfg(feature = "gui")]
+fn ingestion_state_snapshot() -> IngestionStateSnapshot {
+    let store = ingestion_state_store();
+    let guard = match store.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.clone()
+}
+
+#[cfg(feature = "gui")]
+fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(source)
+        .map_err(|e| format!("could not inspect {}: {e}", source.display()))?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Ok(());
+    }
+    if file_type.is_dir() {
+        std::fs::create_dir_all(destination)
+            .map_err(|e| format!("could not create {}: {e}", destination.display()))?;
+        let entries = std::fs::read_dir(source)
+            .map_err(|e| format!("could not read {}: {e}", source.display()))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| format!("could not read entry under {}: {e}", source.display()))?;
+            let from = entry.path();
+            let to = destination.join(entry.file_name());
+            copy_path_recursive(&from, &to)?;
+        }
+        return Ok(());
+    }
+
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    std::fs::copy(source, destination).map_err(|e| {
+        format!(
+            "could not copy {} to {}: {e}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(feature = "gui")]
+fn archive_path_if_exists(source: &Path, destination: &Path) -> Result<(), String> {
+    if source.exists() {
+        copy_path_recursive(source, destination)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "gui")]
+fn archive_and_reset_user_state(current_config: fae::SpeechConfig) -> Result<PathBuf, String> {
+    let archive_root = fae::personality::fae_home_dir()
+        .join("archives")
+        .join(format!("session-reset-{}", now_ts_millis()));
+    std::fs::create_dir_all(&archive_root)
+        .map_err(|e| format!("could not create archive directory: {e}"))?;
+
+    let config_path = fae::SpeechConfig::default_config_path();
+    let memory_root = current_config.memory.root_dir.clone();
+    let memory_dir = memory_root.join("memory");
+    let soul_path = fae::personality::soul_path();
+    let onboarding_path = fae::personality::onboarding_path();
+
+    archive_path_if_exists(
+        &config_path,
+        &archive_root.join("settings").join("config.toml"),
+    )?;
+    archive_path_if_exists(&memory_dir, &archive_root.join("memory"))?;
+    archive_path_if_exists(&soul_path, &archive_root.join("behavior").join("SOUL.md"))?;
+    archive_path_if_exists(
+        &onboarding_path,
+        &archive_root.join("behavior").join("onboarding.md"),
+    )?;
+
+    let default_cfg = fae::SpeechConfig::default();
+    default_cfg
+        .save_to_file(&config_path)
+        .map_err(|e| format!("could not write default config: {e}"))?;
+
+    if memory_dir.exists() {
+        std::fs::remove_dir_all(&memory_dir)
+            .map_err(|e| format!("could not remove memory directory: {e}"))?;
+    }
+    let repo = fae::memory::MemoryRepository::new(&memory_root);
+    repo.ensure_layout()
+        .map_err(|e| format!("could not initialize memory layout: {e}"))?;
+
+    write_text_file(
+        &fae::personality::soul_path(),
+        fae::personality::DEFAULT_SOUL,
+    )?;
+    write_text_file(
+        &fae::personality::onboarding_path(),
+        fae::personality::DEFAULT_ONBOARDING_CHECKLIST,
+    )?;
+
+    Ok(archive_root)
+}
+
+#[cfg(feature = "gui")]
+fn collect_ingestion_files(target: &Path) -> Result<Vec<PathBuf>, String> {
+    if !target.exists() {
+        return Err(format!("path does not exist: {}", target.display()));
+    }
+
+    let mut files = Vec::<PathBuf>::new();
+    let mut stack = vec![target.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("could not inspect {}: {e}", path.display()))?;
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_file() {
+            files.push(path);
+        } else if file_type.is_dir() {
+            let entries = std::fs::read_dir(&path)
+                .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+            for entry in entries {
+                let entry = entry
+                    .map_err(|e| format!("could not read entry under {}: {e}", path.display()))?;
+                stack.push(entry.path());
+            }
+        }
+
+        if files.len() > MAX_INGESTION_FILES {
+            return Err(format!(
+                "ingestion path is too large (>{MAX_INGESTION_FILES} files). Narrow the target."
+            ));
+        }
+    }
+
+    files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    if files.is_empty() {
+        return Err("no files found at the selected path".to_owned());
+    }
+    Ok(files)
+}
+
+#[cfg(feature = "gui")]
+fn build_ingestion_document_payload(path: &Path) -> Result<IngestionDocumentPayload, String> {
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    let file_size_bytes = bytes.len();
+    let truncated = bytes.len() > MAX_INGESTION_BYTES_PER_FILE;
+    let slice_len = bytes.len().min(MAX_INGESTION_BYTES_PER_FILE);
+    let sample = &bytes[..slice_len];
+
+    let (excerpt, binary_fallback) = match std::str::from_utf8(sample) {
+        Ok(text) => (text.to_owned(), false),
+        Err(_) => {
+            let preview = sample
+                .iter()
+                .take(128)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let binary_note = format!(
+                "Binary content ({} bytes). Hex preview (first {} bytes): {}",
+                file_size_bytes,
+                sample.len().min(128),
+                preview
+            );
+            (binary_note, true)
+        }
+    };
+
+    Ok(IngestionDocumentPayload {
+        path: path.to_path_buf(),
+        file_size_bytes,
+        excerpt,
+        truncated,
+        binary_fallback,
+    })
+}
+
+#[cfg(feature = "gui")]
+fn build_ingestion_prompt(payload: &IngestionDocumentPayload) -> String {
+    let ext = payload
+        .path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let truncation_note = if payload.truncated {
+        "yes (excerpt only)"
+    } else {
+        "no"
+    };
+
+    format!(
+        "You are Fae's local ingestion worker.\n\
+Task: extract durable memory records from the provided document for future conversations.\n\
+Return STRICT JSON only with this schema:\n\
+{{\"records\":[{{\"kind\":\"profile|fact|episode\",\"text\":\"...\",\"confidence\":0.0,\"tags\":[\"...\"]}}]}}\n\
+Rules:\n\
+- Include only grounded facts from the input.\n\
+- Do not include secrets like API keys or random code tokens.\n\
+- Keep each text concise and specific.\n\
+- If no durable memories are found, return {{\"records\":[]}}.\n\
+Source path: {}\n\
+Extension: {}\n\
+Size bytes: {}\n\
+Binary fallback used: {}\n\
+Truncated: {}\n\
+\n\
+Document excerpt:\n\
+{}\n",
+        payload.path.display(),
+        ext,
+        payload.file_size_bytes,
+        payload.binary_fallback,
+        truncation_note,
+        payload.excerpt
+    )
+}
+
+#[cfg(feature = "gui")]
+fn extract_first_json_object(raw: &str) -> Option<String> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if end < start {
+        return None;
+    }
+    Some(raw[start..=end].to_owned())
+}
+
+#[cfg(feature = "gui")]
+fn parse_ingestion_candidates(raw: &str) -> Vec<IngestionCandidateRecord> {
+    if let Ok(parsed) = serde_json::from_str::<IngestionCandidateEnvelope>(raw) {
+        return parsed.records;
+    }
+    let Some(json) = extract_first_json_object(raw) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<IngestionCandidateEnvelope>(&json)
+        .map(|parsed| parsed.records)
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "gui")]
+fn normalize_ingested_memory_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(feature = "gui")]
+fn parse_ingested_memory_kind(kind: &str) -> fae::memory::MemoryKind {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "profile" => fae::memory::MemoryKind::Profile,
+        "episode" => fae::memory::MemoryKind::Episode,
+        _ => fae::memory::MemoryKind::Fact,
+    }
+}
+
+#[cfg(feature = "gui")]
+fn sanitize_ingestion_tags(tags: &[String]) -> Vec<String> {
+    let mut out = vec!["ingestion".to_owned()];
+    for tag in tags {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !out
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(trimmed))
+        {
+            out.push(trimmed.to_owned());
+        }
+    }
+    out
+}
+
+#[cfg(feature = "gui")]
+async fn run_ingestion_prompt_with_local_brain(
+    agent: &mut fae::agent::FaeAgentLlm,
+    prompt: String,
+) -> Result<String, String> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<fae::pipeline::messages::SentenceChunk>(256);
+    let collector = tokio::spawn(async move {
+        let mut output = String::new();
+        while let Some(chunk) = rx.recv().await {
+            if chunk.is_final {
+                break;
+            }
+            output.push_str(&chunk.text);
+        }
+        output
+    });
+
+    let interrupted = agent
+        .generate_response(
+            prompt,
+            tx,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await
+        .map_err(|e| format!("local ingestion generation failed: {e}"))?;
+
+    let output = collector
+        .await
+        .map_err(|e| format!("ingestion collector task failed: {e}"))?;
+    if interrupted && output.trim().is_empty() {
+        return Err("ingestion generation interrupted".to_owned());
+    }
+    if output.trim().is_empty() {
+        return Err("local ingestion generation returned no output".to_owned());
+    }
+    Ok(output)
+}
+
+#[cfg(feature = "gui")]
+fn start_ingestion_job(target: PathBuf) -> Result<(), String> {
+    if !target.exists() {
+        return Err(format!("path does not exist: {}", target.display()));
+    }
+
+    {
+        let mut already_running = false;
+        with_ingestion_state(|state| {
+            if state.running {
+                already_running = true;
+                return;
+            }
+            *state = IngestionStateSnapshot {
+                running: true,
+                target: target.display().to_string(),
+                status: "Preparing ingestion...".to_owned(),
+                total_files: 0,
+                processed_files: 0,
+                inserted_records: 0,
+                skipped_files: 0,
+                error: None,
+            };
+        });
+        if already_running {
+            return Err("an ingestion task is already running".to_owned());
+        }
+    }
+
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                with_ingestion_state(|state| {
+                    state.running = false;
+                    state.error = Some(format!("could not start ingestion runtime: {e}"));
+                    state.status = "Failed: could not start ingestion runtime".to_owned();
+                });
+                return;
+            }
+        };
+
+        runtime.block_on(async move {
+            let finish_with_error = |message: String| {
+                with_ingestion_state(|state| {
+                    state.running = false;
+                    state.error = Some(message.clone());
+                    state.status = format!("Failed: {message}");
+                });
+            };
+
+            let files = match collect_ingestion_files(&target) {
+                Ok(files) => files,
+                Err(e) => {
+                    finish_with_error(e);
+                    return;
+                }
+            };
+
+            with_ingestion_state(|state| {
+                state.total_files = files.len();
+                state.status = format!("Loading local brain for {} files...", files.len());
+            });
+
+            let config = read_config_or_default();
+            let mut local_cfg = config.llm.clone();
+            local_cfg.backend = fae::config::LlmBackend::Local;
+            local_cfg.tool_mode = fae::config::AgentToolMode::Off;
+            local_cfg.enable_local_fallback = false;
+            local_cfg.api_url.clear();
+            local_cfg.api_key.clear();
+            local_cfg.cloud_provider = None;
+            local_cfg.cloud_model = None;
+            local_cfg.max_tokens = local_cfg.max_tokens.max(1600);
+
+            let local_model = match fae::llm::LocalLlm::new(&local_cfg).await {
+                Ok(model) => model,
+                Err(e) => {
+                    finish_with_error(format!("could not load local model: {e}"));
+                    return;
+                }
+            };
+
+            let mut agent =
+                match fae::agent::FaeAgentLlm::new(&local_cfg, Some(local_model), None, None, None)
+                    .await
+                {
+                    Ok(agent) => agent,
+                    Err(e) => {
+                        finish_with_error(format!("could not start local ingestion agent: {e}"));
+                        return;
+                    }
+                };
+
+            let memory_repo = fae::memory::MemoryRepository::new(&config.memory.root_dir);
+            if let Err(e) = memory_repo.ensure_layout() {
+                finish_with_error(format!("could not initialize memory repository: {e}"));
+                return;
+            }
+
+            let mut seen_texts = std::collections::HashSet::<String>::new();
+            match memory_repo.list_records() {
+                Ok(records) => {
+                    for record in records {
+                        if record.status == fae::memory::MemoryStatus::Active {
+                            seen_texts.insert(
+                                normalize_ingested_memory_text(&record.text).to_ascii_lowercase(),
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    finish_with_error(format!("could not load existing memories: {e}"));
+                    return;
+                }
+            }
+
+            let mut inserted_records = 0usize;
+            let mut skipped_files = 0usize;
+            let total_files = files.len();
+
+            for (index, file_path) in files.into_iter().enumerate() {
+                with_ingestion_state(|state| {
+                    state.status = format!(
+                        "Ingesting file {} of {}: {}",
+                        index + 1,
+                        total_files,
+                        file_path.display()
+                    );
+                });
+
+                let payload = match build_ingestion_document_payload(&file_path) {
+                    Ok(payload) => payload,
+                    Err(_e) => {
+                        skipped_files = skipped_files.saturating_add(1);
+                        with_ingestion_state(|state| {
+                            state.processed_files = index + 1;
+                            state.skipped_files = skipped_files;
+                        });
+                        continue;
+                    }
+                };
+
+                let prompt = build_ingestion_prompt(&payload);
+                let response = match run_ingestion_prompt_with_local_brain(&mut agent, prompt).await
+                {
+                    Ok(output) => output,
+                    Err(e) => {
+                        tracing::warn!(
+                            "ingestion model call failed for {}: {e}",
+                            file_path.display()
+                        );
+                        skipped_files = skipped_files.saturating_add(1);
+                        with_ingestion_state(|state| {
+                            state.processed_files = index + 1;
+                            state.skipped_files = skipped_files;
+                        });
+                        continue;
+                    }
+                };
+
+                let mut inserted_this_file = 0usize;
+                for candidate in parse_ingestion_candidates(&response)
+                    .into_iter()
+                    .take(MAX_INGESTION_RECORDS_PER_FILE)
+                {
+                    let normalized = normalize_ingested_memory_text(&candidate.text);
+                    if normalized.trim().is_empty() {
+                        continue;
+                    }
+                    let key = normalized.to_ascii_lowercase();
+                    if seen_texts.contains(&key) {
+                        continue;
+                    }
+
+                    let kind = parse_ingested_memory_kind(&candidate.kind);
+                    let confidence = candidate.confidence.unwrap_or(0.72).clamp(0.0, 1.0);
+                    let tags = sanitize_ingestion_tags(&candidate.tags);
+                    match memory_repo.insert_record(kind, &normalized, confidence, None, tags) {
+                        Ok(_) => {
+                            seen_texts.insert(key);
+                            inserted_this_file = inserted_this_file.saturating_add(1);
+                            inserted_records = inserted_records.saturating_add(1);
+                        }
+                        Err(e) => tracing::warn!(
+                            "ingestion failed to insert memory from {}: {e}",
+                            file_path.display()
+                        ),
+                    }
+                }
+
+                if inserted_this_file == 0 {
+                    skipped_files = skipped_files.saturating_add(1);
+                }
+
+                with_ingestion_state(|state| {
+                    state.processed_files = index + 1;
+                    state.inserted_records = inserted_records;
+                    state.skipped_files = skipped_files;
+                });
+            }
+
+            with_ingestion_state(|state| {
+                state.running = false;
+                state.status = format!(
+                    "Ingestion complete: {} records added across {} files ({} skipped).",
+                    inserted_records, total_files, skipped_files
+                );
+                state.error = None;
+            });
+        });
+    });
+
+    Ok(())
 }
 
 #[cfg(feature = "gui")]
@@ -4051,6 +4735,21 @@ fn app() -> Element {
         })
     };
 
+    let open_ingestion_window = {
+        let desktop = desktop.clone();
+        std::rc::Rc::new(move || {
+            let dom = VirtualDom::new(ingestion_window);
+            let cfg = Config::new().with_window(
+                WindowBuilder::new()
+                    .with_title("Fae Ingestion")
+                    .with_inner_size(LogicalSize::new(820.0, 860.0))
+                    .with_min_inner_size(LogicalSize::new(620.0, 680.0))
+                    .with_resizable(true),
+            );
+            let _handle = desktop.new_window(dom, cfg);
+        })
+    };
+
     let open_guide_window = {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
@@ -4071,6 +4770,7 @@ fn app() -> Element {
         let open_soul_window = open_soul_window.clone();
         let open_skills_window = open_skills_window.clone();
         let open_memories_window = open_memories_window.clone();
+        let open_ingestion_window = open_ingestion_window.clone();
         let open_guide_window = open_guide_window.clone();
         use_muda_event_handler(move |event| {
             if event.id() == FAE_MENU_OPEN_SETTINGS {
@@ -4081,6 +4781,8 @@ fn app() -> Element {
                 open_skills_window();
             } else if event.id() == FAE_MENU_OPEN_MEMORIES {
                 open_memories_window();
+            } else if event.id() == FAE_MENU_OPEN_INGESTION {
+                open_ingestion_window();
             } else if event.id() == FAE_MENU_OPEN_GUIDE {
                 open_guide_window();
             } else if event.id() == FAE_MENU_CHECK_UPDATES {
@@ -5807,6 +6509,199 @@ fn skills_window() -> Element {
 }
 
 #[cfg(feature = "gui")]
+fn ingestion_window() -> Element {
+    let desktop = use_window();
+
+    let mut target_path = use_signal(String::new);
+    let mut action_status = use_signal(String::new);
+    let mut snapshot = use_signal(ingestion_state_snapshot);
+
+    {
+        let mut snapshot = snapshot;
+        use_future(move || async move {
+            loop {
+                snapshot.set(ingestion_state_snapshot());
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+        });
+    }
+
+    let progress = snapshot.read().clone();
+    let progress_fraction = if progress.total_files == 0 {
+        0.0
+    } else {
+        (progress.processed_files as f64 / progress.total_files as f64).clamp(0.0, 1.0)
+    };
+    let progress_width = format!("{:.0}%", progress_fraction * 100.0);
+    let progress_detail = if progress.total_files > 0 {
+        format!(
+            "Processed {} / {} files · {} memories added · {} skipped",
+            progress.processed_files,
+            progress.total_files,
+            progress.inserted_records,
+            progress.skipped_files
+        )
+    } else if progress.running {
+        "Preparing ingestion scan...".to_owned()
+    } else {
+        "No ingestion running.".to_owned()
+    };
+    let active_target = if !progress.target.trim().is_empty() {
+        progress.target.clone()
+    } else if !target_path.read().trim().is_empty() {
+        target_path.read().to_string()
+    } else {
+        "(not selected)".to_owned()
+    };
+
+    rsx! {
+        style { {GLOBAL_CSS} }
+        div { class: "container",
+            div { class: "topbar",
+                button { class: "topbar-btn", onclick: move |_| desktop.close(), "Close" }
+                p { class: "topbar-title", "Ingestion" }
+                button {
+                    class: "topbar-btn",
+                    onclick: move |_| snapshot.set(ingestion_state_snapshot()),
+                    "Refresh"
+                }
+            }
+
+            div { class: "settings", style: "max-width: 820px; width: 100%;",
+                p { class: "note",
+                    "Ingestion always uses Fae's local brain for privacy. It runs in the background and does not block other actions."
+                }
+                p { class: "settings-sub", "Selected target: {active_target}" }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Target" }
+                    div { class: "settings-section-body",
+                        div { class: "settings-row",
+                            label { class: "settings-label", "Path" }
+                            input {
+                                class: "settings-select",
+                                r#type: "text",
+                                placeholder: "/path/to/file-or-folder",
+                                value: "{target_path.read()}",
+                                oninput: move |evt| target_path.set(evt.value()),
+                            }
+                        }
+                        div { class: "details-actions",
+                            button {
+                                class: "settings-save",
+                                disabled: progress.running,
+                                onclick: move |_| {
+                                    action_status.set("Opening file picker...".to_owned());
+                                    spawn(async move {
+                                        let picked = tokio::task::spawn_blocking(|| {
+                                            rfd::FileDialog::new().pick_file()
+                                        })
+                                        .await;
+                                        match picked {
+                                            Ok(Some(path)) => {
+                                                target_path.set(path.display().to_string());
+                                                action_status.set("Selected file target.".to_owned());
+                                            }
+                                            Ok(None) => action_status.set("Cancelled.".to_owned()),
+                                            Err(e) => action_status.set(format!("file picker failed: {e}")),
+                                        }
+                                    });
+                                },
+                                "Choose File..."
+                            }
+                            button {
+                                class: "settings-save",
+                                disabled: progress.running,
+                                onclick: move |_| {
+                                    action_status.set("Opening folder picker...".to_owned());
+                                    spawn(async move {
+                                        let picked = tokio::task::spawn_blocking(|| {
+                                            rfd::FileDialog::new().pick_folder()
+                                        })
+                                        .await;
+                                        match picked {
+                                            Ok(Some(path)) => {
+                                                target_path.set(path.display().to_string());
+                                                action_status.set("Selected folder target.".to_owned());
+                                            }
+                                            Ok(None) => action_status.set("Cancelled.".to_owned()),
+                                            Err(e) => action_status.set(format!("folder picker failed: {e}")),
+                                        }
+                                    });
+                                },
+                                "Choose Folder..."
+                            }
+                            button {
+                                class: "settings-save",
+                                disabled: progress.running,
+                                onclick: move |_| {
+                                    let path = target_path.read().trim().to_owned();
+                                    if path.is_empty() {
+                                        action_status.set("Select a file or folder first.".to_owned());
+                                        return;
+                                    }
+                                    action_status.set("Starting ingestion...".to_owned());
+                                    match start_ingestion_job(PathBuf::from(&path)) {
+                                        Ok(()) => {
+                                            snapshot.set(ingestion_state_snapshot());
+                                            action_status.set(
+                                                "Ingestion started in background using local brain.".to_owned(),
+                                            );
+                                        }
+                                        Err(e) => action_status.set(e),
+                                    }
+                                },
+                                if progress.running { "Ingestion Running..." } else { "Start Ingestion" }
+                            }
+                            button {
+                                class: "settings-save",
+                                onclick: {
+                                    let target = active_target.clone();
+                                    move |_| {
+                                        if target == "(not selected)" {
+                                            action_status.set("No target selected yet.".to_owned());
+                                            return;
+                                        }
+                                        match open_external_target(&target) {
+                                            Ok(()) => action_status.set("Opened target in Finder.".to_owned()),
+                                            Err(e) => action_status.set(format!("could not open target: {e}")),
+                                        }
+                                    }
+                                },
+                                "Reveal Target"
+                            }
+                        }
+                    }
+                }
+
+                details { class: "settings-section", open: true,
+                    summary { class: "settings-section-summary", "Progress" }
+                    div { class: "settings-section-body",
+                        p { class: "settings-sub", "{progress.status}" }
+                        div { class: "progress-container",
+                            div { class: "progress-bar",
+                                div {
+                                    class: "progress-fill",
+                                    style: "width: {progress_width};",
+                                }
+                            }
+                            p { class: "progress-text", "{progress_detail}" }
+                        }
+                        if let Some(error) = progress.error.clone() {
+                            p { class: "warning", "{error}" }
+                        }
+                    }
+                }
+
+                if !action_status.read().trim().is_empty() {
+                    p { class: "settings-status", "{action_status.read()}" }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
 fn memories_window() -> Element {
     let desktop = use_window();
     let memory_root = read_config_or_default().memory.root_dir;
@@ -6165,6 +7060,8 @@ fn preferences_window() -> Element {
     let update_check_status = use_signal(String::new);
     let mut settings_mode = use_signal(|| SettingsMode::Basic);
     let mut diagnostics_status = use_signal(String::new);
+    let mut reset_status = use_signal(String::new);
+    let mut reset_in_progress = use_signal(|| false);
 
     use_hook(move || {
         let mut config_state = config_state;
@@ -6556,6 +7453,54 @@ fn preferences_window() -> Element {
                                     "Gather Logs"
                                 }
                                 p { class: "settings-value", "{diagnostics_status.read()}" }
+                            }
+                        }
+                    }
+
+                    details { class: "settings-section",
+                        summary { class: "settings-section-summary", "Reset Session" }
+                        div { class: "settings-section-body",
+                            p { class: "note",
+                                "Archive current memories/settings, then reset to defaults so next launch starts onboarding from a clean state."
+                            }
+                            p { class: "settings-sub",
+                                "Archive location: {fae::personality::fae_home_dir().join(\"archives\").display()}"
+                            }
+                            div { class: "settings-row",
+                                button {
+                                    class: "settings-save",
+                                    disabled: *reset_in_progress.read(),
+                                    onclick: move |_| {
+                                        if *reset_in_progress.read() {
+                                            return;
+                                        }
+                                        reset_in_progress.set(true);
+                                        reset_status.set("Archiving memories/settings and resetting...".to_owned());
+                                        let cfg = config_state.read().clone();
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(move || {
+                                                archive_and_reset_user_state(cfg)
+                                            })
+                                            .await;
+                                            match result {
+                                                Ok(Ok(path)) => {
+                                                    let refreshed = read_config_or_default();
+                                                    config_state.set(refreshed);
+                                                    let _ = ui_bus().send(UiBusEvent::ConfigUpdated);
+                                                    reset_status.set(format!(
+                                                        "Reset complete. Archive saved at {}. Restart Fae to begin fresh onboarding.",
+                                                        path.display()
+                                                    ));
+                                                }
+                                                Ok(Err(e)) => reset_status.set(format!("Reset failed: {e}")),
+                                                Err(e) => reset_status.set(format!("Reset failed: {e}")),
+                                            }
+                                            reset_in_progress.set(false);
+                                        });
+                                    },
+                                    if *reset_in_progress.read() { "Resetting..." } else { "Archive + Reset Session" }
+                                }
+                                p { class: "settings-value", "{reset_status.read()}" }
                             }
                         }
                     }
