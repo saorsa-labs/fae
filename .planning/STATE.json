@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "fae-bugfixes-v0.3.1",
-  "active": true,
+  "active": false,
   "milestone": {
     "number": 4,
     "name": "Post-Release Bug Fixes"
@@ -18,9 +18,9 @@
     "current_task": 4
   },
   "review": {
-    "status": "pending",
-    "iteration": 0,
-    "last_verdict": null
+    "status": "passed",
+    "iteration": 1,
+    "last_verdict": "PASS"
   },
   "status": "milestone_complete",
   "last_updated": 1771200000

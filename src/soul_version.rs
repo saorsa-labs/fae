@@ -5,7 +5,7 @@
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Metadata for a single SOUL.md version backup.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -20,35 +20,17 @@ pub struct SoulVersion {
     pub path: PathBuf,
 }
 
-#[cfg(test)]
-use std::sync::Mutex;
-
-#[cfg(test)]
-static TEST_VERSIONS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-#[cfg(test)]
-pub fn set_test_versions_dir(dir: Option<PathBuf>) {
-    *TEST_VERSIONS_DIR.lock().expect("lock") = dir;
-}
-
-/// Returns the directory where SOUL.md version backups are stored.
-fn versions_dir() -> PathBuf {
-    #[cfg(test)]
-    {
-        if let Some(dir) = TEST_VERSIONS_DIR.lock().expect("lock").as_ref() {
-            return dir.clone();
-        }
-    }
+/// Returns the default directory where SOUL.md version backups are stored.
+fn default_versions_dir() -> PathBuf {
     crate::fae_dirs::data_dir().join("soul_versions")
 }
 
-/// Ensures the versions directory exists.
-fn ensure_versions_dir() -> Result<PathBuf> {
-    let dir = versions_dir();
+/// Ensures the given directory exists, creating it if needed.
+fn ensure_dir(dir: &Path) -> Result<PathBuf> {
     if !dir.exists() {
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(dir)?;
     }
-    Ok(dir)
+    Ok(dir.to_path_buf())
 }
 
 /// Generate a version ID from current timestamp.
@@ -56,21 +38,145 @@ fn generate_version_id() -> String {
     chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f").to_string()
 }
 
-/// Get the file path for a specific version ID.
-fn version_path(version_id: &str) -> PathBuf {
-    versions_dir().join(format!("{version_id}.md"))
+/// Get the file path for a specific version ID within a directory.
+fn version_path_in(version_id: &str, dir: &Path) -> PathBuf {
+    dir.join(format!("{version_id}.md"))
 }
 
-/// Get the metadata file path for a specific version ID.
-#[allow(dead_code)] // Will be used in Task 4 if needed
-fn version_metadata_path(version_id: &str) -> PathBuf {
-    versions_dir().join(format!("{version_id}.json"))
+/// Get the metadata file path for a specific version ID within a directory.
+fn version_metadata_path_in(version_id: &str, dir: &Path) -> PathBuf {
+    dir.join(format!("{version_id}.json"))
 }
 
 /// Calculate BLAKE3 hash of content.
 fn calculate_hash(content: &str) -> String {
     blake3::hash(content.as_bytes()).to_hex().to_string()
 }
+
+/// Lists all SOUL.md versions in the given directory (newest first).
+fn list_versions_in(dir: &Path) -> Result<Vec<SoulVersion>> {
+    let dir = ensure_dir(dir)?;
+
+    let mut versions = Vec::new();
+
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        // Only process .json metadata files
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+
+        // Read and parse metadata
+        let metadata_content = std::fs::read_to_string(&path)?;
+        match serde_json::from_str::<SoulVersion>(&metadata_content) {
+            Ok(version) => versions.push(version),
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to parse version metadata {:?}: {}",
+                    path, e
+                );
+                continue;
+            }
+        }
+    }
+
+    // Sort by timestamp, newest first
+    versions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    Ok(versions)
+}
+
+/// Create a backup of SOUL.md content in the given directory.
+///
+/// Returns None if the content is identical to any existing backup (by hash).
+fn create_backup_in(soul_content: &str, dir: &Path) -> Result<Option<SoulVersion>> {
+    let content_hash = calculate_hash(soul_content);
+
+    // Check if any existing version already has this content hash
+    let existing_versions = list_versions_in(dir)?;
+    if existing_versions
+        .iter()
+        .any(|v| v.content_hash == content_hash)
+    {
+        // Content already backed up, skip duplicate
+        return Ok(None);
+    }
+
+    // Create new backup
+    let version_id = generate_version_id();
+    let timestamp = chrono::Utc::now();
+
+    let dir = ensure_dir(dir)?;
+    let backup_path = dir.join(format!("{}.md", version_id));
+    let metadata_path = dir.join(format!("{}.json", version_id));
+
+    // Write content
+    std::fs::write(&backup_path, soul_content)?;
+
+    // Write metadata
+    let version = SoulVersion {
+        id: version_id,
+        timestamp,
+        content_hash,
+        path: backup_path,
+    };
+
+    let metadata_json = serde_json::to_string_pretty(&version)
+        .map_err(|e| crate::error::SpeechError::Config(format!("JSON serialization: {}", e)))?;
+    std::fs::write(metadata_path, metadata_json)?;
+
+    Ok(Some(version))
+}
+
+/// Load content from a specific version by ID in the given directory.
+fn load_version_in(version_id: &str, dir: &Path) -> Result<String> {
+    let path = version_path_in(version_id, dir);
+
+    if !path.exists() {
+        return Err(crate::error::SpeechError::Config(format!(
+            "Version {} not found",
+            version_id
+        )));
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    Ok(content)
+}
+
+/// Cleanup old versions beyond retention limit in the given directory.
+///
+/// Keeps the most recent `keep_count` versions and deletes the rest.
+fn cleanup_old_versions_in(keep_count: usize, dir: &Path) -> Result<usize> {
+    let versions = list_versions_in(dir)?;
+
+    if versions.len() <= keep_count {
+        return Ok(0);
+    }
+
+    let to_delete = &versions[keep_count..];
+    let mut deleted = 0;
+
+    for version in to_delete {
+        // Delete content file
+        if version.path.exists() {
+            std::fs::remove_file(&version.path)?;
+        }
+
+        // Delete metadata file
+        let metadata_path = version_metadata_path_in(&version.id, dir);
+        if metadata_path.exists() {
+            std::fs::remove_file(&metadata_path)?;
+        }
+
+        deleted += 1;
+    }
+
+    Ok(deleted)
+}
+
+// ── Public API (delegates to `_in` variants with default directory) ──
 
 /// Convenience wrapper for backup-before-save flow.
 ///
@@ -93,42 +199,7 @@ pub fn backup_before_save(soul_content: &str) -> Result<String> {
 /// Returns None if the content is identical to any existing backup (by hash).
 /// Otherwise creates a new timestamped backup and returns the version info.
 pub fn create_backup(soul_content: &str) -> Result<Option<SoulVersion>> {
-    let content_hash = calculate_hash(soul_content);
-
-    // Check if any existing version already has this content hash
-    let existing_versions = list_versions()?;
-    if existing_versions
-        .iter()
-        .any(|v| v.content_hash == content_hash)
-    {
-        // Content already backed up, skip duplicate
-        return Ok(None);
-    }
-
-    // Create new backup
-    let version_id = generate_version_id();
-    let timestamp = chrono::Utc::now();
-
-    let dir = ensure_versions_dir()?;
-    let backup_path = dir.join(format!("{}.md", version_id));
-    let metadata_path = dir.join(format!("{}.json", version_id));
-
-    // Write content
-    std::fs::write(&backup_path, soul_content)?;
-
-    // Write metadata
-    let version = SoulVersion {
-        id: version_id,
-        timestamp,
-        content_hash,
-        path: backup_path,
-    };
-
-    let metadata_json = serde_json::to_string_pretty(&version)
-        .map_err(|e| crate::error::SpeechError::Config(format!("JSON serialization: {}", e)))?;
-    std::fs::write(metadata_path, metadata_json)?;
-
-    Ok(Some(version))
+    create_backup_in(soul_content, &default_versions_dir())
 }
 
 /// A single line in a diff output.
@@ -182,31 +253,7 @@ pub fn calculate_diff(old: &str, new: &str) -> Vec<DiffLine> {
 /// Keeps the most recent `keep_count` versions and deletes the rest.
 /// Returns the number of versions deleted.
 pub fn cleanup_old_versions(keep_count: usize) -> Result<usize> {
-    let versions = list_versions()?;
-
-    if versions.len() <= keep_count {
-        return Ok(0);
-    }
-
-    let to_delete = &versions[keep_count..];
-    let mut deleted = 0;
-
-    for version in to_delete {
-        // Delete content file
-        if version.path.exists() {
-            std::fs::remove_file(&version.path)?;
-        }
-
-        // Delete metadata file
-        let metadata_path = version_metadata_path(&version.id);
-        if metadata_path.exists() {
-            std::fs::remove_file(&metadata_path)?;
-        }
-
-        deleted += 1;
-    }
-
-    Ok(deleted)
+    cleanup_old_versions_in(keep_count, &default_versions_dir())
 }
 
 /// Format version metadata for display in audit trail.
@@ -239,52 +286,12 @@ pub fn restore_version(version_id: &str) -> Result<()> {
 
 /// Load content from a specific version by ID.
 pub fn load_version(version_id: &str) -> Result<String> {
-    let path = version_path(version_id);
-
-    if !path.exists() {
-        return Err(crate::error::SpeechError::Config(format!(
-            "Version {} not found",
-            version_id
-        )));
-    }
-
-    let content = std::fs::read_to_string(&path)?;
-    Ok(content)
+    load_version_in(version_id, &default_versions_dir())
 }
 
 /// Lists all SOUL.md versions in chronological order (newest first).
 pub fn list_versions() -> Result<Vec<SoulVersion>> {
-    let dir = ensure_versions_dir()?;
-
-    let mut versions = Vec::new();
-
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Only process .json metadata files
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-
-        // Read and parse metadata
-        let metadata_content = std::fs::read_to_string(&path)?;
-        match serde_json::from_str::<SoulVersion>(&metadata_content) {
-            Ok(version) => versions.push(version),
-            Err(e) => {
-                eprintln!(
-                    "Warning: failed to parse version metadata {:?}: {}",
-                    path, e
-                );
-                continue;
-            }
-        }
-    }
-
-    // Sort by timestamp, newest first
-    versions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-    Ok(versions)
+    list_versions_in(&default_versions_dir())
 }
 
 #[cfg(test)]
@@ -292,39 +299,37 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use std::path::Path;
     use tempfile::TempDir;
 
-    /// Helper to create a test versions directory and set it as the test override.
-    fn setup_test_dir() -> (TempDir, PathBuf) {
+    /// Helper to create an isolated test versions directory.
+    /// Returns the TempDir (must be held alive) and the versions path.
+    fn make_test_dir() -> (TempDir, PathBuf) {
         let temp = TempDir::new().expect("create tempdir");
         let versions_dir = temp.path().join("soul_versions");
         std::fs::create_dir_all(&versions_dir).expect("create versions dir");
-        set_test_versions_dir(Some(versions_dir.clone()));
         (temp, versions_dir)
-    }
-
-    /// Helper to clean up test directory override.
-    fn cleanup_test_dir() {
-        set_test_versions_dir(None);
     }
 
     #[test]
     fn test_version_path_format() {
+        let dir = Path::new("/tmp/test_versions");
         let id = "20260215_221500_123";
-        let path = version_path(id);
-        assert!(
-            path.to_string_lossy()
-                .ends_with("soul_versions/20260215_221500_123.md")
+        let path = version_path_in(id, dir);
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/test_versions/20260215_221500_123.md")
         );
     }
 
     #[test]
     fn test_version_metadata_path_format() {
+        let dir = Path::new("/tmp/test_versions");
         let id = "20260215_221500_123";
-        let path = version_metadata_path(id);
-        assert!(
-            path.to_string_lossy()
-                .ends_with("soul_versions/20260215_221500_123.json")
+        let path = version_metadata_path_in(id, dir);
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/test_versions/20260215_221500_123.json")
         );
     }
 
@@ -347,28 +352,16 @@ mod tests {
 
     #[test]
     fn test_list_versions_empty() {
-        // This test relies on a real temp directory
-        // In production, we'd use dependency injection to mock the versions_dir
-        // For now, we'll just verify it doesn't crash on empty dir
+        let (_temp, dir) = make_test_dir();
 
-        let (_temp, _versions_dir) = setup_test_dir();
+        let result = list_versions_in(&dir);
+        assert!(result.is_ok());
 
-        // Note: This test won't work properly without mocking versions_dir()
-        // Since list_versions() uses the real fae_dirs::data_dir()
-        // We'll just verify the function signature compiles
-        let result = list_versions();
-
-        // In real testing environment, this should be Ok with empty vec
-        // But since we're using real dirs, we just check it's callable
-        match result {
-            Ok(_versions) => {
-                // May or may not be empty depending on actual data dir
-                // Just verify it returned successfully
-            }
-            Err(_) => {
-                // Might fail if data dir doesn't exist, which is fine for this test
-            }
-        }
+        let versions = result.expect("versions");
+        assert!(
+            versions.is_empty(),
+            "Fresh directory should have no versions"
+        );
     }
 
     #[test]
@@ -385,12 +378,13 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_versions_dir_creates() {
-        // This test verifies ensure_versions_dir works in real environment
-        let result = ensure_versions_dir();
-        assert!(result.is_ok());
+    fn test_ensure_dir_creates() {
+        let temp = TempDir::new().expect("create tempdir");
+        let dir = temp.path().join("new_subdir");
+        assert!(!dir.exists());
 
-        let dir = result.expect("get dir");
+        let result = ensure_dir(&dir);
+        assert!(result.is_ok());
         assert!(dir.exists());
     }
 
@@ -416,10 +410,10 @@ mod tests {
 
     #[test]
     fn test_create_backup_success() {
-        let (_temp, _dir) = setup_test_dir();
+        let (_temp, dir) = make_test_dir();
         let content = format!("# Test SOUL.md\nTest backup at {}", chrono::Utc::now());
 
-        let result = create_backup(&content);
+        let result = create_backup_in(&content, &dir);
         assert!(result.is_ok());
 
         let version_opt = result.expect("create backup");
@@ -432,56 +426,50 @@ mod tests {
         // Verify content was written correctly
         let written_content = std::fs::read_to_string(&version.path).expect("read backup");
         assert_eq!(written_content, content);
-
-        cleanup_test_dir();
     }
 
     #[test]
     fn test_create_backup_duplicate_content() {
-        let (_temp, _dir) = setup_test_dir();
+        let (_temp, dir) = make_test_dir();
         let content = format!("# Duplicate test {}", chrono::Utc::now());
 
-        let result1 = create_backup(&content);
+        let result1 = create_backup_in(&content, &dir);
         assert!(result1.is_ok());
         let version1_opt = result1.expect("first backup");
         assert!(version1_opt.is_some());
 
         // Immediate second backup with same content should return None
-        let result2 = create_backup(&content);
+        let result2 = create_backup_in(&content, &dir);
         assert!(result2.is_ok());
         let version2_opt = result2.expect("second backup");
         assert!(
             version2_opt.is_none(),
             "duplicate content should skip backup"
         );
-
-        cleanup_test_dir();
     }
 
     #[test]
     fn test_create_backup_different_content() {
-        let (_temp, _dir) = setup_test_dir();
+        let (_temp, dir) = make_test_dir();
         let content1 = format!("# First backup {}", chrono::Utc::now());
         let content2 = format!("# Second backup {}", chrono::Utc::now());
 
-        let result1 = create_backup(&content1);
+        let result1 = create_backup_in(&content1, &dir);
         assert!(result1.is_ok());
         assert!(result1.expect("first").is_some());
 
         // Give it a tiny delay to ensure different timestamp
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let result2 = create_backup(&content2);
+        let result2 = create_backup_in(&content2, &dir);
         assert!(result2.is_ok());
         let version2 = result2.expect("second");
         assert!(version2.is_some(), "different content should create backup");
-
-        cleanup_test_dir();
     }
 
     #[test]
     fn test_backup_before_save_flow() {
-        let (_temp, _dir) = setup_test_dir();
+        // backup_before_save uses the default dir; just verify it doesn't panic.
         let content = format!("# GUI save test {}", chrono::Utc::now());
 
         let result = backup_before_save(&content);
@@ -493,8 +481,6 @@ mod tests {
             "Expected backup message, got: {}",
             msg
         );
-
-        cleanup_test_dir();
     }
 
     #[test]
@@ -510,10 +496,10 @@ mod tests {
 
     #[test]
     fn test_load_version_success() {
-        let (_temp, _dir) = setup_test_dir();
+        let (_temp, dir) = make_test_dir();
         let content = format!("# Load test {}", chrono::Utc::now());
 
-        let backup_result = create_backup(&content);
+        let backup_result = create_backup_in(&content, &dir);
         assert!(backup_result.is_ok());
 
         let version_opt = backup_result.expect("backup");
@@ -522,18 +508,17 @@ mod tests {
         let version = version_opt.expect("version");
 
         // Load it back
-        let load_result = load_version(&version.id);
+        let load_result = load_version_in(&version.id, &dir);
         assert!(load_result.is_ok());
 
         let loaded_content = load_result.expect("loaded content");
         assert_eq!(loaded_content, content);
-
-        cleanup_test_dir();
     }
 
     #[test]
     fn test_load_version_not_found() {
-        let result = load_version("nonexistent_version_id");
+        let (_temp, dir) = make_test_dir();
+        let result = load_version_in("nonexistent_version_id", &dir);
         assert!(result.is_err());
 
         let err = result.expect_err("should error");
@@ -547,17 +532,17 @@ mod tests {
 
     #[test]
     fn test_list_versions_with_metadata() {
-        let (_temp, _dir) = setup_test_dir();
+        let (_temp, dir) = make_test_dir();
         let content1 = format!("# Version 1 {}", chrono::Utc::now());
-        let _ = create_backup(&content1);
+        let _ = create_backup_in(&content1, &dir);
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let content2 = format!("# Version 2 {}", chrono::Utc::now());
-        let _ = create_backup(&content2);
+        let _ = create_backup_in(&content2, &dir);
 
         // List versions
-        let versions_result = list_versions();
+        let versions_result = list_versions_in(&dir);
         assert!(versions_result.is_ok());
 
         let versions = versions_result.expect("versions");
@@ -579,8 +564,6 @@ mod tests {
             assert!(!version.content_hash.is_empty());
             assert!(version.path.exists());
         }
-
-        cleanup_test_dir();
     }
 
     #[test]
@@ -636,9 +619,10 @@ mod tests {
     #[test]
     #[ignore] // Skipped: requires mocking personality::soul_path() and load_soul()
     fn test_restore_version_success() {
+        let (_temp, dir) = make_test_dir();
         // Create a backup
         let original_content = format!("# Original content {}", chrono::Utc::now());
-        let backup_result = create_backup(&original_content);
+        let backup_result = create_backup_in(&original_content, &dir);
         assert!(backup_result.is_ok());
         let version_opt = backup_result.expect("backup");
         assert!(version_opt.is_some());
@@ -647,7 +631,7 @@ mod tests {
         // Simulate editing by creating another version
         std::thread::sleep(std::time::Duration::from_millis(10));
         let modified_content = format!("# Modified content {}", chrono::Utc::now());
-        let _ = create_backup(&modified_content);
+        let _ = create_backup_in(&modified_content, &dir);
 
         // Restore the original version
         let restore_result = restore_version(&version.id);
@@ -661,9 +645,10 @@ mod tests {
     #[test]
     #[ignore] // Skipped: requires mocking personality::soul_path() and load_soul()
     fn test_restore_creates_backup() {
+        let (_temp, dir) = make_test_dir();
         // Create initial version
         let content1 = format!("# Content 1 {}", chrono::Utc::now());
-        let backup1 = create_backup(&content1);
+        let backup1 = create_backup_in(&content1, &dir);
         assert!(backup1.is_ok());
         let version1 = backup1.expect("backup1").expect("version1");
 
@@ -671,12 +656,9 @@ mod tests {
 
         // Create second version
         let content2 = format!("# Content 2 {}", chrono::Utc::now());
-        let _ = create_backup(&content2);
+        let _ = create_backup_in(&content2, &dir);
 
-        // Restore first version — this calls create_backup(load_soul()) internally.
-        // The backup may be deduplicated if the real SOUL.md content already has a
-        // matching hash. So we only verify the restore itself succeeds and writes
-        // the correct content to soul_path().
+        // Restore first version
         let restore_result = restore_version(&version1.id);
         assert!(
             restore_result.is_ok(),
@@ -697,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_old_versions() {
-        let (_temp, _dir) = setup_test_dir();
+        let (_temp, dir) = make_test_dir();
 
         // Create 5 unique versions
         for i in 0..5 {
@@ -707,26 +689,24 @@ mod tests {
                 chrono::Utc::now(),
                 rand::random::<u64>()
             );
-            let _ = create_backup(&content);
+            let _ = create_backup_in(&content, &dir);
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
 
-        let count_after_create = list_versions().expect("after create").len();
+        let count_after_create = list_versions_in(&dir).expect("after create").len();
         assert_eq!(count_after_create, 5, "Should have created 5 versions");
 
         // Cleanup to keep only 3
-        let deleted = cleanup_old_versions(3).expect("cleanup");
+        let deleted = cleanup_old_versions_in(3, &dir).expect("cleanup");
 
-        let count_final = list_versions().expect("final").len();
+        let count_final = list_versions_in(&dir).expect("final").len();
         assert_eq!(deleted, 2, "Should have deleted 2 versions");
         assert_eq!(count_final, 3, "Should have 3 versions left");
-
-        cleanup_test_dir();
     }
 
     #[test]
     fn test_cleanup_preserves_recent() {
-        let (_temp, _dir) = setup_test_dir();
+        let (_temp, dir) = make_test_dir();
         let mut version_ids = Vec::new();
         for i in 0..3 {
             let content = format!(
@@ -735,7 +715,7 @@ mod tests {
                 chrono::Utc::now(),
                 rand::random::<u64>()
             );
-            let backup = create_backup(&content).expect("backup");
+            let backup = create_backup_in(&content, &dir).expect("backup");
             if let Some(version) = backup {
                 version_ids.push(version.id.clone());
             }
@@ -745,10 +725,10 @@ mod tests {
         assert_eq!(version_ids.len(), 3, "Should have created 3 versions");
 
         // Keep only 2 versions
-        let _ = cleanup_old_versions(2);
+        let _ = cleanup_old_versions_in(2, &dir);
 
         // Verify the most recent 2 of our versions still exist
-        let versions = list_versions().expect("list versions");
+        let versions = list_versions_in(&dir).expect("list versions");
         let remaining_ids: Vec<String> = versions.iter().map(|v| v.id.clone()).collect();
 
         assert_eq!(remaining_ids.len(), 2, "Should have 2 versions left");
@@ -760,8 +740,6 @@ mod tests {
             remaining_ids.contains(&version_ids[1]),
             "Second most recent version should be preserved"
         );
-
-        cleanup_test_dir();
     }
 
     #[test]
