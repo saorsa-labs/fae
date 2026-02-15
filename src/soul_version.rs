@@ -164,6 +164,24 @@ pub fn calculate_diff(old: &str, new: &str) -> Vec<DiffLine> {
     result
 }
 
+/// Restore a previous version as the current SOUL.md.
+///
+/// Creates a backup of the current state before restoring.
+pub fn restore_version(version_id: &str) -> Result<()> {
+    // Load the old version content
+    let old_content = load_version(version_id)?;
+
+    // Backup current state before restoring
+    let current_content = crate::personality::load_soul();
+    let _ = create_backup(&current_content)?; // Ignore if duplicate
+
+    // Write the restored content
+    let soul_path = crate::personality::soul_path();
+    std::fs::write(&soul_path, old_content)?;
+
+    Ok(())
+}
+
 /// Load content from a specific version by ID.
 pub fn load_version(version_id: &str) -> Result<String> {
     let path = version_path(version_id);
@@ -545,5 +563,69 @@ mod tests {
 
         assert!(removed > 0, "Expected removed lines");
         assert!(added > 0, "Expected added lines");
+    }
+
+    #[test]
+    fn test_restore_version_success() {
+        // Create a backup
+        let original_content = format!("# Original content {}", chrono::Utc::now());
+        let backup_result = create_backup(&original_content);
+        assert!(backup_result.is_ok());
+        let version_opt = backup_result.expect("backup");
+        assert!(version_opt.is_some());
+        let version = version_opt.expect("version");
+
+        // Simulate editing by creating another version
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let modified_content = format!("# Modified content {}", chrono::Utc::now());
+        let _ = create_backup(&modified_content);
+
+        // Restore the original version
+        let restore_result = restore_version(&version.id);
+        assert!(restore_result.is_ok());
+
+        // Verify restoration worked
+        let restored_content = crate::personality::load_soul();
+        assert_eq!(restored_content, original_content);
+    }
+
+    #[test]
+    fn test_restore_creates_backup() {
+        // Create initial version
+        let content1 = format!("# Content 1 {}", chrono::Utc::now());
+        let backup1 = create_backup(&content1);
+        assert!(backup1.is_ok());
+        let version1 = backup1.expect("backup1").expect("version1");
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Create second version
+        let content2 = format!("# Content 2 {}", chrono::Utc::now());
+        let _ = create_backup(&content2);
+
+        // Count versions before restore
+        let versions_before = list_versions().expect("list before");
+        let count_before = versions_before.len();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Restore first version (should create backup of second version)
+        let _ = restore_version(&version1.id);
+
+        // Count versions after restore
+        let versions_after = list_versions().expect("list after");
+        let count_after = versions_after.len();
+
+        // Should have one more version (backup of content2 before restore)
+        assert!(
+            count_after > count_before,
+            "Expected backup to be created during restore"
+        );
+    }
+
+    #[test]
+    fn test_restore_invalid_version() {
+        let result = restore_version("nonexistent_version");
+        assert!(result.is_err());
     }
 }
