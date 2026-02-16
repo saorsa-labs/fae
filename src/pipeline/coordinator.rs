@@ -1118,6 +1118,13 @@ async fn run_vad_stage(
                                     || state.assistant_generating.load(Ordering::Relaxed);
                                 if was_suppressing && !actively_suppressing {
                                     suppress_until = Some(std::time::Instant::now() + echo_tail);
+                                    // Flush the VAD buffer so audio accumulated
+                                    // during assistant playback is discarded.
+                                    // Without this, the VAD emits the buffered
+                                    // playback as a mega-segment once the echo
+                                    // tail expires.
+                                    vad.reset();
+                                    pending = None;
                                 }
                                 was_suppressing = actively_suppressing;
 
@@ -1191,6 +1198,18 @@ async fn run_vad_stage(
                                     if should_drop {
                                         info!(
                                             "dropping {duration_s:.1}s speech segment (echo suppression)"
+                                        );
+                                        continue;
+                                    }
+
+                                    // Duration guard: human utterances rarely exceed
+                                    // 15 s in a single VAD segment.  Anything longer
+                                    // is almost certainly accumulated playback that
+                                    // slipped past echo suppression.
+                                    const MAX_SEGMENT_SECS: f32 = 15.0;
+                                    if duration_s > MAX_SEGMENT_SECS {
+                                        info!(
+                                            "dropping {duration_s:.1}s speech segment (exceeds {MAX_SEGMENT_SECS}s cap — likely echo)"
                                         );
                                         continue;
                                     }
