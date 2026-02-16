@@ -130,4 +130,22 @@ mod tests {
         let prompt = assemble_prompt("any", "");
         assert!(prompt.contains("You have a canvas window."));
     }
+
+    #[test]
+    fn prompt_includes_companion_presence() {
+        let prompt = assemble_prompt("fae", "");
+        assert!(prompt.contains("Companion presence:"));
+        assert!(prompt.contains("always present and listening"));
+        assert!(prompt.contains("Direct address"));
+        assert!(prompt.contains("err on the side of silence"));
+    }
+
+    #[test]
+    fn soul_includes_presence_principles() {
+        // Use DEFAULT_SOUL (compiled-in) rather than load_soul() which reads
+        // from the user's data directory and may have an older version.
+        assert!(DEFAULT_SOUL.contains("Presence Principles"));
+        assert!(DEFAULT_SOUL.contains("always-present companion"));
+        assert!(DEFAULT_SOUL.contains("Silence is a form of respect"));
+    }
 }

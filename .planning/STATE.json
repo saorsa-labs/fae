@@ -7,9 +7,9 @@
     "name": "Companion Presence Mode"
   },
   "phase": {
-    "number": "1.3",
-    "name": "Personality & Prompts",
-    "plan": "PLAN-phase-1.3.md",
+    "number": "1.4",
+    "name": "Integration Testing",
+    "plan": "PLAN-phase-1.4.md",
     "status": "complete"
   },
   "progress": {
@@ -22,6 +22,6 @@
     "iteration": 0,
     "last_verdict": "PASS"
   },
-  "status": "task_complete",
-  "last_updated": "2026-02-16T15:20:00Z"
+  "status": "milestone_complete",
+  "last_updated": "2026-02-16T15:30:00Z"
 }

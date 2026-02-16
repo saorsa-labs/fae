@@ -4230,6 +4230,111 @@ mod tests {
         assert!(clean.contains(stop_phrase));
     }
 
+    // ── sleep phrase detection (multi-phrase) ──────────────────────
+
+    /// Helper: simulate the gate's sleep-phrase detection pipeline.
+    /// Mirrors the logic in `run_conversation_gate()`.
+    fn matches_sleep_phrase(stt_text: &str, phrases: &[String]) -> bool {
+        let lower_raw = stt_text.to_lowercase();
+        let lower_expanded = expand_contractions(&lower_raw);
+        let clean = strip_punctuation(&lower_expanded);
+        phrases.iter().any(|phrase| clean.contains(phrase.as_str()))
+    }
+
+    #[test]
+    fn sleep_phrases_shut_up_detected() {
+        let phrases: Vec<String> = crate::config::ConversationConfig::default()
+            .effective_sleep_phrases()
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(matches_sleep_phrase("Shut up!", &phrases));
+        assert!(matches_sleep_phrase("shut up", &phrases));
+        assert!(matches_sleep_phrase("Oh just shut up already", &phrases));
+    }
+
+    #[test]
+    fn sleep_phrases_go_to_sleep_detected() {
+        let phrases: Vec<String> = crate::config::ConversationConfig::default()
+            .effective_sleep_phrases()
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(matches_sleep_phrase("Go to sleep", &phrases));
+        assert!(matches_sleep_phrase("go to sleep, Fae", &phrases));
+    }
+
+    #[test]
+    fn sleep_phrases_thatll_do_fae_with_contraction() {
+        let phrases: Vec<String> = crate::config::ConversationConfig::default()
+            .effective_sleep_phrases()
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        // "that'll do fae" is in the default list; STT may produce "that'll" which
+        // expand_contractions converts to "that will" — and "that will do fae" is
+        // also in the default list.
+        assert!(matches_sleep_phrase("That'll do, Fae", &phrases));
+        assert!(matches_sleep_phrase("that will do fae", &phrases));
+    }
+
+    #[test]
+    fn sleep_phrases_quiet_fae_detected() {
+        let phrases: Vec<String> = crate::config::ConversationConfig::default()
+            .effective_sleep_phrases()
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(matches_sleep_phrase("Quiet Fae", &phrases));
+        assert!(matches_sleep_phrase("quiet fae!", &phrases));
+    }
+
+    #[test]
+    fn sleep_phrases_bye_fae_detected() {
+        let phrases: Vec<String> = crate::config::ConversationConfig::default()
+            .effective_sleep_phrases()
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(matches_sleep_phrase("Bye Fae", &phrases));
+        assert!(matches_sleep_phrase("goodbye fae", &phrases));
+    }
+
+    #[test]
+    fn sleep_phrases_unrelated_not_detected() {
+        let phrases: Vec<String> = crate::config::ConversationConfig::default()
+            .effective_sleep_phrases()
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(!matches_sleep_phrase(
+            "What is the weather today?",
+            &phrases
+        ));
+        assert!(!matches_sleep_phrase("Tell me a joke", &phrases));
+        assert!(!matches_sleep_phrase("Hello Fae", &phrases));
+    }
+
+    #[test]
+    fn sleep_phrases_legacy_stop_phrase_included() {
+        let mut config = crate::config::ConversationConfig::default();
+        config.stop_phrase = "hush now fae".to_owned();
+        let phrases: Vec<String> = config
+            .effective_sleep_phrases()
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+        assert!(matches_sleep_phrase("Hush now, Fae!", &phrases));
+    }
+
+    #[test]
+    fn auto_idle_disabled_when_timeout_zero() {
+        // Default config should have idle_timeout_s == 0, meaning the
+        // auto-idle timer branch in the gate is never entered.
+        let config = crate::config::ConversationConfig::default();
+        assert_eq!(config.idle_timeout_s, 0);
+    }
+
     #[test]
     fn show_conversation_request_detected() {
         assert!(is_show_conversation_request("Fae show me the conversation"));
