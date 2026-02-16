@@ -48,6 +48,13 @@ fn main() {
         .with(file_layer)
         .init();
 
+    // Clean up any .old backup left by a previous self-update.
+    // If we reach this point the new binary launched successfully,
+    // so we can safely remove the backup to free disk space.
+    if let Err(e) = fae::update::cleanup_old_backup() {
+        tracing::warn!("failed to clean up old update backup: {e}");
+    }
+
     // Build native menu bar.
     // On macOS, this creates a standard application menu bar (not a system tray/status bar item).
     // The app runs as a foreground application with full window chrome and menu bar integration.
@@ -103,6 +110,8 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     let open_channels_item = MenuItem::with_id(FAE_MENU_OPEN_CHANNELS, "Channels...", true, None);
     let open_ingestion_item =
         MenuItem::with_id(FAE_MENU_OPEN_INGESTION, "Ingestion...", true, None);
+    let export_data_item = MenuItem::with_id(FAE_MENU_EXPORT_DATA, "Export Data...", true, None);
+    let import_data_item = MenuItem::with_id(FAE_MENU_IMPORT_DATA, "Import Data...", true, None);
     let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
     let check_updates_item =
         MenuItem::with_id(FAE_MENU_CHECK_UPDATES, "Check for Updates...", true, None);
@@ -124,6 +133,9 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &open_scheduler_item,
         &open_channels_item,
         &open_ingestion_item,
+        &PredefinedMenuItem::separator(),
+        &export_data_item,
+        &import_data_item,
         &PredefinedMenuItem::separator(),
         &open_guide_item,
         &check_updates_item,
@@ -515,6 +527,29 @@ mod gui {
     pub fn scheduler_requires_restart(
         current: &SchedulerMemoryBinding,
         next: &SchedulerMemoryBinding,
+    ) -> bool {
+        current != next
+    }
+
+    /// Scheduler-relevant conversation settings.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SchedulerConversationBinding {
+        pub llm_signature: String,
+    }
+
+    /// Extract conversation fields that affect scheduled agent runs.
+    pub fn scheduler_conversation_binding(
+        config: &fae::config::SpeechConfig,
+    ) -> SchedulerConversationBinding {
+        let llm_signature = serde_json::to_string(&config.llm)
+            .unwrap_or_else(|e| format!("llm-signature-unavailable:{e}"));
+        SchedulerConversationBinding { llm_signature }
+    }
+
+    /// Whether scheduler should restart after conversation config changes.
+    pub fn scheduler_conversation_requires_restart(
+        current: &SchedulerConversationBinding,
+        next: &SchedulerConversationBinding,
     ) -> bool {
         current != next
     }
@@ -1051,6 +1086,20 @@ mod gui {
         }
 
         #[test]
+        fn scheduler_restart_decision_tracks_llm_config_changes() {
+            let base = fae::config::SpeechConfig::default();
+            let current = scheduler_conversation_binding(&base);
+
+            let same = scheduler_conversation_binding(&base);
+            assert!(!scheduler_conversation_requires_restart(&current, &same));
+
+            let mut changed = base.clone();
+            changed.llm.api_model = "different-model".to_owned();
+            let next = scheduler_conversation_binding(&changed);
+            assert!(scheduler_conversation_requires_restart(&current, &next));
+        }
+
+        #[test]
         fn scheduler_memory_telemetry_is_canvas_only_main_screen_suppressed() {
             let mut bridge = fae::canvas::bridge::CanvasBridge::new("gui-test", 800.0, 600.0);
             let mut main_screen_visible = 0usize;
@@ -1403,6 +1452,10 @@ const FAE_MENU_OPEN_CHANNELS: &str = "fae-menu-channels";
 const FAE_MENU_OPEN_GUIDE: &str = "fae-open-guide";
 #[cfg(feature = "gui")]
 const FAE_MENU_CHECK_UPDATES: &str = "fae-check-updates";
+#[cfg(feature = "gui")]
+const FAE_MENU_EXPORT_DATA: &str = "fae-export-data";
+#[cfg(feature = "gui")]
+const FAE_MENU_IMPORT_DATA: &str = "fae-import-data";
 
 /// A subtitle bubble that auto-expires after a timeout.
 #[cfg(feature = "gui")]
@@ -3884,6 +3937,22 @@ fn run_manual_update_check(
     });
 }
 
+#[cfg(feature = "gui")]
+fn begin_update_dialog_request(mut update_dialog_generation: Signal<u64>) -> u64 {
+    let next_generation = (*update_dialog_generation.read()).saturating_add(1);
+    update_dialog_generation.set(next_generation);
+    next_generation
+}
+
+#[cfg(feature = "gui")]
+fn dismiss_update_dialog(
+    mut update_dialog: Signal<Option<UpdateDialogState>>,
+    update_dialog_generation: Signal<u64>,
+) {
+    let _ = begin_update_dialog_request(update_dialog_generation);
+    update_dialog.set(None);
+}
+
 /// Root application component.
 #[cfg(feature = "gui")]
 fn app() -> Element {
@@ -3968,6 +4037,7 @@ fn app() -> Element {
     let mut update_install_error = use_signal(|| None::<String>);
     let mut update_gate = use_signal(|| None::<UpdateGatePhase>);
     let mut update_dialog = use_signal(|| None::<UpdateDialogState>);
+    let update_dialog_generation = use_signal(|| 0u64);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut show_scheduler_panel = use_signal(|| false);
     let mut show_channels_panel = use_signal(|| false);
@@ -4186,10 +4256,11 @@ fn app() -> Element {
         let mut config_state = config_state;
 
         spawn(async move {
-            let initial_cfg = config_state.read().memory.clone();
-            let mut active_binding = gui::scheduler_memory_binding(&initial_cfg);
+            let initial_cfg = config_state.read().clone();
+            let mut active_memory_binding = gui::scheduler_memory_binding(&initial_cfg.memory);
+            let mut active_conversation_binding = gui::scheduler_conversation_binding(&initial_cfg);
             let (mut scheduler_handle, mut scheduler_rx) =
-                fae::startup::start_scheduler_with_memory(&initial_cfg);
+                fae::startup::start_scheduler_with_config(&initial_cfg);
             let mut cfg_rx = ui_bus().subscribe();
 
             loop {
@@ -4265,11 +4336,13 @@ fn app() -> Element {
                             None => {
                                 tracing::warn!("scheduler result channel closed; restarting");
                                 scheduler_handle.abort();
-                                let cfg = config_state.read().memory.clone();
-                                let launched = fae::startup::start_scheduler_with_memory(&cfg);
+                                let cfg = config_state.read().clone();
+                                let launched = fae::startup::start_scheduler_with_config(&cfg);
                                 scheduler_handle = launched.0;
                                 scheduler_rx = launched.1;
-                                active_binding = gui::scheduler_memory_binding(&cfg);
+                                active_memory_binding = gui::scheduler_memory_binding(&cfg.memory);
+                                active_conversation_binding =
+                                    gui::scheduler_conversation_binding(&cfg);
                             }
                         }
                     }
@@ -4286,20 +4359,39 @@ fn app() -> Element {
                                         config_state.read().clone()
                                     }
                                 };
-                                let next_binding = gui::scheduler_memory_binding(&cfg.memory);
-                                if gui::scheduler_requires_restart(&active_binding, &next_binding) {
+                                let next_memory_binding = gui::scheduler_memory_binding(&cfg.memory);
+                                let next_conversation_binding =
+                                    gui::scheduler_conversation_binding(&cfg);
+                                let memory_changed = gui::scheduler_requires_restart(
+                                    &active_memory_binding,
+                                    &next_memory_binding,
+                                );
+                                let conversation_changed = gui::scheduler_conversation_requires_restart(
+                                    &active_conversation_binding,
+                                    &next_conversation_binding,
+                                );
+
+                                if memory_changed || conversation_changed {
                                     let restart_count = gui::record_scheduler_memory_restart();
-                                    tracing::info!(
-                                        scheduler_memory_restarts_total = restart_count,
-                                        root = %cfg.memory.root_dir.display(),
-                                        retention_days = cfg.memory.retention_days,
-                                        "scheduler memory config changed; restarting"
-                                    );
+                                    if memory_changed {
+                                        tracing::info!(
+                                            scheduler_memory_restarts_total = restart_count,
+                                            root = %cfg.memory.root_dir.display(),
+                                            retention_days = cfg.memory.retention_days,
+                                            "scheduler memory config changed; restarting"
+                                        );
+                                    } else {
+                                        tracing::info!(
+                                            scheduler_memory_restarts_total = restart_count,
+                                            "scheduler conversation config changed; restarting"
+                                        );
+                                    }
                                     scheduler_handle.abort();
-                                    let launched = fae::startup::start_scheduler_with_memory(&cfg.memory);
+                                    let launched = fae::startup::start_scheduler_with_config(&cfg);
                                     scheduler_handle = launched.0;
                                     scheduler_rx = launched.1;
-                                    active_binding = next_binding;
+                                    active_memory_binding = next_memory_binding;
+                                    active_conversation_binding = next_conversation_binding;
                                 }
                                 config_state.set(cfg);
                             }
@@ -5037,7 +5129,82 @@ fn app() -> Element {
                 open_ingestion_window();
             } else if event.id() == FAE_MENU_OPEN_GUIDE {
                 open_guide_window();
+            } else if event.id() == FAE_MENU_EXPORT_DATA {
+                sub_fae.write().set("Exporting data...".to_owned());
+                spawn(async move {
+                    let dest = tokio::task::spawn_blocking(|| {
+                        let ts = fae::diagnostics::chrono_timestamp();
+                        let default_name = format!("fae-backup-{ts}.zip");
+                        rfd::FileDialog::new()
+                            .set_file_name(&default_name)
+                            .add_filter("ZIP archive", &["zip"])
+                            .save_file()
+                    })
+                    .await;
+                    let path = match dest {
+                        Ok(Some(p)) => p,
+                        _ => {
+                            sub_fae.write().set("Export cancelled.".to_owned());
+                            return;
+                        }
+                    };
+                    let dest_clone = path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        fae::diagnostics::export_all_data(&dest_clone)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(_)) => {
+                            let name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("backup.zip");
+                            sub_fae.write().set(format!("Backup saved to {name}"));
+                        }
+                        Ok(Err(e)) => {
+                            sub_fae.write().set(format!("Export failed: {e}"));
+                        }
+                        Err(e) => {
+                            sub_fae.write().set(format!("Export failed: {e}"));
+                        }
+                    }
+                });
+            } else if event.id() == FAE_MENU_IMPORT_DATA {
+                spawn(async move {
+                    let source = tokio::task::spawn_blocking(|| {
+                        rfd::FileDialog::new()
+                            .add_filter("ZIP archive", &["zip"])
+                            .pick_file()
+                    })
+                    .await;
+                    let path = match source {
+                        Ok(Some(p)) => p,
+                        _ => return,
+                    };
+                    sub_fae.write().set("Restoring data...".to_owned());
+                    let src_clone = path.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        fae::diagnostics::import_all_data(&src_clone)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(())) => {
+                            let name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("backup.zip");
+                            sub_fae.write().set(format!("Data restored from {name}"));
+                        }
+                        Ok(Err(e)) => {
+                            sub_fae.write().set(format!("Import failed: {e}"));
+                        }
+                        Err(e) => {
+                            sub_fae.write().set(format!("Import failed: {e}"));
+                        }
+                    }
+                });
             } else if event.id() == FAE_MENU_CHECK_UPDATES {
+                let request_generation = begin_update_dialog_request(update_dialog_generation);
                 update_dialog.set(Some(UpdateDialogState::Checking));
                 let etag = update_state.read().etag_fae.clone();
                 spawn(async move {
@@ -5046,6 +5213,9 @@ fn app() -> Element {
                         checker.check(etag.as_deref())
                     })
                     .await;
+                    if *update_dialog_generation.read() != request_generation {
+                        return;
+                    }
                     match result {
                         Ok(Ok((Some(release), new_etag))) => {
                             update_available.set(Some(release.clone()));
@@ -5419,7 +5589,7 @@ fn app() -> Element {
                 match dialog {
                     Some(UpdateDialogState::Checking) => rsx! {
                         div { class: "modal-overlay",
-                            onclick: move |_| update_dialog.set(None),
+                            onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                             div {
                                 class: "modal update-dialog",
                                 onclick: move |evt| evt.stop_propagation(),
@@ -5432,7 +5602,7 @@ fn app() -> Element {
                         let ver = env!("CARGO_PKG_VERSION");
                         rsx! {
                             div { class: "modal-overlay",
-                                onclick: move |_| update_dialog.set(None),
+                                onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                 div {
                                     class: "modal update-dialog",
                                     onclick: move |evt| evt.stop_propagation(),
@@ -5444,6 +5614,9 @@ fn app() -> Element {
                                         button {
                                             class: "modal-btn update-dialog-btn-secondary",
                                             onclick: move |_| {
+                                                let request_generation = begin_update_dialog_request(
+                                                    update_dialog_generation,
+                                                );
                                                 update_dialog.set(Some(
                                                     UpdateDialogState::LoadingHistory,
                                                 ));
@@ -5454,6 +5627,11 @@ fn app() -> Element {
                                                             checker.fetch_releases(15)
                                                         })
                                                         .await;
+                                                    if *update_dialog_generation.read()
+                                                        != request_generation
+                                                    {
+                                                        return;
+                                                    }
                                                     match result {
                                                         Ok(Ok(releases)) => {
                                                             update_dialog.set(Some(
@@ -5483,7 +5661,7 @@ fn app() -> Element {
                                         }
                                         button {
                                             class: "modal-btn modal-approve",
-                                            onclick: move |_| update_dialog.set(None),
+                                            onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                             "OK"
                                         }
                                     }
@@ -5497,7 +5675,7 @@ fn app() -> Element {
                         let dl_url = release.download_url.clone();
                         rsx! {
                             div { class: "modal-overlay",
-                                onclick: move |_| update_dialog.set(None),
+                                onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                 div {
                                     class: "modal update-dialog",
                                     onclick: move |evt| evt.stop_propagation(),
@@ -5509,6 +5687,9 @@ fn app() -> Element {
                                         button {
                                             class: "modal-btn update-dialog-btn-secondary",
                                             onclick: move |_| {
+                                                let request_generation = begin_update_dialog_request(
+                                                    update_dialog_generation,
+                                                );
                                                 update_dialog.set(Some(
                                                     UpdateDialogState::LoadingHistory,
                                                 ));
@@ -5519,6 +5700,11 @@ fn app() -> Element {
                                                             checker.fetch_releases(15)
                                                         })
                                                         .await;
+                                                    if *update_dialog_generation.read()
+                                                        != request_generation
+                                                    {
+                                                        return;
+                                                    }
                                                     match result {
                                                         Ok(Ok(releases)) => {
                                                             update_dialog.set(Some(
@@ -5548,7 +5734,7 @@ fn app() -> Element {
                                         }
                                         button {
                                             class: "modal-btn update-dialog-btn-secondary",
-                                            onclick: move |_| update_dialog.set(None),
+                                            onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                             "Not Now"
                                         }
                                         button {
@@ -5556,7 +5742,7 @@ fn app() -> Element {
                                             onclick: {
                                                 let dl_url = dl_url.clone();
                                                 move |_| {
-                                                    update_dialog.set(None);
+                                                    dismiss_update_dialog(update_dialog, update_dialog_generation);
                                                     apply_and_relaunch(
                                                         dl_url.clone(),
                                                         update_installing,
@@ -5575,7 +5761,7 @@ fn app() -> Element {
                     },
                     Some(UpdateDialogState::LoadingHistory) => rsx! {
                         div { class: "modal-overlay",
-                            onclick: move |_| update_dialog.set(None),
+                            onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                             div {
                                 class: "modal update-dialog",
                                 onclick: move |evt| evt.stop_propagation(),
@@ -5589,7 +5775,7 @@ fn app() -> Element {
                         let items = releases.clone();
                         rsx! {
                             div { class: "modal-overlay",
-                                onclick: move |_| update_dialog.set(None),
+                                onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                 div {
                                     class: "modal update-dialog update-dialog-wide",
                                     onclick: move |evt| evt.stop_propagation(),
@@ -5634,7 +5820,7 @@ fn app() -> Element {
                                     div { class: "update-dialog-btn-row",
                                         button {
                                             class: "modal-btn modal-approve",
-                                            onclick: move |_| update_dialog.set(None),
+                                            onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                             "Close"
                                         }
                                     }
@@ -5646,7 +5832,7 @@ fn app() -> Element {
                         let msg = message.clone();
                         rsx! {
                             div { class: "modal-overlay",
-                                onclick: move |_| update_dialog.set(None),
+                                onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                 div {
                                     class: "modal update-dialog",
                                     onclick: move |evt| evt.stop_propagation(),
@@ -5655,7 +5841,7 @@ fn app() -> Element {
                                     div { class: "update-dialog-btn-row",
                                         button {
                                             class: "modal-btn modal-approve",
-                                            onclick: move |_| update_dialog.set(None),
+                                            onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
                                             "OK"
                                         }
                                     }
@@ -6750,6 +6936,7 @@ fn soul_window() -> Element {
     let mut soul_text = use_signal(String::new);
     let mut onboarding_text = use_signal(String::new);
     let mut status = use_signal(String::new);
+    let mut sec_soul = use_signal(|| true);
 
     {
         let soul_text = soul_text;
@@ -6782,8 +6969,11 @@ fn soul_window() -> Element {
                     "These files define Fae's behavior scaffolding. Keep them clear and concise."
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "SOUL.md" }
+                details { class: "settings-section", open: *sec_soul.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_soul.read(); sec_soul.set(!v); },
+                        "SOUL.md"
+                    }
                     div { class: "settings-section-body",
                         textarea {
                             class: "settings-textarea",
@@ -6909,6 +7099,8 @@ fn skills_window() -> Element {
     let mut analysis = use_signal(String::new);
     let mut status = use_signal(String::new);
     let inventory = use_signal(Vec::<SkillInventoryEntry>::new);
+    let mut sec_download = use_signal(|| true);
+    let mut sec_editor = use_signal(|| true);
 
     {
         use_hook(move || refresh_skill_inventory_ui(inventory, status));
@@ -6947,8 +7139,11 @@ fn skills_window() -> Element {
                     "Download a skill draft, review it, edit it, and install only when approved."
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Download + Review" }
+                details { class: "settings-section", open: *sec_download.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_download.read(); sec_download.set(!v); },
+                        "Download + Review"
+                    }
                     div { class: "settings-section-body",
                         div { class: "settings-row",
                             label { class: "settings-label", "Skill URL" }
@@ -7010,8 +7205,11 @@ fn skills_window() -> Element {
                     }
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Draft Editor" }
+                details { class: "settings-section", open: *sec_editor.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_editor.read(); sec_editor.set(!v); },
+                        "Draft Editor"
+                    }
                     div { class: "settings-section-body",
                         div { class: "settings-row",
                             label { class: "settings-label", "Skill ID" }
@@ -7110,6 +7308,8 @@ fn ingestion_window() -> Element {
     let mut target_path = use_signal(String::new);
     let mut action_status = use_signal(String::new);
     let mut snapshot = use_signal(ingestion_state_snapshot);
+    let mut sec_target = use_signal(|| true);
+    let mut sec_progress = use_signal(|| true);
 
     {
         let mut snapshot = snapshot;
@@ -7169,8 +7369,11 @@ fn ingestion_window() -> Element {
                 }
                 p { class: "settings-sub", "Selected target: {active_target}" }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Target" }
+                details { class: "settings-section", open: *sec_target.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_target.read(); sec_target.set(!v); },
+                        "Target"
+                    }
                     div { class: "settings-section-body",
                         div { class: "settings-row",
                             label { class: "settings-label", "Path" }
@@ -7272,8 +7475,11 @@ fn ingestion_window() -> Element {
                     }
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Progress" }
+                details { class: "settings-section", open: *sec_progress.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_progress.read(); sec_progress.set(!v); },
+                        "Progress"
+                    }
                     div { class: "settings-section-body",
                         p { class: "settings-sub", "{progress.status}" }
                         div { class: "progress-container",
@@ -7313,6 +7519,8 @@ fn memories_window() -> Element {
     let mut selected_record_id = use_signal(String::new);
     let mut selected_record_text = use_signal(String::new);
     let mut status = use_signal(String::new);
+    let mut sec_profile = use_signal(|| true);
+    let mut sec_records = use_signal(|| true);
 
     {
         let root = memory_root.clone();
@@ -7402,8 +7610,11 @@ fn memories_window() -> Element {
                     "Edit carefully. Record updates are audited and status changes are reversible with future tools."
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Primary User Profile" }
+                details { class: "settings-section", open: *sec_profile.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_profile.read(); sec_profile.set(!v); },
+                        "Primary User Profile"
+                    }
                     div { class: "settings-section-body",
                         div { class: "settings-row",
                             label { class: "settings-label", "Name" }
@@ -7477,8 +7688,11 @@ fn memories_window() -> Element {
                     }
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Durable Memory Records" }
+                details { class: "settings-section", open: *sec_records.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_records.read(); sec_records.set(!v); },
+                        "Durable Memory Records"
+                    }
                     div { class: "settings-section-body",
                         if record_options.is_empty() {
                             p { class: "note", "No durable records found yet." }
@@ -7667,6 +7881,10 @@ fn preferences_window() -> Element {
     let mut diagnostics_status = use_signal(String::new);
     let mut reset_status = use_signal(String::new);
     let mut reset_in_progress = use_signal(|| false);
+    let mut sec_assistant = use_signal(|| true);
+    let mut sec_theme = use_signal(|| true);
+    let mut sec_channels = use_signal(|| false);
+    let mut sec_updates = use_signal(|| true);
 
     use_future(move || async move {
         let mut rx = ui_bus().subscribe();
@@ -7751,8 +7969,11 @@ fn preferences_window() -> Element {
                     }
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Assistant" }
+                details { class: "settings-section", open: *sec_assistant.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_assistant.read(); sec_assistant.set(!v); },
+                        "Assistant"
+                    }
                     div { class: "settings-section-body",
                         p { class: "note", "Core behavior for normal day-to-day usage." }
                         div { class: "settings-row",
@@ -7802,8 +8023,11 @@ fn preferences_window() -> Element {
                     }
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Theme" }
+                details { class: "settings-section", open: *sec_theme.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_theme.read(); sec_theme.set(!v); },
+                        "Theme"
+                    }
                     div { class: "settings-section-body",
                         p { class: "note", "Choose light or dark appearance, or follow system settings." }
                         div { class: "settings-row",
@@ -7859,8 +8083,11 @@ fn preferences_window() -> Element {
                     }
                 }
 
-                details { class: "settings-section", open: *settings_mode.read() == SettingsMode::Advanced,
-                    summary { class: "settings-section-summary", "Channels" }
+                details { class: "settings-section", open: *sec_channels.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_channels.read(); sec_channels.set(!v); },
+                        "Channels"
+                    }
                     div { class: "settings-section-body",
                         p { class: "note", "Enable only the channels you actively use." }
                         div { class: "settings-row",
@@ -8051,8 +8278,11 @@ fn preferences_window() -> Element {
                     }
                 }
 
-                details { class: "settings-section", open: true,
-                    summary { class: "settings-section-summary", "Updates" }
+                details { class: "settings-section", open: *sec_updates.read(),
+                    summary { class: "settings-section-summary",
+                        onclick: move |evt| { evt.prevent_default(); let v = *sec_updates.read(); sec_updates.set(!v); },
+                        "Updates"
+                    }
                     div { class: "settings-section-body",
                         div { class: "settings-row",
                             label { class: "settings-label", "Fae version" }
@@ -9053,7 +9283,7 @@ const STRUCTURAL_CSS: &str = r#"
     }
     .settings-section-summary::-webkit-details-marker { display: none; }
     .settings-section-summary::before {
-        content: "\u25B8";
+        content: "\25B8 ";
         display: inline-block;
         margin-right: 0.45rem;
         transition: transform 0.2s;
@@ -9711,17 +9941,17 @@ const STRUCTURAL_CSS: &str = r#"
 
     .subtitle-fae {
         align-self: flex-start;
-        background: rgba(59, 130, 246, 0.18);
-        border: 1px solid rgba(59, 130, 246, 0.3);
-        color: #93bbfc;
+        background: var(--blue-dim);
+        border: 1px solid var(--blue);
+        color: var(--blue-text);
         border-bottom-left-radius: 0.25rem;
     }
 
     .subtitle-user {
         align-self: flex-end;
-        background: rgba(34, 197, 94, 0.18);
-        border: 1px solid rgba(34, 197, 94, 0.3);
-        color: #86efac;
+        background: var(--green-dim);
+        border: 1px solid var(--green);
+        color: var(--green-text);
         border-bottom-right-radius: 0.25rem;
     }
 

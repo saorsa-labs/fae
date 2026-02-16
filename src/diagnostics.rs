@@ -505,9 +505,9 @@ mod tests {
     fn test_export_all_data() {
         let tmp = tempfile::TempDir::new().unwrap_or_else(|_| unreachable!());
 
-        let data_dir = tmp.path().join("data");
-        let config_dir = tmp.path().join("config");
-        let cache_dir = tmp.path().join("cache");
+        let data_dir = tmp.path().join("fae-data");
+        let config_dir = tmp.path().join("fae-config");
+        let cache_dir = tmp.path().join("fae-cache");
         fs::create_dir_all(&data_dir).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&config_dir).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&cache_dir).unwrap_or_else(|_| unreachable!());
@@ -593,9 +593,9 @@ mod tests {
         assert!(content.contains("Included:"), "should list included items");
 
         // --- Test 2: empty directories (graceful handling) ---
-        let empty_data = tmp.path().join("empty_data");
-        let empty_config = tmp.path().join("empty_config");
-        let empty_cache = tmp.path().join("empty_cache");
+        let empty_data = tmp.path().join("fae-empty-data");
+        let empty_config = tmp.path().join("fae-empty-config");
+        let empty_cache = tmp.path().join("fae-empty-cache");
         fs::create_dir_all(&empty_data).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&empty_config).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&empty_cache).unwrap_or_else(|_| unreachable!());
@@ -621,9 +621,9 @@ mod tests {
         // Uses richer data set to cover all directory types.
 
         // Fresh source directories for roundtrip.
-        let rt_data = tmp.path().join("rt_data");
-        let rt_config = tmp.path().join("rt_config");
-        let rt_cache = tmp.path().join("rt_cache");
+        let rt_data = tmp.path().join("fae-rt-data");
+        let rt_config = tmp.path().join("fae-rt-config");
+        let rt_cache = tmp.path().join("fae-rt-cache");
         fs::create_dir_all(&rt_data).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&rt_config).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&rt_cache).unwrap_or_else(|_| unreachable!());
@@ -707,9 +707,9 @@ mod tests {
         assert!(rt_export.is_ok(), "roundtrip export failed: {rt_export:?}");
 
         // Import into completely fresh directories.
-        let dst_data = tmp.path().join("dst_data");
-        let dst_config = tmp.path().join("dst_config");
-        let dst_cache = tmp.path().join("dst_cache");
+        let dst_data = tmp.path().join("fae-dst-data");
+        let dst_config = tmp.path().join("fae-dst-config");
+        let dst_cache = tmp.path().join("fae-dst-cache");
         fs::create_dir_all(&dst_data).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&dst_config).unwrap_or_else(|_| unreachable!());
         fs::create_dir_all(&dst_cache).unwrap_or_else(|_| unreachable!());
