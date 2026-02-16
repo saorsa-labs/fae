@@ -629,7 +629,26 @@ pub fn start_scheduler() -> (
     tokio::task::JoinHandle<()>,
     tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
 ) {
-    start_scheduler_with_memory(&MemoryConfig::default())
+    let config = load_scheduler_config_or_default();
+    start_scheduler_with_config(&config)
+}
+
+fn load_scheduler_config_or_default() -> SpeechConfig {
+    let path = SpeechConfig::default_config_path();
+    if path.exists() {
+        match SpeechConfig::from_file(&path) {
+            Ok(config) => config,
+            Err(e) => {
+                warn!(
+                    "failed to read scheduler config from {}: {e}; using defaults",
+                    path.display()
+                );
+                SpeechConfig::default()
+            }
+        }
+    } else {
+        SpeechConfig::default()
+    }
 }
 
 /// Start the background scheduler using explicit memory settings.
@@ -638,6 +657,21 @@ pub fn start_scheduler() -> (
 /// and retention policy while leaving other built-in tasks unchanged.
 pub fn start_scheduler_with_memory(
     memory: &MemoryConfig,
+) -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
+) {
+    let mut config = load_scheduler_config_or_default();
+    config.memory = memory.clone();
+    start_scheduler_with_config(&config)
+}
+
+/// Start the background scheduler using explicit runtime configuration.
+///
+/// Scheduled conversations use this config directly instead of process defaults,
+/// so API/provider settings stay aligned with the active application config.
+pub fn start_scheduler_with_config(
+    config: &SpeechConfig,
 ) -> (
     tokio::task::JoinHandle<()>,
     tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
@@ -653,8 +687,9 @@ pub fn start_scheduler_with_memory(
     let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
     scheduler.with_update_checks();
     scheduler.with_memory_maintenance();
-    let memory_root = memory.root_dir.clone();
-    let retention_days = memory.retention_days;
+    let memory_root = config.memory.root_dir.clone();
+    let retention_days = config.memory.retention_days;
+    let scheduler_config = config.clone();
 
     // Wrap the bridge executor to also handle built-in tasks
     let bridge_executor = bridge.into_executor();
@@ -676,7 +711,7 @@ pub fn start_scheduler_with_memory(
 
     // Spawn background task to handle conversation requests
     tokio::spawn(async move {
-        handle_conversation_requests(conversation_req_rx).await;
+        handle_conversation_requests(conversation_req_rx, scheduler_config).await;
     });
 
     (handle, rx)
@@ -688,14 +723,11 @@ pub fn start_scheduler_with_memory(
 /// executes them using a lightweight agent session (not the full STT→TTS pipeline).
 async fn handle_conversation_requests(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::pipeline::messages::ConversationRequest>,
+    config: SpeechConfig,
 ) {
-    use crate::config::SpeechConfig;
     use crate::pipeline::messages::ConversationResponse;
     use tokio::time::{Duration, timeout};
     use tracing::{debug, error, info};
-
-    // Use default configuration for agent sessions
-    let config = SpeechConfig::default();
 
     while let Some(request) = rx.recv().await {
         info!(

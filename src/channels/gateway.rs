@@ -40,21 +40,37 @@ struct WhatsAppVerifyQuery {
     challenge: Option<String>,
 }
 
+fn resolve_gateway_bearer_token(
+    config: &ChannelGatewayConfig,
+    manager: &dyn crate::credentials::CredentialManager,
+) -> anyhow::Result<Option<String>> {
+    let Some(cred_ref) = config.bearer_token.as_ref() else {
+        return Ok(None);
+    };
+    if !cred_ref.is_set() {
+        return Ok(None);
+    }
+
+    let raw_token = manager
+        .retrieve(cred_ref)
+        .map_err(|e| anyhow::anyhow!("failed to resolve gateway bearer token: {e}"))?
+        .ok_or_else(|| anyhow::anyhow!("gateway bearer token reference resolved to no value"))?;
+
+    let token = raw_token.trim();
+    if token.is_empty() {
+        anyhow::bail!("gateway bearer token resolved to an empty value");
+    }
+
+    Ok(Some(token.to_owned()))
+}
+
 pub async fn run_gateway(
     config: ChannelGatewayConfig,
     whatsapp: Option<Arc<WhatsAppAdapter>>,
     inbound_tx: mpsc::Sender<ChannelInboundMessage>,
     manager: Box<dyn crate::credentials::CredentialManager>,
 ) -> anyhow::Result<()> {
-    let bearer_token = if let Some(ref cred_ref) = config.bearer_token {
-        cred_ref
-            .resolve(manager.as_ref())
-            .await
-            .ok()
-            .filter(|s| !s.is_empty())
-    } else {
-        None
-    };
+    let bearer_token = resolve_gateway_bearer_token(&config, manager.as_ref())?;
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -197,4 +213,94 @@ async fn whatsapp_inbound(
             "queued_messages": queued
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::credentials::{CredentialError, CredentialRef};
+
+    struct StubCredentialManager {
+        fail_keychain_lookup: bool,
+        keychain_value: Option<String>,
+    }
+
+    impl crate::credentials::CredentialManager for StubCredentialManager {
+        fn store(&self, _account: &str, _value: &str) -> Result<CredentialRef, CredentialError> {
+            Err(CredentialError::StorageError(
+                "store not implemented in test stub".to_owned(),
+            ))
+        }
+
+        fn retrieve(&self, cred_ref: &CredentialRef) -> Result<Option<String>, CredentialError> {
+            match cred_ref {
+                CredentialRef::None => Ok(None),
+                CredentialRef::Plaintext(value) => Ok(Some(value.clone())),
+                CredentialRef::Keychain { .. } => {
+                    if self.fail_keychain_lookup {
+                        Err(CredentialError::KeychainAccess(
+                            "simulated keychain failure".to_owned(),
+                        ))
+                    } else {
+                        Ok(self.keychain_value.clone())
+                    }
+                }
+            }
+        }
+
+        fn delete(&self, _cred_ref: &CredentialRef) -> Result<(), CredentialError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn resolve_gateway_bearer_token_errors_when_keychain_resolution_fails() {
+        let cfg = ChannelGatewayConfig {
+            enabled: true,
+            host: "127.0.0.1".to_owned(),
+            port: 4088,
+            bearer_token: Some(CredentialRef::Keychain {
+                service: "com.saorsalabs.fae".to_owned(),
+                account: "channels.gateway.bearer".to_owned(),
+            }),
+        };
+        let manager = StubCredentialManager {
+            fail_keychain_lookup: true,
+            keychain_value: None,
+        };
+
+        let result = resolve_gateway_bearer_token(&cfg, &manager);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_gateway_bearer_token_returns_none_when_unset() {
+        let cfg = ChannelGatewayConfig {
+            enabled: true,
+            host: "127.0.0.1".to_owned(),
+            port: 4088,
+            bearer_token: None,
+        };
+        let manager = StubCredentialManager {
+            fail_keychain_lookup: false,
+            keychain_value: None,
+        };
+
+        let result = resolve_gateway_bearer_token(&cfg, &manager).expect("resolution should pass");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn bearer_validation_requires_exact_token_match() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer abc123".parse().expect("header parse"),
+        );
+
+        assert!(bearer_is_valid(&headers, &Some("abc123".to_owned())));
+        assert!(!bearer_is_valid(&headers, &Some("wrong".to_owned())));
+    }
 }

@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 pub const CANVAS_SKILL: &str = include_str!("../Skills/canvas.md");
 /// Built-in skill for external LLM setup and operations.
 pub const EXTERNAL_LLM_SKILL: &str = include_str!("../Skills/external-llm.md");
+/// Built-in skill for Python helper scripts executed via uv.
+pub const UV_SCRIPTS_SKILL: &str = include_str!("../Skills/uv-scripts.md");
 
 /// Package manifest accepted by installer.
 #[derive(Debug, Clone, Deserialize)]
@@ -525,7 +527,11 @@ pub fn list_managed_skills_strict() -> crate::Result<Vec<ManagedSkillInfo>> {
 ///
 /// Includes built-in names and active custom/managed skills.
 pub fn list_skills() -> Vec<String> {
-    let mut names = vec!["canvas".to_owned(), "external-llm".to_owned()];
+    let mut names = vec![
+        "canvas".to_owned(),
+        "external-llm".to_owned(),
+        "uv-scripts".to_owned(),
+    ];
     let custom = list_custom_skill_names(&default_paths());
     names.extend(custom);
 
@@ -582,7 +588,11 @@ fn list_custom_skill_names(paths: &SkillPaths) -> Vec<String> {
 ///
 /// Returns built-ins followed by active custom/managed skill markdown files.
 pub fn load_all_skills() -> String {
-    let mut parts: Vec<String> = vec![CANVAS_SKILL.to_owned(), EXTERNAL_LLM_SKILL.to_owned()];
+    let mut parts: Vec<String> = vec![
+        CANVAS_SKILL.to_owned(),
+        EXTERNAL_LLM_SKILL.to_owned(),
+        UV_SCRIPTS_SKILL.to_owned(),
+    ];
     let paths = default_paths();
     let states = load_registry(&paths)
         .ok()
@@ -608,7 +618,7 @@ pub fn load_all_skills() -> String {
             let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
-            if stem == "canvas" || stem == "external-llm" {
+            if stem == "canvas" || stem == "external-llm" || stem == "uv-scripts" {
                 continue;
             }
             if let Some(state) = states.get(stem)
@@ -655,6 +665,7 @@ mod tests {
     fn built_in_skills_nonempty() {
         assert!(!CANVAS_SKILL.is_empty());
         assert!(!EXTERNAL_LLM_SKILL.is_empty());
+        assert!(!UV_SCRIPTS_SKILL.is_empty());
     }
 
     #[test]

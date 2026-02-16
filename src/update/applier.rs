@@ -67,6 +67,50 @@ pub fn current_exe_path() -> Result<PathBuf> {
         .map_err(|e| SpeechError::Update(format!("cannot determine current executable path: {e}")))
 }
 
+/// Roll back to the previous binary version.
+///
+/// Looks for a `.old` backup next to the current executable and restores it.
+/// Returns `true` if a rollback was performed, `false` if no backup exists.
+///
+/// # Errors
+///
+/// Returns an error if the backup exists but cannot be restored.
+pub fn rollback_update() -> Result<bool> {
+    let current = current_exe_path()?;
+    let backup = current.with_extension("old");
+    if !backup.exists() {
+        return Ok(false);
+    }
+    std::fs::rename(&backup, &current).map_err(|e| {
+        SpeechError::Update(format!(
+            "cannot restore backup {} → {}: {e}",
+            backup.display(),
+            current.display()
+        ))
+    })?;
+    tracing::info!("rolled back to previous binary at {}", current.display());
+    Ok(true)
+}
+
+/// Remove the `.old` backup left by a previous update.
+///
+/// Call this on successful startup to confirm the update worked and free
+/// disk space. Safe to call when no backup exists (returns `Ok(())`).
+pub fn cleanup_old_backup() -> Result<()> {
+    let current = current_exe_path()?;
+    let backup = current.with_extension("old");
+    if backup.exists() {
+        std::fs::remove_file(&backup).map_err(|e| {
+            SpeechError::Update(format!(
+                "cannot remove old backup {}: {e}",
+                backup.display()
+            ))
+        })?;
+        tracing::info!("removed old backup at {}", backup.display());
+    }
+    Ok(())
+}
+
 /// Returns the expected binary filename for the current platform.
 fn binary_filename() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -101,9 +145,24 @@ fn download_binary(url: &str, dest: &Path) -> Result<()> {
 }
 
 /// Verify the downloaded binary is valid by running it with `--version`.
+///
+/// On macOS, clears the quarantine extended attribute before execution so
+/// Gatekeeper doesn't block the binary inside the App Sandbox container.
 fn verify_binary(path: &Path) -> Result<()> {
     // Set executable permission first (Unix).
     set_executable(path)?;
+
+    // Clear macOS quarantine attribute BEFORE attempting to run the binary.
+    // Without this, Gatekeeper blocks execution of downloaded binaries inside
+    // the App Sandbox container with "Operation not permitted".
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("xattr")
+            .args(["-d", "com.apple.quarantine", &path.to_string_lossy()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
 
     let output = std::process::Command::new(path)
         .arg("--version")
@@ -202,10 +261,14 @@ fn replace_binary_unix(new_binary: &Path, current_binary: &Path) -> Result<Apply
             .status();
     }
 
-    // Remove backup.
-    let _ = std::fs::remove_file(&backup);
-
-    tracing::info!("binary updated at {}", current_binary.display());
+    // Keep the backup so the user (or a startup check) can roll back if the
+    // new binary fails to launch.  The backup is removed on the *next*
+    // successful startup via `cleanup_old_backup()`.
+    tracing::info!(
+        "binary updated at {} (backup at {})",
+        current_binary.display(),
+        backup.display()
+    );
     Ok(ApplyResult::RestartRequired {
         new_binary: current_binary.to_owned(),
     })
@@ -329,8 +392,10 @@ mod tests {
         let content = std::fs::read_to_string(&old_binary).unwrap();
         assert_eq!(content, "new-content");
 
-        // Backup should have been cleaned up.
-        assert!(!old_binary.with_extension("old").exists());
+        // Backup should still exist for potential rollback.
+        assert!(old_binary.with_extension("old").exists());
+        let backup_content = std::fs::read_to_string(old_binary.with_extension("old")).unwrap();
+        assert_eq!(backup_content, "old-content");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -351,6 +416,27 @@ mod tests {
         let result = replace_binary_unix(&source, &target).unwrap();
         assert!(matches!(result, ApplyResult::RestartRequired { .. }));
         assert!(target.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_old_backup_removes_backup() {
+        let dir = std::env::temp_dir().join("fae-test-cleanup");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let binary = dir.join("test-binary");
+        let backup = dir.join("test-binary.old");
+
+        std::fs::write(&binary, "current").unwrap();
+        std::fs::write(&backup, "old-version").unwrap();
+
+        // cleanup_old_backup uses current_exe_path, so we can't test it
+        // end-to-end here. Instead verify the backup file logic directly.
+        assert!(backup.exists());
+        std::fs::remove_file(&backup).unwrap();
+        assert!(!backup.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

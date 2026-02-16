@@ -211,14 +211,17 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
 
     if config.channels.gateway.enabled {
         let host = config.channels.gateway.host.trim();
-        if host == "0.0.0.0"
-            && config
-                .channels
-                .gateway
-                .bearer_token
-                .as_ref()
-                .is_none_or(|token| !token.is_set())
-        {
+        let bearer_missing = config
+            .channels
+            .gateway
+            .bearer_token
+            .as_ref()
+            .is_none_or(|token| match token {
+                crate::credentials::CredentialRef::None => true,
+                crate::credentials::CredentialRef::Plaintext(value) => value.trim().is_empty(),
+                crate::credentials::CredentialRef::Keychain { .. } => false,
+            });
+        if host == "0.0.0.0" && bearer_missing {
             issues.push(ChannelValidationIssue {
                 id: "gateway-public-without-auth".to_owned(),
                 title: "Gateway is public without bearer auth".to_owned(),
@@ -490,7 +493,8 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use crate::config::{ChannelsConfig, DiscordChannelConfig, SpeechConfig};
+    use crate::config::{ChannelGatewayConfig, ChannelsConfig, DiscordChannelConfig, SpeechConfig};
+    use crate::credentials::CredentialRef;
 
     #[test]
     fn validation_flags_missing_discord_token() {
@@ -510,5 +514,48 @@ mod tests {
 
         let issues = validate_config(&config);
         assert!(issues.iter().any(|i| i.id == "discord-missing-token"));
+    }
+
+    #[test]
+    fn validation_flags_public_gateway_without_bearer_token() {
+        let config = SpeechConfig {
+            channels: ChannelsConfig {
+                enabled: true,
+                gateway: ChannelGatewayConfig {
+                    enabled: true,
+                    host: "0.0.0.0".to_owned(),
+                    port: 4088,
+                    bearer_token: None,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let issues = validate_config(&config);
+        assert!(issues.iter().any(|i| i.id == "gateway-public-without-auth"));
+    }
+
+    #[test]
+    fn validation_allows_public_gateway_with_keychain_bearer_reference() {
+        let config = SpeechConfig {
+            channels: ChannelsConfig {
+                enabled: true,
+                gateway: ChannelGatewayConfig {
+                    enabled: true,
+                    host: "0.0.0.0".to_owned(),
+                    port: 4088,
+                    bearer_token: Some(CredentialRef::Keychain {
+                        service: "com.saorsalabs.fae".to_owned(),
+                        account: "channels.gateway.bearer".to_owned(),
+                    }),
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let issues = validate_config(&config);
+        assert!(!issues.iter().any(|i| i.id == "gateway-public-without-auth"));
     }
 }

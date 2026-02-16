@@ -8,5 +8,6 @@ pub mod applier;
 pub mod checker;
 pub mod state;
 
+pub use applier::{cleanup_old_backup, rollback_update};
 pub use checker::{Release, UpdateChecker};
 pub use state::{AutoUpdatePreference, UpdateState};

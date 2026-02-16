@@ -269,19 +269,38 @@ pub fn format_version_info(version: &SoulVersion) -> String {
 /// Restore a previous version as the current SOUL.md.
 ///
 /// Creates a backup of the current state before restoring.
-pub fn restore_version(version_id: &str) -> Result<()> {
-    // Load the old version content
-    let old_content = load_version(version_id)?;
+fn restore_version_in(
+    version_id: &str,
+    versions_dir: &Path,
+    current_content: &str,
+    soul_path: &Path,
+) -> Result<()> {
+    // Load the target version content first so a bad version ID fails without
+    // mutating backups or the active SOUL file.
+    let restored_content = load_version_in(version_id, versions_dir)?;
 
-    // Backup current state before restoring
-    let current_content = crate::personality::load_soul();
-    let _ = create_backup(&current_content)?; // Ignore if duplicate
+    // Backup current state before restoring (no-op if duplicate).
+    let _ = create_backup_in(current_content, versions_dir)?;
 
-    // Write the restored content
-    let soul_path = crate::personality::soul_path();
-    std::fs::write(&soul_path, old_content)?;
-
+    if let Some(parent) = soul_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(soul_path, restored_content)?;
     Ok(())
+}
+
+/// Restore a previous version as the current SOUL.md.
+///
+/// Creates a backup of the current state before restoring.
+pub fn restore_version(version_id: &str) -> Result<()> {
+    let current_content = crate::personality::load_soul();
+    let soul_path = crate::personality::soul_path();
+    restore_version_in(
+        version_id,
+        &default_versions_dir(),
+        &current_content,
+        &soul_path,
+    )
 }
 
 /// Load content from a specific version by ID.
@@ -617,10 +636,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Skipped: requires mocking personality::soul_path() and load_soul()
     fn test_restore_version_success() {
-        let (_temp, dir) = make_test_dir();
-        // Create a backup
+        let (temp, dir) = make_test_dir();
+        let soul_path = temp.path().join("SOUL.md");
+
+        // Create a backup target to restore to.
         let original_content = format!("# Original content {}", chrono::Utc::now());
         let backup_result = create_backup_in(&original_content, &dir);
         assert!(backup_result.is_ok());
@@ -628,52 +648,68 @@ mod tests {
         assert!(version_opt.is_some());
         let version = version_opt.expect("version");
 
-        // Simulate editing by creating another version
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Simulate edited current SOUL content.
         let modified_content = format!("# Modified content {}", chrono::Utc::now());
-        let _ = create_backup_in(&modified_content, &dir);
+        std::fs::write(&soul_path, &modified_content).expect("write modified soul");
 
-        // Restore the original version
-        let restore_result = restore_version(&version.id);
+        // Restore the original version.
+        let restore_result = restore_version_in(&version.id, &dir, &modified_content, &soul_path);
         assert!(restore_result.is_ok());
 
-        // Verify restoration worked
-        let restored_content = crate::personality::load_soul();
+        // Verify restoration wrote the expected file content.
+        let restored_content = std::fs::read_to_string(&soul_path).expect("read restored soul");
         assert_eq!(restored_content, original_content);
     }
 
     #[test]
-    #[ignore] // Skipped: requires mocking personality::soul_path() and load_soul()
     fn test_restore_creates_backup() {
-        let (_temp, dir) = make_test_dir();
-        // Create initial version
+        let (temp, dir) = make_test_dir();
+        let soul_path = temp.path().join("SOUL.md");
+
+        // Create initial version.
         let content1 = format!("# Content 1 {}", chrono::Utc::now());
         let backup1 = create_backup_in(&content1, &dir);
         assert!(backup1.is_ok());
         let version1 = backup1.expect("backup1").expect("version1");
 
+        // Simulate current SOUL content before restore.
+        let content2 = format!("# Content 2 {}", chrono::Utc::now());
+        std::fs::write(&soul_path, &content2).expect("write soul content2");
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        // Create second version
-        let content2 = format!("# Content 2 {}", chrono::Utc::now());
-        let _ = create_backup_in(&content2, &dir);
-
-        // Restore first version
-        let restore_result = restore_version(&version1.id);
+        // Restore first version.
+        let restore_result = restore_version_in(&version1.id, &dir, &content2, &soul_path);
         assert!(
             restore_result.is_ok(),
             "Restore should succeed: {:?}",
             restore_result.err()
         );
 
-        // Verify the restored content matches version1
-        let restored = crate::personality::load_soul();
+        // Verify the restored content matches version1.
+        let restored = std::fs::read_to_string(&soul_path).expect("read restored soul");
         assert_eq!(restored, content1, "Restored content should match version1");
+
+        // Verify current content was backed up before restore.
+        let versions = list_versions_in(&dir).expect("list versions");
+        assert_eq!(
+            versions.len(),
+            2,
+            "Restore should create one additional backup"
+        );
+        assert!(
+            versions
+                .iter()
+                .any(|version| version.content_hash == calculate_hash(&content2)),
+            "Expected backup hash for pre-restore content"
+        );
     }
 
     #[test]
     fn test_restore_invalid_version() {
-        let result = restore_version("nonexistent_version");
+        let (temp, dir) = make_test_dir();
+        let soul_path = temp.path().join("SOUL.md");
+        let current_content = "# current";
+        let result = restore_version_in("nonexistent_version", &dir, current_content, &soul_path);
         assert!(result.is_err());
     }
 
