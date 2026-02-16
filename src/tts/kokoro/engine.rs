@@ -51,7 +51,8 @@ impl KokoroTts {
         info!("loading tokenizer");
         let tokenizer = load_tokenizer(&paths.tokenizer_json)?;
 
-        let is_british = config.voice.starts_with("bf_") || config.voice.starts_with("bm_");
+        let resolved = super::download::resolve_voice_alias(&config.voice);
+        let is_british = resolved.starts_with("bf_") || resolved.starts_with("bm_");
         info!("initialising misaki phonemizer (british={is_british})");
         let phonemizer = Phonemizer::new(is_british);
 

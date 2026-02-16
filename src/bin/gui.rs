@@ -4860,7 +4860,7 @@ fn app() -> Element {
         format!(
             "Kokoro: {}",
             if current_voice.is_empty() {
-                "bf_emma"
+                "fae"
             } else {
                 &current_voice
             }
@@ -6527,7 +6527,7 @@ fn app() -> Element {
                             class: "pill",
                             disabled: !settings_enabled,
                             onclick: move |_| {
-                                config_state.write().tts.voice = "bf_emma".to_owned();
+                                config_state.write().tts.voice = "fae".to_owned();
                                 voices_status.set("Reset to default voice (save to persist).".to_owned());
                             },
                             "Reset to default voice"

@@ -581,7 +581,9 @@ pub enum TtsBackend {
 pub struct TtsConfig {
     /// Which TTS backend to use.
     pub backend: TtsBackend,
-    /// Voice style name for Kokoro (e.g., "bf_emma", "af_sky") or path to custom `.bin`.
+    /// Voice style name for Kokoro (e.g., "fae", "bf_emma", "af_sky") or path to custom `.bin`.
+    ///
+    /// The special name `"fae"` is an alias for the bundled default voice.
     pub voice: String,
     /// Path to reference audio for voice cloning (Fish Speech only).
     pub voice_reference: Option<PathBuf>,
@@ -599,7 +601,7 @@ impl Default for TtsConfig {
     fn default() -> Self {
         Self {
             backend: TtsBackend::default(),
-            voice: "bf_emma".to_owned(),
+            voice: "fae".to_owned(),
             voice_reference: None,
             voice_reference_transcript: None,
             model_variant: "q8".to_owned(),

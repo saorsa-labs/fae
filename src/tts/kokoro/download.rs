@@ -9,6 +9,18 @@ use tracing::info;
 /// HuggingFace repo for Kokoro-82M ONNX models.
 pub const KOKORO_REPO_ID: &str = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
+/// Resolve voice aliases to their underlying Kokoro voice style name.
+///
+/// The `"fae"` alias maps to `"bf_emma"` (British female), matching Fae's
+/// character. The bundled `assets/voices/fae.wav` serves as the canonical
+/// reference for future voice-cloning integration.
+pub fn resolve_voice_alias(voice: &str) -> &str {
+    match voice {
+        "fae" => "bf_emma",
+        other => other,
+    }
+}
+
 /// Paths to downloaded Kokoro assets.
 pub struct KokoroPaths {
     /// Path to the ONNX model file (inside `onnx/` subfolder).
@@ -37,16 +49,18 @@ pub fn model_filename(variant: &str) -> &'static str {
 
 /// Get the voice filename for a given voice name.
 ///
+/// Resolves aliases (e.g. `"fae"` → `"bf_emma"`) before building the path.
 /// Returns `None` if the voice is a custom absolute path to a `.bin` file.
 pub fn voice_filename(voice: &str) -> Option<String> {
-    if std::path::Path::new(voice)
+    let resolved = resolve_voice_alias(voice);
+    if std::path::Path::new(resolved)
         .extension()
         .is_some_and(|ext| ext == "bin")
-        && std::path::Path::new(voice).is_absolute()
+        && std::path::Path::new(resolved).is_absolute()
     {
         None
     } else {
-        Some(format!("voices/{voice}.bin"))
+        Some(format!("voices/{resolved}.bin"))
     }
 }
 
@@ -110,16 +124,17 @@ pub fn download_kokoro_assets(variant: &str, voice: &str) -> Result<KokoroPaths>
         .get("tokenizer.json")
         .map_err(|e| SpeechError::Model(format!("failed to download tokenizer.json: {e}")))?;
 
-    // Voice style tensor
-    let voice_bin = if std::path::Path::new(voice)
+    // Voice style tensor (resolve aliases like "fae" → "bf_emma")
+    let resolved_voice = resolve_voice_alias(voice);
+    let voice_bin = if std::path::Path::new(resolved_voice)
         .extension()
         .is_some_and(|ext| ext == "bin")
-        && std::path::Path::new(voice).is_absolute()
+        && std::path::Path::new(resolved_voice).is_absolute()
     {
         // User provided an absolute path to a custom .bin
-        PathBuf::from(voice)
+        PathBuf::from(resolved_voice)
     } else {
-        let voice_file = format!("voices/{voice}.bin");
+        let voice_file = format!("voices/{resolved_voice}.bin");
         info!("ensuring voice: {voice_file}");
         repo.get(&voice_file)
             .map_err(|e| SpeechError::Model(format!("failed to download {voice_file}: {e}")))?
