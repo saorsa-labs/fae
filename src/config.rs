@@ -611,31 +611,78 @@ impl Default for TtsConfig {
     }
 }
 
-/// Conversation gate configuration (wake word and stop phrase).
+/// Conversation gate configuration (wake word, sleep phrases, and companion presence).
+///
+/// In companion mode (`idle_timeout_s == 0`), Fae stays present until explicitly
+/// told to sleep via one of the `sleep_phrases`. She never auto-dismisses herself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConversationConfig {
     /// Wake word to activate the assistant (case-insensitive).
     pub wake_word: String,
-    /// Phrase to stop the assistant and return to idle (case-insensitive).
+    /// Deprecated: use `sleep_phrases` instead.
+    ///
+    /// Legacy single stop phrase kept for backward compatibility with older
+    /// config files. Merged into the effective sleep phrase list at runtime.
     pub stop_phrase: String,
+    /// Phrases that put Fae to sleep (case-insensitive substring match).
+    ///
+    /// Any of these phrases detected in user speech will transition Fae from
+    /// Active to Idle state. Use [`Self::effective_sleep_phrases`] at runtime
+    /// to get the merged list (includes legacy `stop_phrase` if set).
+    #[serde(default = "default_sleep_phrases")]
+    pub sleep_phrases: Vec<String>,
     /// Whether the conversation gate is enabled.
     pub enabled: bool,
     /// Seconds of inactivity (no user speech while assistant is idle) before
     /// automatically returning to the Idle state.
     ///
-    /// Set to 0 to disable the auto-idle timeout.
+    /// Set to 0 to disable the auto-idle timeout (companion mode — Fae stays
+    /// present until told to sleep). Defaults to 0.
     pub idle_timeout_s: u32,
+}
+
+/// Default sleep phrases for companion mode.
+fn default_sleep_phrases() -> Vec<String> {
+    vec![
+        "shut up".to_owned(),
+        "stop fae".to_owned(),
+        "go to sleep".to_owned(),
+        "that will do fae".to_owned(),
+        "that'll do fae".to_owned(),
+        "quiet fae".to_owned(),
+        "sleep fae".to_owned(),
+        "goodbye fae".to_owned(),
+        "bye fae".to_owned(),
+    ]
 }
 
 impl Default for ConversationConfig {
     fn default() -> Self {
         Self {
             wake_word: "hi fae".to_owned(),
-            stop_phrase: "that will do fae".to_owned(),
+            stop_phrase: String::new(),
+            sleep_phrases: default_sleep_phrases(),
             enabled: true,
-            idle_timeout_s: 20,
+            idle_timeout_s: 0,
         }
+    }
+}
+
+impl ConversationConfig {
+    /// Returns the effective list of sleep phrases, merging `sleep_phrases`
+    /// with the legacy `stop_phrase` if it is non-empty and not already present.
+    pub fn effective_sleep_phrases(&self) -> Vec<String> {
+        let mut phrases = self.sleep_phrases.clone();
+        let legacy = self.stop_phrase.trim().to_lowercase();
+        if !legacy.is_empty()
+            && !phrases
+                .iter()
+                .any(|p| p.trim().eq_ignore_ascii_case(&legacy))
+        {
+            phrases.push(self.stop_phrase.clone());
+        }
+        phrases
     }
 }
 
@@ -1417,5 +1464,87 @@ mode = "light"
         // Round-trip
         let loaded: SpeechConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(loaded.theme.mode, ThemeMode::Dark);
+    }
+
+    // ── Companion presence / sleep phrases ──────────────────────────
+
+    #[test]
+    fn sleep_phrases_default_is_nonempty() {
+        let config = ConversationConfig::default();
+        assert!(config.sleep_phrases.len() >= 5);
+        assert!(config.sleep_phrases.iter().any(|p| p.contains("shut up")));
+        assert!(config.sleep_phrases.iter().any(|p| p.contains("stop fae")));
+        assert!(
+            config
+                .sleep_phrases
+                .iter()
+                .any(|p| p.contains("go to sleep"))
+        );
+    }
+
+    #[test]
+    fn idle_timeout_default_is_zero() {
+        let config = ConversationConfig::default();
+        assert_eq!(config.idle_timeout_s, 0);
+    }
+
+    #[test]
+    fn effective_sleep_phrases_includes_legacy() {
+        let mut config = ConversationConfig::default();
+        config.stop_phrase = "hush now fae".to_owned();
+        let effective = config.effective_sleep_phrases();
+        assert!(effective.iter().any(|p| p == "hush now fae"));
+    }
+
+    #[test]
+    fn effective_sleep_phrases_no_duplicates() {
+        let mut config = ConversationConfig::default();
+        // "shut up" is already in sleep_phrases
+        config.stop_phrase = "shut up".to_owned();
+        let effective = config.effective_sleep_phrases();
+        let count = effective.iter().filter(|p| *p == "shut up").count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn conversation_config_backward_compat() {
+        // Old config format with only stop_phrase (no sleep_phrases)
+        let toml_str = r#"
+[conversation]
+wake_word = "hi fae"
+stop_phrase = "that will do fae"
+enabled = true
+idle_timeout_s = 20
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.conversation.stop_phrase, "that will do fae");
+        // sleep_phrases gets serde default
+        assert!(!config.conversation.sleep_phrases.is_empty());
+        assert_eq!(config.conversation.idle_timeout_s, 20);
+        // effective list includes legacy stop_phrase (already in defaults)
+        let effective = config.conversation.effective_sleep_phrases();
+        assert!(effective.iter().any(|p| p == "that will do fae"));
+    }
+
+    #[test]
+    fn conversation_config_new_format() {
+        let toml_str = r#"
+[conversation]
+wake_word = "hi fae"
+sleep_phrases = ["shush", "go away fae"]
+enabled = true
+idle_timeout_s = 0
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.conversation.sleep_phrases.len(), 2);
+        assert_eq!(config.conversation.sleep_phrases[0], "shush");
+        assert_eq!(config.conversation.sleep_phrases[1], "go away fae");
+        assert_eq!(config.conversation.idle_timeout_s, 0);
+    }
+
+    #[test]
+    fn legacy_stop_phrase_default_is_empty() {
+        let config = ConversationConfig::default();
+        assert!(config.stop_phrase.is_empty());
     }
 }
