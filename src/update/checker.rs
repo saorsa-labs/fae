@@ -65,6 +65,82 @@ impl UpdateChecker {
         &self.repo
     }
 
+    /// Fetch multiple releases from the GitHub releases API.
+    ///
+    /// Returns up to `max` releases sorted newest-first (GitHub's default).
+    /// This is an on-demand user action (no ETag caching).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be
+    /// parsed.
+    pub fn fetch_releases(&self, max: usize) -> Result<Vec<Release>> {
+        let per_page = max.min(100);
+        let url = format!(
+            "https://api.github.com/repos/{}/releases?per_page={per_page}",
+            self.repo
+        );
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(20))
+            .build();
+
+        let resp = agent
+            .get(&url)
+            .set("User-Agent", "fae/0.1 (update-checker)")
+            .set("Accept", "application/vnd.github+json")
+            .call()
+            .map_err(|e| {
+                SpeechError::Update(format!("GitHub API request failed for {}: {e}", self.repo))
+            })?;
+
+        let status = resp.status();
+        if !(200..300).contains(&status) {
+            let body = resp.into_string().unwrap_or_default();
+            let preview = body
+                .trim()
+                .chars()
+                .take(180)
+                .collect::<String>()
+                .replace('\n', " ");
+            let suffix = if preview.is_empty() {
+                String::new()
+            } else {
+                format!(": {preview}")
+            };
+            return Err(SpeechError::Update(format!(
+                "GitHub API returned HTTP {status} for {}{suffix}",
+                self.repo
+            )));
+        }
+
+        let body_text = resp.into_string().map_err(|e| {
+            SpeechError::Update(format!("cannot read GitHub releases response body: {e}"))
+        })?;
+
+        let entries: Vec<serde_json::Value> = serde_json::from_str(&body_text).map_err(|e| {
+            let preview = body_text
+                .chars()
+                .take(180)
+                .collect::<String>()
+                .replace('\n', " ");
+            SpeechError::Update(format!(
+                "cannot parse GitHub releases JSON: {e}; response preview: {preview}"
+            ))
+        })?;
+
+        let mut releases = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            match parse_github_release(entry) {
+                Ok(r) => releases.push(r),
+                Err(_) => continue, // skip unparseable entries (e.g. drafts)
+            }
+        }
+
+        Ok(releases)
+    }
+
     /// Check GitHub for a newer release.
     ///
     /// Uses conditional requests via the `If-None-Match` / `ETag` header pair
@@ -383,6 +459,75 @@ mod tests {
         // No matching asset for current platform → empty download_url.
         assert_eq!(release.version, "1.0.0");
         // download_url may be empty if no matching asset
+    }
+
+    #[test]
+    fn parse_multiple_releases() {
+        let entries = vec![
+            serde_json::json!({
+                "tag_name": "v0.3.0",
+                "body": "Third release",
+                "published_at": "2026-02-15T00:00:00Z",
+                "assets": []
+            }),
+            serde_json::json!({
+                "tag_name": "v0.2.0",
+                "body": "Second release",
+                "published_at": "2026-02-10T00:00:00Z",
+                "assets": []
+            }),
+            serde_json::json!({
+                "tag_name": "v0.1.0",
+                "body": "First release",
+                "published_at": "2026-02-01T00:00:00Z",
+                "assets": []
+            }),
+        ];
+
+        let mut releases = Vec::new();
+        for entry in &entries {
+            if let Ok(r) = parse_github_release(entry) {
+                releases.push(r);
+            }
+        }
+
+        assert_eq!(releases.len(), 3);
+        assert_eq!(releases[0].version, "0.3.0");
+        assert_eq!(releases[1].version, "0.2.0");
+        assert_eq!(releases[2].version, "0.1.0");
+    }
+
+    #[test]
+    fn parse_multiple_releases_skips_invalid() {
+        let entries = vec![
+            serde_json::json!({
+                "tag_name": "v1.0.0",
+                "body": "Valid",
+                "published_at": "2026-01-01T00:00:00Z",
+                "assets": []
+            }),
+            serde_json::json!({
+                "body": "No tag — should be skipped",
+                "assets": []
+            }),
+            serde_json::json!({
+                "tag_name": "v0.9.0",
+                "body": "Also valid",
+                "published_at": "2025-12-01T00:00:00Z",
+                "assets": []
+            }),
+        ];
+
+        let mut releases = Vec::new();
+        for entry in &entries {
+            if let Ok(r) = parse_github_release(entry) {
+                releases.push(r);
+            }
+        }
+
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].version, "1.0.0");
+        assert_eq!(releases[1].version, "0.9.0");
     }
 
     #[test]

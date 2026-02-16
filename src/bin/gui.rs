@@ -193,6 +193,23 @@ mod gui {
         Failed { error: String },
     }
 
+    /// States for the "Check for Updates" dialog.
+    #[derive(Debug, Clone)]
+    pub enum UpdateDialogState {
+        /// Spinner: "Checking for updates..."
+        Checking,
+        /// "You're up to date!" with current version.
+        UpToDate,
+        /// "Fae v{version} is available" with release notes.
+        Available { release: fae::update::Release },
+        /// Fetching version history...
+        LoadingHistory,
+        /// List of previous releases.
+        History { releases: Vec<fae::update::Release> },
+        /// Error state.
+        Error { message: String },
+    }
+
     /// Application state phases.
     #[derive(Debug, Clone, PartialEq)]
     pub enum AppStatus {
@@ -1354,7 +1371,7 @@ use dioxus::prelude::*;
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder, use_muda_event_handler, use_window};
 
 #[cfg(feature = "gui")]
-use gui::{AppStatus, SharedState, UpdateGatePhase};
+use gui::{AppStatus, SharedState, UpdateDialogState, UpdateGatePhase};
 
 use std::path::{Path, PathBuf};
 #[cfg(feature = "gui")]
@@ -3946,10 +3963,11 @@ fn app() -> Element {
     let mut update_state = use_signal(fae::update::UpdateState::load);
     let mut update_available = use_signal(|| None::<fae::update::Release>);
     let mut update_banner_dismissed = use_signal(|| false);
-    let update_check_status = use_signal(String::new);
+    let _update_check_status = use_signal(String::new);
     let update_installing = use_signal(|| false);
     let mut update_install_error = use_signal(|| None::<String>);
     let mut update_gate = use_signal(|| None::<UpdateGatePhase>);
+    let mut update_dialog = use_signal(|| None::<UpdateDialogState>);
     let mut scheduler_notification = use_signal(|| None::<fae::scheduler::tasks::UserPrompt>);
     let mut show_scheduler_panel = use_signal(|| false);
     let mut show_channels_panel = use_signal(|| false);
@@ -5020,12 +5038,42 @@ fn app() -> Element {
             } else if event.id() == FAE_MENU_OPEN_GUIDE {
                 open_guide_window();
             } else if event.id() == FAE_MENU_CHECK_UPDATES {
-                run_manual_update_check(
-                    update_check_status,
-                    update_available,
-                    update_state,
-                    update_banner_dismissed,
-                );
+                update_dialog.set(Some(UpdateDialogState::Checking));
+                let etag = update_state.read().etag_fae.clone();
+                spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        let checker = fae::update::UpdateChecker::for_fae();
+                        checker.check(etag.as_deref())
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok((Some(release), new_etag))) => {
+                            update_available.set(Some(release.clone()));
+                            update_state.write().etag_fae = new_etag;
+                            update_state.write().mark_checked();
+                            let state = update_state.read().clone();
+                            let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                            update_dialog.set(Some(UpdateDialogState::Available { release }));
+                        }
+                        Ok(Ok((None, new_etag))) => {
+                            update_state.write().etag_fae = new_etag;
+                            update_state.write().mark_checked();
+                            let state = update_state.read().clone();
+                            let _ = tokio::task::spawn_blocking(move || state.save()).await;
+                            update_dialog.set(Some(UpdateDialogState::UpToDate));
+                        }
+                        Ok(Err(e)) => {
+                            update_dialog.set(Some(UpdateDialogState::Error {
+                                message: format!("{e}"),
+                            }));
+                        }
+                        Err(e) => {
+                            update_dialog.set(Some(UpdateDialogState::Error {
+                                message: format!("{e}"),
+                            }));
+                        }
+                    }
+                });
             }
         })
     };
@@ -5362,6 +5410,260 @@ fn app() -> Element {
                     }
                 } else {
                     rsx! {}
+                }
+            }
+
+            // --- Update dialog modal (manual "Check for Updates..." action) ---
+            {
+                let dialog = update_dialog.read().clone();
+                match dialog {
+                    Some(UpdateDialogState::Checking) => rsx! {
+                        div { class: "modal-overlay",
+                            onclick: move |_| update_dialog.set(None),
+                            div {
+                                class: "modal update-dialog",
+                                onclick: move |evt| evt.stop_propagation(),
+                                h2 { class: "modal-title", "Check for Updates" }
+                                p { class: "modal-subtitle", "Checking for updates\u{2026}" }
+                            }
+                        }
+                    },
+                    Some(UpdateDialogState::UpToDate) => {
+                        let ver = env!("CARGO_PKG_VERSION");
+                        rsx! {
+                            div { class: "modal-overlay",
+                                onclick: move |_| update_dialog.set(None),
+                                div {
+                                    class: "modal update-dialog",
+                                    onclick: move |evt| evt.stop_propagation(),
+                                    h2 { class: "modal-title", "You\u{2019}re up to date!" }
+                                    p { class: "update-dialog-version",
+                                        "Fae v{ver} is the latest version."
+                                    }
+                                    div { class: "update-dialog-btn-row",
+                                        button {
+                                            class: "modal-btn update-dialog-btn-secondary",
+                                            onclick: move |_| {
+                                                update_dialog.set(Some(
+                                                    UpdateDialogState::LoadingHistory,
+                                                ));
+                                                spawn(async move {
+                                                    let result =
+                                                        tokio::task::spawn_blocking(move || {
+                                                            let checker = fae::update::UpdateChecker::for_fae();
+                                                            checker.fetch_releases(15)
+                                                        })
+                                                        .await;
+                                                    match result {
+                                                        Ok(Ok(releases)) => {
+                                                            update_dialog.set(Some(
+                                                                UpdateDialogState::History {
+                                                                    releases,
+                                                                },
+                                                            ));
+                                                        }
+                                                        Ok(Err(e)) => {
+                                                            update_dialog.set(Some(
+                                                                UpdateDialogState::Error {
+                                                                    message: format!("{e}"),
+                                                                },
+                                                            ));
+                                                        }
+                                                        Err(e) => {
+                                                            update_dialog.set(Some(
+                                                                UpdateDialogState::Error {
+                                                                    message: format!("{e}"),
+                                                                },
+                                                            ));
+                                                        }
+                                                    }
+                                                });
+                                            },
+                                            "Version History"
+                                        }
+                                        button {
+                                            class: "modal-btn modal-approve",
+                                            onclick: move |_| update_dialog.set(None),
+                                            "OK"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(UpdateDialogState::Available { ref release }) => {
+                        let ver = release.version.clone();
+                        let notes = release.release_notes.clone();
+                        let dl_url = release.download_url.clone();
+                        rsx! {
+                            div { class: "modal-overlay",
+                                onclick: move |_| update_dialog.set(None),
+                                div {
+                                    class: "modal update-dialog",
+                                    onclick: move |evt| evt.stop_propagation(),
+                                    h2 { class: "modal-title", "Fae v{ver} is available" }
+                                    if !notes.is_empty() {
+                                        div { class: "update-dialog-notes", "{notes}" }
+                                    }
+                                    div { class: "update-dialog-btn-row",
+                                        button {
+                                            class: "modal-btn update-dialog-btn-secondary",
+                                            onclick: move |_| {
+                                                update_dialog.set(Some(
+                                                    UpdateDialogState::LoadingHistory,
+                                                ));
+                                                spawn(async move {
+                                                    let result =
+                                                        tokio::task::spawn_blocking(move || {
+                                                            let checker = fae::update::UpdateChecker::for_fae();
+                                                            checker.fetch_releases(15)
+                                                        })
+                                                        .await;
+                                                    match result {
+                                                        Ok(Ok(releases)) => {
+                                                            update_dialog.set(Some(
+                                                                UpdateDialogState::History {
+                                                                    releases,
+                                                                },
+                                                            ));
+                                                        }
+                                                        Ok(Err(e)) => {
+                                                            update_dialog.set(Some(
+                                                                UpdateDialogState::Error {
+                                                                    message: format!("{e}"),
+                                                                },
+                                                            ));
+                                                        }
+                                                        Err(e) => {
+                                                            update_dialog.set(Some(
+                                                                UpdateDialogState::Error {
+                                                                    message: format!("{e}"),
+                                                                },
+                                                            ));
+                                                        }
+                                                    }
+                                                });
+                                            },
+                                            "Version History"
+                                        }
+                                        button {
+                                            class: "modal-btn update-dialog-btn-secondary",
+                                            onclick: move |_| update_dialog.set(None),
+                                            "Not Now"
+                                        }
+                                        button {
+                                            class: "modal-btn modal-approve",
+                                            onclick: {
+                                                let dl_url = dl_url.clone();
+                                                move |_| {
+                                                    update_dialog.set(None);
+                                                    apply_and_relaunch(
+                                                        dl_url.clone(),
+                                                        update_installing,
+                                                        update_install_error,
+                                                        update_gate,
+                                                        None,
+                                                    );
+                                                }
+                                            },
+                                            "Install & Relaunch"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(UpdateDialogState::LoadingHistory) => rsx! {
+                        div { class: "modal-overlay",
+                            onclick: move |_| update_dialog.set(None),
+                            div {
+                                class: "modal update-dialog",
+                                onclick: move |evt| evt.stop_propagation(),
+                                h2 { class: "modal-title", "Version History" }
+                                p { class: "modal-subtitle", "Loading release history\u{2026}" }
+                            }
+                        }
+                    },
+                    Some(UpdateDialogState::History { ref releases }) => {
+                        let current_ver = env!("CARGO_PKG_VERSION");
+                        let items = releases.clone();
+                        rsx! {
+                            div { class: "modal-overlay",
+                                onclick: move |_| update_dialog.set(None),
+                                div {
+                                    class: "modal update-dialog update-dialog-wide",
+                                    onclick: move |evt| evt.stop_propagation(),
+                                    h2 { class: "modal-title", "Version History" }
+                                    div { class: "update-dialog-history",
+                                        for rel in items.iter() {
+                                            div {
+                                                class: if rel.version == current_ver {
+                                                    "update-dialog-history-item update-dialog-history-current"
+                                                } else {
+                                                    "update-dialog-history-item"
+                                                },
+                                                div { class: "update-dialog-history-header",
+                                                    span { class: "update-dialog-history-version",
+                                                        "v{rel.version}"
+                                                    }
+                                                    if rel.version == current_ver {
+                                                        span { class: "update-dialog-history-badge",
+                                                            "current"
+                                                        }
+                                                    }
+                                                    if !rel.published_at.is_empty() {
+                                                        span {
+                                                            class: "update-dialog-history-date",
+                                                            {
+                                                                rel.published_at
+                                                                    .get(..10)
+                                                                    .unwrap_or(&rel.published_at)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if !rel.release_notes.is_empty() {
+                                                    div {
+                                                        class: "update-dialog-history-notes",
+                                                        "{rel.release_notes}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div { class: "update-dialog-btn-row",
+                                        button {
+                                            class: "modal-btn modal-approve",
+                                            onclick: move |_| update_dialog.set(None),
+                                            "Close"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(UpdateDialogState::Error { ref message }) => {
+                        let msg = message.clone();
+                        rsx! {
+                            div { class: "modal-overlay",
+                                onclick: move |_| update_dialog.set(None),
+                                div {
+                                    class: "modal update-dialog",
+                                    onclick: move |evt| evt.stop_propagation(),
+                                    h2 { class: "modal-title", "Update Check Failed" }
+                                    p { class: "update-dialog-error", "{msg}" }
+                                    div { class: "update-dialog-btn-row",
+                                        button {
+                                            class: "modal-btn modal-approve",
+                                            onclick: move |_| update_dialog.set(None),
+                                            "OK"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    None => rsx! {},
                 }
             }
 
@@ -10078,6 +10380,93 @@ const STRUCTURAL_CSS: &str = r#"
         cursor: pointer;
     }
     .update-gate-skip:hover { color: var(--text-primary); }
+
+    /* --- Update dialog --- */
+    .update-dialog { max-width: 420px; }
+    .update-dialog-wide { max-width: 520px; }
+    .update-dialog-version {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.8rem;
+    }
+    .update-dialog-notes {
+        max-height: 12rem;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 0.6rem;
+        margin-bottom: 0.8rem;
+        line-height: 1.5;
+    }
+    .update-dialog-error {
+        font-size: 0.85rem;
+        color: var(--red);
+        margin-bottom: 0.8rem;
+    }
+    .update-dialog-btn-row {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+        margin-top: 0.4rem;
+    }
+    .update-dialog-btn-secondary {
+        background: var(--bg-elevated);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+    }
+    .update-dialog-btn-secondary:hover {
+        color: var(--text-primary);
+    }
+    .update-dialog-history {
+        max-height: 20rem;
+        overflow-y: auto;
+        margin-bottom: 0.8rem;
+    }
+    .update-dialog-history-item {
+        border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+        padding: 0.6rem 0;
+    }
+    .update-dialog-history-item:last-child { border-bottom: none; }
+    .update-dialog-history-current {
+        background: rgba(var(--accent-rgb, 255,255,255), 0.04);
+        border-radius: var(--radius-sm);
+        padding: 0.6rem 0.4rem;
+        margin: 0 -0.4rem;
+    }
+    .update-dialog-history-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.2rem;
+    }
+    .update-dialog-history-version { font-weight: 600; font-size: 0.9rem; }
+    .update-dialog-history-badge {
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        background: var(--accent);
+        color: #000;
+        padding: 0.1rem 0.4rem;
+        border-radius: var(--radius-pill);
+    }
+    .update-dialog-history-date {
+        font-size: 0.75rem;
+        color: var(--text-tertiary);
+        margin-left: auto;
+    }
+    .update-dialog-history-notes {
+        font-size: 0.78rem;
+        color: var(--text-secondary);
+        white-space: pre-wrap;
+        line-height: 1.45;
+        max-height: 6rem;
+        overflow-y: auto;
+        margin-top: 0.2rem;
+    }
 
     /* --- Scrollbar --- */
     ::-webkit-scrollbar { width: 5px; }
