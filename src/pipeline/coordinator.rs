@@ -1072,7 +1072,7 @@ async fn run_vad_stage(
     // for a brief window so residual echo/reverb doesn't leak through.
     // When AEC is active, the DSP filter handles most echo removal, so only a
     // short tail is needed to catch residual reverb.
-    let echo_tail_ms: u64 = if state.aec_enabled { 300 } else { 1500 };
+    let echo_tail_ms: u64 = if state.aec_enabled { 1000 } else { 2000 };
     let echo_tail = std::time::Duration::from_millis(echo_tail_ms);
 
     let mut was_suppressing = false;
@@ -1191,6 +1191,26 @@ async fn run_vad_stage(
                                     if should_drop {
                                         info!(
                                             "dropping {duration_s:.1}s speech segment (echo suppression)"
+                                        );
+                                        continue;
+                                    }
+
+                                    // Amplitude-based echo guard: even when the speaking
+                                    // flag is off, reject segments with abnormally high
+                                    // RMS that indicate speaker-to-mic feedback.  Normal
+                                    // human speech through a mic produces RMS ~0.005–0.05;
+                                    // speaker bleed-through produces RMS >0.1 (often >>1).
+                                    let seg_rms: f32 = if segment.samples.is_empty() {
+                                        0.0
+                                    } else {
+                                        (segment.samples.iter().map(|s| s * s).sum::<f32>()
+                                            / segment.samples.len() as f32)
+                                            .sqrt()
+                                    };
+                                    const ECHO_RMS_CEILING: f32 = 0.15;
+                                    if seg_rms > ECHO_RMS_CEILING {
+                                        info!(
+                                            "dropping {duration_s:.1}s speech segment (rms={seg_rms:.3} exceeds echo ceiling {ECHO_RMS_CEILING})"
                                         );
                                         continue;
                                     }
