@@ -11,6 +11,7 @@
 //! - **write** — Create or overwrite files
 //! - **web_search** — Search the web via embedded multi-engine scraper
 //! - **fetch_url** — Fetch and extract web page content
+//! - **desktop** — Desktop automation (screenshots, clicks, typing, windows)
 //!
 //! # Mode Gating
 //!
@@ -19,6 +20,7 @@
 //! - `Full` — All tools are available
 
 pub mod bash;
+pub mod desktop;
 pub mod edit;
 pub mod fetch_url;
 pub mod input_sanitize;
@@ -36,6 +38,7 @@ pub mod web_search;
 pub mod write;
 
 pub use bash::BashTool;
+pub use desktop::DesktopTool;
 pub use edit::EditTool;
 pub use fetch_url::FetchUrlTool;
 pub use input_sanitize::{SanitizedInput, sanitize_command_input, sanitize_content_input};

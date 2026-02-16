@@ -1490,17 +1490,21 @@ mode = "light"
 
     #[test]
     fn effective_sleep_phrases_includes_legacy() {
-        let mut config = ConversationConfig::default();
-        config.stop_phrase = "hush now fae".to_owned();
+        let config = ConversationConfig {
+            stop_phrase: "hush now fae".to_owned(),
+            ..ConversationConfig::default()
+        };
         let effective = config.effective_sleep_phrases();
         assert!(effective.iter().any(|p| p == "hush now fae"));
     }
 
     #[test]
     fn effective_sleep_phrases_no_duplicates() {
-        let mut config = ConversationConfig::default();
         // "shut up" is already in sleep_phrases
-        config.stop_phrase = "shut up".to_owned();
+        let config = ConversationConfig {
+            stop_phrase: "shut up".to_owned(),
+            ..ConversationConfig::default()
+        };
         let effective = config.effective_sleep_phrases();
         let count = effective.iter().filter(|p| *p == "shut up").count();
         assert_eq!(count, 1);

@@ -4317,8 +4317,10 @@ mod tests {
 
     #[test]
     fn sleep_phrases_legacy_stop_phrase_included() {
-        let mut config = crate::config::ConversationConfig::default();
-        config.stop_phrase = "hush now fae".to_owned();
+        let config = crate::config::ConversationConfig {
+            stop_phrase: "hush now fae".to_owned(),
+            ..crate::config::ConversationConfig::default()
+        };
         let phrases: Vec<String> = config
             .effective_sleep_phrases()
             .iter()

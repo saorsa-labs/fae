@@ -478,9 +478,17 @@ fn build_registry(
             )));
             registry.register(Arc::new(ApprovalTool::new(
                 Arc::new(EditTool::new()),
-                tool_approval_tx,
+                tool_approval_tx.clone(),
                 APPROVAL_TIMEOUT,
             )));
+            // Desktop automation (Full mode, with approval).
+            if let Some(desktop_tool) = crate::fae_llm::tools::DesktopTool::try_new() {
+                registry.register(Arc::new(ApprovalTool::new(
+                    Arc::new(desktop_tool),
+                    tool_approval_tx,
+                    APPROVAL_TIMEOUT,
+                )));
+            }
         }
         AgentToolMode::FullNoApproval => {
             // No approval needed - register tools directly
@@ -488,6 +496,10 @@ fn build_registry(
             registry.register(Arc::new(ReadTool::new()));
             registry.register(Arc::new(WriteTool::new()));
             registry.register(Arc::new(EditTool::new()));
+            // Desktop automation (no approval).
+            if let Some(desktop_tool) = crate::fae_llm::tools::DesktopTool::try_new() {
+                registry.register(Arc::new(desktop_tool));
+            }
         }
     }
 
