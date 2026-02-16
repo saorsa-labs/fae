@@ -2830,9 +2830,11 @@ struct ConversationGateControl {
 /// In `Idle` state, listens for the wake word and discards everything else.
 /// In `Active` state:
 ///   - If the assistant is speaking/generating, only interrupt on wake word
-///     (name-gated barge-in) or stop phrase.
-///   - If the assistant is silent, forward any speech and check for stop phrase.
-///   - Auto-returns to Idle after a configurable inactivity timeout.
+///     (name-gated barge-in) or a sleep phrase.
+///   - If the assistant is silent, forward any speech and check for sleep phrases.
+///   - Optionally auto-returns to Idle after `idle_timeout_s` of inactivity.
+///     When `idle_timeout_s == 0` (companion mode), Fae stays present until
+///     explicitly told to sleep via one of the configured sleep phrases.
 async fn run_conversation_gate(
     config: SpeechConfig,
     mut stt_rx: mpsc::Receiver<Transcription>,
@@ -2840,7 +2842,12 @@ async fn run_conversation_gate(
     mut ctl: ConversationGateControl,
 ) {
     let wake_word = config.conversation.wake_word.to_lowercase();
-    let stop_phrase = config.conversation.stop_phrase.to_lowercase();
+    let sleep_phrases: Vec<String> = config
+        .conversation
+        .effective_sleep_phrases()
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect();
     let idle_timeout_s = config.conversation.idle_timeout_s;
     let mut state = GateState::Idle;
 
@@ -2994,10 +3001,10 @@ async fn run_conversation_gate(
                                 // stop phrase "that will do fae".
                                 let clean = strip_punctuation(&lower_expanded);
 
-                                // Check for stop phrase (always, even during
+                                // Check for sleep phrases (always, even during
                                 // assistant speech — "that'll do Fae" should work
                                 // mid-sentence when AEC is active).
-                                if clean.contains(&stop_phrase) {
+                                if sleep_phrases.iter().any(|phrase| clean.contains(phrase.as_str())) {
                                     ctl.interrupt.store(true, Ordering::Relaxed);
                                     let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
                                     if ctl.clear_queue_on_stop
@@ -3010,7 +3017,7 @@ async fn run_conversation_gate(
                                     if ctl.console_output {
                                         println!("\n[{display_name}] Standing by.\n");
                                     }
-                                    info!("stop phrase detected, returning to idle");
+                                    info!("sleep phrase detected, returning to idle");
                                     continue;
                                 }
 
