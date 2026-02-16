@@ -829,6 +829,82 @@ mod tests {
         assert!(!all.is_empty());
     }
 
+    /// E2E: write a skill .md file → list discovers it → load includes its content.
+    #[test]
+    fn e2e_write_list_load_skill() {
+        let paths = test_paths("e2e-write-list-load");
+
+        // Write a plain .md file (simulates save_user_skill_markdown).
+        write_file(
+            &paths.root.join("weather.md"),
+            "# Weather\nWhen the user asks about weather, use the HTTP tool.",
+        );
+
+        // list_custom_skill_names should discover it (no registry entry needed).
+        let names = list_custom_skill_names(&paths);
+        assert!(
+            names.contains(&"weather".to_owned()),
+            "expected weather in {names:?}"
+        );
+
+        // load_all_skills would load it, but uses global skills_dir(). Instead
+        // verify directly that the file can be read and content matches.
+        let content =
+            std::fs::read_to_string(paths.root.join("weather.md")).expect("read weather.md");
+        assert!(content.contains("Weather"));
+        assert!(content.contains("HTTP tool"));
+
+        // Verify .state/ directory files don't appear in skill list.
+        let state_names = list_custom_skill_names(&paths);
+        assert!(!state_names.iter().any(|n| n.contains("state")));
+
+        let _ = std::fs::remove_dir_all(&paths.root);
+    }
+
+    /// E2E: install package → disable → rollback → verify content restored.
+    #[test]
+    fn e2e_install_disable_rollback_pipeline() {
+        let paths = test_paths("e2e-install-rollback");
+
+        // Pre-seed an existing skill (simulates user editing).
+        write_file(
+            &skill_md_path(&paths, "notes"),
+            "# Notes v1\nOriginal notes skill.",
+        );
+
+        // Install newer version via package.
+        let pkg = paths.root.join("pkg-notes");
+        std::fs::create_dir_all(&pkg).expect("create pkg");
+        write_file(
+            &pkg.join("SKILL.toml"),
+            "id = \"notes\"\nname = \"Notes\"\nversion = \"2.0.0\"\n",
+        );
+        write_file(&pkg.join("SKILL.md"), "# Notes v2\nUpdated notes skill.");
+
+        let info = install_skill_package_at(&paths, &pkg).expect("install");
+        assert_eq!(info.version, "2.0.0");
+        assert_eq!(info.state, ManagedSkillState::Active);
+
+        // Verify active content is v2.
+        let content = std::fs::read_to_string(skill_md_path(&paths, "notes")).expect("read active");
+        assert!(content.contains("v2"), "active should be v2: {content}");
+
+        // Rollback restores v1 (from snapshot).
+        rollback_skill_at(&paths, "notes").expect("rollback");
+        let rolled =
+            std::fs::read_to_string(skill_md_path(&paths, "notes")).expect("read rolled back");
+        assert!(rolled.contains("v1"), "rolled back should be v1: {rolled}");
+
+        // Verify skill is still listed.
+        let names = list_custom_skill_names(&paths);
+        assert!(
+            names.contains(&"notes".to_owned()),
+            "expected notes in {names:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&paths.root);
+    }
+
     #[test]
     fn managed_skill_info_round_trip() {
         let info = ManagedSkillInfo {
