@@ -22,7 +22,7 @@ use std::sync::{Mutex, OnceLock};
 
 static RECORD_COUNTER: AtomicU64 = AtomicU64::new(1);
 static MEMORY_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 const MANIFEST_FILE: &str = "manifest.toml";
 const RECORDS_FILE: &str = "records.jsonl";
 const AUDIT_FILE: &str = "audit.jsonl";
@@ -191,6 +191,14 @@ pub enum MemoryKind {
     Profile,
     Episode,
     Fact,
+    /// A date-based event (birthday, meeting, deadline, anniversary).
+    Event,
+    /// A known person (friend, colleague, family member).
+    Person,
+    /// A user interest or hobby.
+    Interest,
+    /// A commitment or promise the user made.
+    Commitment,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -229,6 +237,15 @@ pub struct MemoryRecord {
     pub created_at: u64,
     #[serde(default)]
     pub updated_at: u64,
+    /// Optional importance score for prioritization (0.0–1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance_score: Option<f32>,
+    /// Optional staleness threshold in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_after_secs: Option<u64>,
+    /// Optional structured metadata (JSON blob).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -385,6 +402,7 @@ impl MemoryRepository {
                 while version < target_version {
                     match version {
                         0 => self.migrate_0_to_1()?,
+                        1 => self.migrate_1_to_2()?,
                         other => {
                             return Err(SpeechError::Memory(format!(
                                 "unsupported memory migration from schema version {other}"
@@ -441,6 +459,17 @@ impl MemoryRepository {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn migrate_1_to_2(&self) -> Result<()> {
+        // v2 adds optional fields (importance_score, stale_after_secs, metadata)
+        // to MemoryRecord and new MemoryKind variants (Event, Person, Interest,
+        // Commitment). All new fields have #[serde(default)] so existing records
+        // deserialize without changes. We re-serialize to normalize the format.
+        self.ensure_layout()?;
+        let records = self.list_records()?;
+        self.rewrite_records(&records)?;
         Ok(())
     }
 
@@ -600,6 +629,9 @@ impl MemoryRepository {
                 supersedes: None,
                 created_at: now,
                 updated_at: now,
+                importance_score: None,
+                stale_after_secs: None,
+                metadata: None,
             };
 
             self.append_record(&record)?;
@@ -696,6 +728,9 @@ impl MemoryRepository {
                 supersedes: Some(old_id.to_owned()),
                 created_at: now,
                 updated_at: now,
+                importance_score: None,
+                stale_after_secs: None,
+                metadata: None,
             };
 
             records.push(new_record.clone());
@@ -1604,6 +1639,10 @@ fn display_kind(kind: MemoryKind) -> &'static str {
         MemoryKind::Profile => "profile",
         MemoryKind::Episode => "episode",
         MemoryKind::Fact => "fact",
+        MemoryKind::Event => "event",
+        MemoryKind::Person => "person",
+        MemoryKind::Interest => "interest",
+        MemoryKind::Commitment => "commitment",
     }
 }
 
@@ -1658,6 +1697,8 @@ fn score_record(record: &MemoryRecord, query_tokens: &[String]) -> f32 {
     match record.kind {
         MemoryKind::Profile => score += SCORE_KIND_BONUS_PROFILE,
         MemoryKind::Fact => score += SCORE_KIND_BONUS_FACT,
+        MemoryKind::Event | MemoryKind::Commitment => score += SCORE_KIND_BONUS_FACT,
+        MemoryKind::Person | MemoryKind::Interest => score += SCORE_KIND_BONUS_FACT,
         MemoryKind::Episode => {}
     }
 

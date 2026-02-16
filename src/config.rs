@@ -24,6 +24,8 @@ pub struct SpeechConfig {
     pub models: ModelConfig,
     /// Memory settings (persistent user identity + known people).
     pub memory: MemoryConfig,
+    /// Proactive intelligence settings.
+    pub intelligence: IntelligenceConfig,
     /// Conversation gate settings (wake word / stop phrase).
     pub conversation: ConversationConfig,
     /// Barge-in (interrupt) behavior while the assistant is generating/speaking.
@@ -818,6 +820,67 @@ impl Default for MemoryConfig {
             min_profile_confidence: 0.70,
             retention_days: 365,
             schema_auto_migrate: true,
+        }
+    }
+}
+
+/// Proactivity level for intelligence delivery.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProactivityLevel {
+    /// No proactive features.
+    Off,
+    /// Extract and store intelligence, but only deliver on explicit request.
+    DigestOnly,
+    /// Scheduled morning briefings + on-demand queries (default).
+    #[default]
+    Gentle,
+    /// Briefings + timely reminders (interrupts for urgent items).
+    Active,
+}
+
+/// Configuration for the proactive intelligence system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntelligenceConfig {
+    /// Master switch for intelligence extraction.
+    pub enabled: bool,
+    /// Model to use for extraction (None = use default LLM).
+    pub extraction_model: Option<String>,
+    /// Maximum intelligence items per extraction pass.
+    pub max_extraction_items: usize,
+    /// Quiet hours start (hour 0-23, local time).
+    pub quiet_hours_start: u8,
+    /// Quiet hours end (hour 0-23, local time).
+    pub quiet_hours_end: u8,
+    /// Maximum proactive deliveries per day.
+    pub annoyance_budget_daily: u32,
+    /// Morning briefing hour (local time).
+    pub briefing_hour: u8,
+    /// Morning briefing minute.
+    pub briefing_min: u8,
+    /// Proactivity level.
+    pub proactivity_level: ProactivityLevel,
+    /// Maximum background research tasks per day.
+    pub max_daily_research_tasks: u32,
+    /// Minimum seconds between proactive deliveries.
+    pub delivery_cooldown_secs: u64,
+}
+
+impl Default for IntelligenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            extraction_model: None,
+            max_extraction_items: 10,
+            quiet_hours_start: 23,
+            quiet_hours_end: 7,
+            annoyance_budget_daily: 5,
+            briefing_hour: 8,
+            briefing_min: 0,
+            proactivity_level: ProactivityLevel::default(),
+            max_daily_research_tasks: 3,
+            delivery_cooldown_secs: 300,
         }
     }
 }

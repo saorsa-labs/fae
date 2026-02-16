@@ -144,4 +144,41 @@ pub enum RuntimeEvent {
         /// Error message from the primary provider.
         error: String,
     },
+    /// Intelligence extraction completed for a conversation turn.
+    ///
+    /// Emitted after the background extraction pass finishes.
+    IntelligenceExtraction {
+        /// Number of intelligence items extracted.
+        items_count: usize,
+        /// Number of actions triggered.
+        actions_count: usize,
+    },
+    /// A proactive briefing has been prepared and is ready for delivery.
+    ///
+    /// Emitted when the briefing builder finishes gathering data.
+    ProactiveBriefingReady {
+        /// Number of briefing items prepared.
+        item_count: usize,
+    },
+    /// A relationship record was updated or created.
+    ///
+    /// Emitted after a relationship upsert from intelligence actions.
+    RelationshipUpdate {
+        /// Person's name.
+        name: String,
+    },
+    /// A skill proposal was generated.
+    ///
+    /// Emitted when a new skill opportunity is detected.
+    SkillProposal {
+        /// Proposed skill name.
+        skill_name: String,
+    },
+    /// Noise budget status changed.
+    ///
+    /// Emitted when the daily noise budget is reset or exhausted.
+    NoiseBudgetUpdate {
+        /// Remaining deliveries allowed today.
+        remaining: u32,
+    },
 }

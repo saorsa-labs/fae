@@ -599,6 +599,14 @@ pub const TASK_MEMORY_REINDEX: &str = "memory_reindex";
 pub const TASK_MEMORY_GC: &str = "memory_gc";
 /// Well-known task ID for memory schema migration checks.
 pub const TASK_MEMORY_MIGRATE: &str = "memory_migrate";
+/// Well-known task ID for the daily noise budget reset.
+pub const TASK_NOISE_BUDGET_RESET: &str = "noise_budget_reset";
+/// Well-known task ID for checking stale relationships.
+pub const TASK_STALE_RELATIONSHIPS: &str = "stale_relationships";
+/// Well-known task ID for the morning briefing.
+pub const TASK_MORNING_BRIEFING: &str = "morning_briefing";
+/// Well-known task ID for checking skill proposal opportunities.
+pub const TASK_SKILL_PROPOSALS: &str = "skill_proposals";
 
 /// Execute a built-in scheduled task by ID.
 ///
@@ -625,7 +633,77 @@ pub fn execute_builtin_with_memory_root(
         TASK_MEMORY_REINDEX => run_memory_reindex_for_root(memory_root),
         TASK_MEMORY_GC => run_memory_gc_for_root(memory_root, retention_days),
         TASK_MEMORY_MIGRATE => run_memory_migrate_for_root(memory_root),
+        TASK_NOISE_BUDGET_RESET => run_noise_budget_reset(),
+        TASK_STALE_RELATIONSHIPS => run_stale_relationship_check(memory_root),
+        TASK_MORNING_BRIEFING => run_morning_briefing_check(memory_root),
+        TASK_SKILL_PROPOSALS => run_skill_proposal_check(memory_root),
         _ => TaskResult::Error(format!("unknown built-in task: {task_id}")),
+    }
+}
+
+/// Reset the daily noise budget.
+///
+/// This is a lightweight task that logs the reset. The actual NoiseController
+/// state is managed in-memory by the pipeline coordinator.
+fn run_noise_budget_reset() -> TaskResult {
+    tracing::info!("daily noise budget reset");
+    TaskResult::Success("noise budget reset".into())
+}
+
+/// Check for stale relationships that haven't been mentioned recently.
+fn run_stale_relationship_check(memory_root: &Path) -> TaskResult {
+    let repo = crate::memory::MemoryRepository::new(memory_root);
+    let store = crate::intelligence::IntelligenceStore::new(repo);
+    match store.query_stale_relationships(30) {
+        Ok(stale) => {
+            if stale.is_empty() {
+                TaskResult::Success("no stale relationships".into())
+            } else {
+                let names: Vec<String> = stale
+                    .iter()
+                    .filter_map(|(r, _)| {
+                        crate::intelligence::IntelligenceStore::parse_relationship_meta(r)
+                            .map(|m| m.name)
+                    })
+                    .collect();
+                TaskResult::Success(format!(
+                    "found {} stale relationships: {}",
+                    stale.len(),
+                    names.join(", ")
+                ))
+            }
+        }
+        Err(e) => TaskResult::Error(format!("stale relationship check failed: {e}")),
+    }
+}
+
+/// Build a morning briefing summary for logging/telemetry.
+fn run_morning_briefing_check(memory_root: &Path) -> TaskResult {
+    let repo = crate::memory::MemoryRepository::new(memory_root);
+    let store = crate::intelligence::IntelligenceStore::new(repo);
+    let briefing = crate::intelligence::build_briefing(&store);
+    if briefing.is_empty() {
+        TaskResult::Success("no briefing items today".into())
+    } else {
+        TaskResult::Success(format!("briefing ready: {} items", briefing.len()))
+    }
+}
+
+/// Check for skill proposal opportunities.
+fn run_skill_proposal_check(memory_root: &Path) -> TaskResult {
+    let opportunities = crate::intelligence::detect_skill_opportunities(memory_root);
+    if opportunities.is_empty() {
+        TaskResult::Success("no new skill opportunities detected".into())
+    } else {
+        let names: Vec<&str> = opportunities
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .collect();
+        TaskResult::Success(format!(
+            "detected {} skill opportunities: {}",
+            opportunities.len(),
+            names.join(", ")
+        ))
     }
 }
 
@@ -801,6 +879,9 @@ mod tests {
             supersedes: None,
             created_at: old,
             updated_at: old,
+            importance_score: None,
+            stale_after_secs: None,
+            metadata: None,
         };
         let line = serde_json::to_string(&record).expect("serialize old record");
         std::fs::write(memory_dir.join("records.jsonl"), format!("{line}\n"))

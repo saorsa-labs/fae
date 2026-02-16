@@ -207,7 +207,12 @@ impl CanvasBridge {
             | RuntimeEvent::ModelSwitchRequested { .. }
             | RuntimeEvent::ConversationCanvasVisibility { .. }
             | RuntimeEvent::ProviderFallback { .. }
-            | RuntimeEvent::MicStatus { .. } => {}
+            | RuntimeEvent::MicStatus { .. }
+            | RuntimeEvent::IntelligenceExtraction { .. }
+            | RuntimeEvent::ProactiveBriefingReady { .. }
+            | RuntimeEvent::RelationshipUpdate { .. }
+            | RuntimeEvent::SkillProposal { .. }
+            | RuntimeEvent::NoiseBudgetUpdate { .. } => {}
         }
     }
 

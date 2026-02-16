@@ -2250,6 +2250,29 @@ async fn run_llm_stage(
             &assistant_text,
         );
 
+        // Background intelligence extraction (non-blocking).
+        if config.intelligence.enabled {
+            let resolved_key = config
+                .llm
+                .api_key
+                .resolve(credential_manager.as_ref())
+                .await
+                .unwrap_or_default();
+
+            let params = crate::intelligence::ExtractionParams {
+                user_text: user_text.clone(),
+                assistant_text: assistant_text.clone(),
+                memory_context: None,
+                llm_config: config.llm.clone(),
+                resolved_api_key: resolved_key,
+                extraction_model: config.intelligence.extraction_model.clone(),
+                memory_path: config.memory.root_dir.clone(),
+                runtime_tx: runtime_tx.clone(),
+            };
+
+            tokio::spawn(crate::intelligence::run_background_extraction(params));
+        }
+
         if transcription_channel_closed && pending_inputs.is_empty() {
             break;
         }
@@ -4911,10 +4934,11 @@ mod tests {
             .expect("llm stage join");
 
         let events = collect_runtime_events(&mut runtime_rx);
+        let current_ver = crate::memory::current_memory_schema_version();
         assert!(events.iter().any(|event| matches!(
             event,
             RuntimeEvent::MemoryMigration { from, to, success }
-            if *from == 0 && *to == 1 && *success
+            if *from == 0 && *to == current_ver && *success
         )));
 
         server.shutdown().await;
@@ -4944,10 +4968,11 @@ mod tests {
             .expect("llm stage join");
 
         let events = collect_runtime_events(&mut runtime_rx);
+        let current_ver = crate::memory::current_memory_schema_version();
         assert!(events.iter().any(|event| matches!(
             event,
             RuntimeEvent::MemoryMigration { from, to, success }
-            if *from == 0 && *to == 1 && !*success
+            if *from == 0 && *to == current_ver && !*success
         )));
 
         let repo = MemoryRepository::new(&root);

@@ -2719,6 +2719,10 @@ fn memory_kind_label(kind: fae::memory::MemoryKind) -> &'static str {
         fae::memory::MemoryKind::Profile => "profile",
         fae::memory::MemoryKind::Episode => "episode",
         fae::memory::MemoryKind::Fact => "fact",
+        fae::memory::MemoryKind::Event => "event",
+        fae::memory::MemoryKind::Person => "person",
+        fae::memory::MemoryKind::Interest => "interest",
+        fae::memory::MemoryKind::Commitment => "commitment",
     }
 }
 

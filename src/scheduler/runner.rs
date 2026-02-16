@@ -140,6 +140,52 @@ impl Scheduler {
         self.add_task_if_missing(gc_task);
     }
 
+    /// Register built-in intelligence maintenance tasks.
+    ///
+    /// Includes: noise budget reset, stale relationship check, morning briefing,
+    /// and skill proposal detection.
+    pub fn with_intelligence_maintenance(&mut self) {
+        use crate::scheduler::tasks::{
+            TASK_MORNING_BRIEFING, TASK_NOISE_BUDGET_RESET, TASK_SKILL_PROPOSALS,
+            TASK_STALE_RELATIONSHIPS,
+        };
+
+        let mut noise_reset = ScheduledTask::new(
+            TASK_NOISE_BUDGET_RESET,
+            "Reset daily noise budget",
+            Schedule::Daily { hour: 0, min: 0 },
+        );
+        noise_reset.kind = TaskKind::Builtin;
+
+        let mut stale_rel = ScheduledTask::new(
+            TASK_STALE_RELATIONSHIPS,
+            "Check stale relationships",
+            Schedule::Interval {
+                secs: 7 * 24 * 3600,
+            },
+        );
+        stale_rel.kind = TaskKind::Builtin;
+
+        let mut morning = ScheduledTask::new(
+            TASK_MORNING_BRIEFING,
+            "Prepare morning briefing",
+            Schedule::Daily { hour: 8, min: 0 },
+        );
+        morning.kind = TaskKind::Builtin;
+
+        let mut skills = ScheduledTask::new(
+            TASK_SKILL_PROPOSALS,
+            "Check skill opportunities",
+            Schedule::Daily { hour: 11, min: 0 },
+        );
+        skills.kind = TaskKind::Builtin;
+
+        self.add_task_if_missing(noise_reset);
+        self.add_task_if_missing(stale_rel);
+        self.add_task_if_missing(morning);
+        self.add_task_if_missing(skills);
+    }
+
     /// Add (or replace) a task.
     pub fn add_task(&mut self, task: ScheduledTask) {
         if let Some(existing) = self.tasks.iter_mut().find(|t| t.id == task.id) {
