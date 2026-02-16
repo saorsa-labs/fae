@@ -5004,7 +5004,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(models_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Models")
                     .with_inner_size(LogicalSize::new(520.0, 760.0))
@@ -5019,7 +5019,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(preferences_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Settings")
                     .with_inner_size(LogicalSize::new(620.0, 780.0))
@@ -5034,7 +5034,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(soul_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Soul")
                     .with_inner_size(LogicalSize::new(760.0, 820.0))
@@ -5049,7 +5049,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(skills_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Skills")
                     .with_inner_size(LogicalSize::new(760.0, 820.0))
@@ -5064,7 +5064,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(memories_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Memories")
                     .with_inner_size(LogicalSize::new(820.0, 860.0))
@@ -5079,7 +5079,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(ingestion_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Ingestion")
                     .with_inner_size(LogicalSize::new(820.0, 860.0))
@@ -5094,7 +5094,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(fae_guide_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Guide")
                     .with_inner_size(LogicalSize::new(760.0, 800.0))
@@ -7906,7 +7906,7 @@ fn preferences_window() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(models_window);
-            let cfg = Config::new().with_window(
+            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
                 WindowBuilder::new()
                     .with_title("Fae Models")
                     .with_inner_size(LogicalSize::new(520.0, 760.0))

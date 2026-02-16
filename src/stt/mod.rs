@@ -56,7 +56,28 @@ impl ParakeetStt {
 
         let transcribed_start = Instant::now();
         let duration_s = segment.samples.len() as f32 / segment.sample_rate as f32;
-        info!("transcribing {duration_s:.1}s audio segment");
+
+        // Diagnostic: log segment audio characteristics to debug empty transcriptions.
+        let rms: f32 = if segment.samples.is_empty() {
+            0.0
+        } else {
+            (segment.samples.iter().map(|s| s * s).sum::<f32>() / segment.samples.len() as f32)
+                .sqrt()
+        };
+        let peak = segment
+            .samples
+            .iter()
+            .map(|s| s.abs())
+            .fold(0.0f32, f32::max);
+        let non_zero = segment
+            .samples
+            .iter()
+            .filter(|&&s| s.abs() > 0.0001)
+            .count();
+        info!(
+            "transcribing {duration_s:.1}s audio segment (rms={rms:.6}, peak={peak:.6}, non_zero={non_zero}/{})",
+            segment.samples.len()
+        );
 
         let model = self
             .model
