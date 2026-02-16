@@ -2524,17 +2524,24 @@ async fn run_tts_stage(
             sentence = rx.recv() => {
                 match sentence {
                     Some(sentence) => {
-                        // Generate visemes for lip-sync animation
-                        if let Some(ref rt_tx) = runtime_tx {
-                            let visemes = crate::viseme::text_to_visemes(&sentence.text, 1.0);
-                            // Send first viseme as a "preview" - the GUI will advance through them
-                            if let Some((viseme, _, _)) = visemes.first() {
-                                let mouth_png = crate::viseme::viseme_to_mouth_png(*viseme);
-                                let _ = rt_tx.send(RuntimeEvent::AssistantViseme {
-                                    mouth_png: mouth_png.to_owned(),
-                                });
-                            }
-                        }
+                        // Spawn viseme generation in parallel with TTS synthesis.
+                        let viseme_handle = if let Some(ref rt_tx) = runtime_tx {
+                            let viseme_text = sentence.text.clone();
+                            let viseme_tx = rt_tx.clone();
+                            Some(tokio::task::spawn_blocking(move || {
+                                let visemes =
+                                    crate::viseme::text_to_visemes(&viseme_text, 1.0);
+                                if let Some((viseme, _, _)) = visemes.first() {
+                                    let mouth_png =
+                                        crate::viseme::viseme_to_mouth_png(*viseme);
+                                    let _ = viseme_tx.send(RuntimeEvent::AssistantViseme {
+                                        mouth_png: mouth_png.to_owned(),
+                                    });
+                                }
+                            }))
+                        } else {
+                            None
+                        };
 
                         // If an interrupt was requested (barge-in), drop any pending synthesis
                         // and only forward a final marker to unblock downstream state.
@@ -2587,6 +2594,12 @@ async fn run_tts_stage(
                                 }
                             }
                             Err(e) => error!("TTS error: {e}"),
+                        }
+
+                        // Ensure viseme generation finishes (runs concurrently
+                        // with TTS synthesis above).
+                        if let Some(handle) = viseme_handle {
+                            let _ = handle.await;
                         }
                     }
                     None => break,

@@ -103,7 +103,27 @@ impl FaeAgentLlm {
         );
         let cancel = agent.cancellation_token();
 
-        let run_fut = agent.run_with_messages(self.history.clone());
+        // Create clause streaming channel for low-latency TTS pipelining.
+        // Clauses are streamed during LLM generation so TTS can start
+        // synthesizing before the full response is available.
+        let (clause_tx, mut clause_rx) = mpsc::channel::<String>(16);
+
+        // Forwarding task: convert raw clause strings into SentenceChunks.
+        let chunk_tx = tx.clone();
+        let fwd_handle = tokio::spawn(async move {
+            while let Some(clause) = clause_rx.recv().await {
+                if !clause.is_empty() {
+                    let _ = chunk_tx
+                        .send(SentenceChunk {
+                            text: clause,
+                            is_final: false,
+                        })
+                        .await;
+                }
+            }
+        });
+
+        let run_fut = agent.run_with_messages_streaming(self.history.clone(), clause_tx);
         tokio::pin!(run_fut);
 
         let mut was_interrupted = false;
@@ -122,7 +142,21 @@ impl FaeAgentLlm {
             }
         };
 
-        let result = run_result.map_err(|e| SpeechError::Llm(format!("agent run failed: {e}")))?;
+        // Wait for forwarding task to finish draining clauses.
+        let _ = fwd_handle.await;
+
+        let result = match run_result {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx
+                    .send(SentenceChunk {
+                        text: String::new(),
+                        is_final: true,
+                    })
+                    .await;
+                return Err(SpeechError::Llm(format!("agent run failed: {e}")));
+            }
+        };
 
         if was_interrupted || matches!(result.stop_reason, StopReason::Cancelled) {
             let _ = tx
@@ -147,7 +181,15 @@ impl FaeAgentLlm {
         self.emit_tool_events(&result);
         self.append_result_messages(&result);
         self.trim_history();
-        stream_result_to_chunks(result.final_text.clone(), tx.clone()).await?;
+
+        // All clause chunks were streamed during generation; send the
+        // final marker so the TTS stage knows the response is complete.
+        let _ = tx
+            .send(SentenceChunk {
+                text: String::new(),
+                is_final: true,
+            })
+            .await;
 
         Ok(false)
     }
@@ -478,42 +520,6 @@ fn build_registry(
     }
 
     Arc::new(registry)
-}
-
-async fn stream_result_to_chunks(text: String, tx: mpsc::Sender<SentenceChunk>) -> Result<()> {
-    if text.trim().is_empty() {
-        tx.send(SentenceChunk {
-            text: String::new(),
-            is_final: true,
-        })
-        .await
-        .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
-        return Ok(());
-    }
-
-    let mut sentence_buffer = text;
-    while let Some(pos) = crate::llm::find_clause_boundary(&sentence_buffer) {
-        let sentence = sentence_buffer[..=pos].trim().to_owned();
-        if !sentence.is_empty() {
-            tx.send(SentenceChunk {
-                text: sentence,
-                is_final: false,
-            })
-            .await
-            .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
-        }
-        sentence_buffer = sentence_buffer[pos + 1..].to_owned();
-    }
-
-    let remaining = sentence_buffer.trim().to_owned();
-    tx.send(SentenceChunk {
-        text: remaining,
-        is_final: true,
-    })
-    .await
-    .map_err(|e| SpeechError::Channel(format!("LLM output channel closed: {e}")))?;
-
-    Ok(())
 }
 
 fn estimate_history_tokens(messages: &[Message]) -> usize {

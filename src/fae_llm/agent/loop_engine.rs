@@ -13,7 +13,7 @@ use super::accumulator::StreamAccumulator;
 use super::executor::ToolExecutor;
 use super::types::{AgentConfig, AgentLoopResult, ExecutedToolCall, StopReason, TurnResult};
 use crate::fae_llm::error::FaeLlmError;
-use crate::fae_llm::events::FinishReason;
+use crate::fae_llm::events::{FinishReason, LlmEvent};
 use crate::fae_llm::observability::metrics::{MetricsCollector, NoopMetrics};
 use crate::fae_llm::observability::spans::*;
 use crate::fae_llm::provider::{ProviderAdapter, ToolDefinition};
@@ -23,6 +23,7 @@ use crate::fae_llm::tools::sanitize::sanitize_tool_output;
 use crate::fae_llm::tools::types::DEFAULT_MAX_BYTES;
 use crate::fae_llm::types::RequestOptions;
 use crate::fae_llm::usage::TokenUsage;
+use tokio::sync::mpsc;
 
 /// Lower temperature improves tool-calling judgment on smaller local models.
 const TOOL_JUDGMENT_TEMPERATURE: f64 = 0.2;
@@ -159,6 +160,24 @@ impl AgentLoop {
         self.run_loop(messages).await
     }
 
+    /// Run the agent loop with clause-level text streaming.
+    ///
+    /// As TextDelta tokens arrive from the provider, they are buffered and
+    /// sent through `clause_tx` whenever a clause boundary is detected.
+    /// This enables the TTS stage to begin synthesis while the LLM is still
+    /// generating, dramatically reducing first-audio latency.
+    ///
+    /// On tool-calling turns the clause buffer is discarded; only the final
+    /// text turn is streamed. When the sender is dropped (method returns),
+    /// the receiver sees channel close as the end-of-stream signal.
+    pub async fn run_with_messages_streaming(
+        &self,
+        messages: Vec<Message>,
+        clause_tx: mpsc::Sender<String>,
+    ) -> Result<AgentLoopResult, FaeLlmError> {
+        self.run_loop_inner(messages, Some(clause_tx)).await
+    }
+
     /// Continue a conversation from a previous agent loop result.
     ///
     /// Reconstructs the message history from the previous result,
@@ -184,7 +203,16 @@ impl AgentLoop {
     }
 
     /// The main agent loop implementation.
-    async fn run_loop(&self, mut messages: Vec<Message>) -> Result<AgentLoopResult, FaeLlmError> {
+    async fn run_loop(&self, messages: Vec<Message>) -> Result<AgentLoopResult, FaeLlmError> {
+        self.run_loop_inner(messages, None).await
+    }
+
+    /// The main agent loop implementation with optional clause streaming.
+    async fn run_loop_inner(
+        &self,
+        mut messages: Vec<Message>,
+        clause_tx: Option<mpsc::Sender<String>>,
+    ) -> Result<AgentLoopResult, FaeLlmError> {
         let mut turns = Vec::new();
         let total_usage = TokenUsage::default();
         let request_timeout = tokio::time::Duration::from_secs(self.config.request_timeout_secs);
@@ -194,6 +222,7 @@ impl AgentLoop {
         }
         let loop_start = std::time::Instant::now();
         let mut circuit_breaker = self.config.circuit_breaker.clone();
+        let mut clause_buffer = String::new();
 
         for _turn_idx in 0..self.config.max_turns {
             let turn_number = _turn_idx + 1;
@@ -273,7 +302,22 @@ impl AgentLoop {
                 match tokio::time::timeout(tokio::time::Duration::from_millis(25), stream.next())
                     .await
                 {
-                    Ok(Some(event)) => acc.push(event),
+                    Ok(Some(event)) => {
+                        // Buffer TextDelta tokens for clause-level streaming.
+                        if let Some(ref ctx) = clause_tx
+                            && let LlmEvent::TextDelta { ref text } = event
+                        {
+                            clause_buffer.push_str(text);
+                            while let Some(pos) = crate::llm::find_clause_boundary(&clause_buffer) {
+                                let clause = clause_buffer[..=pos].trim().to_owned();
+                                clause_buffer = clause_buffer[pos + 1..].to_owned();
+                                if !clause.is_empty() {
+                                    let _ = ctx.send(clause).await;
+                                }
+                            }
+                        }
+                        acc.push(event);
+                    }
                     Ok(None) => break,
                     Err(_) => continue,
                 }
@@ -424,11 +468,22 @@ impl AgentLoop {
                     usage: None,
                 });
 
+                // Discard any clause text accumulated during a tool turn.
+                clause_buffer.clear();
+
                 // Continue the loop for the next turn
                 continue;
             }
 
-            // No tool calls — the model is done
+            // No tool calls — the model is done.
+            // Flush any remaining clause buffer text to the streaming channel.
+            if let Some(ref ctx) = clause_tx {
+                let remaining = clause_buffer.trim().to_owned();
+                if !remaining.is_empty() {
+                    let _ = ctx.send(remaining).await;
+                }
+                clause_buffer.clear();
+            }
             let turn_duration_ms = turn_start.elapsed().as_millis() as u64;
             self.metrics
                 .record_turn_latency_ms(turn_number, turn_duration_ms);
