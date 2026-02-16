@@ -311,6 +311,72 @@ pub fn export_all_data(destination: &Path) -> Result<PathBuf> {
     Ok(destination.to_path_buf())
 }
 
+/// Restores user data from a previously exported backup ZIP file.
+///
+/// Extracts the backup archive contents into the active Fae data and config
+/// directories. The ZIP layout produced by [`export_all_data`] is:
+///
+/// - `config/…` → extracted to [`crate::fae_dirs::config_dir()`]
+/// - `data/…` → extracted to [`crate::fae_dirs::data_dir()`]
+/// - `BACKUP_INFO.txt` → skipped (metadata only)
+///
+/// Existing files are overwritten. New directories are created as needed.
+///
+/// # Errors
+///
+/// Returns an error if the ZIP cannot be read or files cannot be written.
+pub fn import_all_data(backup_path: &Path) -> Result<()> {
+    let file = fs::File::open(backup_path)
+        .map_err(|e| SpeechError::Pipeline(format!("cannot open backup: {e}")))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| SpeechError::Pipeline(format!("invalid zip archive: {e}")))?;
+
+    let config_root = crate::fae_dirs::config_dir();
+    let data_root = crate::fae_dirs::data_dir();
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| SpeechError::Pipeline(format!("zip entry error: {e}")))?;
+
+        let entry_name = entry.name().to_owned();
+
+        // Skip metadata-only file.
+        if entry_name == "BACKUP_INFO.txt" {
+            continue;
+        }
+
+        // Skip directory entries (they have no content; we create dirs for files).
+        if entry.is_dir() {
+            continue;
+        }
+
+        // Route to the correct destination root.
+        let dest_path = if let Some(rest) = entry_name.strip_prefix("config/") {
+            config_root.join(rest)
+        } else if let Some(rest) = entry_name.strip_prefix("data/") {
+            data_root.join(rest)
+        } else {
+            // Unknown top-level entry — place in data root.
+            data_root.join(&entry_name)
+        };
+
+        // Create parent directories.
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Extract file contents.
+        let mut buf = Vec::new();
+        entry
+            .read_to_end(&mut buf)
+            .map_err(|e| SpeechError::Pipeline(format!("zip read error: {e}")))?;
+        fs::write(&dest_path, &buf)?;
+    }
+
+    Ok(())
+}
+
 /// Builds human-readable metadata for the backup archive.
 fn build_backup_metadata() -> String {
     format!(
@@ -550,5 +616,147 @@ mod tests {
             !earch.is_empty(),
             "empty backup should have at least BACKUP_INFO.txt"
         );
+
+        // --- Test 3: E2E roundtrip (export → import → verify byte-for-byte) ---
+        // Uses richer data set to cover all directory types.
+
+        // Fresh source directories for roundtrip.
+        let rt_data = tmp.path().join("rt_data");
+        let rt_config = tmp.path().join("rt_config");
+        let rt_cache = tmp.path().join("rt_cache");
+        fs::create_dir_all(&rt_data).unwrap_or_else(|_| unreachable!());
+        fs::create_dir_all(&rt_config).unwrap_or_else(|_| unreachable!());
+        fs::create_dir_all(&rt_cache).unwrap_or_else(|_| unreachable!());
+
+        // Config files.
+        fs::write(rt_config.join("config.toml"), "[audio]\nvolume = 0.8")
+            .unwrap_or_else(|_| unreachable!());
+        fs::write(
+            rt_config.join("scheduler.json"),
+            r#"{"last_run":"2026-01-01"}"#,
+        )
+        .unwrap_or_else(|_| unreachable!());
+
+        // Data root files.
+        fs::write(rt_data.join("SOUL.md"), "# My Soul\nI am Fae.")
+            .unwrap_or_else(|_| unreachable!());
+        fs::write(rt_data.join("onboarding.md"), "# Onboarding complete")
+            .unwrap_or_else(|_| unreachable!());
+        fs::write(rt_data.join("manifest.toml"), "[manifest]\nversion = 1")
+            .unwrap_or_else(|_| unreachable!());
+
+        // Skills.
+        let rt_skills = rt_data.join("skills");
+        fs::create_dir_all(&rt_skills).unwrap_or_else(|_| unreachable!());
+        fs::write(
+            rt_skills.join("weather.md"),
+            "# Weather Skill\nCheck forecasts.",
+        )
+        .unwrap_or_else(|_| unreachable!());
+        fs::write(
+            rt_skills.join("calendar.md"),
+            "# Calendar Skill\nManage events.",
+        )
+        .unwrap_or_else(|_| unreachable!());
+
+        // Memory.
+        let rt_memory = rt_data.join("memory");
+        fs::create_dir_all(&rt_memory).unwrap_or_else(|_| unreachable!());
+        fs::write(
+            rt_memory.join("record-001.json"),
+            r#"{"id":"001","text":"hi"}"#,
+        )
+        .unwrap_or_else(|_| unreachable!());
+
+        // Nested soul_versions.
+        let rt_sv = rt_data.join("soul_versions");
+        let rt_sv_sub = rt_sv.join("2026");
+        fs::create_dir_all(&rt_sv_sub).unwrap_or_else(|_| unreachable!());
+        fs::write(rt_sv.join("v1.md"), "Soul version 1").unwrap_or_else(|_| unreachable!());
+        fs::write(rt_sv_sub.join("v2.md"), "Soul version 2 in nested dir")
+            .unwrap_or_else(|_| unreachable!());
+
+        // Logs.
+        let rt_logs = rt_data.join("logs");
+        fs::create_dir_all(&rt_logs).unwrap_or_else(|_| unreachable!());
+        fs::write(rt_logs.join("fae.log"), "2026-01-01 INFO boot")
+            .unwrap_or_else(|_| unreachable!());
+
+        // External APIs.
+        let rt_apis = rt_data.join("external_apis");
+        fs::create_dir_all(&rt_apis).unwrap_or_else(|_| unreachable!());
+        fs::write(rt_apis.join("openai.toml"), "[openai]\nmodel = \"gpt-4\"")
+            .unwrap_or_else(|_| unreachable!());
+
+        // Wakeword (binary).
+        let rt_wakeword = rt_data.join("wakeword");
+        fs::create_dir_all(&rt_wakeword).unwrap_or_else(|_| unreachable!());
+        fs::write(rt_wakeword.join("sample.wav"), b"RIFF fake wav data")
+            .unwrap_or_else(|_| unreachable!());
+
+        // Voices (binary).
+        let rt_voices = rt_data.join("voices");
+        fs::create_dir_all(&rt_voices).unwrap_or_else(|_| unreachable!());
+        fs::write(rt_voices.join("emma.bin"), b"\x00\x01\x02voice-data")
+            .unwrap_or_else(|_| unreachable!());
+
+        // Export.
+        let rt_zip = tmp.path().join("roundtrip.zip");
+        let rt_export =
+            with_test_dirs(&rt_data, &rt_config, &rt_cache, || export_all_data(&rt_zip));
+        assert!(rt_export.is_ok(), "roundtrip export failed: {rt_export:?}");
+
+        // Import into completely fresh directories.
+        let dst_data = tmp.path().join("dst_data");
+        let dst_config = tmp.path().join("dst_config");
+        let dst_cache = tmp.path().join("dst_cache");
+        fs::create_dir_all(&dst_data).unwrap_or_else(|_| unreachable!());
+        fs::create_dir_all(&dst_config).unwrap_or_else(|_| unreachable!());
+        fs::create_dir_all(&dst_cache).unwrap_or_else(|_| unreachable!());
+
+        let rt_import = with_test_dirs(&dst_data, &dst_config, &dst_cache, || {
+            import_all_data(&rt_zip)
+        });
+        assert!(rt_import.is_ok(), "roundtrip import failed: {rt_import:?}");
+
+        // Verify every file byte-for-byte.
+        let check = |rel: &str, src_root: &Path, dst_root: &Path| {
+            let src_file = src_root.join(rel);
+            let dst_file = dst_root.join(rel);
+            assert!(
+                dst_file.is_file(),
+                "restored file missing: {rel} (at {})",
+                dst_file.display()
+            );
+            let src_bytes = fs::read(&src_file).unwrap_or_else(|_| unreachable!());
+            let dst_bytes = fs::read(&dst_file).unwrap_or_else(|_| unreachable!());
+            assert_eq!(
+                src_bytes,
+                dst_bytes,
+                "content mismatch for {rel}: {} vs {} bytes",
+                src_bytes.len(),
+                dst_bytes.len()
+            );
+        };
+
+        // Config.
+        check("config.toml", &rt_config, &dst_config);
+        check("scheduler.json", &rt_config, &dst_config);
+
+        // Data root.
+        check("SOUL.md", &rt_data, &dst_data);
+        check("onboarding.md", &rt_data, &dst_data);
+        check("manifest.toml", &rt_data, &dst_data);
+
+        // Subdirectories.
+        check("skills/weather.md", &rt_data, &dst_data);
+        check("skills/calendar.md", &rt_data, &dst_data);
+        check("memory/record-001.json", &rt_data, &dst_data);
+        check("soul_versions/v1.md", &rt_data, &dst_data);
+        check("soul_versions/2026/v2.md", &rt_data, &dst_data);
+        check("logs/fae.log", &rt_data, &dst_data);
+        check("external_apis/openai.toml", &rt_data, &dst_data);
+        check("wakeword/sample.wav", &rt_data, &dst_data);
+        check("voices/emma.bin", &rt_data, &dst_data);
     }
 }
