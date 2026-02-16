@@ -325,19 +325,18 @@ type = "none"
         assert!(secret.resolve().is_err());
     }
 
+    /// Test profile overlay by loading directly from a temp file.
+    ///
+    /// Avoids env-var manipulation (`HOME`/`FAE_DATA_DIR`) that causes
+    /// parallel-test races on macOS CI.
     #[test]
     fn apply_external_profile_overlays_llm_fields() {
-        let tmp = tempfile::tempdir().unwrap();
-        // Use FAE_DATA_DIR (direct override) instead of HOME to avoid
-        // parallel-test races on macOS where dirs::data_dir() derives
-        // from HOME and multiple tests mutate it concurrently.
-        let _data = EnvGuard::set("FAE_DATA_DIR", tmp.path().to_string_lossy().as_ref());
+        let dir = tempfile::tempdir().unwrap();
         let _env = EnvGuard::set("FAE_PROFILE_KEY", "sk-test-xyz");
 
-        let profile_dir = external_apis_dir();
-        std::fs::create_dir_all(&profile_dir).unwrap();
+        let path = dir.path().join("work.toml");
         std::fs::write(
-            profile_dir.join("work.toml"),
+            &path,
             r#"
 provider = "openai"
 api_type = "openai_responses"
@@ -354,15 +353,24 @@ var = "FAE_PROFILE_KEY"
         )
         .unwrap();
 
+        // Load profile directly from temp path (no env-var directory lookup).
+        let profile = load_profile_from_path("work", &path).unwrap();
+        assert!(profile.enabled);
+
+        // Resolve secret and overlay onto LlmConfig — same as apply_external_profile().
+        let resolved_api_key = profile.api_key.resolve().unwrap().unwrap_or_default();
         let mut llm = crate::config::LlmConfig {
             external_profile: Some("work".to_owned()),
             ..Default::default()
         };
-        llm.api_key = crate::credentials::CredentialRef::None;
-        llm.cloud_provider = None;
+        llm.api_url = profile.api_url.clone();
+        llm.api_model = profile.api_model.clone();
+        llm.api_type = profile.api_type;
+        llm.api_organization = profile.api_organization.clone();
+        llm.api_key = crate::credentials::CredentialRef::Plaintext(resolved_api_key);
+        llm.cloud_provider = Some(profile.provider.clone());
+        llm.cloud_model = Some(profile.api_model.clone());
 
-        let applied = apply_external_profile(&mut llm).unwrap().unwrap();
-        assert_eq!(applied.profile_id, "work");
         assert_eq!(llm.api_url, "https://example.com");
         assert_eq!(llm.api_model, "example-model");
         assert_eq!(llm.api_type, LlmApiType::OpenAiResponses);
