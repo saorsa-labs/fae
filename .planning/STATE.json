@@ -1,27 +1,27 @@
 {
   "version": 1,
-  "project": "fae-bugfixes-v0.3.1",
-  "active": false,
+  "project": "data-backup-and-skills",
+  "active": true,
   "milestone": {
-    "number": 4,
-    "name": "Post-Release Bug Fixes"
+    "number": 1,
+    "name": "Data Backup & Skills Verification"
   },
   "phase": {
-    "number": "D.2",
-    "name": "Contract & Test Fixes (P2)",
-    "plan": "PLAN-phase-D.2.md",
+    "number": "1.1",
+    "name": "Backup Core",
+    "plan": "PLAN-phase-1.1.md",
     "status": "complete"
   },
   "progress": {
-    "total_tasks": 4,
-    "completed_tasks": 4,
-    "current_task": 4
+    "total_tasks": 5,
+    "completed_tasks": 5,
+    "current_task": 5
   },
   "review": {
     "status": "passed",
-    "iteration": 1,
+    "iteration": 0,
     "last_verdict": "PASS"
   },
-  "status": "milestone_complete",
-  "last_updated": 1771200000
+  "status": "phase_complete",
+  "last_updated": "2026-02-16T12:30:00Z"
 }
