@@ -327,8 +327,11 @@ type = "none"
 
     #[test]
     fn apply_external_profile_overlays_llm_fields() {
-        let home = tempfile::tempdir().unwrap();
-        let _home = EnvGuard::set("HOME", home.path().to_string_lossy().as_ref());
+        let tmp = tempfile::tempdir().unwrap();
+        // Use FAE_DATA_DIR (direct override) instead of HOME to avoid
+        // parallel-test races on macOS where dirs::data_dir() derives
+        // from HOME and multiple tests mutate it concurrently.
+        let _data = EnvGuard::set("FAE_DATA_DIR", tmp.path().to_string_lossy().as_ref());
         let _env = EnvGuard::set("FAE_PROFILE_KEY", "sk-test-xyz");
 
         let profile_dir = external_apis_dir();
