@@ -97,6 +97,48 @@ impl XdotoolBackend {
     }
 }
 
+/// Parse `xdotool getwindowgeometry` output and return the window center `(x, y)`.
+///
+/// Expected format:
+/// ```text
+/// Window 12345
+///   Position: 100,200 (screen: 0)
+///   Geometry: 800x600
+/// ```
+///
+/// Center is `(pos_x + width / 2, pos_y + height / 2)`.
+fn parse_window_geometry(output: &str) -> Result<(i64, i64), String> {
+    let mut pos_x: Option<i64> = None;
+    let mut pos_y: Option<i64> = None;
+    let mut width: Option<i64> = None;
+    let mut height: Option<i64> = None;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+
+        if let Some(rest) = trimmed.strip_prefix("Position:") {
+            // "100,200 (screen: 0)"
+            let coords_part = rest.trim().split_whitespace().next().unwrap_or("");
+            let mut parts = coords_part.split(',');
+            pos_x = parts.next().and_then(|s| s.trim().parse().ok());
+            pos_y = parts.next().and_then(|s| s.trim().parse().ok());
+        } else if let Some(rest) = trimmed.strip_prefix("Geometry:") {
+            // "800x600"
+            let size_part = rest.trim();
+            let mut parts = size_part.split('x');
+            width = parts.next().and_then(|s| s.trim().parse().ok());
+            height = parts.next().and_then(|s| s.trim().parse().ok());
+        }
+    }
+
+    let px = pos_x.ok_or("missing Position in geometry output")?;
+    let py = pos_y.ok_or("missing Position y-coordinate in geometry output")?;
+    let w = width.ok_or("missing Geometry width in geometry output")?;
+    let h = height.ok_or("missing Geometry height in geometry output")?;
+
+    Ok((px + w / 2, py + h / 2))
+}
+
 impl Default for XdotoolBackend {
     fn default() -> Self {
         Self::new()
@@ -110,6 +152,8 @@ impl DesktopBackend for XdotoolBackend {
 
     fn is_available(&self) -> bool {
         Self::binary_exists("xdotool")
+            && Self::binary_exists("scrot")
+            && Self::binary_exists("xdg-open")
     }
 
     fn execute(&self, action: &DesktopAction) -> Result<DesktopResult, String> {
@@ -145,17 +189,39 @@ impl DesktopBackend for XdotoolBackend {
                 }
                 ClickTarget::Label(label) => {
                     // xdotool doesn't support accessibility labels directly.
-                    // Fall back to searching for a window with that name.
+                    // Fall back to searching for a window with that name and
+                    // clicking the center of the first match.
                     let output = self.run_command("xdotool", &["search", "--name", label])?;
-                    if output.trim().is_empty() {
-                        return Err(format!(
-                            "no window found matching label '{label}'. \
-                             xdotool does not support accessibility labels; \
-                             use coordinates instead."
-                        ));
-                    }
+                    let first_id = output
+                        .lines()
+                        .next()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| {
+                            format!(
+                                "no window found matching label '{label}'. \
+                                 xdotool does not support accessibility labels; \
+                                 use coordinates instead."
+                            )
+                        })?;
+
+                    // Get geometry so we can click the window center.
+                    let geom_output =
+                        self.run_command("xdotool", &["getwindowgeometry", first_id])?;
+                    let (cx, cy) = parse_window_geometry(&geom_output).map_err(|e| {
+                        format!("failed to parse geometry for window {first_id}: {e}")
+                    })?;
+
+                    let cx_str = cx.to_string();
+                    let cy_str = cy.to_string();
+
+                    self.run_command("xdotool", &["windowactivate", first_id])?;
+                    self.run_command("xdotool", &["mousemove", &cx_str, &cy_str, "click", "1"])?;
+
                     Ok(DesktopResult {
-                        output: format!("Found windows matching '{label}': {}", output.trim()),
+                        output: format!(
+                            "Clicked window '{label}' (id: {first_id}) at ({cx}, {cy})"
+                        ),
                         screenshot_path: None,
                     })
                 }
@@ -287,5 +353,67 @@ mod tests {
         assert!(!XdotoolBackend::binary_exists(
             "definitely_not_a_real_binary_12345"
         ));
+    }
+
+    // ── Geometry parsing tests ──────────────────────────────────
+
+    #[test]
+    fn parse_window_geometry_valid() {
+        let output = "Window 12345\n  Position: 100,200 (screen: 0)\n  Geometry: 800x600\n";
+        let result = parse_window_geometry(output);
+        assert!(result.is_ok());
+        let (cx, cy) = match result {
+            Ok(v) => v,
+            Err(_) => unreachable!("should parse valid geometry"),
+        };
+        // center = (100 + 800/2, 200 + 600/2) = (500, 500)
+        assert_eq!(cx, 500);
+        assert_eq!(cy, 500);
+    }
+
+    #[test]
+    fn parse_window_geometry_asymmetric() {
+        let output = "Window 99\n  Position: 0,0 (screen: 0)\n  Geometry: 1920x1080\n";
+        let (cx, cy) = match parse_window_geometry(output) {
+            Ok(v) => v,
+            Err(_) => unreachable!("should parse valid geometry"),
+        };
+        assert_eq!(cx, 960);
+        assert_eq!(cy, 540);
+    }
+
+    #[test]
+    fn parse_window_geometry_offset_position() {
+        let output = "Window 42\n  Position: 50,75 (screen: 0)\n  Geometry: 100x200\n";
+        let (cx, cy) = match parse_window_geometry(output) {
+            Ok(v) => v,
+            Err(_) => unreachable!("should parse valid geometry"),
+        };
+        // center = (50 + 100/2, 75 + 200/2) = (100, 175)
+        assert_eq!(cx, 100);
+        assert_eq!(cy, 175);
+    }
+
+    #[test]
+    fn parse_window_geometry_missing_position() {
+        let output = "Window 12345\n  Geometry: 800x600\n";
+        assert!(parse_window_geometry(output).is_err());
+    }
+
+    #[test]
+    fn parse_window_geometry_missing_geometry() {
+        let output = "Window 12345\n  Position: 100,200 (screen: 0)\n";
+        assert!(parse_window_geometry(output).is_err());
+    }
+
+    #[test]
+    fn parse_window_geometry_empty_input() {
+        assert!(parse_window_geometry("").is_err());
+    }
+
+    #[test]
+    fn parse_window_geometry_malformed_coords() {
+        let output = "Window 12345\n  Position: abc,def (screen: 0)\n  Geometry: 800x600\n";
+        assert!(parse_window_geometry(output).is_err());
     }
 }
