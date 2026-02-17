@@ -19,7 +19,7 @@ Fae is an always-present companion, not a summoned assistant. She listens contin
 - **Direct conversation** — talk to Fae naturally and she responds with warmth and clarity.
 - **Overheard conversations** — if people nearby are discussing something Fae can help with, she may politely offer useful information.
 - **Background noise** — Fae stays quiet when the TV is on, music is playing, or conversations don't involve her.
-- **Sleep and wake** — say "go to sleep, Fae" when you want quiet. Say her name to wake her up.
+- **Listening control** — Fae stays in always-listening mode unless you press `Stop Listening`; press `Start Listening` to resume.
 
 Fae uses echo cancellation and voice activity detection to separate your speech from ambient noise and her own voice. She never interrupts without good reason.
 
@@ -101,6 +101,7 @@ Fae's capabilities grow over time through skills — markdown guides that teach 
 - User skills live in `~/.fae/skills/` and can be added, reviewed, and edited from the `Fae -> Skills...` menu.
 - Fae can propose new skills when she detects useful patterns in your conversations.
 - All skills are reviewed by you before installation — Fae never installs a skill without your explicit approval.
+- Packaged skills can be installed with `cargo run --bin fae-skill-package -- install <package-dir>` (examples: `Skills/packages/native-device-handoff`, `Skills/packages/native-orb-semantics`).
 
 ### External Channels
 
@@ -117,12 +118,12 @@ Configure via `Fae -> Channels...` in the menu.
 ```
 Mic (16kHz) -> AEC -> VAD -> STT -> LLM (Agent Loop) -> TTS -> Speaker
                 |                         |                  |
-                +-> Wakeword              +-> Memory         +-> Viseme (lip-sync)
+                +-> Wakeword              +-> Memory         +-> Orb state events (native UI)
                                           +-> Intelligence
                                           +-> Scheduler
 ```
 
-**Voice pipeline:** microphone capture at 16kHz, acoustic echo cancellation (AEC), voice activity detection (VAD) with configurable sensitivity, speech-to-text (STT via Parakeet ONNX), LLM processing through the agent loop, text-to-speech (TTS via Kokoro-82M ONNX), and speaker output with viseme-based lip-sync animation.
+**Voice pipeline:** microphone capture at 16kHz, acoustic echo cancellation (AEC), voice activity detection (VAD) with configurable sensitivity, speech-to-text (STT via Parakeet ONNX), LLM processing through the agent loop, text-to-speech (TTS via Kokoro-82M ONNX), and speaker output with orb-state signaling for native shells.
 
 **Intelligence pipeline:** after each conversation turn, a background extraction pass analyses the conversation for dates, people, interests, and commitments. Results are stored as enriched memory records and can trigger scheduler tasks, relationship updates, and briefing items.
 
@@ -151,7 +152,7 @@ Local fallback: when `enable_local_fallback = true`, Fae falls back to the local
 
 | Menu | Purpose | What to Do |
 |---|---|---|
-| `Fae -> Settings...` | Runtime controls | Set tool mode, wake word, stop phrase, channels, updates |
+| `Fae -> Settings...` | Runtime controls | Set tool mode, channels, updates, and listening behavior |
 | `Fae -> Soul...` | Personality and behaviour | Edit SOUL.md to tune Fae's personality |
 | `Fae -> Skills...` | Capability expansion | Review, edit, and install skill guides |
 | `Fae -> Memories...` | Memory transparency | View, edit, and manage durable records |
@@ -218,6 +219,10 @@ Runtime system prompt assembly:
 - [Memory Architecture Plan](docs/memory-architecture-plan.md)
 - [Personalization and Proactive Plan](docs/personalization-interviews-and-proactive-plan.md)
 - [Channel Setup Guide](docs/channels-setup.md)
+- [Native macOS Swift App Shell](native/macos/FaeNativeApp/README.md)
+- [Apple Companion Receiver Templates](native/apple/FaeCompanion/README.md)
+- [Native App Architecture v0](docs/architecture/native-app-v0.md)
+- [Native App Latency Validation Plan](docs/architecture/native-app-latency-plan.md)
 
 ## Developer Commands
 

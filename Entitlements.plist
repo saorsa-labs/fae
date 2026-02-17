@@ -11,6 +11,14 @@
   <key>com.apple.security.files.user-selected.read-write</key>
   <true/>
 
+  <!-- Common user folders for assistant tool operations -->
+  <key>com.apple.security.files.desktop.read-write</key>
+  <true/>
+  <key>com.apple.security.files.documents.read-write</key>
+  <true/>
+  <key>com.apple.security.files.downloads.read-write</key>
+  <true/>
+
   <!-- Security-scoped bookmarks for persistent file access across restarts -->
   <key>com.apple.security.files.bookmarks.app-scope</key>
   <true/>

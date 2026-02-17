@@ -52,10 +52,10 @@ pub enum RuntimeEvent {
     ///
     /// Intended for driving simple avatar animation (mouth open/close).
     AssistantAudioLevel { rms: f32 },
-    /// Viseme events for lip-sync animation.
+    /// Legacy viseme event for lip-sync animation.
     ///
-    /// Contains the mouth shape to display and timing information.
-    /// This provides accurate lip-sync compared to RMS-based animation.
+    /// Native orb UI paths do not require phoneme/viseme animation, so this
+    /// event is retained for compatibility and is not emitted by default.
     AssistantViseme {
         /// The viseme/mouth shape to display.
         mouth_png: String,

@@ -36,6 +36,7 @@ pub mod error;
 pub mod external_llm;
 pub mod fae_dirs;
 pub mod fae_llm;
+pub mod host;
 pub mod huggingface;
 pub mod intelligence;
 pub mod llm;

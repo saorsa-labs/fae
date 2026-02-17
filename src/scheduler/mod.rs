@@ -4,6 +4,7 @@
 //! Designed for future extensibility with user-defined scheduled tasks
 //! (calendar checks, research, reminders).
 
+pub mod authority;
 pub mod executor_bridge;
 pub mod runner;
 pub mod tasks;

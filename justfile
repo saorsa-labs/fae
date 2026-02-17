@@ -14,6 +14,22 @@ default:
 run:
     cargo run --bin fae
 
+# Run the native macOS SwiftUI shell.
+run-native-swift:
+    cd native/macos/FaeNativeApp && swift run
+
+# Build the native macOS SwiftUI shell.
+build-native-swift:
+    cd native/macos/FaeNativeApp && swift build
+
+# Install the packaged native-device-handoff skill.
+install-native-handoff-skill:
+    cargo run --bin fae-skill-package -- install Skills/packages/native-device-handoff
+
+# Install the packaged native-orb-semantics skill.
+install-native-orb-skill:
+    cargo run --bin fae-skill-package -- install Skills/packages/native-orb-semantics
+
 # Slice an avatar sheet PNG into assets/avatar/*.png
 slice-avatar SHEET:
     cargo run --features tools --bin fae-avatar-slicer -- {{SHEET}} assets/avatar

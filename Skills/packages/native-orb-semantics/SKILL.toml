@@ -1,0 +1,4 @@
+id = "native_orb_semantics"
+name = "Native Orb Semantics"
+version = "0.1.0"
+entry_file = "SKILL.md"

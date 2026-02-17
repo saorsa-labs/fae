@@ -816,6 +816,19 @@ pub fn start_scheduler_with_config(
     let bridge = crate::scheduler::executor_bridge::TaskExecutorBridge::new(conversation_req_tx);
 
     let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
+    let authority_root = crate::fae_dirs::config_dir();
+    let lease = crate::scheduler::authority::LeaderLease::new(
+        format!("fae-{}-{}", std::process::id(), uuid::Uuid::new_v4()),
+        std::process::id(),
+        authority_root.join("scheduler.leader.lock"),
+        crate::scheduler::authority::LeaderLeaseConfig::default(),
+    );
+    let run_key_ledger = crate::scheduler::authority::RunKeyLedger::new(
+        authority_root.join("scheduler.run_keys.jsonl"),
+    );
+    scheduler = scheduler
+        .with_leader_lease(lease)
+        .with_run_key_ledger(run_key_ledger);
     scheduler.with_update_checks();
     scheduler.with_memory_maintenance();
     let memory_root = config.memory.root_dir.clone();

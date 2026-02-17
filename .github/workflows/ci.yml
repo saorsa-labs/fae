@@ -64,7 +64,7 @@ jobs:
         run: cargo test --all-features
 
   build:
-    name: Build (macOS arm64)
+    name: Build (macOS arm64 native Swift shell)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,5 +82,10 @@ jobs:
           key: ${{ runner.os }}-aarch64-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-aarch64-cargo-build-
 
-      - name: Build release (GUI)
-        run: cargo build --release --features gui
+      - name: Build Rust backend (release)
+        run: cargo build --release --no-default-features
+
+      - name: Build native Swift app (release)
+        run: |
+          cd native/macos/FaeNativeApp
+          swift build -c release

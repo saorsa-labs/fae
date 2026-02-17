@@ -1,0 +1,4 @@
+id = "native_device_handoff"
+name = "Native Device Handoff"
+version = "0.1.0"
+entry_file = "SKILL.md"

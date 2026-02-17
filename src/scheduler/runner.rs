@@ -7,6 +7,10 @@
 use crate::scheduler::tasks::{
     Schedule, ScheduledTask, TaskKind, TaskResult, TaskRunOutcome, TaskRunRecord,
 };
+use crate::scheduler::{
+    authority::{LeaderLease, LeadershipDecision, RunKeyLedger, now_epoch_millis},
+    tasks,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -47,6 +51,10 @@ pub struct Scheduler {
     executor: Option<TaskExecutor>,
     /// Max history entries kept in memory and persisted to disk.
     max_history_entries: usize,
+    /// Optional leader lease controller for single-writer scheduling.
+    leader_lease: Option<LeaderLease>,
+    /// Optional run-key dedupe ledger shared across scheduler instances.
+    run_key_ledger: Option<RunKeyLedger>,
 }
 
 /// Persisted scheduler state.
@@ -78,7 +86,21 @@ impl Scheduler {
             result_tx,
             executor: None,
             max_history_entries: DEFAULT_HISTORY_LIMIT,
+            leader_lease: None,
+            run_key_ledger: None,
         }
+    }
+
+    /// Enable single-leader scheduling via a lease controller.
+    pub fn with_leader_lease(mut self, lease: LeaderLease) -> Self {
+        self.leader_lease = Some(lease);
+        self
+    }
+
+    /// Enable cross-instance run-key dedupe.
+    pub fn with_run_key_ledger(mut self, ledger: RunKeyLedger) -> Self {
+        self.run_key_ledger = Some(ledger);
+        self
     }
 
     /// Set a custom executor callback for running tasks.
@@ -285,6 +307,9 @@ impl Scheduler {
 
             loop {
                 interval.tick().await;
+                if !self.should_execute_tick() {
+                    continue;
+                }
                 self.tick();
             }
         })
@@ -306,9 +331,22 @@ impl Scheduler {
                 None => continue,
             };
 
-            let started_at = crate::scheduler::tasks::now_epoch_secs();
+            let started_at = tasks::now_epoch_secs();
+            let planned_at = task_snapshot.next_run.unwrap_or_else(|| {
+                if TICK_INTERVAL_SECS == 0 {
+                    started_at
+                } else {
+                    started_at.saturating_sub(started_at % TICK_INTERVAL_SECS)
+                }
+            });
+
+            let run_key = build_run_key(&task_snapshot.id, planned_at);
+            if self.should_skip_duplicate_run(&run_key, &task_snapshot.id, started_at) {
+                continue;
+            }
+
             let mut result = self.execute_task(&task_snapshot);
-            let finished_at = crate::scheduler::tasks::now_epoch_secs();
+            let finished_at = tasks::now_epoch_secs();
 
             let elapsed_secs = finished_at.saturating_sub(started_at);
             let mut outcome = result.outcome();
@@ -351,6 +389,63 @@ impl Scheduler {
     fn push_history(&mut self, run: TaskRunRecord) {
         self.history.push(run);
         self.trim_history();
+    }
+
+    fn should_execute_tick(&self) -> bool {
+        let Some(lease) = self.leader_lease.as_ref() else {
+            return true;
+        };
+
+        match lease.try_acquire_or_renew_at(now_epoch_millis()) {
+            Ok(LeadershipDecision::Leader { takeover }) => {
+                if takeover {
+                    info!("scheduler leadership acquired via takeover");
+                }
+                true
+            }
+            Ok(LeadershipDecision::Follower {
+                leader_instance_id,
+                lease_expires_at,
+            }) => {
+                debug!(
+                    "scheduler tick skipped; leader is '{}' until {}",
+                    leader_instance_id, lease_expires_at
+                );
+                false
+            }
+            Err(e) => {
+                warn!("scheduler lease check failed, skipping tick: {e}");
+                false
+            }
+        }
+    }
+
+    fn should_skip_duplicate_run(&mut self, run_key: &str, task_id: &str, started_at: u64) -> bool {
+        let Some(ledger) = self.run_key_ledger.as_mut() else {
+            return false;
+        };
+
+        match ledger.record_once(run_key) {
+            Ok(true) => false,
+            Ok(false) => {
+                debug!("suppressing duplicate scheduler run key '{run_key}'");
+                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.mark_run_success();
+                }
+                self.push_history(TaskRunRecord {
+                    task_id: task_id.to_owned(),
+                    started_at,
+                    finished_at: started_at,
+                    outcome: TaskRunOutcome::Success,
+                    summary: format!("duplicate run suppressed ({run_key})"),
+                });
+                true
+            }
+            Err(e) => {
+                warn!("run-key dedupe failed for task '{task_id}', continuing: {e}");
+                false
+            }
+        }
     }
 
     fn trim_history(&mut self) {
@@ -402,6 +497,10 @@ impl Scheduler {
             })
         }
     }
+}
+
+pub(crate) fn build_run_key(task_id: &str, planned_at: u64) -> String {
+    format!("{task_id}:{planned_at}")
 }
 
 fn load_snapshot_from_path(path: Option<PathBuf>) -> crate::Result<SchedulerSnapshot> {
@@ -553,6 +652,9 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::scheduler::authority::{LeaderLease, LeaderLeaseConfig, RunKeyLedger};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_scheduler() -> (Scheduler, mpsc::UnboundedReceiver<TaskResult>) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -741,5 +843,126 @@ mod tests {
         assert!(matches!(result.unwrap().unwrap(), TaskResult::Success(_)));
 
         handle.abort();
+    }
+
+    #[test]
+    fn duplicate_run_key_is_suppressed_before_execution() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let ledger_path = std::env::temp_dir().join("fae-scheduler-v2-dedupe.jsonl");
+        let mut ledger = RunKeyLedger::new(ledger_path.clone());
+        let dedupe_key = build_run_key("dup-task", 1);
+        assert!(ledger.record_once(&dedupe_key).expect("seed dedupe key"));
+
+        let mut scheduler = Scheduler::new(tx).with_run_key_ledger(ledger);
+        scheduler.state_path = None;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let call_counter = Arc::clone(&calls);
+        scheduler.executor = Some(Box::new(move |_| {
+            call_counter.fetch_add(1, Ordering::SeqCst);
+            TaskResult::Success("ran".to_owned())
+        }));
+
+        let mut task = ScheduledTask::new("dup-task", "Dup Task", Schedule::Interval { secs: 60 });
+        task.next_run = Some(1);
+        scheduler.add_task(task);
+
+        scheduler.tick();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(scheduler.history().len(), 1);
+        assert!(
+            scheduler.history()[0]
+                .summary
+                .contains("duplicate run suppressed"),
+            "summary was: {}",
+            scheduler.history()[0].summary
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "suppressed run should not emit result"
+        );
+        let _ = std::fs::remove_file(ledger_path);
+    }
+
+    #[test]
+    fn follower_scheduler_skips_tick_when_leader_is_active() {
+        let dir = std::env::temp_dir().join("fae-scheduler-v2-leader");
+        let _ = std::fs::create_dir_all(&dir);
+        let lease_path = dir.join("scheduler.leader.lock");
+        let cfg = LeaderLeaseConfig::default();
+
+        let leader = LeaderLease::new("leader-a", 1001, lease_path.clone(), cfg);
+        let now = now_epoch_millis();
+        let _ = leader
+            .try_acquire_or_renew_at(now)
+            .expect("acquire leader lease");
+
+        let follower = LeaderLease::new("leader-b", 1002, lease_path, cfg);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let scheduler = Scheduler::new(tx).with_leader_lease(follower);
+
+        assert!(
+            !scheduler.should_execute_tick(),
+            "follower should skip tick while another leader lease is active"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn shared_ledger_prevents_duplicate_execution_across_schedulers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ledger_path = temp.path().join("scheduler.run_keys.jsonl");
+        let task_id = "shared-dedupe-task";
+        let planned_at = 12_345_u64;
+
+        let mut ledger_a = RunKeyLedger::new(ledger_path.clone());
+        let mut ledger_b = RunKeyLedger::new(ledger_path.clone());
+
+        assert!(ledger_a.record_once("warmup-a").expect("warmup a"));
+        assert!(ledger_b.record_once("warmup-b").expect("warmup b"));
+
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let calls_a = Arc::clone(&calls);
+        let mut scheduler_a = Scheduler::new(tx_a).with_run_key_ledger(ledger_a);
+        scheduler_a.state_path = None;
+        scheduler_a.executor = Some(Box::new(move |_| {
+            calls_a.fetch_add(1, Ordering::SeqCst);
+            TaskResult::Success("ran-a".to_owned())
+        }));
+        let mut task_a =
+            ScheduledTask::new(task_id, "Shared Task A", Schedule::Interval { secs: 60 });
+        task_a.next_run = Some(planned_at);
+        scheduler_a.add_task(task_a);
+
+        let calls_b = Arc::clone(&calls);
+        let mut scheduler_b = Scheduler::new(tx_b).with_run_key_ledger(ledger_b);
+        scheduler_b.state_path = None;
+        scheduler_b.executor = Some(Box::new(move |_| {
+            calls_b.fetch_add(1, Ordering::SeqCst);
+            TaskResult::Success("ran-b".to_owned())
+        }));
+        let mut task_b =
+            ScheduledTask::new(task_id, "Shared Task B", Schedule::Interval { secs: 60 });
+        task_b.next_run = Some(planned_at);
+        scheduler_b.add_task(task_b);
+
+        scheduler_a.tick();
+        scheduler_b.tick();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "shared run key should execute once across schedulers"
+        );
+
+        let emitted = usize::from(rx_a.try_recv().is_ok()) + usize::from(rx_b.try_recv().is_ok());
+        assert_eq!(
+            emitted, 1,
+            "exactly one scheduler should emit an execution result"
+        );
     }
 }

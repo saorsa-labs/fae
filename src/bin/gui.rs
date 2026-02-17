@@ -71,12 +71,15 @@ fn main() {
         .launch(app);
 }
 
-/// Build the native menu bar with About, Edit, and Window submenus.
+/// Build the native menu bar with Apple-style app organization.
 ///
 /// Creates a standard macOS menu bar with:
-/// - App menu: About, Settings, Soul, Skills, Memories, Scheduler, Ingestion, Guide, Check Updates, Hide/Show, Quit
+/// - App menu: About, Settings, Check Updates, Hide/Show, Quit
+/// - File menu: Export/Import data
 /// - Edit menu: Undo/Redo, Cut/Copy/Paste, Select All
+/// - View menu: Soul, Skills, Memories, Scheduler, Channels, Ingestion
 /// - Window menu: Minimize, Maximize, Fullscreen, Close
+/// - Help menu: Fae Guide
 ///
 /// The menu bar persists for the lifetime of the application and provides
 /// standard macOS application integration. This is NOT a system tray/status bar item.
@@ -107,8 +110,10 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     let open_channels_item = MenuItem::with_id(FAE_MENU_OPEN_CHANNELS, "Channels...", true, None);
     let open_ingestion_item =
         MenuItem::with_id(FAE_MENU_OPEN_INGESTION, "Ingestion...", true, None);
-    let export_data_item = MenuItem::with_id(FAE_MENU_EXPORT_DATA, "Export Data...", true, None);
-    let import_data_item = MenuItem::with_id(FAE_MENU_IMPORT_DATA, "Import Data...", true, None);
+    let export_data_item =
+        MenuItem::with_id(FAE_MENU_EXPORT_DATA, "Export Fae's memories", true, None);
+    let import_data_item =
+        MenuItem::with_id(FAE_MENU_IMPORT_DATA, "Import Fea's memories", true, None);
     let open_guide_item = MenuItem::with_id(FAE_MENU_OPEN_GUIDE, "Fae Guide", true, None);
     let check_updates_item =
         MenuItem::with_id(FAE_MENU_CHECK_UPDATES, "Check for Updates...", true, None);
@@ -124,17 +129,6 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &PredefinedMenuItem::about(None, Some(about_metadata)),
         &PredefinedMenuItem::separator(),
         &open_settings_item,
-        &open_soul_item,
-        &open_skills_item,
-        &open_memories_item,
-        &open_scheduler_item,
-        &open_channels_item,
-        &open_ingestion_item,
-        &PredefinedMenuItem::separator(),
-        &export_data_item,
-        &import_data_item,
-        &PredefinedMenuItem::separator(),
-        &open_guide_item,
         &check_updates_item,
         &PredefinedMenuItem::separator(),
         &PredefinedMenuItem::hide(None),
@@ -143,6 +137,10 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &PredefinedMenuItem::separator(),
         &PredefinedMenuItem::quit(None),
     ]);
+
+    // File submenu.
+    let file_menu = Submenu::new("File", true);
+    let _ = file_menu.append_items(&[&export_data_item, &import_data_item]);
 
     // Edit submenu (Cut/Copy/Paste/Select All — standard accelerators).
     let edit_menu = Submenu::new("Edit", true);
@@ -157,6 +155,17 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &PredefinedMenuItem::select_all(None),
     ]);
 
+    // View submenu.
+    let view_menu = Submenu::new("View", true);
+    let _ = view_menu.append_items(&[
+        &open_soul_item,
+        &open_skills_item,
+        &open_memories_item,
+        &open_scheduler_item,
+        &open_channels_item,
+        &open_ingestion_item,
+    ]);
+
     // Window submenu.
     let window_menu = Submenu::new("Window", true);
     let _ = window_menu.append_items(&[
@@ -167,7 +176,18 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
         &PredefinedMenuItem::close_window(None),
     ]);
 
-    let _ = menu.append_items(&[&app_menu, &edit_menu, &window_menu]);
+    // Help submenu.
+    let help_menu = Submenu::new("Help", true);
+    let _ = help_menu.append_items(&[&open_guide_item]);
+
+    let _ = menu.append_items(&[
+        &app_menu,
+        &file_menu,
+        &edit_menu,
+        &view_menu,
+        &window_menu,
+        &help_menu,
+    ]);
 
     // On macOS, the first submenu automatically becomes the app menu,
     // and the Window menu integrates with native window management.
@@ -1794,10 +1814,18 @@ struct ApprovalPreview {
     title: String,
     message: String,
     destructive_delete: bool,
+    capability_request: Option<CapabilityPreview>,
     kind: ApprovalUiKind,
     options: Vec<String>,
     placeholder: Option<String>,
     initial_value: String,
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone)]
+struct CapabilityPreview {
+    capability: String,
+    scope: Option<String>,
 }
 
 #[cfg(feature = "gui")]
@@ -1842,6 +1870,7 @@ fn truncate_canvas_value(text: &str, max_chars: usize) -> String {
 fn parse_approval_preview(req: &fae::ToolApprovalRequest) -> ApprovalPreview {
     let mut title = req.name.clone();
     let mut message = req.input_json.clone();
+    let mut capability_request = None::<CapabilityPreview>;
     let mut kind = match req.name.as_str() {
         "pi.select" => ApprovalUiKind::Select,
         "pi.input" => ApprovalUiKind::Input,
@@ -1853,6 +1882,23 @@ fn parse_approval_preview(req: &fae::ToolApprovalRequest) -> ApprovalPreview {
     let mut initial_value = String::new();
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&req.input_json) {
+        if req.name == "capability.request" {
+            let capability = json
+                .get("capability")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            let scope = json
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            if let Some(capability) = capability {
+                capability_request = Some(CapabilityPreview { capability, scope });
+            }
+        }
         if let Some(k) = json.get("kind").and_then(|v| v.as_str()) {
             kind = match k {
                 "select" => ApprovalUiKind::Select,
@@ -1883,6 +1929,18 @@ fn parse_approval_preview(req: &fae::ToolApprovalRequest) -> ApprovalPreview {
             initial_value = v.to_owned();
         }
     }
+    if let Some(capability) = capability_request.as_ref() {
+        if title == req.name {
+            title = "Capability Access Request".to_owned();
+        }
+        if message == req.input_json {
+            let scope = capability.scope.as_deref().unwrap_or("session");
+            message = format!(
+                "Fae is requesting expanded capability access.\n\nCapability: {}\nScope: {scope}",
+                capability.capability
+            );
+        }
+    }
     if matches!(kind, ApprovalUiKind::Select)
         && initial_value.is_empty()
         && let Some(first) = options.first()
@@ -1895,6 +1953,7 @@ fn parse_approval_preview(req: &fae::ToolApprovalRequest) -> ApprovalPreview {
         title,
         message,
         destructive_delete,
+        capability_request,
         kind,
         options,
         placeholder,
@@ -1910,7 +1969,9 @@ fn push_approval_request_to_canvas(
     let preview = parse_approval_preview(req);
     let headline = match preview.kind {
         ApprovalUiKind::Confirm => {
-            if preview.destructive_delete {
+            if preview.capability_request.is_some() {
+                "Approval needed: capability access requested"
+            } else if preview.destructive_delete {
                 "Approval needed: destructive file action requested"
             } else {
                 "Approval needed: elevated tool action requested"
@@ -1938,11 +1999,15 @@ fn push_approval_decision_to_canvas(
     approved: bool,
 ) {
     let text = if approved {
-        if preview.destructive_delete {
+        if preview.capability_request.is_some() {
+            "Capability access granted"
+        } else if preview.destructive_delete {
             "Destructive request approved"
         } else {
             "Tool escalation approved"
         }
+    } else if preview.capability_request.is_some() {
+        "Capability access denied"
     } else if preview.destructive_delete {
         "Destructive request denied"
     } else {
@@ -6451,17 +6516,14 @@ fn app() -> Element {
                     p { class: "welcome-text", "{welcome_text}" }
                 }
 
-                // Voice command hints (only when models are loaded and running)
+                // Listening behavior hint (running mode)
                 if is_running {
                     p { class: "hint",
-                        "Say "
-                        span { class: "hint-phrase", "\"Hi Fae\"" }
-                        " to converse with me"
-                    }
-                    p { class: "hint",
-                        "Say "
-                        span { class: "hint-phrase", "\"That'll do Fae\"" }
-                        " to stop me"
+                        "Always listening. Use "
+                        span { class: "hint-phrase", "\"Stop Listening\"" }
+                        " to pause, then "
+                        span { class: "hint-phrase", "\"Start Listening\"" }
+                        " to resume."
                     }
                 }
 
@@ -6993,7 +7055,9 @@ fn app() -> Element {
                     let preview = parse_approval_preview(req);
                     let title = match preview.kind {
                         ApprovalUiKind::Confirm => {
-                            if preview.destructive_delete {
+                            if preview.capability_request.is_some() {
+                                "Grant Capability Access?"
+                            } else if preview.destructive_delete {
                                 "Approve Destructive Action?"
                             } else {
                                 "Approve Tool Action?"
@@ -7004,7 +7068,11 @@ fn app() -> Element {
                         ApprovalUiKind::Editor => "Editor Response Required",
                     };
                     let action_label = if matches!(preview.kind, ApprovalUiKind::Confirm) {
-                        "Approve"
+                        if preview.capability_request.is_some() {
+                            "Grant"
+                        } else {
+                            "Approve"
+                        }
                     } else {
                         "Submit"
                     };
@@ -8426,13 +8494,10 @@ fn preferences_window() -> Element {
                             }
                         }
                         div { class: "settings-row",
-                            label { class: "settings-label", "Stop phrase" }
-                            input {
-                                class: "settings-select",
-                                r#type: "text",
-                                disabled: !settings_enabled,
-                                value: "{config_state.read().conversation.stop_phrase}",
-                                oninput: move |evt| config_state.write().conversation.stop_phrase = evt.value(),
+                            label { class: "settings-label", "Listening control" }
+                            p { class: "settings-sub",
+                                "Fae runs in always-listening mode. Use the main "
+                                "Start Listening / Stop Listening button to pause or resume capture."
                             }
                         }
                     }

@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fae Orb</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;500&display=swap');
+
+  :root {
+    --bg: #0a0b0d;
+    --label: rgba(200, 211, 213, 0.2);
+    --hint: rgba(200, 211, 213, 0.12);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: radial-gradient(circle at 20% 12%, #101216 0%, #090a0d 46%, #060709 100%);
+    min-height: 100vh;
+    overflow: hidden;
+    font-family: 'Cormorant Garamond', serif;
+    cursor: crosshair;
+  }
+
+  .scene {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .orb-wrapper {
+    position: relative;
+    width: 340px;
+    height: 340px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .orb {
+    width: 320px;
+    height: 320px;
+    border-radius: 50%;
+    overflow: hidden;
+    position: relative;
+    box-shadow: inset 0 0 40px rgba(255, 255, 255, 0.03);
+  }
+
+  #orbCanvas {
+    width: 320px;
+    height: 320px;
+    border-radius: 50%;
+  }
+
+  #pulseCanvas {
+    position: absolute;
+    width: 560px;
+    height: 560px;
+    pointer-events: none;
+  }
+
+  .orb-highlight {
+    position: absolute;
+    top: 12%;
+    left: 23%;
+    width: 20%;
+    height: 13%;
+    background: radial-gradient(ellipse, rgba(255,255,255,0.12) 0%, transparent 70%);
+    border-radius: 50%;
+    transform: rotate(-18deg);
+    pointer-events: none;
+    animation: highlightShift 12s ease-in-out infinite;
+  }
+
+  .aura {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    border: 1px solid rgba(200, 211, 213, 0.05);
+  }
+
+  .aura-1 { width: 380px; height: 380px; animation: auraExpand 10s ease-in-out infinite; }
+  .aura-2 { width: 450px; height: 450px; animation: auraExpand 10s ease-in-out infinite 3.2s; }
+  .aura-3 { width: 520px; height: 520px; animation: auraExpand 10s ease-in-out infinite 6.4s; }
+
+  .label {
+    position: absolute;
+    bottom: 11%;
+    color: var(--label);
+    letter-spacing: 0.42em;
+    text-transform: uppercase;
+    font-size: 13px;
+    pointer-events: none;
+  }
+
+  .hint {
+    position: absolute;
+    bottom: 7%;
+    color: var(--hint);
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    font-size: 11px;
+    pointer-events: none;
+  }
+
+  @keyframes highlightShift {
+    0%, 100% { opacity: 0.35; transform: rotate(-18deg) translateY(0); }
+    50% { opacity: 0.12; transform: rotate(-12deg) translateY(5px); }
+  }
+
+  @keyframes auraExpand {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.06); opacity: 0.35; }
+  }
+</style>
+</head>
+<body>
+  <div class="scene" id="scene">
+    <div class="aura aura-1"></div>
+    <div class="aura aura-2"></div>
+    <div class="aura aura-3"></div>
+
+    <div class="orb-wrapper" id="orbWrapper">
+      <canvas id="pulseCanvas" width="1120" height="1120"></canvas>
+      <div class="orb">
+        <canvas id="orbCanvas" width="640" height="640"></canvas>
+      </div>
+      <div class="orb-highlight"></div>
+    </div>
+
+    <div class="label" id="modeLabel">idle</div>
+    <div class="hint">move cursor to influence light</div>
+  </div>
+
+<script>
+const PALETTE = {
+  heatherMist: "#B4A8C4",
+  glenGreen: "#5F7F6F",
+  lochGreyGreen: "#7A9B8E",
+  autumnBracken: "#A67B5B",
+  silverMist: "#C8D3D5",
+  rowanBerry: "#8B4653",
+  mossStone: "#4A5D52",
+  dawnLight: "#E8DED2",
+  peatEarth: "#3D3630"
+};
+
+const MODES = {
+  idle: {
+    base: [PALETTE.heatherMist, PALETTE.lochGreyGreen, PALETTE.silverMist],
+    pulseSpeed: 0.6,
+    ringRate: 2.2,
+    ringAlpha: 0.06
+  },
+  listening: {
+    base: [PALETTE.glenGreen, PALETTE.lochGreyGreen, PALETTE.silverMist],
+    pulseSpeed: 1.1,
+    ringRate: 1.5,
+    ringAlpha: 0.09
+  },
+  thinking: {
+    base: [PALETTE.heatherMist, PALETTE.rowanBerry, PALETTE.lochGreyGreen],
+    pulseSpeed: 1.5,
+    ringRate: 1.2,
+    ringAlpha: 0.11
+  },
+  speaking: {
+    base: [PALETTE.autumnBracken, PALETTE.rowanBerry, PALETTE.dawnLight],
+    pulseSpeed: 1.9,
+    ringRate: 0.8,
+    ringAlpha: 0.15
+  }
+};
+
+const PALETTE_OVERRIDES = {
+  "heather-mist": [PALETTE.heatherMist, PALETTE.lochGreyGreen, PALETTE.silverMist],
+  "glen-green": [PALETTE.glenGreen, PALETTE.lochGreyGreen, PALETTE.mossStone],
+  "loch-grey-green": [PALETTE.lochGreyGreen, PALETTE.silverMist, PALETTE.glenGreen],
+  "autumn-bracken": [PALETTE.autumnBracken, PALETTE.dawnLight, PALETTE.rowanBerry],
+  "silver-mist": [PALETTE.silverMist, PALETTE.heatherMist, PALETTE.dawnLight],
+  "rowan-berry": [PALETTE.rowanBerry, PALETTE.autumnBracken, PALETTE.peatEarth],
+  "moss-stone": [PALETTE.mossStone, PALETTE.glenGreen, PALETTE.peatEarth],
+  "dawn-light": [PALETTE.dawnLight, PALETTE.silverMist, PALETTE.autumnBracken],
+  "peat-earth": [PALETTE.peatEarth, PALETTE.mossStone, PALETTE.dawnLight]
+};
+
+let mode = "idle";
+let paletteOverride = "mode-default";
+let lastRingAt = 0;
+let rings = [];
+let pointer = { x: 0.5, y: 0.5, influence: 0 };
+
+const orbCanvas = document.getElementById("orbCanvas");
+const orbCtx = orbCanvas.getContext("2d");
+const pulseCanvas = document.getElementById("pulseCanvas");
+const pulseCtx = pulseCanvas.getContext("2d");
+const modeLabel = document.getElementById("modeLabel");
+
+const W = orbCanvas.width;
+const H = orbCanvas.height;
+const CX = W / 2;
+const CY = H / 2;
+const R = W / 2;
+
+const PW = pulseCanvas.width;
+const PH = pulseCanvas.height;
+const PCX = PW / 2;
+const PCY = PH / 2;
+
+function normalizePaletteKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-");
+}
+
+function activePalette() {
+  if (paletteOverride !== "mode-default" && PALETTE_OVERRIDES[paletteOverride]) {
+    return PALETTE_OVERRIDES[paletteOverride];
+  }
+  return MODES[mode].base;
+}
+
+function paletteLabel(key) {
+  return key.replace(/-/g, " ");
+}
+
+function refreshModeLabel() {
+  modeLabel.textContent = paletteOverride === "mode-default"
+    ? mode
+    : `${mode} · ${paletteLabel(paletteOverride)}`;
+}
+
+window.setOrbMode = function setOrbMode(next) {
+  if (!MODES[next]) return;
+  mode = next;
+  refreshModeLabel();
+};
+
+window.setOrbPalette = function setOrbPalette(next) {
+  const key = normalizePaletteKey(next);
+  if (!key || key === "mode-default" || key === "default") {
+    paletteOverride = "mode-default";
+    refreshModeLabel();
+    return;
+  }
+  if (!PALETTE_OVERRIDES[key]) {
+    return;
+  }
+  paletteOverride = key;
+  refreshModeLabel();
+};
+
+window.clearOrbPalette = function clearOrbPalette() {
+  paletteOverride = "mode-default";
+  refreshModeLabel();
+};
+
+function hexToRgb(hex) {
+  const clean = hex.replace("#", "");
+  const bigint = parseInt(clean, 16);
+  return {
+    r: (bigint >> 16) & 255,
+    g: (bigint >> 8) & 255,
+    b: bigint & 255
+  };
+}
+
+function addRing(nowSec) {
+  const state = MODES[mode];
+  const basePalette = activePalette();
+  const baseSpeed = 90 + (state.pulseSpeed * 42);
+  const color = basePalette[Math.floor(Math.random() * basePalette.length)];
+  rings.push({
+    born: nowSec,
+    speed: baseSpeed + (Math.random() * 26),
+    thickness: 16 + (Math.random() * 20),
+    max: 300,
+    color,
+    alpha: state.ringAlpha + (Math.random() * 0.03)
+  });
+}
+
+function drawRings(nowSec) {
+  pulseCtx.clearRect(0, 0, PW, PH);
+  rings = rings.filter((ring) => {
+    const age = nowSec - ring.born;
+    const radius = age * ring.speed;
+    if (radius > ring.max) return false;
+
+    const t = radius / ring.max;
+    const fade = t < 0.12 ? t / 0.12 : 1 - ((t - 0.12) / 0.88);
+    const alpha = Math.max(0, fade * ring.alpha);
+    if (alpha < 0.003) return true;
+
+    const c = hexToRgb(ring.color);
+    const inner = Math.max(0, radius - ring.thickness / 2);
+    const outer = radius + ring.thickness / 2;
+    const grad = pulseCtx.createRadialGradient(PCX, PCY, inner, PCX, PCY, outer);
+    grad.addColorStop(0, `rgba(${c.r},${c.g},${c.b},0)`);
+    grad.addColorStop(0.42, `rgba(${c.r},${c.g},${c.b},${alpha})`);
+    grad.addColorStop(0.7, `rgba(${c.r},${c.g},${c.b},${alpha * 0.6})`);
+    grad.addColorStop(1, `rgba(${c.r},${c.g},${c.b},0)`);
+
+    pulseCtx.fillStyle = grad;
+    pulseCtx.beginPath();
+    pulseCtx.arc(PCX, PCY, outer, 0, Math.PI * 2);
+    pulseCtx.fill();
+
+    return true;
+  });
+}
+
+function drawOrb(nowSec) {
+  const state = MODES[mode];
+  const colors = activePalette().map(hexToRgb);
+  orbCtx.clearRect(0, 0, W, H);
+
+  const influence = pointer.influence;
+  const driftX = (pointer.x - 0.5) * 52 * influence;
+  const driftY = (pointer.y - 0.5) * 52 * influence;
+  const wobble = Math.sin(nowSec * (0.35 + state.pulseSpeed * 0.08)) * 8;
+  const throb = 1 + (Math.sin(nowSec * 0.42) * 0.012);
+
+  orbCtx.save();
+  orbCtx.translate(CX, CY);
+  orbCtx.scale(throb, throb);
+  orbCtx.translate(-CX, -CY);
+
+  const baseGrad = orbCtx.createRadialGradient(
+    CX - 32 + driftX * 0.6,
+    CY - 38 + driftY * 0.5,
+    20,
+    CX,
+    CY,
+    R
+  );
+
+  baseGrad.addColorStop(0, `rgba(${colors[2].r},${colors[2].g},${colors[2].b},0.84)`);
+  baseGrad.addColorStop(0.46, `rgba(${colors[0].r},${colors[0].g},${colors[0].b},0.56)`);
+  baseGrad.addColorStop(1, `rgba(${colors[1].r},${colors[1].g},${colors[1].b},0.45)`);
+
+  orbCtx.fillStyle = baseGrad;
+  orbCtx.beginPath();
+  orbCtx.arc(CX, CY, R, 0, Math.PI * 2);
+  orbCtx.fill();
+
+  for (let i = 0; i < 6; i += 1) {
+    const phase = nowSec * (0.2 + (i * 0.11) + state.pulseSpeed * 0.1);
+    const x = CX + Math.cos(phase + i) * (48 + (i * 14)) + driftX * (0.4 + i * 0.03);
+    const y = CY + Math.sin((phase * 0.9) + i * 0.7) * (42 + (i * 11)) + driftY * (0.4 + i * 0.03);
+    const radius = 110 + (Math.sin(phase * 1.7) * 20) + wobble;
+    const color = colors[i % colors.length];
+
+    const blob = orbCtx.createRadialGradient(x, y, 0, x, y, radius);
+    blob.addColorStop(0, `rgba(${color.r},${color.g},${color.b},0.12)`);
+    blob.addColorStop(1, `rgba(${color.r},${color.g},${color.b},0)`);
+    orbCtx.fillStyle = blob;
+    orbCtx.fillRect(0, 0, W, H);
+  }
+
+  orbCtx.globalCompositeOperation = "soft-light";
+  const sheen = orbCtx.createLinearGradient(0, 0, W, H);
+  sheen.addColorStop(0, "rgba(255,255,255,0.08)");
+  sheen.addColorStop(0.4, "rgba(255,255,255,0.02)");
+  sheen.addColorStop(1, "rgba(20,20,30,0.2)");
+  orbCtx.fillStyle = sheen;
+  orbCtx.fillRect(0, 0, W, H);
+  orbCtx.globalCompositeOperation = "source-over";
+  orbCtx.restore();
+}
+
+function loop(t) {
+  const nowSec = t / 1000;
+  const state = MODES[mode];
+  if (nowSec - lastRingAt >= state.ringRate) {
+    addRing(nowSec);
+    if (mode === "speaking" && Math.random() < 0.45) {
+      addRing(nowSec + 0.08);
+    }
+    lastRingAt = nowSec;
+  }
+
+  drawOrb(nowSec);
+  drawRings(nowSec);
+  requestAnimationFrame(loop);
+}
+
+document.getElementById("scene").addEventListener("mousemove", (event) => {
+  const rect = event.currentTarget.getBoundingClientRect();
+  pointer.x = (event.clientX - rect.left) / rect.width;
+  pointer.y = (event.clientY - rect.top) / rect.height;
+  pointer.influence = 1;
+});
+
+document.getElementById("scene").addEventListener("mouseleave", () => {
+  pointer.influence = 0;
+});
+
+refreshModeLabel();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

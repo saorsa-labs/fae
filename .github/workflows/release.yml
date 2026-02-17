@@ -68,8 +68,20 @@ jobs:
           key: ${{ runner.os }}-aarch64-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-aarch64-release-
 
-      - name: Build release binaries
-        run: cargo build --release --features gui
+      - name: Build release binaries (Rust backend + native Swift shell)
+        run: |
+          cargo build --release --no-default-features
+
+          pushd native/macos/FaeNativeApp
+          swift build -c release
+          SWIFT_BIN_REL="$(find .build -type f -perm -111 -name FaeNativeApp | head -n 1)"
+          if [ -z "$SWIFT_BIN_REL" ]; then
+            echo "::error::Could not locate built FaeNativeApp binary under native/macos/FaeNativeApp/.build"
+            exit 1
+          fi
+          SWIFT_BIN_ABS="$(cd "$(dirname "$SWIFT_BIN_REL")" && pwd)/$(basename "$SWIFT_BIN_REL")"
+          echo "SWIFT_APP_BINARY=$SWIFT_BIN_ABS" >> "$GITHUB_ENV"
+          popd
 
       - name: Import signing certificate
         env:
@@ -77,11 +89,9 @@ jobs:
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          # Skip signing if certificate is not configured
-          if [ -z "$MACOS_CERTIFICATE" ]; then
-            echo "::warning::MACOS_CERTIFICATE not set — skipping code signing"
-            echo "SIGNING_ENABLED=false" >> "$GITHUB_ENV"
-            exit 0
+          if [ -z "$MACOS_CERTIFICATE" ] || [ -z "$MACOS_CERTIFICATE_PASSWORD" ] || [ -z "$KEYCHAIN_PASSWORD" ]; then
+            echo "::error::macOS signing secrets are required (MACOS_CERTIFICATE, MACOS_CERTIFICATE_PASSWORD, KEYCHAIN_PASSWORD)"
+            exit 1
           fi
 
           echo "SIGNING_ENABLED=true" >> "$GITHUB_ENV"
@@ -112,11 +122,16 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
+          if [ -z "$MACOS_SIGNING_IDENTITY" ]; then
+            echo "::error::MACOS_SIGNING_IDENTITY is required for signed releases"
+            exit 1
+          fi
+
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
-            target/release/fae
+            "$SWIFT_APP_BINARY"
 
       - name: Notarize binaries
         if: env.SIGNING_ENABLED == 'true'
@@ -125,45 +140,19 @@ jobs:
           MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
           MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
         run: |
-          NOTARIZE_ZIP="$RUNNER_TEMP/fae-notarize.zip"
-          ditto -c -k --keepParent target/release/fae "$NOTARIZE_ZIP"
+          if [ -z "$MACOS_NOTARIZATION_APPLE_ID" ] || [ -z "$MACOS_NOTARIZATION_PASSWORD" ] || [ -z "$MACOS_NOTARIZATION_TEAM_ID" ]; then
+            echo "::error::macOS notarization secrets are required (MACOS_NOTARIZATION_APPLE_ID, MACOS_NOTARIZATION_PASSWORD, MACOS_NOTARIZATION_TEAM_ID)"
+            exit 1
+          fi
+
+          NOTARIZE_ZIP="$RUNNER_TEMP/fae-native-swift-notarize.zip"
+          ditto -c -k --keepParent "$SWIFT_APP_BINARY" "$NOTARIZE_ZIP"
 
           xcrun notarytool submit "$NOTARIZE_ZIP" \
             --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
             --password "$MACOS_NOTARIZATION_PASSWORD" \
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
             --wait
-
-      - name: Download Pi coding agent binary
-        env:
-          PI_VERSION: "latest"
-        run: |
-          PI_ASSET="pi-darwin-arm64.tar.gz"
-          PI_URL="https://github.com/badlogic/pi-mono/releases/${PI_VERSION}/download/${PI_ASSET}"
-
-          echo "Downloading Pi from ${PI_URL}"
-          curl -fsSL -o "/tmp/${PI_ASSET}" "${PI_URL}"
-
-          # Extract Pi binary from the tarball (pi/pi inside the archive)
-          mkdir -p /tmp/pi-extract
-          tar xzf "/tmp/${PI_ASSET}" -C /tmp/pi-extract
-          if [ -f /tmp/pi-extract/pi/pi ]; then
-            echo "PI_BINARY=/tmp/pi-extract/pi/pi" >> "$GITHUB_ENV"
-          else
-            echo "::error::Pi binary not found at expected path in archive"
-            exit 1
-          fi
-
-      - name: Sign Pi binary
-        if: env.SIGNING_ENABLED == 'true'
-        env:
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: |
-          codesign --force --options runtime \
-            --sign "$MACOS_SIGNING_IDENTITY" \
-            --entitlements Entitlements.plist \
-            --timestamp \
-            "$PI_BINARY"
 
       - name: Prepare release payloads
         run: |
@@ -179,14 +168,14 @@ jobs:
           mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 
           # Standalone binary used by in-app self-update.
-          cp target/release/fae "$UPDATE_ASSET"
+          cp "$SWIFT_APP_BINARY" "$UPDATE_ASSET"
           chmod +x "$UPDATE_ASSET"
 
-          # Build a macOS app bundle for user-friendly installer packaging.
-          cp target/release/fae "$APP_BUNDLE/Contents/MacOS/fae"
-          cp "${PI_BINARY}" "$APP_BUNDLE/Contents/Resources/pi"
+          # Build native macOS app bundle from Swift shell.
+          cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
+          cp target/release/fae "$APP_BUNDLE/Contents/Resources/fae-backend"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-          chmod +x "$APP_BUNDLE/Contents/MacOS/fae" "$APP_BUNDLE/Contents/Resources/pi"
+          chmod +x "$APP_BUNDLE/Contents/MacOS/FaeNativeApp" "$APP_BUNDLE/Contents/Resources/fae-backend"
           cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -195,7 +184,7 @@ jobs:
             <key>CFBundleDisplayName</key>
             <string>Fae</string>
             <key>CFBundleExecutable</key>
-            <string>fae</string>
+            <string>FaeNativeApp</string>
             <key>CFBundleIdentifier</key>
             <string>com.saorsalabs.fae</string>
             <key>CFBundleName</key>
@@ -222,18 +211,20 @@ jobs:
             <string>Fae needs access to your Downloads to help manage files when you ask.</string>
             <key>NSSpeechRecognitionUsageDescription</key>
             <string>Fae uses speech recognition to understand your voice commands.</string>
+            <key>NSAppleEventsUsageDescription</key>
+            <string>Fae can automate supported apps only when you explicitly request actions.</string>
             <key>CFBundleIconFile</key>
             <string>AppIcon</string>
           </dict>
           </plist>
           EOF
 
-          # Dev-focused archive (CLI/source users) with bundled Pi.
-          cp target/release/fae "$ARCHIVE_STAGING/"
-          cp "${PI_BINARY}" "$ARCHIVE_STAGING/pi"
+          # Archive includes native app bundle and backend binary.
+          cp -R "$APP_BUNDLE" "$ARCHIVE_STAGING/Fae.app"
+          cp target/release/fae "$ARCHIVE_STAGING/fae-backend"
           cp README.md "$ARCHIVE_STAGING/"
           cp LICENSE "$ARCHIVE_STAGING/" 2>/dev/null || true
-          chmod +x "$ARCHIVE_STAGING/fae" "$ARCHIVE_STAGING/pi"
+          chmod +x "$ARCHIVE_STAGING/fae-backend"
           tar -czf "$ARCHIVE" -C "$ARCHIVE_STAGING" .
 
           echo "DIST_DIR=$DIST_DIR" >> "$GITHUB_ENV"
@@ -250,13 +241,19 @@ jobs:
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
-            "$APP_BUNDLE/Contents/Resources/pi"
+            "$APP_BUNDLE/Contents/Resources/fae-backend"
 
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
-            "$APP_BUNDLE/Contents/MacOS/fae"
+            "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
+
+          codesign --force --options runtime \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --entitlements Entitlements.plist \
+            --timestamp \
+            "$UPDATE_ASSET"
 
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
@@ -265,6 +262,7 @@ jobs:
             "$APP_BUNDLE"
 
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          spctl -a -vvv --type execute "$APP_BUNDLE"
 
       - name: Build macOS installer (.dmg)
         run: |

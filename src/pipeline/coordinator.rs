@@ -2391,7 +2391,7 @@ async fn run_tts_stage(
     tx: mpsc::Sender<SynthesizedAudio>,
     interrupt: Arc<AtomicBool>,
     cancel: CancellationToken,
-    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    _runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
 ) {
     let mut engine = match config.tts.backend {
         crate::config::TtsBackend::Kokoro => {
@@ -2432,25 +2432,6 @@ async fn run_tts_stage(
             sentence = rx.recv() => {
                 match sentence {
                     Some(sentence) => {
-                        // Spawn viseme generation in parallel with TTS synthesis.
-                        let viseme_handle = if let Some(ref rt_tx) = runtime_tx {
-                            let viseme_text = sentence.text.clone();
-                            let viseme_tx = rt_tx.clone();
-                            Some(tokio::task::spawn_blocking(move || {
-                                let visemes =
-                                    crate::viseme::text_to_visemes(&viseme_text, 1.0);
-                                if let Some((viseme, _, _)) = visemes.first() {
-                                    let mouth_png =
-                                        crate::viseme::viseme_to_mouth_png(*viseme);
-                                    let _ = viseme_tx.send(RuntimeEvent::AssistantViseme {
-                                        mouth_png: mouth_png.to_owned(),
-                                    });
-                                }
-                            }))
-                        } else {
-                            None
-                        };
-
                         // If an interrupt was requested (barge-in), drop any pending synthesis
                         // and only forward a final marker to unblock downstream state.
                         if interrupt.load(Ordering::Relaxed) {
@@ -2502,12 +2483,6 @@ async fn run_tts_stage(
                                 }
                             }
                             Err(e) => error!("TTS error: {e}"),
-                        }
-
-                        // Ensure viseme generation finishes (runs concurrently
-                        // with TTS synthesis above).
-                        if let Some(handle) = viseme_handle {
-                            let _ = handle.await;
                         }
                     }
                     None => break,
@@ -2653,8 +2628,8 @@ fn strip_punctuation(text: &str) -> String {
         .join(" ")
 }
 
-/// Expand common English contractions so STT output like "that'll" matches
-/// the configured stop phrase "that will".
+/// Expand common English contractions.
+#[cfg(test)]
 fn expand_contractions(text: &str) -> String {
     text.replace("that'll", "that will")
         .replace("i'll", "i will")
@@ -2730,32 +2705,26 @@ struct ConversationGateControl {
     gate_active: Arc<AtomicBool>,
 }
 
-/// Conversation gate: filters transcriptions based on sleep phrases.
+/// Conversation gate: routes transcriptions based on active/idle state.
 ///
 /// Always starts in `Active` state (always-on companion mode). The gate
-/// transitions to `Idle` when a sleep phrase is detected or a
-/// `GateCommand::Sleep` is received. It returns to `Active` on a
+/// transitions to `Idle` when a `GateCommand::Sleep` is received
+/// (or optional idle timeout if configured). It returns to `Active` on a
 /// `GateCommand::Wake`.
 ///
 /// In `Active` state:
 ///   - If the assistant is speaking/generating, only interrupt on name
-///     mention (name-gated barge-in) or a sleep phrase.
-///   - If the assistant is silent, forward any speech and check for sleep phrases.
+///     mention (name-gated barge-in).
+///   - If the assistant is silent, forward speech directly.
 ///   - Optionally auto-returns to Idle after `idle_timeout_s` of inactivity.
 ///     When `idle_timeout_s == 0` (companion mode), Fae stays present until
-///     explicitly told to sleep via one of the configured sleep phrases.
+///     explicitly paused by `GateCommand::Sleep`.
 async fn run_conversation_gate(
     config: SpeechConfig,
     mut stt_rx: mpsc::Receiver<Transcription>,
     llm_tx: mpsc::Sender<Transcription>,
     mut ctl: ConversationGateControl,
 ) {
-    let sleep_phrases: Vec<String> = config
-        .conversation
-        .effective_sleep_phrases()
-        .iter()
-        .map(|s| s.to_lowercase())
-        .collect();
     let idle_timeout_s = config.conversation.idle_timeout_s;
     // Always-on: start in Active state.
     let mut state = GateState::Active;
@@ -2841,11 +2810,9 @@ async fn run_conversation_gate(
                             continue;
                         }
 
-                        // Use the raw lowercase string for any operations that need stable
-                        // byte offsets back into `t.text`. Contraction expansion can change
-                        // string length, which would invalidate indices.
+                        // Use lowercase string for stable byte offsets back into `t.text`
+                        // when extracting a query around the name mention.
                         let lower_raw = t.text.to_lowercase();
-                        let lower_expanded = expand_contractions(&lower_raw);
 
                         match state {
                             GateState::Idle => {
@@ -2854,32 +2821,6 @@ async fn run_conversation_gate(
                                 // transcriptions until Wake command.
                             }
                             GateState::Active => {
-                                // Strip punctuation for phrase matching so STT
-                                // formatting (commas, periods) doesn't break
-                                // comparisons. E.g. "that will do, fae" matches
-                                // stop phrase "that will do fae".
-                                let clean = strip_punctuation(&lower_expanded);
-
-                                // Check for sleep phrases (always, even during
-                                // assistant speech — "that'll do Fae" should work
-                                // mid-sentence when AEC is active).
-                                if sleep_phrases.iter().any(|phrase| clean.contains(phrase.as_str())) {
-                                    ctl.interrupt.store(true, Ordering::Relaxed);
-                                    let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
-                                    if ctl.clear_queue_on_stop
-                                        && let Some(tx) = &ctl.llm_queue_cmd_tx
-                                    {
-                                        let _ = tx.send(LlmQueueCommand::ClearQueuedInputs);
-                                    }
-                                    state = GateState::Idle;
-                                    gate_active.store(false, Ordering::Relaxed);
-                                    if ctl.console_output {
-                                        println!("\n[{display_name}] Standing by.\n");
-                                    }
-                                    info!("sleep phrase detected, returning to idle");
-                                    continue;
-                                }
-
                                 let assistant_active =
                                     ctl.assistant_speaking.load(Ordering::Relaxed)
                                     || ctl.assistant_generating.load(Ordering::Relaxed);
@@ -4838,7 +4779,7 @@ mod tests {
         let _ = handle.await;
     }
 
-    /// Verify sleep phrase → Idle → GateCommand::Wake → Active cycle.
+    /// Verify GateCommand::Sleep → Idle → GateCommand::Wake → Active cycle.
     #[tokio::test]
     async fn gate_sleep_wake_cycle() {
         let config = SpeechConfig::default();
@@ -4873,23 +4814,16 @@ mod tests {
             "gate should start active"
         );
 
-        // Send a sleep phrase via transcription — gate should go Idle.
-        stt_tx
-            .send(Transcription {
-                text: "go to sleep".to_string(),
-                is_final: true,
-                voiceprint: None,
-                audio_captured_at: Instant::now(),
-                transcribed_at: Instant::now(),
-            })
-            .await
-            .expect("send sleep phrase");
+        // Send Sleep command — gate should go Idle.
+        gate_cmd_tx
+            .send(GateCommand::Sleep)
+            .expect("send sleep command");
 
         // Give the gate time to process.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(
             !gate_active.load(Ordering::Relaxed),
-            "gate should be idle after sleep phrase"
+            "gate should be idle after sleep command"
         );
 
         // Send a transcription while idle — should NOT reach LLM.
