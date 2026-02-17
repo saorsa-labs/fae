@@ -25,12 +25,12 @@
 ///
 /// # Metrics
 ///
-/// Implement the [`MetricsCollector`](metrics::MetricsCollector) trait to collect performance and usage metrics.
+/// Implement the [`MetricsCollector`] trait to collect performance and usage metrics.
 /// A no-op default implementation is provided.
 ///
 /// # Secret Redaction
 ///
-/// Use [`RedactedString`](redact::RedactedString) to prevent accidental leakage of API keys, tokens, and other
+/// Use [`RedactedString`] to prevent accidental leakage of API keys, tokens, and other
 /// sensitive data in logs and error messages.
 pub mod metrics;
 pub mod redact;

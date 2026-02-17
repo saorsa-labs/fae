@@ -2,7 +2,7 @@
 //!
 //! Defines the [`ProviderAdapter`] trait that all LLM provider implementations
 //! satisfy. Adapters normalize provider-specific APIs into the shared
-//! [`LlmEvent`](crate::fae_llm::events::LlmEvent) stream.
+//! [`LlmEvent`] stream.
 
 use std::pin::Pin;
 

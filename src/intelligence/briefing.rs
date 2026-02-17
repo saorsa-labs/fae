@@ -109,7 +109,7 @@ const MAX_BRIEFING_ITEMS: usize = 10;
 ///
 /// Gathers upcoming events (7 days), stale relationships (30 days),
 /// commitments, and research results. Ranks by priority and caps to
-/// [`MAX_BRIEFING_ITEMS`].
+/// `MAX_BRIEFING_ITEMS`.
 pub fn build_briefing(store: &IntelligenceStore) -> Briefing {
     let mut items = Vec::new();
 

@@ -4,7 +4,7 @@
 //! available backend per OS:
 //!
 //! - **macOS**: [`PeekabooBackend`](peekaboo::PeekabooBackend) via the `peekaboo` CLI
-//! - **Linux/X11**: [`XdotoolBackend`](xdotool::XdotoolBackend) via `xdotool` + `scrot`
+//! - **Linux/X11**: `XdotoolBackend` via `xdotool` + `scrot`
 //!
 //! Only available in `ToolMode::Full`.
 
