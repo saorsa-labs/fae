@@ -64,7 +64,6 @@ pub mod viseme;
 pub mod voice_clone;
 pub mod voice_command;
 pub mod voiceprint;
-pub mod wakeword;
 
 #[cfg(test)]
 pub(crate) mod test_utils;

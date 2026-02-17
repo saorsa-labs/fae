@@ -4665,7 +4665,6 @@ fn app() -> Element {
                                                                 sf.set_at = Some(std::time::Instant::now());
                                                             }
                                                             fae::pipeline::messages::ControlEvent::UserSpeechStart { .. } => {}
-                                                            fae::pipeline::messages::ControlEvent::WakewordDetected => {}
                                                         },
                                                         fae::RuntimeEvent::AssistantGenerating { active } => assistant_generating.set(*active),
                                                         fae::RuntimeEvent::AssistantAudioLevel { rms } => assistant_rms.set(*rms),
@@ -4696,8 +4695,9 @@ fn app() -> Element {
                                                             }
                                                         }
                                                         fae::RuntimeEvent::ToolCall { name, .. } => {
-                                                            // Auto-open canvas panel when Fae uses a canvas tool.
-                                                            if name.starts_with("canvas_") && name != "canvas_clear" {
+                                                            // Auto-open canvas panel when Fae uses any tool
+                                                            // so the user can see what Fae is doing.
+                                                            if name != "canvas_clear" {
                                                                 canvas_visible.set(true);
                                                             }
                                                             // Auto-close canvas panel when Fae clears the canvas.
@@ -4705,6 +4705,7 @@ fn app() -> Element {
                                                                 canvas_visible.set(false);
                                                             }
                                                         }
+                                                        fae::RuntimeEvent::ToolExecuting { .. } => {}
                                                         fae::RuntimeEvent::ToolResult { .. } => {}
                                                         fae::RuntimeEvent::ModelSelectionPrompt { .. } => {
                                                             // TODO: Task 5 will implement the model picker UI
@@ -8050,16 +8051,6 @@ fn preferences_window() -> Element {
                                 option { value: "read_write", "Read/write (ask first)" }
                                 option { value: "full", "Full (ask first)" }
                                 option { value: "full_no_approval", "Full (no approval)" }
-                            }
-                        }
-                        div { class: "settings-row",
-                            label { class: "settings-label", "Wake word" }
-                            input {
-                                class: "settings-select",
-                                r#type: "text",
-                                disabled: !settings_enabled,
-                                value: "{config_state.read().conversation.wake_word}",
-                                oninput: move |evt| config_state.write().conversation.wake_word = evt.value(),
                             }
                         }
                         div { class: "settings-row",

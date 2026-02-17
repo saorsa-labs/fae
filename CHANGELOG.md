@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.5.0] - 2026-02-17
+
+### Changed
+
+- **Always-On Companion Mode** — Fae now starts listening immediately. The wake word system (MFCC+DTW keyword spotter) has been completely removed. The conversation gate starts in Active state; no wake word is needed. Sleep phrases and the stop/start listening button are preserved.
+- **Faster Response Times** — VAD silence detection reduced from 2200ms to 1000ms, barge-in silence reduced from 1200ms to 800ms. This saves ~1.2 seconds per conversational turn.
+
+### Added
+
+- **Real-Time Tool Feedback** — when Fae uses tools, she now shows live progress in the canvas (tool name + "running..." indicator). Tool events are emitted as they happen instead of in a batch after completion. The canvas auto-opens for all tool calls.
+- **ToolExecuting runtime event** — new `RuntimeEvent::ToolExecuting` variant for live tool progress indication.
+
+### Fixed
+
+- **Canvas Blank Messages** — whitespace-only assistant text, empty tool names, and empty chunk text no longer produce blank canvas messages. Guards added at multiple levels (chunk acceptance, flush, push, push_tool).
+
+### Removed
+
+- `src/wakeword.rs` — MFCC+DTW wake word spotter module (632 lines).
+- `src/bin/record_wakeword.rs` — wake word recording utility binary.
+- `WakewordDetected` event variant from the pipeline.
+
 ## [v0.4.1] - 2026-02-17
 
 ### Fixed

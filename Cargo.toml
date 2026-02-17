@@ -17,10 +17,6 @@ path = "src/bin/gui.rs"
 required-features = ["gui"]
 
 [[bin]]
-name = "fae-record-wakeword"
-path = "src/bin/record_wakeword.rs"
-
-[[bin]]
 name = "fae-avatar-slicer"
 path = "src/bin/avatar_slicer.rs"
 required-features = ["tools"]

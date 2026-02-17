@@ -23,7 +23,8 @@ use crate::fae_llm::tools::sanitize::sanitize_tool_output;
 use crate::fae_llm::tools::types::DEFAULT_MAX_BYTES;
 use crate::fae_llm::types::RequestOptions;
 use crate::fae_llm::usage::TokenUsage;
-use tokio::sync::mpsc;
+use crate::runtime::RuntimeEvent;
+use tokio::sync::{broadcast, mpsc};
 
 /// Lower temperature improves tool-calling judgment on smaller local models.
 const TOOL_JUDGMENT_TEMPERATURE: f64 = 0.2;
@@ -48,6 +49,8 @@ pub struct AgentLoop {
     tool_definitions: Vec<ToolDefinition>,
     cancel: CancellationToken,
     metrics: Arc<dyn MetricsCollector>,
+    /// Optional broadcast sender for emitting live tool events to the runtime.
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
 }
 
 impl AgentLoop {
@@ -106,7 +109,18 @@ impl AgentLoop {
             tool_definitions,
             cancel: CancellationToken::new(),
             metrics,
+            runtime_tx: None,
         }
+    }
+
+    /// Set the runtime event sender for live tool event emission.
+    ///
+    /// When set, the agent loop will emit `ToolCall`, `ToolExecuting`,
+    /// and `ToolResult` events in real-time as tools are executed,
+    /// rather than requiring post-hoc emission.
+    pub fn with_runtime_tx(mut self, tx: broadcast::Sender<RuntimeEvent>) -> Self {
+        self.runtime_tx = Some(tx);
+        self
     }
 
     /// Cancel the agent loop.
@@ -373,6 +387,20 @@ impl AgentLoop {
                     });
                 }
 
+                // Emit live ToolCall events before execution begins
+                if let Some(ref rtx) = self.runtime_tx {
+                    for tc in &accumulated.tool_calls {
+                        let _ = rtx.send(RuntimeEvent::ToolCall {
+                            id: tc.call_id.clone(),
+                            name: tc.function_name.clone(),
+                            input_json: tc.arguments_json.clone(),
+                        });
+                        let _ = rtx.send(RuntimeEvent::ToolExecuting {
+                            name: tc.function_name.clone(),
+                        });
+                    }
+                }
+
                 // Execute tools
                 let tool_results = self
                     .tool_executor
@@ -392,6 +420,21 @@ impl AgentLoop {
                                 .record_tool_latency_ms(&exec.function_name, exec.duration_ms);
                             self.metrics
                                 .count_tool_result(&exec.function_name, exec.result.success);
+
+                            // Emit live ToolResult event
+                            if let Some(ref rtx) = self.runtime_tx {
+                                let output_text = if exec.result.success {
+                                    Some(exec.result.content.clone())
+                                } else {
+                                    exec.result.error.clone()
+                                };
+                                let _ = rtx.send(RuntimeEvent::ToolResult {
+                                    id: exec.call_id.clone(),
+                                    name: exec.function_name.clone(),
+                                    success: exec.result.success,
+                                    output_text,
+                                });
+                            }
 
                             assistant_tool_calls.push(AssistantToolCall {
                                 call_id: exec.call_id.clone(),
@@ -419,6 +462,16 @@ impl AgentLoop {
                             let error_msg = format!("Error: {e}");
                             self.metrics
                                 .count_tool_result(&acc_call.function_name, false);
+
+                            // Emit live ToolResult event for failure
+                            if let Some(ref rtx) = self.runtime_tx {
+                                let _ = rtx.send(RuntimeEvent::ToolResult {
+                                    id: call_id.clone(),
+                                    name: acc_call.function_name.clone(),
+                                    success: false,
+                                    output_text: Some(error_msg.clone()),
+                                });
+                            }
 
                             assistant_tool_calls.push(AssistantToolCall {
                                 call_id: call_id.clone(),

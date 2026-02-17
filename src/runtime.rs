@@ -30,6 +30,8 @@ pub enum RuntimeEvent {
     AssistantSentence(SentenceChunk),
     /// Whether the assistant is currently generating a response.
     AssistantGenerating { active: bool },
+    /// Agent tool is currently executing (for "thinking" indicator).
+    ToolExecuting { name: String },
     /// Agent tool call request (for UI/telemetry).
     ToolCall {
         /// Tool call identifier (stable across start/update/end).

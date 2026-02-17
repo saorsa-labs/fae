@@ -26,7 +26,7 @@ pub struct SpeechConfig {
     pub memory: MemoryConfig,
     /// Proactive intelligence settings.
     pub intelligence: IntelligenceConfig,
-    /// Conversation gate settings (wake word / stop phrase).
+    /// Conversation gate settings (sleep phrases / always-on mode).
     pub conversation: ConversationConfig,
     /// Barge-in (interrupt) behavior while the assistant is generating/speaking.
     pub barge_in: BargeInConfig,
@@ -141,7 +141,7 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             threshold: 0.001,
-            min_silence_duration_ms: 2200,
+            min_silence_duration_ms: 1000,
             speech_pad_ms: 30,
             min_speech_duration_ms: 500,
         }
@@ -726,7 +726,7 @@ impl Default for BargeInConfig {
             min_rms: 0.05,
             confirm_ms: 150,
             assistant_start_holdoff_ms: 500,
-            barge_in_silence_ms: 1200,
+            barge_in_silence_ms: 800,
         }
     }
 }
@@ -1618,5 +1618,46 @@ idle_timeout_s = 0
     fn legacy_stop_phrase_default_is_empty() {
         let config = ConversationConfig::default();
         assert!(config.stop_phrase.is_empty());
+    }
+
+    /// Old config.toml files with [wakeword] section still load without errors.
+    #[test]
+    fn backward_compat_config_with_wakeword_section() {
+        let toml_str = r#"
+[audio]
+input_sample_rate = 16000
+
+[wakeword]
+enabled = true
+threshold = 0.6
+num_mfcc = 13
+
+[conversation]
+wake_word = "hi fae"
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        // The wakeword section deserializes without error.
+        assert!(config.wakeword.enabled);
+        assert!((config.wakeword.threshold - 0.6).abs() < f32::EPSILON);
+        assert_eq!(config.wakeword.num_mfcc, 13);
+        // Other fields use defaults.
+        assert_eq!(config.audio.input_sample_rate, 16000);
+    }
+
+    /// Config without [wakeword] section also loads fine (uses defaults).
+    #[test]
+    fn backward_compat_config_without_wakeword_section() {
+        let toml_str = r#"
+[audio]
+input_sample_rate = 16000
+
+[conversation]
+wake_word = "hey fae"
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        // Wakeword defaults apply.
+        assert!(!config.wakeword.enabled);
+        assert!((config.wakeword.threshold - 0.5).abs() < f32::EPSILON);
+        assert_eq!(config.audio.input_sample_rate, 16000);
     }
 }

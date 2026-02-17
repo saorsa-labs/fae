@@ -1,58 +1,36 @@
-# Companion Presence Mode — Roadmap
+# Fae v0.5.0: Always-On Companion + Tool Feedback + Speed
 
 ## Problem Statement
-Fae currently operates as a "summoned servant" — she wakes on command, responds, then auto-dismisses herself after 20 seconds of silence. This feels cold and dismissive. She can't decide for herself whether to speak — she's either fully on or fully off.
-
-We want Fae to be an **always-present companion** who listens, thinks, and chooses when to speak. She should stay present unless explicitly told to go to sleep. She should intelligently decide whether speech is directed at her, whether she can helpfully contribute to a nearby conversation, or whether she should stay quiet.
+Fae operates in a "summoned servant" model requiring a wake word. Tool execution gives zero feedback until completion. VAD silence detection adds unnecessary latency. Canvas sometimes shows blank messages.
 
 ## Success Criteria
-- Auto-idle timeout removed (Fae never auto-dismisses herself)
-- Multiple natural "go to sleep" phrases: "shut up", "stop Fae", "go to sleep", "that'll do Fae", "quiet Fae", etc.
-- Wake word ("fae" / "hi fae") still brings her back from sleep
-- System prompt + SOUL.md updated for companion presence behavior
-- Fae intelligently decides whether to respond based on context:
-  - Direct address → respond normally
-  - Overheard question she can help with → politely interject with variety
-  - Background noise / TV / others chatting → stay quiet
-- Errs on the side of silence when uncertain
-- Interjection language varies naturally (not the same phrase each time)
-- All barge-in and interruption mechanisms preserved
-- Backward-compatible config migration (existing configs still work)
+- Wake word system completely removed — Fae always listens
+- Conversation gate starts Active (always-on)
+- Stop/start listening button preserved
+- Sleep phrases preserved
+- Real-time tool execution feedback in canvas
+- No blank canvas messages
+- Response latency reduced (VAD tuning, wakeword overhead removed)
 - Zero compilation errors and warnings
 - All tests pass
 
 ---
 
-## Milestone 1: Companion Presence Mode
+## Milestone 1: Always-On Companion + Speed + Feedback
 
-### Phase 1.1: Config & Sleep Phrases
-Update `ConversationConfig` to support multiple sleep phrases. Add `sleep_phrases: Vec<String>` with sensible defaults. Change `idle_timeout_s` default from 20 to 0 (disabled). Keep backward compatibility with existing single `stop_phrase` field via serde migration.
+### Phase 1.1: Remove Wake Word System ✅
+Deleted wakeword.rs, record_wakeword binary, removed all wakeword code from coordinator, gate starts Active, removed WakewordDetected event.
 
-**Key files:** `src/config.rs`
+### Phase 1.2: Speed Improvements ✅
+VAD silence 2200ms→1000ms, barge-in silence 1200ms→800ms, audio path simplified.
 
-### Phase 1.2: Conversation Gate
-Modify `run_conversation_gate()` in the pipeline coordinator. Remove/disable auto-idle timer when `idle_timeout_s == 0`. Replace single stop-phrase check with multi-phrase sleep detection from `sleep_phrases`. Preserve all wake mechanisms (wake word, wakeword spotter, GUI button) and barge-in behavior unchanged.
+### Phase 1.3: Real-Time Tool Feedback ✅
+Added ToolExecuting event, threaded runtime_tx into AgentLoop, live tool event emission, auto-open canvas for all tools.
 
-**Key files:** `src/pipeline/coordinator.rs`
+### Phase 1.4: Fix Canvas Blank Messages ✅
+Whitespace guards in flush_assistant, AssistantSentence, push(), push_tool().
 
-### Phase 1.3: Personality & Prompts
-Update `Prompts/system_prompt.md` and `SOUL.md` for companion presence mode. Add guidance for contextual awareness: when to respond, when to interject, when to stay quiet. Add interjection variety ("Excuse me, I couldn't help but overhear...", "Just thought I'd mention...", etc.). Ensure Fae errs on the side of silence when uncertain.
+### Phase 1.5: Integration Testing & Polish ✅
+End-to-end validation, backward compat testing, update CHANGELOG.md, update docs.
 
-**Key files:** `Prompts/system_prompt.md`, `SOUL.md`
-
-### Phase 1.4: Integration Testing
-Add/update tests for multi-phrase sleep detection, disabled auto-idle, gate state transitions with new config. Verify backward compatibility with existing configs. Full validation (fmt, clippy, test).
-
-**Key files:** `src/pipeline/coordinator.rs` (tests), `src/config.rs` (tests)
-
----
-
-## Architecture Notes
-- Conversation gate is in `src/pipeline/coordinator.rs` lines ~2836-3091
-- State machine: `GateState { Idle, Active }`
-- Auto-idle timer: `tokio::time::interval(5s)` checks `last_activity.elapsed()`
-- Stop phrase: `strip_punctuation()` → `expand_contractions()` → substring match
-- Wake word: `find_wake_word()` with variant detection ("fae", "faye", "fee", etc.)
-- Prompts assembled in `src/personality.rs`: core_prompt + SOUL + skills + user_addon
-- Barge-in: name-gated (conversation gate) + energy-based (control handler) + wakeword spotter
-- ConversationConfig: `wake_word`, `stop_phrase`, `enabled`, `idle_timeout_s`
+**Key files:** `src/pipeline/coordinator.rs` (tests), `src/config.rs`, `CHANGELOG.md`

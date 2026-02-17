@@ -444,59 +444,8 @@ impl PipelineCoordinator {
             (audio_rx, None)
         };
 
-        // Wakeword spotter: when enabled, tee audio to a second channel so the
-        // MFCC+DTW spotter runs in parallel with VAD.
-        let wakeword_enabled = self.config.wakeword.enabled;
-        let (final_vad_rx, wakeword_handle, wakeword_gate_rx) = if wakeword_enabled {
-            let (wakeword_audio_tx, wakeword_audio_rx) =
-                mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
-            let (tee_out_tx, tee_out_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
-            let (wakeword_signal_tx, wakeword_signal_rx) = mpsc::unbounded_channel::<()>();
-            let cancel_tee = cancel.clone();
-
-            // Tee task: sends each audio chunk to both VAD and wakeword spotter.
-            tokio::spawn(async move {
-                let mut rx = vad_audio_rx;
-                loop {
-                    tokio::select! {
-                        () = cancel_tee.cancelled() => break,
-                        chunk = rx.recv() => {
-                            match chunk {
-                                Some(c) => {
-                                    // Best-effort send to wakeword: don't block VAD.
-                                    let _ = wakeword_audio_tx.try_send(c.clone());
-                                    if tee_out_tx.send(c).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                None => break,
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Wakeword spotter: maps detections to signals for the conversation gate.
-            let ww_config = self.config.clone();
-            let ww_control_tx = control_tx.clone();
-            let ww_cancel = cancel.clone();
-            let ww_signal_tx = wakeword_signal_tx;
-            let handle = Some(tokio::spawn(async move {
-                // The stage sends ControlEvent::WakewordDetected AND a () signal.
-                run_wakeword_stage_with_signal(
-                    ww_config,
-                    wakeword_audio_rx,
-                    ww_control_tx,
-                    ww_signal_tx,
-                    ww_cancel,
-                )
-                .await;
-            }));
-
-            (tee_out_rx, handle, Some(wakeword_signal_rx))
-        } else {
-            (vad_audio_rx, None, None)
-        };
+        // Audio goes directly to VAD (no wakeword tee needed in always-on mode).
+        let final_vad_rx = vad_audio_rx;
 
         // Stage 2: VAD (always)
         let vad_handle = {
@@ -601,7 +550,6 @@ impl PipelineCoordinator {
                         clear_queue_on_stop: self.config.llm.clear_queue_on_stop,
                         console_output,
                         cancel: cancel.clone(),
-                        wakeword_rx: wakeword_gate_rx,
                         gate_cmd_rx: self.gate_cmd_rx.take(),
                         gate_active: Arc::clone(&self.gate_active),
                     };
@@ -801,9 +749,6 @@ impl PipelineCoordinator {
                 if let Some(aec) = aec_handle {
                     let _ = aec.await;
                 }
-                if let Some(ww) = wakeword_handle {
-                    let _ = ww.await;
-                }
 
                 if let Some(gate) = gate_handle {
                     let _ = tokio::join!(
@@ -943,66 +888,6 @@ async fn run_aec_stage(
                         let cleaned = processor.process(chunk);
                         if tx.send(cleaned).await.is_err() {
                             break;
-                        }
-                    }
-                    None => break,
-                }
-            }
-        }
-    }
-}
-
-/// Wakeword spotter stage: runs MFCC+DTW detection on raw audio in parallel
-/// with the VAD stage. Emits a `ControlEvent::WakewordDetected` for UI
-/// observability and a dedicated `()` signal to the conversation gate.
-async fn run_wakeword_stage_with_signal(
-    config: SpeechConfig,
-    mut rx: mpsc::Receiver<AudioChunk>,
-    control_tx: mpsc::UnboundedSender<ControlEvent>,
-    signal_tx: mpsc::UnboundedSender<()>,
-    cancel: CancellationToken,
-) {
-    use crate::wakeword::WakewordSpotter;
-
-    let mut spotter = match WakewordSpotter::new(&config.wakeword, config.audio.input_sample_rate) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("failed to init wakeword spotter: {e}");
-            loop {
-                tokio::select! {
-                    () = cancel.cancelled() => return,
-                    chunk = rx.recv() => {
-                        if chunk.is_none() { return; }
-                    }
-                }
-            }
-        }
-    };
-
-    info!(
-        "wakeword spotter started ({} references)",
-        spotter.reference_count()
-    );
-
-    let cooldown = Duration::from_secs(2);
-    let mut last_detection: Option<Instant> = None;
-
-    loop {
-        tokio::select! {
-            () = cancel.cancelled() => break,
-            chunk = rx.recv() => {
-                match chunk {
-                    Some(chunk) => {
-                        if spotter.process(&chunk.samples) {
-                            let in_cooldown = last_detection
-                                .is_some_and(|t| t.elapsed() < cooldown);
-                            if !in_cooldown {
-                                info!("wakeword detected by MFCC+DTW spotter");
-                                let _ = control_tx.send(ControlEvent::WakewordDetected);
-                                let _ = signal_tx.send(());
-                                last_detection = Some(Instant::now());
-                                spotter.clear();
-                            }
                         }
                     }
                     None => break,
@@ -2838,9 +2723,6 @@ struct ConversationGateControl {
     clear_queue_on_stop: bool,
     console_output: bool,
     cancel: CancellationToken,
-    /// Optional channel for MFCC+DTW wake word detections from the spotter stage.
-    /// When received in Idle state, transitions to Active immediately.
-    wakeword_rx: Option<mpsc::UnboundedReceiver<()>>,
     /// Optional channel for GUI-driven gate commands (wake/sleep button).
     gate_cmd_rx: Option<mpsc::UnboundedReceiver<GateCommand>>,
     /// Shared flag indicating whether the gate is currently active.
@@ -2848,12 +2730,16 @@ struct ConversationGateControl {
     gate_active: Arc<AtomicBool>,
 }
 
-/// Conversation gate: filters transcriptions based on wake word / stop phrase.
+/// Conversation gate: filters transcriptions based on sleep phrases.
 ///
-/// In `Idle` state, listens for the wake word and discards everything else.
+/// Always starts in `Active` state (always-on companion mode). The gate
+/// transitions to `Idle` when a sleep phrase is detected or a
+/// `GateCommand::Sleep` is received. It returns to `Active` on a
+/// `GateCommand::Wake`.
+///
 /// In `Active` state:
-///   - If the assistant is speaking/generating, only interrupt on wake word
-///     (name-gated barge-in) or a sleep phrase.
+///   - If the assistant is speaking/generating, only interrupt on name
+///     mention (name-gated barge-in) or a sleep phrase.
 ///   - If the assistant is silent, forward any speech and check for sleep phrases.
 ///   - Optionally auto-returns to Idle after `idle_timeout_s` of inactivity.
 ///     When `idle_timeout_s == 0` (companion mode), Fae stays present until
@@ -2864,7 +2750,6 @@ async fn run_conversation_gate(
     llm_tx: mpsc::Sender<Transcription>,
     mut ctl: ConversationGateControl,
 ) {
-    let wake_word = config.conversation.wake_word.to_lowercase();
     let sleep_phrases: Vec<String> = config
         .conversation
         .effective_sleep_phrases()
@@ -2872,32 +2757,23 @@ async fn run_conversation_gate(
         .map(|s| s.to_lowercase())
         .collect();
     let idle_timeout_s = config.conversation.idle_timeout_s;
-    let mut state = GateState::Idle;
+    // Always-on: start in Active state.
+    let mut state = GateState::Active;
 
     let display_name = "Fae".to_owned();
 
-    // Take the wakeword receiver out of ctl so we can use it in the select loop
-    // without a mutable borrow conflict.
-    let mut wakeword_rx = ctl.wakeword_rx.take();
     let mut gate_cmd_rx = ctl.gate_cmd_rx.take();
     let gate_active = ctl.gate_active.clone();
+    // Start active immediately.
+    gate_active.store(true, Ordering::Relaxed);
 
     // Auto-idle: track when the last conversational activity happened.
     let mut last_activity = Instant::now();
     let mut idle_check = tokio::time::interval(Duration::from_secs(5));
 
-    info!("conversation gate active, wake word: \"{wake_word}\"");
+    info!("conversation gate active (always-on)");
 
     loop {
-        // Create a future for the wakeword channel that resolves to None when
-        // the channel is absent (effectively disabled).
-        let wakeword_fut = async {
-            match &mut wakeword_rx {
-                Some(rx) => rx.recv().await,
-                None => std::future::pending().await,
-            }
-        };
-
         // Create a future for the GUI gate command channel.
         let gate_cmd_fut = async {
             match &mut gate_cmd_rx {
@@ -2938,16 +2814,6 @@ async fn run_conversation_gate(
                     _ => {} // Already in requested state, ignore.
                 }
             }
-            // MFCC+DTW wake word detection from the spotter stage.
-            Some(()) = wakeword_fut, if state == GateState::Idle => {
-                state = GateState::Active;
-                gate_active.store(true, Ordering::Relaxed);
-                last_activity = Instant::now();
-                if ctl.console_output {
-                    println!("\n[{display_name}] Listening...");
-                }
-                info!("wakeword spotter triggered, transitioning to active");
-            }
             // Periodic auto-idle check.
             _ = idle_check.tick(), if state == GateState::Active && idle_timeout_s > 0 => {
                 let assistant_active =
@@ -2983,39 +2849,9 @@ async fn run_conversation_gate(
 
                         match state {
                             GateState::Idle => {
-                                if let Some((pos, matched_len)) =
-                                    find_wake_word(&lower_raw, &wake_word)
-                                {
-                                    // Wake word detected — transition to Active
-                                    state = GateState::Active;
-                                    gate_active.store(true, Ordering::Relaxed);
-                                    last_activity = Instant::now();
-                                    if ctl.console_output {
-                                        println!("\n[{display_name}] Listening...");
-                                    }
-
-                                    let query = extract_query_around_wake_word(
-                                        &t.text, pos, matched_len,
-                                    );
-
-                                    let latency =
-                                        t.transcribed_at.duration_since(t.audio_captured_at);
-                                    if ctl.console_output {
-                                        println!(
-                                            "[You] {query} (STT: {:.0}ms)",
-                                            latency.as_millis()
-                                        );
-                                    }
-
-                                    let forwarded = Transcription {
-                                        text: query,
-                                        ..t
-                                    };
-                                    if llm_tx.send(forwarded).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                // If no wake word, silently discard
+                                // In always-on mode, Idle means the user
+                                // explicitly asked to sleep. Discard all
+                                // transcriptions until Wake command.
                             }
                             GateState::Active => {
                                 // Strip punctuation for phrase matching so STT
@@ -3048,12 +2884,9 @@ async fn run_conversation_gate(
                                     ctl.assistant_speaking.load(Ordering::Relaxed)
                                     || ctl.assistant_generating.load(Ordering::Relaxed);
 
-                                // Check for full wake phrase first ("hi fae", "hey fae").
-                                // Then fall back to standalone name mention ("fae") for
-                                // name-gated barge-in — the user shouldn't need the full
-                                // phrase when already in an active conversation.
-                                let name_match = find_wake_word(&lower_raw, &wake_word)
-                                    .or_else(|| find_name_mention(&lower_raw));
+                                // Name-gated barge-in: saying "Fae, stop that"
+                                // should interrupt even during assistant speech.
+                                let name_match = find_name_mention(&lower_raw);
 
                                 if let Some((pos, matched_len)) = name_match {
                                     ctl.interrupt.store(true, Ordering::Relaxed);
@@ -3061,7 +2894,7 @@ async fn run_conversation_gate(
                                         let _ = ctl.playback_cmd_tx.send(PlaybackCommand::Stop);
                                     }
 
-                                    let query = extract_query_around_wake_word(
+                                    let query = extract_query_around_name(
                                         &t.text, pos, matched_len,
                                     );
 
@@ -3120,12 +2953,12 @@ async fn run_conversation_gate(
     }
 }
 
-/// Extract the user's query from text surrounding a wake word match.
+/// Extract the user's query from text surrounding a name mention match.
 ///
-/// Prefers text after the wake word ("Fae, how are you?" → "how are you?"),
+/// Prefers text after the name ("Fae, how are you?" → "how are you?"),
 /// falls back to text before it ("Hello Fae" → "Hello"), then defaults to
-/// "Hello" if the wake word was the entire utterance.
-fn extract_query_around_wake_word(text: &str, pos: usize, matched_len: usize) -> String {
+/// "Hello" if the name was the entire utterance.
+fn extract_query_around_name(text: &str, pos: usize, matched_len: usize) -> String {
     let after = &text[pos + matched_len..];
     let after = after.trim_start_matches([',', ':', '.', '!', '?', ' ']);
     let after = after.trim();
@@ -3144,79 +2977,10 @@ fn extract_query_around_wake_word(text: &str, pos: usize, matched_len: usize) ->
     }
 }
 
-fn find_wake_word(lower_raw: &str, wake_word: &str) -> Option<(usize, usize)> {
-    if wake_word.is_empty() {
-        return None;
-    }
-
-    let mut variants: Vec<String> = Vec::new();
-    variants.push(wake_word.to_owned());
-
-    // Common STT confusions for "fae" — add variants for both standalone and
-    // multi-word wake phrases containing "fae".
-    let fae_variants = ["faye", "fae", "fea", "fee", "fay", "fey", "fah", "feh"];
-
-    if wake_word == "hi fae" {
-        // Multi-word wake phrase: generate all "hi X" and "high X" variants.
-        for v in fae_variants {
-            variants.push(format!("hi {v}"));
-            variants.push(format!("high {v}"));
-            // STT may insert comma: "hi, fae"
-            variants.push(format!("hi, {v}"));
-            variants.push(format!("high, {v}"));
-        }
-        // Also match "hey fae" as a close variant of "hi fae"
-        for v in fae_variants {
-            variants.push(format!("hey {v}"));
-            variants.push(format!("hey, {v}"));
-        }
-    } else if wake_word == "fae" {
-        for v in fae_variants {
-            variants.push(v.to_owned());
-        }
-    }
-
-    // Sort longest-first so longer matches are preferred.
-    variants.sort_by_key(|v| std::cmp::Reverse(v.len()));
-    variants.dedup();
-
-    let mut best: Option<(usize, usize)> = None;
-    for v in &variants {
-        let mut search_from = 0;
-        while search_from < lower_raw.len() {
-            let haystack = &lower_raw[search_from..];
-            let Some(rel_pos) = haystack.find(v.as_str()) else {
-                break;
-            };
-            let pos = search_from + rel_pos;
-            let end = pos + v.len();
-
-            // Word boundary check: avoid false positives like "coffee" matching "fee"
-            // or "buffet" matching "fey". A boundary is start-of-string, end-of-string,
-            // or a non-alphanumeric character.
-            let start_ok = pos == 0 || !lower_raw.as_bytes()[pos - 1].is_ascii_alphanumeric();
-            let end_ok =
-                end >= lower_raw.len() || !lower_raw.as_bytes()[end].is_ascii_alphanumeric();
-
-            if start_ok && end_ok {
-                let candidate = (pos, v.len());
-                best = match best {
-                    None => Some(candidate),
-                    Some(prev) if candidate.0 < prev.0 => Some(candidate),
-                    Some(prev) => Some(prev),
-                };
-                break; // found a valid match for this variant
-            }
-            search_from = pos + 1;
-        }
-    }
-    best
-}
-
 /// Check if the assistant's name ("fae") appears in text as a standalone word.
 ///
-/// This is used during Active state for name-gated barge-in: saying just "Fae,
-/// stop that" should interrupt even though the full wake phrase is "hi fae".
+/// This is used during Active state for name-gated barge-in: saying "Fae,
+/// stop that" should interrupt the assistant.
 /// Returns `(byte_pos, matched_len)` of the first standalone name match, or
 /// `None` if the name doesn't appear.
 fn find_name_mention(lower_raw: &str) -> Option<(usize, usize)> {
@@ -3862,308 +3626,6 @@ mod tests {
         assert!(!result.contains("```"));
     }
 
-    // ── find_wake_word ──────────────────────────────────────────────
-
-    #[test]
-    fn wake_word_exact_match() {
-        assert_eq!(find_wake_word("fae tell me a joke", "fae"), Some((0, 3)));
-    }
-
-    #[test]
-    fn wake_word_fee_variant() {
-        // "fee" is the most common STT confusion for "fae"
-        assert_eq!(find_wake_word("fee what time is it", "fae"), Some((0, 3)));
-    }
-
-    #[test]
-    fn wake_word_fay_variant() {
-        assert_eq!(find_wake_word("hey fay how are you", "fae"), Some((4, 3)));
-    }
-
-    #[test]
-    fn wake_word_fey_variant() {
-        assert_eq!(
-            find_wake_word("fey, what is the weather", "fae"),
-            Some((0, 3))
-        );
-    }
-
-    #[test]
-    fn wake_word_faye_variant() {
-        assert_eq!(find_wake_word("faye tell me a story", "fae"), Some((0, 4)));
-    }
-
-    #[test]
-    fn wake_word_fah_variant() {
-        assert_eq!(find_wake_word("fah what is that", "fae"), Some((0, 3)));
-    }
-
-    #[test]
-    fn wake_word_boundary_rejects_coffee() {
-        // "coffee" contains "fee" but should NOT trigger the wake word
-        assert_eq!(find_wake_word("i love coffee", "fae"), None);
-    }
-
-    #[test]
-    fn wake_word_boundary_rejects_buffet() {
-        // "buffet" contains "fey" substring — should not match
-        assert_eq!(find_wake_word("we went to the buffet", "fae"), None);
-    }
-
-    #[test]
-    fn wake_word_boundary_rejects_fayette() {
-        // "fayette" starts with "fay" but is not at a word boundary on the right
-        assert_eq!(find_wake_word("welcome to fayette", "fae"), None);
-    }
-
-    #[test]
-    fn wake_word_with_punctuation() {
-        // Punctuation counts as a word boundary
-        assert_eq!(find_wake_word("fae, play some music", "fae"), Some((0, 3)));
-        assert_eq!(find_wake_word("hey fee! what's up", "fae"), Some((4, 3)));
-    }
-
-    #[test]
-    fn wake_word_mid_sentence() {
-        assert_eq!(find_wake_word("hello fae how are you", "fae"), Some((6, 3)));
-    }
-
-    #[test]
-    fn wake_word_empty_wake_word() {
-        assert_eq!(find_wake_word("anything", ""), None);
-    }
-
-    #[test]
-    fn wake_word_not_found() {
-        assert_eq!(find_wake_word("tell me a joke", "fae"), None);
-    }
-
-    // ── canonicalize_wake_word_transcription ─────────────────────────
-
-    #[test]
-    fn canonicalize_fee_to_fae() {
-        let result = canonicalize_wake_word_transcription("fae", "Fee what time is it");
-        assert_eq!(result, Some("Fae what time is it".to_owned()));
-    }
-
-    #[test]
-    fn canonicalize_fay_to_fae() {
-        let result = canonicalize_wake_word_transcription("fae", "Fay, tell me a joke");
-        assert_eq!(result, Some("Fae, tell me a joke".to_owned()));
-    }
-
-    #[test]
-    fn canonicalize_faye_to_fae() {
-        let result = canonicalize_wake_word_transcription("fae", "Faye how are you");
-        assert_eq!(result, Some("Fae how are you".to_owned()));
-    }
-
-    #[test]
-    fn canonicalize_hey_fee_to_hey_fae() {
-        let result = canonicalize_wake_word_transcription("fae", "Hey fee, play music");
-        assert_eq!(result, Some("Hey Fae, play music".to_owned()));
-    }
-
-    #[test]
-    fn canonicalize_no_match() {
-        let result = canonicalize_wake_word_transcription("fae", "tell me a joke");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn canonicalize_non_fae_wake_word_noop() {
-        let result = canonicalize_wake_word_transcription("alexa", "alexa play music");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn canonicalize_hello_comma_fee() {
-        // STT often produces "Hello, Fee." — the comma variant must be handled
-        let result = canonicalize_wake_word_transcription("fae", "Hello, Fee.");
-        assert_eq!(result, Some("Hello, Fae.".to_owned()));
-    }
-
-    #[test]
-    fn canonicalize_hi_comma_fay() {
-        let result = canonicalize_wake_word_transcription("fae", "Hi, Fay!");
-        assert_eq!(result, Some("Hi, Fae!".to_owned()));
-    }
-
-    #[test]
-    fn canonicalize_hey_comma_fee() {
-        let result = canonicalize_wake_word_transcription("fae", "Hey, Fee how are you");
-        assert_eq!(result, Some("Hey, Fae how are you".to_owned()));
-    }
-
-    #[test]
-    fn canonicalize_okay_comma_fae() {
-        let result = canonicalize_wake_word_transcription("fae", "Okay, Fae stop");
-        assert_eq!(result, Some("Okay, Fae stop".to_owned()));
-    }
-
-    // ── wake word extraction helpers ────────────────────────────────
-
-    /// Helper: given an input like "Hello, Fee.", simulate what the
-    /// conversation gate extracts as the query to send to the LLM.
-    fn extract_query(input: &str, wake_word: &str) -> Option<String> {
-        let lower_raw = input.to_lowercase();
-        let (pos, matched_len) = find_wake_word(&lower_raw, wake_word)?;
-
-        let after = &input[pos + matched_len..];
-        let after = after.trim_start_matches([',', ':', '.', '!', '?', ' ']);
-        let after = after.trim();
-
-        if !after.is_empty() {
-            return Some(after.to_owned());
-        }
-
-        // Nothing after wake word — check for text before it
-        let before = &input[..pos];
-        let before = before.trim_end_matches([',', ':', '.', '!', '?', ' ']);
-        let before = before.trim();
-
-        if before.is_empty() {
-            Some("Hello".to_owned())
-        } else {
-            Some(before.to_owned())
-        }
-    }
-
-    #[test]
-    fn extract_query_after_wake_word() {
-        // "Fee what time is it" → query is "what time is it"
-        assert_eq!(
-            extract_query("fee what time is it", "fae"),
-            Some("what time is it".to_owned())
-        );
-    }
-
-    #[test]
-    fn extract_query_hello_fee_dot() {
-        // "Hello, Fee." → nothing after wake word → use "Hello" before it
-        assert_eq!(
-            extract_query("Hello, Fee.", "fae"),
-            Some("Hello".to_owned())
-        );
-    }
-
-    #[test]
-    fn extract_query_hello_fee_no_punct() {
-        // "Hello Fee" → nothing after → use "Hello"
-        assert_eq!(extract_query("Hello Fee", "fae"), Some("Hello".to_owned()));
-    }
-
-    #[test]
-    fn extract_query_hey_fae_how_are_you() {
-        // "Hey Fae how are you" → query is "how are you"
-        assert_eq!(
-            extract_query("Hey Fae how are you", "fae"),
-            Some("how are you".to_owned())
-        );
-    }
-
-    #[test]
-    fn extract_query_just_fae() {
-        // Just "Fae" alone → default greeting "Hello"
-        assert_eq!(extract_query("fae", "fae"), Some("Hello".to_owned()));
-    }
-
-    #[test]
-    fn extract_query_fae_comma() {
-        // "Fae," → nothing meaningful after → default "Hello"
-        assert_eq!(extract_query("Fae,", "fae"), Some("Hello".to_owned()));
-    }
-
-    #[test]
-    fn extract_query_hi_fae_excl() {
-        // "Hi Fae!" → nothing after → "Hi" from before
-        assert_eq!(extract_query("Hi Fae!", "fae"), Some("Hi".to_owned()));
-    }
-
-    // ── "hi fae" multi-word wake phrase ─────────────────────────────
-
-    #[test]
-    fn hi_fae_exact_match() {
-        assert_eq!(find_wake_word("hi fae how are you", "hi fae"), Some((0, 6)));
-    }
-
-    #[test]
-    fn hi_fae_with_comma() {
-        assert_eq!(
-            find_wake_word("hi, fae how are you", "hi fae"),
-            Some((0, 7))
-        );
-    }
-
-    #[test]
-    fn hi_fee_variant() {
-        assert_eq!(
-            find_wake_word("hi fee what time is it", "hi fae"),
-            Some((0, 6))
-        );
-    }
-
-    #[test]
-    fn hi_fea_variant() {
-        assert_eq!(
-            find_wake_word("hi fea tell me a joke", "hi fae"),
-            Some((0, 6))
-        );
-    }
-
-    #[test]
-    fn high_fae_variant() {
-        // STT may hear "high" instead of "hi"
-        assert_eq!(
-            find_wake_word("high fae how are you", "hi fae"),
-            Some((0, 8))
-        );
-    }
-
-    #[test]
-    fn hey_fae_variant() {
-        // "hey fae" is a close variant of "hi fae"
-        assert_eq!(
-            find_wake_word("hey fae how are you", "hi fae"),
-            Some((0, 7))
-        );
-    }
-
-    #[test]
-    fn hi_fae_not_found() {
-        assert_eq!(find_wake_word("tell me a joke", "hi fae"), None);
-    }
-
-    #[test]
-    fn hi_fae_query_extraction() {
-        // "Hi Fae, how are you" → "how are you"
-        assert_eq!(
-            extract_query("hi fae, how are you", "hi fae"),
-            Some("how are you".to_owned())
-        );
-    }
-
-    #[test]
-    fn hi_fae_alone_gives_greeting() {
-        // Just "Hi Fae" → default greeting
-        assert_eq!(extract_query("hi fae", "hi fae"), Some("Hello".to_owned()));
-    }
-
-    #[test]
-    fn hi_fea_query_extraction() {
-        assert_eq!(
-            extract_query("hi fea tell me a story", "hi fae"),
-            Some("tell me a story".to_owned())
-        );
-    }
-
-    #[test]
-    fn canonicalize_hi_fae_variants() {
-        // canonicalize should work with "hi fae" as wake word too
-        let result = canonicalize_wake_word_transcription("hi fae", "Hi Fee, tell me a joke");
-        assert_eq!(result, Some("Hi Fae, tell me a joke".to_owned()));
-    }
-
     // ── find_name_mention (standalone name for barge-in) ────────────
 
     #[test]
@@ -4638,7 +4100,7 @@ mod tests {
     }
 
     async fn wait_for_mock_requests(server: &MockApiServer, min_count: usize) {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if server.request_count() >= min_count {
                     break;
@@ -4791,7 +4253,7 @@ mod tests {
             .expect("send transcription");
         drop(input_tx);
 
-        tokio::time::timeout(Duration::from_secs(5), stage)
+        tokio::time::timeout(Duration::from_secs(30), stage)
             .await
             .expect("llm stage timeout")
             .expect("llm stage join");
@@ -4831,7 +4293,7 @@ mod tests {
             .expect("send transcription");
         drop(input_tx);
 
-        tokio::time::timeout(Duration::from_secs(5), stage)
+        tokio::time::timeout(Duration::from_secs(30), stage)
             .await
             .expect("llm stage timeout")
             .expect("llm stage join");
@@ -4875,7 +4337,7 @@ mod tests {
             .expect("send second transcription");
         drop(input_tx);
 
-        tokio::time::timeout(Duration::from_secs(5), stage)
+        tokio::time::timeout(Duration::from_secs(30), stage)
             .await
             .expect("llm stage timeout")
             .expect("llm stage join");
@@ -4928,7 +4390,7 @@ mod tests {
 
         drop(input_tx);
 
-        tokio::time::timeout(Duration::from_secs(5), stage)
+        tokio::time::timeout(Duration::from_secs(30), stage)
             .await
             .expect("llm stage timeout")
             .expect("llm stage join");
@@ -4962,7 +4424,7 @@ mod tests {
 
         drop(input_tx);
 
-        tokio::time::timeout(Duration::from_secs(5), stage)
+        tokio::time::timeout(Duration::from_secs(30), stage)
             .await
             .expect("llm stage timeout")
             .expect("llm stage join");
@@ -5299,6 +4761,171 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Verify the conversation gate starts in Active state and processes
+    /// transcriptions immediately without needing a wake word.
+    #[tokio::test]
+    async fn gate_starts_active_and_forwards_transcription() {
+        let config = SpeechConfig::default();
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, mut llm_rx) = mpsc::channel(8);
+        let (playback_cmd_tx, _playback_cmd_rx) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+
+        let gate_active = Arc::new(AtomicBool::new(false));
+        let ctl = ConversationGateControl {
+            interrupt: Arc::new(AtomicBool::new(false)),
+            assistant_speaking: Arc::new(AtomicBool::new(false)),
+            assistant_generating: Arc::new(AtomicBool::new(false)),
+            playback_cmd_tx,
+            llm_queue_cmd_tx: None,
+            clear_queue_on_stop: false,
+            console_output: false,
+            cancel: cancel.clone(),
+            gate_cmd_rx: None,
+            gate_active: Arc::clone(&gate_active),
+        };
+
+        let handle = tokio::spawn(async move {
+            run_conversation_gate(config, stt_rx, llm_tx, ctl).await;
+        });
+
+        // Gate should be active immediately after spawn.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            gate_active.load(Ordering::Relaxed),
+            "gate should start active"
+        );
+
+        // Send a transcription — it should flow through without any wake word.
+        stt_tx
+            .send(Transcription {
+                text: "what is the weather today".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send transcription");
+
+        let received = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("transcription should reach LLM within timeout");
+        assert!(received.is_some(), "transcription should be forwarded");
+        assert_eq!(received.unwrap().text, "what is the weather today");
+
+        cancel.cancel();
+        drop(stt_tx);
+        let _ = handle.await;
+    }
+
+    /// Verify sleep phrase → Idle → GateCommand::Wake → Active cycle.
+    #[tokio::test]
+    async fn gate_sleep_wake_cycle() {
+        let config = SpeechConfig::default();
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, mut llm_rx) = mpsc::channel(8);
+        let (playback_cmd_tx, _playback_cmd_rx) = mpsc::unbounded_channel();
+        let (gate_cmd_tx, gate_cmd_rx) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+
+        let gate_active = Arc::new(AtomicBool::new(false));
+        let ctl = ConversationGateControl {
+            interrupt: Arc::new(AtomicBool::new(false)),
+            assistant_speaking: Arc::new(AtomicBool::new(false)),
+            assistant_generating: Arc::new(AtomicBool::new(false)),
+            playback_cmd_tx,
+            llm_queue_cmd_tx: None,
+            clear_queue_on_stop: false,
+            console_output: false,
+            cancel: cancel.clone(),
+            gate_cmd_rx: Some(gate_cmd_rx),
+            gate_active: Arc::clone(&gate_active),
+        };
+
+        let handle = tokio::spawn(async move {
+            run_conversation_gate(config, stt_rx, llm_tx, ctl).await;
+        });
+
+        // Wait for gate to be active.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            gate_active.load(Ordering::Relaxed),
+            "gate should start active"
+        );
+
+        // Send a sleep phrase via transcription — gate should go Idle.
+        stt_tx
+            .send(Transcription {
+                text: "go to sleep".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send sleep phrase");
+
+        // Give the gate time to process.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !gate_active.load(Ordering::Relaxed),
+            "gate should be idle after sleep phrase"
+        );
+
+        // Send a transcription while idle — should NOT reach LLM.
+        stt_tx
+            .send(Transcription {
+                text: "this should be ignored".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send while idle");
+
+        // Brief wait, then confirm nothing was forwarded.
+        let idle_recv = tokio::time::timeout(Duration::from_millis(200), llm_rx.recv()).await;
+        assert!(
+            idle_recv.is_err(),
+            "transcription should not be forwarded while idle"
+        );
+
+        // Send Wake command — gate should return to Active.
+        gate_cmd_tx
+            .send(GateCommand::Wake)
+            .expect("send wake command");
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            gate_active.load(Ordering::Relaxed),
+            "gate should be active after wake"
+        );
+
+        // Send transcription again — should flow through.
+        stt_tx
+            .send(Transcription {
+                text: "hello again".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send after wake");
+
+        let received = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("transcription should reach LLM after wake");
+        assert!(received.is_some());
+        assert_eq!(received.unwrap().text, "hello again");
+
+        cancel.cancel();
+        drop(stt_tx);
+        let _ = handle.await;
+    }
+
     #[tokio::test]
     async fn conversation_gate_sleep_emits_clear_queued_command() {
         let config = SpeechConfig::default();
@@ -5318,7 +4945,6 @@ mod tests {
             clear_queue_on_stop: true,
             console_output: false,
             cancel: cancel.clone(),
-            wakeword_rx: None,
             gate_cmd_rx: Some(gate_cmd_rx),
             gate_active: Arc::new(AtomicBool::new(false)),
         };

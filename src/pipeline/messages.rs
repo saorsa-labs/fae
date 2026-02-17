@@ -20,8 +20,6 @@ pub enum ControlEvent {
         /// Whether playback ended due to interruption.
         interrupted: bool,
     },
-    /// MFCC+DTW wake word spotter detected the keyword in raw audio.
-    WakewordDetected,
 }
 
 /// A chunk of raw audio samples from the microphone.

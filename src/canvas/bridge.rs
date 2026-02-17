@@ -93,10 +93,12 @@ impl CanvasBridge {
             }
 
             RuntimeEvent::AssistantSentence(chunk) => {
-                if !self.pending_assistant_text.is_empty() {
-                    self.pending_assistant_text.push(' ');
+                if !chunk.text.trim().is_empty() {
+                    if !self.pending_assistant_text.is_empty() {
+                        self.pending_assistant_text.push(' ');
+                    }
+                    self.pending_assistant_text.push_str(&chunk.text);
                 }
-                self.pending_assistant_text.push_str(&chunk.text);
 
                 if chunk.is_final {
                     self.flush_assistant();
@@ -153,6 +155,11 @@ impl CanvasBridge {
                     self.push(MessageRole::System, "interrupted");
                     self.generating = false;
                 }
+            }
+
+            RuntimeEvent::ToolExecuting { name } => {
+                let text = format!("{name} running\u{2026}");
+                self.push_tool(name, &text);
             }
 
             RuntimeEvent::MemoryRecall { .. } => {}
@@ -274,15 +281,19 @@ impl CanvasBridge {
 
     /// Flush accumulated assistant text as a single message.
     fn flush_assistant(&mut self) {
-        if self.pending_assistant_text.is_empty() {
+        let text = std::mem::take(&mut self.pending_assistant_text);
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
             return;
         }
-        let text = std::mem::take(&mut self.pending_assistant_text);
-        self.push(MessageRole::Assistant, &text);
+        self.push(MessageRole::Assistant, trimmed);
     }
 
     /// Push a message and update grouping state.
     fn push(&mut self, role: MessageRole, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
         let ts = self.next_ts;
         self.next_ts += 1;
 
@@ -299,6 +310,9 @@ impl CanvasBridge {
 
     /// Push a tool message.
     fn push_tool(&mut self, name: &str, text: &str) {
+        if name.trim().is_empty() || text.trim().is_empty() {
+            return;
+        }
         let ts = self.next_ts;
         self.next_ts += 1;
 

@@ -96,11 +96,14 @@ impl FaeAgentLlm {
         self.maybe_compact_history();
         interrupt_flag.store(false, Ordering::Relaxed);
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             self.agent_config.clone(),
             Arc::clone(&self.provider),
             Arc::clone(&self.registry),
         );
+        if let Some(ref tx) = self.runtime_tx {
+            agent = agent.with_runtime_tx(tx.clone());
+        }
         let cancel = agent.cancellation_token();
 
         // Create clause streaming channel for low-latency TTS pipelining.
@@ -178,7 +181,6 @@ impl FaeAgentLlm {
             return Err(SpeechError::Llm(format!("agent error: {message}")));
         }
 
-        self.emit_tool_events(&result);
         self.append_result_messages(&result);
         self.trim_history();
 
@@ -192,35 +194,6 @@ impl FaeAgentLlm {
             .await;
 
         Ok(false)
-    }
-
-    fn emit_tool_events(&self, result: &AgentLoopResult) {
-        let Some(runtime_tx) = &self.runtime_tx else {
-            return;
-        };
-
-        for turn in &result.turns {
-            for tool_call in &turn.tool_calls {
-                let _ = runtime_tx.send(RuntimeEvent::ToolCall {
-                    id: tool_call.call_id.clone(),
-                    name: tool_call.function_name.clone(),
-                    input_json: tool_call.arguments.to_string(),
-                });
-
-                let output_text = if tool_call.result.success {
-                    Some(tool_call.result.content.clone())
-                } else {
-                    tool_call.result.error.clone()
-                };
-
-                let _ = runtime_tx.send(RuntimeEvent::ToolResult {
-                    id: tool_call.call_id.clone(),
-                    name: tool_call.function_name.clone(),
-                    success: tool_call.result.success,
-                    output_text,
-                });
-            }
-        }
     }
 
     fn append_result_messages(&mut self, result: &AgentLoopResult) {
