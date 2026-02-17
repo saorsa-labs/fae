@@ -179,6 +179,23 @@ fn build_menu_bar() -> dioxus::desktop::muda::Menu {
     menu
 }
 
+/// Build child-window config with platform-appropriate menu behavior.
+///
+/// macOS uses one app-global menu; attaching per-window menus can cause
+/// lifecycle issues when secondary windows close.
+#[cfg(feature = "gui")]
+fn child_window_config(window: dioxus::desktop::WindowBuilder) -> dioxus::desktop::Config {
+    let cfg = dioxus::desktop::Config::new().with_window(window);
+    #[cfg(target_os = "macos")]
+    {
+        cfg
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        cfg.with_menu(build_menu_bar())
+    }
+}
+
 #[cfg(feature = "gui")]
 mod gui {
     use fae::progress::ProgressEvent;
@@ -1414,7 +1431,7 @@ mod gui {
 use dioxus::prelude::*;
 
 #[cfg(feature = "gui")]
-use dioxus::desktop::{Config, LogicalSize, WindowBuilder, use_muda_event_handler, use_window};
+use dioxus::desktop::{LogicalSize, WindowBuilder, use_muda_event_handler, use_window};
 
 #[cfg(feature = "gui")]
 use gui::{AppStatus, SharedState, UpdateDialogState, UpdateGatePhase};
@@ -3831,14 +3848,15 @@ fn spawn_current_exe() -> Result<(), String> {
 /// Install a staged update and relaunch Fae via a detached helper script.
 ///
 /// If a staged binary exists on disk, uses [`fae::update::install_via_helper`]
-/// for a clean quit → replace → relaunch cycle. If no staged binary is found,
-/// falls back to the legacy inline download-and-replace path.
+/// for a clean quit → replace → relaunch cycle after integrity checks. If no
+/// staged binary is found, falls back to an inline download-and-replace path
+/// that still verifies signed checksums.
 ///
 /// Used by the startup gate, in-session banner, and scheduler notification paths
 /// so there is exactly one code path for install-and-relaunch.
 #[cfg(feature = "gui")]
 fn apply_and_relaunch(
-    download_url: String,
+    release: fae::update::Release,
     mut update_installing: Signal<bool>,
     mut update_install_error: Signal<Option<String>>,
     mut update_gate: Signal<Option<UpdateGatePhase>>,
@@ -3865,16 +3883,28 @@ fn apply_and_relaunch(
             });
 
             if staged_binary.exists() {
+                let state = fae::update::UpdateState::load();
+                let staged_meta = state.staged_update.unwrap_or(fae::update::StagedUpdate {
+                    version: release.version.clone(),
+                    download_url: release.download_url.clone(),
+                    asset_name: release.asset_name.clone(),
+                    checksums_url: release.checksums_url.clone(),
+                    checksums_signature_url: release.checksums_signature_url.clone(),
+                    expected_sha256: None,
+                    staged_path: staged_binary.clone(),
+                    staged_at: 0,
+                });
+                fae::update::applier::verify_staged_update(&staged_meta, &release)?;
                 tracing::info!("installing staged update from {}", staged_binary.display());
                 fae::update::install_via_helper(&staged_binary, &current)?;
                 // install_via_helper launched the helper; we just need to exit.
                 std::process::exit(0);
             }
 
-            // Fallback: no staged binary — download and replace inline
-            // (legacy path, used when staging failed or was skipped).
-            tracing::info!("no staged binary found, falling back to inline update");
-            fae::update::applier::apply_update(&download_url, &current)
+            // Fallback: no staged binary — download and replace inline with
+            // signed checksum verification.
+            tracing::info!("no staged binary found, falling back to inline verified update");
+            fae::update::applier::apply_update(&release, &current)
         })
         .await;
         update_installing.set(false);
@@ -4057,6 +4087,8 @@ fn app() -> Element {
     let mut update_state = use_signal(fae::update::UpdateState::load);
     let mut update_available = use_signal(|| None::<fae::update::Release>);
     let mut update_banner_dismissed = use_signal(|| false);
+    let mut update_security_warnings = use_signal(Vec::<String>::new);
+    let mut update_security_warning_dismissed = use_signal(|| false);
     let _update_check_status = use_signal(String::new);
     let update_installing = use_signal(|| false);
     let mut update_install_error = use_signal(|| None::<String>);
@@ -4202,6 +4234,18 @@ fn app() -> Element {
         });
     });
 
+    // Startup check: verify update integrity prerequisites (trusted key + gpg).
+    use_hook(move || {
+        let warnings = fae::update::update_verification_warnings();
+        if !warnings.is_empty() {
+            tracing::warn!(
+                "update verification prerequisites missing: {}",
+                warnings.join(" | ")
+            );
+        }
+        update_security_warnings.set(warnings);
+    });
+
     // Startup update gate: check for updates before pipeline starts.
     // If an update is found and not dismissed, the gate blocks startup and
     // shows an Install/Skip dialog. This prevents two copies of Fae running
@@ -4241,12 +4285,17 @@ fn app() -> Element {
                         // Stage the download in the background so it's ready
                         // when the user clicks "Install & Relaunch".
                         if !release.download_url.is_empty() {
-                            let dl_url = release.download_url.clone();
-                            let version = release.version.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
-                                fae::update::stage_update(&dl_url, &version)
+                            let release_for_stage = release.clone();
+                            if let Ok(
+                                fae::update::StageResult::Staged(staged)
+                                | fae::update::StageResult::AlreadyStaged(staged),
+                            ) = tokio::task::spawn_blocking(move || {
+                                fae::update::stage_update(&release_for_stage)
                             })
-                            .await;
+                            .await
+                            {
+                                update_state.write().set_staged_update(staged);
+                            }
                         }
 
                         // Store the release for the in-session banner too.
@@ -4364,12 +4413,20 @@ fn app() -> Element {
                                     if let Ok(Ok((Some(release), _))) = result {
                                         // Stage the download so it's ready when user acts.
                                         if !release.download_url.is_empty() {
-                                            let dl_url = release.download_url.clone();
-                                            let version = release.version.clone();
-                                            let _ = tokio::task::spawn_blocking(move || {
-                                                fae::update::stage_update(&dl_url, &version)
+                                            let release_for_stage = release.clone();
+                                            if let Ok(
+                                                fae::update::StageResult::Staged(staged)
+                                                | fae::update::StageResult::AlreadyStaged(staged),
+                                            ) = tokio::task::spawn_blocking(move || {
+                                                fae::update::stage_update(&release_for_stage)
                                             })
-                                            .await;
+                                            .await
+                                            {
+                                                update_state.write().set_staged_update(staged);
+                                                let state = update_state.read().clone();
+                                                let _ = tokio::task::spawn_blocking(move || state.save())
+                                                    .await;
+                                            }
                                         }
                                         update_available.set(Some(release));
                                     }
@@ -5051,7 +5108,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(models_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Models")
                     .with_inner_size(LogicalSize::new(520.0, 760.0))
@@ -5066,7 +5123,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(preferences_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Settings")
                     .with_inner_size(LogicalSize::new(620.0, 780.0))
@@ -5081,7 +5138,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(soul_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Soul")
                     .with_inner_size(LogicalSize::new(760.0, 820.0))
@@ -5096,7 +5153,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(skills_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Skills")
                     .with_inner_size(LogicalSize::new(760.0, 820.0))
@@ -5111,7 +5168,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(memories_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Memories")
                     .with_inner_size(LogicalSize::new(820.0, 860.0))
@@ -5126,7 +5183,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(ingestion_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Ingestion")
                     .with_inner_size(LogicalSize::new(820.0, 860.0))
@@ -5141,7 +5198,7 @@ fn app() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(fae_guide_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Guide")
                     .with_inner_size(LogicalSize::new(760.0, 800.0))
@@ -5589,7 +5646,7 @@ fn app() -> Element {
                                     onclick: move |_| {
                                         if let Some(rel) = update_available.read().clone() {
                                             apply_and_relaunch(
-                                                rel.download_url.clone(),
+                                                rel,
                                                 update_installing,
                                                 update_install_error,
                                                 update_gate,
@@ -5627,6 +5684,26 @@ fn app() -> Element {
                             button {
                                 class: "update-banner-dismiss",
                                 onclick: move |_| update_install_error.set(None),
+                                "\u{2715}"
+                            }
+                        }
+                    }
+                } else {
+                    rsx! {}
+                }
+            }
+
+            // --- Update security prerequisites warning ---
+            {
+                let warnings = update_security_warnings.read().clone();
+                if !warnings.is_empty() && !*update_security_warning_dismissed.read() {
+                    let message = warnings.join(" ");
+                    rsx! {
+                        div { class: "update-banner update-banner-warning",
+                            span { class: "update-banner-text", "{message}" }
+                            button {
+                                class: "update-banner-dismiss",
+                                onclick: move |_| update_security_warning_dismissed.set(true),
                                 "\u{2715}"
                             }
                         }
@@ -5725,7 +5802,7 @@ fn app() -> Element {
                     Some(UpdateDialogState::Available { ref release }) => {
                         let ver = release.version.clone();
                         let notes = release.release_notes.clone();
-                        let dl_url = release.download_url.clone();
+                        let release_for_install = release.clone();
                         rsx! {
                             div { class: "modal-overlay",
                                 onclick: move |_| dismiss_update_dialog(update_dialog, update_dialog_generation),
@@ -5793,11 +5870,11 @@ fn app() -> Element {
                                         button {
                                             class: "modal-btn modal-approve",
                                             onclick: {
-                                                let dl_url = dl_url.clone();
+                                                let release = release_for_install.clone();
                                                 move |_| {
                                                     dismiss_update_dialog(update_dialog, update_dialog_generation);
                                                     apply_and_relaunch(
-                                                        dl_url.clone(),
+                                                        release.clone(),
                                                         update_installing,
                                                         update_install_error,
                                                         update_gate,
@@ -5929,12 +6006,13 @@ fn app() -> Element {
                                         class: "update-gate-install",
                                         onclick: move |_| {
                                             if let Some(rel) = update_available.read().clone() {
+                                                let version = rel.version.clone();
                                                 apply_and_relaunch(
-                                                    rel.download_url.clone(),
+                                                    rel,
                                                     update_installing,
                                                     update_install_error,
                                                     update_gate,
-                                                    Some(rel.version.clone()),
+                                                    Some(version),
                                                 );
                                             }
                                         },
@@ -6847,7 +6925,7 @@ fn app() -> Element {
                                                 {
                                                     if let Some(rel) = update_available.read().clone() {
                                                         apply_and_relaunch(
-                                                            rel.download_url.clone(),
+                                                            rel,
                                                             update_installing,
                                                             update_install_error,
                                                             update_gate,
@@ -7959,7 +8037,7 @@ fn preferences_window() -> Element {
         let desktop = desktop.clone();
         std::rc::Rc::new(move || {
             let dom = VirtualDom::new(models_window);
-            let cfg = Config::new().with_menu(build_menu_bar()).with_window(
+            let cfg = child_window_config(
                 WindowBuilder::new()
                     .with_title("Fae Models")
                     .with_inner_size(LogicalSize::new(520.0, 760.0))
@@ -10589,6 +10667,10 @@ const STRUCTURAL_CSS: &str = r#"
         padding: 0 0.2rem;
     }
     .update-banner-dismiss:hover { color: var(--text-primary); }
+    .update-banner-warning {
+        border-color: #f59e0b;
+        background: rgba(245, 158, 11, 0.12);
+    }
 
     /* --- Update gate --- */
     .update-gate {

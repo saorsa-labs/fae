@@ -5,7 +5,7 @@
 
 use crate::error::{Result, SpeechError};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// User preference for automatic updates.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,10 +37,29 @@ pub struct StagedUpdate {
     pub version: String,
     /// URL the binary was downloaded from.
     pub download_url: String,
+    /// Release asset name for this binary (e.g. `fae-darwin-aarch64`).
+    #[serde(default = "default_staged_asset_name")]
+    pub asset_name: String,
+    /// URL of the signed checksum manifest for this release.
+    pub checksums_url: Option<String>,
+    /// URL of the detached signature for the checksum manifest.
+    pub checksums_signature_url: Option<String>,
+    /// Expected SHA-256 hash (hex) for the staged binary.
+    pub expected_sha256: Option<String>,
     /// Absolute path to the staged binary on disk.
     pub staged_path: PathBuf,
     /// Unix timestamp when the binary was staged.
     pub staged_at: u64,
+}
+
+fn default_staged_asset_name() -> String {
+    crate::update::checker::fae_asset_name()
+        .unwrap_or(if cfg!(target_os = "windows") {
+            "fae.exe"
+        } else {
+            "fae"
+        })
+        .to_owned()
 }
 
 /// Persistent update state for Fae.
@@ -182,17 +201,8 @@ impl UpdateState {
     }
 
     /// Record a staged update that is ready to install on relaunch.
-    pub fn set_staged_update(&mut self, version: String, download_url: String, staged_path: &Path) {
-        let staged_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        self.staged_update = Some(StagedUpdate {
-            version,
-            download_url,
-            staged_path: staged_path.to_path_buf(),
-            staged_at,
-        });
+    pub fn set_staged_update(&mut self, staged: StagedUpdate) {
+        self.staged_update = Some(staged);
     }
 
     /// Remove any staged update record (e.g. after successful install or cleanup).
@@ -377,6 +387,10 @@ mod tests {
         let staged = StagedUpdate {
             version: "0.5.0".to_owned(),
             download_url: "https://example.com/fae".to_owned(),
+            asset_name: "fae-darwin-aarch64".to_owned(),
+            checksums_url: Some("https://example.com/SHA256SUMS.txt".to_owned()),
+            checksums_signature_url: Some("https://example.com/SHA256SUMS.txt.asc".to_owned()),
+            expected_sha256: Some("abc123".to_owned()),
             staged_path: PathBuf::from("/tmp/staged/fae"),
             staged_at: 1700000000,
         };
@@ -384,6 +398,16 @@ mod tests {
         let restored: StagedUpdate = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.version, "0.5.0");
         assert_eq!(restored.download_url, "https://example.com/fae");
+        assert_eq!(restored.asset_name, "fae-darwin-aarch64");
+        assert_eq!(
+            restored.checksums_url.as_deref(),
+            Some("https://example.com/SHA256SUMS.txt")
+        );
+        assert_eq!(
+            restored.checksums_signature_url.as_deref(),
+            Some("https://example.com/SHA256SUMS.txt.asc")
+        );
+        assert_eq!(restored.expected_sha256.as_deref(), Some("abc123"));
         assert_eq!(restored.staged_path, PathBuf::from("/tmp/staged/fae"));
         assert_eq!(restored.staged_at, 1700000000);
     }
@@ -391,11 +415,16 @@ mod tests {
     #[test]
     fn state_with_staged_update_round_trip() {
         let mut state = UpdateState::default();
-        state.set_staged_update(
-            "0.6.0".to_owned(),
-            "https://example.com/fae-0.6".to_owned(),
-            Path::new("/tmp/staged/fae"),
-        );
+        state.set_staged_update(StagedUpdate {
+            version: "0.6.0".to_owned(),
+            download_url: "https://example.com/fae-0.6".to_owned(),
+            asset_name: "fae-darwin-aarch64".to_owned(),
+            checksums_url: Some("https://example.com/SHA256SUMS.txt".to_owned()),
+            checksums_signature_url: Some("https://example.com/SHA256SUMS.txt.asc".to_owned()),
+            expected_sha256: Some("deadbeef".to_owned()),
+            staged_path: PathBuf::from("/tmp/staged/fae"),
+            staged_at: 123,
+        });
 
         let json = serde_json::to_string(&state).unwrap();
         let restored: UpdateState = serde_json::from_str(&json).unwrap();
@@ -403,7 +432,8 @@ mod tests {
         let staged = restored.staged_update.unwrap();
         assert_eq!(staged.version, "0.6.0");
         assert_eq!(staged.download_url, "https://example.com/fae-0.6");
-        assert!(staged.staged_at > 0);
+        assert_eq!(staged.asset_name, "fae-darwin-aarch64");
+        assert_eq!(staged.expected_sha256.as_deref(), Some("deadbeef"));
     }
 
     #[test]
@@ -411,11 +441,16 @@ mod tests {
         let mut state = UpdateState::default();
         assert!(state.staged_update.is_none());
 
-        state.set_staged_update(
-            "1.0.0".to_owned(),
-            "https://example.com/fae".to_owned(),
-            Path::new("/tmp/staged/fae"),
-        );
+        state.set_staged_update(StagedUpdate {
+            version: "1.0.0".to_owned(),
+            download_url: "https://example.com/fae".to_owned(),
+            asset_name: "fae-darwin-aarch64".to_owned(),
+            checksums_url: None,
+            checksums_signature_url: None,
+            expected_sha256: None,
+            staged_path: PathBuf::from("/tmp/staged/fae"),
+            staged_at: 1,
+        });
         assert!(state.staged_update.is_some());
 
         state.clear_staged_update();

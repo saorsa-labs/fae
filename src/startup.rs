@@ -632,6 +632,9 @@ pub async fn check_for_fae_update_with_staging(stale_hours: u64) -> UpdateCheckR
             tag_name: format!("v{}", staged.version),
             version: staged.version.clone(),
             download_url: staged.download_url.clone(),
+            asset_name: staged.asset_name.clone(),
+            checksums_url: staged.checksums_url.clone(),
+            checksums_signature_url: staged.checksums_signature_url.clone(),
             release_notes: String::new(),
             published_at: String::new(),
             asset_size: 0,
@@ -699,11 +702,9 @@ pub async fn check_for_fae_update_with_staging(stale_hours: u64) -> UpdateCheckR
         && let Some(ref rel) = release
         && !rel.download_url.is_empty()
     {
-        let dl_url = rel.download_url.clone();
-        let version = rel.version.clone();
+        let rel = rel.clone();
         let stage_result =
-            tokio::task::spawn_blocking(move || crate::update::stage_update(&dl_url, &version))
-                .await;
+            tokio::task::spawn_blocking(move || crate::update::stage_update(&rel)).await;
 
         match stage_result {
             Ok(crate::update::StageResult::Staged(s)) => {
@@ -712,15 +713,12 @@ pub async fn check_for_fae_update_with_staging(stale_hours: u64) -> UpdateCheckR
                     s.version,
                     s.staged_path.display()
                 );
-                new_state.set_staged_update(
-                    s.version.clone(),
-                    s.download_url.clone(),
-                    &s.staged_path,
-                );
+                new_state.set_staged_update(s.clone());
                 staged = Some(s);
             }
             Ok(crate::update::StageResult::AlreadyStaged(s)) => {
                 info!("update v{} already staged", s.version);
+                new_state.set_staged_update(s.clone());
                 staged = Some(s);
             }
             Ok(crate::update::StageResult::Failed(e)) => {

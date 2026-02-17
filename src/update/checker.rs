@@ -30,6 +30,12 @@ pub struct Release {
     pub version: String,
     /// Direct download URL for the platform-specific asset.
     pub download_url: String,
+    /// Exact name of the platform-specific asset.
+    pub asset_name: String,
+    /// URL of the signed checksums manifest (`SHA256SUMS.txt`).
+    pub checksums_url: Option<String>,
+    /// URL of the detached signature for the checksums manifest (`SHA256SUMS.txt.asc`).
+    pub checksums_signature_url: Option<String>,
     /// Release notes / changelog body.
     pub release_notes: String,
     /// ISO 8601 publication timestamp.
@@ -262,12 +268,25 @@ fn parse_github_release(body: &serde_json::Value) -> Result<Release> {
         .as_array()
         .ok_or_else(|| SpeechError::Update("missing assets in release JSON".to_owned()))?;
 
-    let (download_url, asset_size) = select_fae_platform_asset(assets).unwrap_or_default();
+    let (asset_name, download_url, asset_size) =
+        select_fae_platform_asset(assets).unwrap_or_else(|| {
+            (
+                fae_asset_name().unwrap_or_default().to_owned(),
+                String::new(),
+                0,
+            )
+        });
+    let checksums_url = select_named_asset_url(assets, "SHA256SUMS.txt");
+    let checksums_signature_url = select_named_asset_url(assets, "SHA256SUMS.txt.asc")
+        .or_else(|| select_named_asset_url(assets, "SHA256SUMS.txt.sig"));
 
     Ok(Release {
         tag_name,
         version,
         download_url,
+        asset_name,
+        checksums_url,
+        checksums_signature_url,
         release_notes,
         published_at,
         asset_size,
@@ -290,7 +309,7 @@ pub fn fae_asset_name() -> Option<&'static str> {
 fn select_platform_asset(
     assets: &[serde_json::Value],
     expected_name: &str,
-) -> Option<(String, u64)> {
+) -> Option<(String, String, u64)> {
     assets.iter().find_map(|asset| {
         let name = asset["name"].as_str()?;
         if name != expected_name {
@@ -301,14 +320,29 @@ fn select_platform_asset(
         if url.is_empty() {
             return None;
         }
-        Some((url, size))
+        Some((name.to_owned(), url, size))
     })
 }
 
 /// Select the matching Fae asset from a GitHub release assets array.
-fn select_fae_platform_asset(assets: &[serde_json::Value]) -> Option<(String, u64)> {
+fn select_fae_platform_asset(assets: &[serde_json::Value]) -> Option<(String, String, u64)> {
     let expected = fae_asset_name()?;
     select_platform_asset(assets, expected)
+}
+
+/// Select an asset URL by exact filename.
+fn select_named_asset_url(assets: &[serde_json::Value], name: &str) -> Option<String> {
+    assets.iter().find_map(|asset| {
+        let asset_name = asset["name"].as_str()?;
+        if asset_name != name {
+            return None;
+        }
+        let url = asset["browser_download_url"].as_str()?.to_owned();
+        if url.is_empty() {
+            return None;
+        }
+        Some(url)
+    })
 }
 
 #[cfg(test)]
@@ -411,10 +445,46 @@ mod tests {
         if fae_asset_name().is_some() {
             let result = select_fae_platform_asset(&assets);
             assert!(result.is_some());
-            let (url, size) = result.unwrap();
+            let (_name, url, size) = result.unwrap();
             assert_eq!(url, "https://example.com/download");
             assert_eq!(size, 1000);
         }
+    }
+
+    #[test]
+    fn parse_github_release_extracts_checksum_assets() {
+        let json = serde_json::json!({
+            "tag_name": "v1.2.3",
+            "body": "",
+            "published_at": "2026-02-16T00:00:00Z",
+            "assets": [
+                {
+                    "name": fae_asset_name().unwrap_or("fae-darwin-aarch64"),
+                    "browser_download_url": "https://example.com/fae",
+                    "size": 123
+                },
+                {
+                    "name": "SHA256SUMS.txt",
+                    "browser_download_url": "https://example.com/SHA256SUMS.txt",
+                    "size": 456
+                },
+                {
+                    "name": "SHA256SUMS.txt.asc",
+                    "browser_download_url": "https://example.com/SHA256SUMS.txt.asc",
+                    "size": 789
+                }
+            ]
+        });
+
+        let release = parse_github_release(&json).unwrap();
+        assert_eq!(
+            release.checksums_url.as_deref(),
+            Some("https://example.com/SHA256SUMS.txt")
+        );
+        assert_eq!(
+            release.checksums_signature_url.as_deref(),
+            Some("https://example.com/SHA256SUMS.txt.asc")
+        );
     }
 
     #[test]

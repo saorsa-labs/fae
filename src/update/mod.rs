@@ -10,7 +10,7 @@ pub mod state;
 
 pub use applier::{
     StageResult, cleanup_old_backup, cleanup_staged_update, install_via_helper, rollback_update,
-    stage_update, staging_directory,
+    stage_update, staging_directory, update_verification_warnings,
 };
 pub use checker::{Release, UpdateChecker};
 pub use state::{AutoUpdatePreference, StagedUpdate, UpdateState};

@@ -6,6 +6,7 @@
 
 use crate::error::{Result, SpeechError};
 use crate::update::state::StagedUpdate;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -27,7 +28,7 @@ pub enum ApplyResult {
 /// Download a release asset and replace the current binary.
 ///
 /// 1. Downloads the new binary to a temp file
-/// 2. Verifies the download is executable (runs `--version`)
+/// 2. Verifies signed checksums and local file integrity
 /// 3. Replaces the current binary using a platform-appropriate method
 /// 4. Returns whether a restart or exit is needed
 ///
@@ -35,7 +36,16 @@ pub enum ApplyResult {
 ///
 /// Returns an error if the download fails, the downloaded binary is invalid,
 /// or the replacement fails.
-pub fn apply_update(download_url: &str, current_binary: &Path) -> Result<ApplyResult> {
+pub fn apply_update(
+    release: &crate::update::Release,
+    current_binary: &Path,
+) -> Result<ApplyResult> {
+    if release.download_url.trim().is_empty() {
+        return Err(SpeechError::Update(
+            "cannot apply update: release download URL is empty".to_owned(),
+        ));
+    }
+
     let temp_dir = std::env::temp_dir().join("fae-self-update");
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| SpeechError::Update(format!("cannot create temp dir: {e}")))?;
@@ -43,10 +53,12 @@ pub fn apply_update(download_url: &str, current_binary: &Path) -> Result<ApplyRe
     let temp_binary = temp_dir.join(binary_filename());
 
     // Step 1: Download.
-    tracing::info!("downloading update from {download_url}");
-    download_binary(download_url, &temp_binary)?;
+    tracing::info!("downloading update from {}", release.download_url);
+    download_binary(&release.download_url, &temp_binary)?;
 
-    // Step 2: Verify.
+    // Step 2: Verify checksum/signature and basic binary shape.
+    let expected_sha256 = resolve_expected_sha256_for_release(release)?;
+    verify_sha256(&temp_binary, &expected_sha256)?;
     verify_binary(&temp_binary)?;
 
     // Step 3: Replace.
@@ -141,24 +153,36 @@ pub fn staging_directory() -> PathBuf {
 ///
 /// # Errors
 ///
-/// Returns [`StageResult::Failed`] if the download or verification fails.
-pub fn stage_update(download_url: &str, version: &str) -> StageResult {
+/// Returns [`StageResult::Failed`] if download, signature, checksum, or local
+/// file verification fails.
+pub fn stage_update(release: &crate::update::Release) -> StageResult {
+    if release.download_url.trim().is_empty() {
+        return StageResult::Failed("release download URL is empty".to_owned());
+    }
+    if release.version.trim().is_empty() {
+        return StageResult::Failed("release version is empty".to_owned());
+    }
+
+    let expected_sha256 = match resolve_expected_sha256_for_release(release) {
+        Ok(v) => v,
+        Err(e) => {
+            return StageResult::Failed(format!("integrity metadata verification failed: {e}"));
+        }
+    };
+
     let staging_dir = staging_directory();
 
     // Check for an existing staged binary for this version.
     let staged_binary = staging_dir.join(binary_filename());
     if staged_binary.exists() {
-        if verify_binary(&staged_binary).is_ok() {
-            let staged_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            return StageResult::AlreadyStaged(StagedUpdate {
-                version: version.to_owned(),
-                download_url: download_url.to_owned(),
-                staged_path: staged_binary,
-                staged_at,
-            });
+        if verify_sha256(&staged_binary, &expected_sha256).is_ok()
+            && verify_binary(&staged_binary).is_ok()
+        {
+            return StageResult::AlreadyStaged(build_staged_update_record(
+                release,
+                staged_binary,
+                Some(expected_sha256),
+            ));
         }
         // Invalid existing staged binary — remove and re-download.
         let _ = std::fs::remove_dir_all(&staging_dir);
@@ -168,10 +192,19 @@ pub fn stage_update(download_url: &str, version: &str) -> StageResult {
         return StageResult::Failed(format!("cannot create staging dir: {e}"));
     }
 
-    tracing::info!("staging update v{version} from {download_url}");
-    if let Err(e) = download_binary(download_url, &staged_binary) {
+    tracing::info!(
+        "staging update v{} from {}",
+        release.version,
+        release.download_url
+    );
+    if let Err(e) = download_binary(&release.download_url, &staged_binary) {
         let _ = std::fs::remove_dir_all(&staging_dir);
         return StageResult::Failed(format!("download failed: {e}"));
+    }
+
+    if let Err(e) = verify_sha256(&staged_binary, &expected_sha256) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return StageResult::Failed(format!("checksum mismatch: {e}"));
     }
 
     if let Err(e) = verify_binary(&staged_binary) {
@@ -179,19 +212,403 @@ pub fn stage_update(download_url: &str, version: &str) -> StageResult {
         return StageResult::Failed(format!("verification failed: {e}"));
     }
 
+    tracing::info!(
+        "update v{} staged at {}",
+        release.version,
+        staged_binary.display()
+    );
+
+    StageResult::Staged(build_staged_update_record(
+        release,
+        staged_binary,
+        Some(expected_sha256),
+    ))
+}
+
+/// Validate an already-staged update before handing it off to the installer helper.
+///
+/// This re-checks the staged file against the expected SHA-256 so a tampered
+/// staged binary cannot be installed.
+pub fn verify_staged_update(staged: &StagedUpdate, release: &crate::update::Release) -> Result<()> {
+    if !staged.staged_path.exists() {
+        return Err(SpeechError::Update(format!(
+            "staged update path does not exist: {}",
+            staged.staged_path.display()
+        )));
+    }
+
+    let expected_sha256 = if let Some(ref checksum) = staged.expected_sha256 {
+        checksum.clone()
+    } else {
+        resolve_expected_sha256_for_release(release)?
+    };
+
+    verify_sha256(&staged.staged_path, &expected_sha256)?;
+    verify_binary(&staged.staged_path)?;
+    Ok(())
+}
+
+/// Return user-facing warnings for missing update verification prerequisites.
+///
+/// If this returns a non-empty list, signed in-app updates are not fully
+/// configured on the current machine and install attempts are expected to fail.
+pub fn update_verification_warnings() -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    if find_gpg_binary().is_none() {
+        warnings.push("Signed updates unavailable: install GnuPG (`gpg` or `gpg2`).".to_owned());
+    }
+
+    if let Err(e) = trusted_update_public_key() {
+        warnings.push(format!("Signed updates unavailable: {e}"));
+    }
+
+    warnings
+}
+
+fn build_staged_update_record(
+    release: &crate::update::Release,
+    staged_path: PathBuf,
+    expected_sha256: Option<String>,
+) -> StagedUpdate {
     let staged_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-
-    tracing::info!("update v{version} staged at {}", staged_binary.display());
-
-    StageResult::Staged(StagedUpdate {
-        version: version.to_owned(),
-        download_url: download_url.to_owned(),
-        staged_path: staged_binary,
+    StagedUpdate {
+        version: release.version.clone(),
+        download_url: release.download_url.clone(),
+        asset_name: if release.asset_name.trim().is_empty() {
+            binary_filename().to_owned()
+        } else {
+            release.asset_name.clone()
+        },
+        checksums_url: release.checksums_url.clone(),
+        checksums_signature_url: release.checksums_signature_url.clone(),
+        expected_sha256,
+        staged_path,
         staged_at,
-    })
+    }
+}
+
+fn resolve_expected_sha256_for_release(release: &crate::update::Release) -> Result<String> {
+    let checksums_url = release
+        .checksums_url
+        .as_deref()
+        .filter(|url| !url.trim().is_empty())
+        .ok_or_else(|| {
+            SpeechError::Update(
+                "release is missing SHA256SUMS.txt URL; refusing unsigned update".to_owned(),
+            )
+        })?;
+    let signature_url = release
+        .checksums_signature_url
+        .as_deref()
+        .filter(|url| !url.trim().is_empty())
+        .ok_or_else(|| {
+            SpeechError::Update(
+                "release is missing SHA256SUMS.txt signature URL; refusing unsigned update"
+                    .to_owned(),
+            )
+        })?;
+
+    let asset_name = if release.asset_name.trim().is_empty() {
+        binary_filename().to_owned()
+    } else {
+        release.asset_name.clone()
+    };
+
+    let verify_dir = std::env::temp_dir().join(format!(
+        "fae-update-verify-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&verify_dir).map_err(|e| {
+        SpeechError::Update(format!(
+            "cannot create checksum verification dir {}: {e}",
+            verify_dir.display()
+        ))
+    })?;
+
+    let checksums_path = verify_dir.join("SHA256SUMS.txt");
+    let signature_path = verify_dir.join("SHA256SUMS.txt.asc");
+
+    let result = (|| -> Result<String> {
+        download_binary(checksums_url, &checksums_path)?;
+        download_binary(signature_url, &signature_path)?;
+        verify_checksums_signature(&checksums_path, &signature_path)?;
+
+        let checksums_content = std::fs::read_to_string(&checksums_path).map_err(|e| {
+            SpeechError::Update(format!(
+                "cannot read checksums file {}: {e}",
+                checksums_path.display()
+            ))
+        })?;
+        parse_sha256_from_manifest(&checksums_content, &asset_name).ok_or_else(|| {
+            SpeechError::Update(format!(
+                "SHA256SUMS.txt does not contain a checksum for asset '{asset_name}'"
+            ))
+        })
+    })();
+
+    let _ = std::fs::remove_dir_all(&verify_dir);
+    result
+}
+
+fn parse_sha256_from_manifest(manifest: &str, asset_name: &str) -> Option<String> {
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let checksum = parts.next()?;
+        let file = parts.next()?;
+
+        if checksum.len() != 64 || !checksum.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+
+        let file = file.trim_start_matches('*');
+        let file_name = std::path::Path::new(file)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(file);
+        if file_name == asset_name {
+            return Some(checksum.to_ascii_lowercase());
+        }
+    }
+
+    None
+}
+
+fn verify_sha256(path: &Path, expected_hex: &str) -> Result<()> {
+    let expected = normalize_hex(expected_hex);
+    if expected.len() != 64 {
+        return Err(SpeechError::Update(format!(
+            "invalid expected SHA-256 length for {}",
+            path.display()
+        )));
+    }
+
+    let actual = sha256_hex(path)?;
+    if actual != expected {
+        return Err(SpeechError::Update(format!(
+            "SHA-256 mismatch for {} (expected {}, got {})",
+            path.display(),
+            expected,
+            actual
+        )));
+    }
+    Ok(())
+}
+
+fn sha256_hex(path: &Path) -> Result<String> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| SpeechError::Update(format!("cannot open {}: {e}", path.display())))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0_u8; 16 * 1024];
+
+    loop {
+        let read = file
+            .read(&mut buf)
+            .map_err(|e| SpeechError::Update(format!("cannot read {}: {e}", path.display())))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn normalize_hex(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+fn verify_checksums_signature(checksums_path: &Path, signature_path: &Path) -> Result<()> {
+    let gpg = find_gpg_binary().ok_or_else(|| {
+        SpeechError::Update(
+            "GPG binary not found (`gpg` or `gpg2` required for signed updates)".to_owned(),
+        )
+    })?;
+    let trusted_public_key = trusted_update_public_key()?;
+    let expected_fingerprint = trusted_update_signing_fingerprint();
+
+    let gpg_home = std::env::temp_dir().join(format!(
+        "fae-gpg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&gpg_home).map_err(|e| {
+        SpeechError::Update(format!(
+            "cannot create temporary GPG home {}: {e}",
+            gpg_home.display()
+        ))
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&gpg_home, std::fs::Permissions::from_mode(0o700));
+    }
+
+    let key_path = gpg_home.join("update-signing-key.asc");
+    std::fs::write(&key_path, trusted_public_key).map_err(|e| {
+        SpeechError::Update(format!(
+            "cannot write trusted update key {}: {e}",
+            key_path.display()
+        ))
+    })?;
+
+    let result = (|| -> Result<()> {
+        let import_output = std::process::Command::new(gpg)
+            .arg("--batch")
+            .arg("--homedir")
+            .arg(&gpg_home)
+            .arg("--import")
+            .arg(&key_path)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| SpeechError::Update(format!("failed to run gpg import: {e}")))?;
+
+        if !import_output.status.success() {
+            let stderr = String::from_utf8_lossy(&import_output.stderr)
+                .trim()
+                .chars()
+                .take(240)
+                .collect::<String>();
+            return Err(SpeechError::Update(format!(
+                "failed to import trusted update key: {stderr}"
+            )));
+        }
+
+        let verify_output = std::process::Command::new(gpg)
+            .arg("--batch")
+            .arg("--status-fd")
+            .arg("1")
+            .arg("--homedir")
+            .arg(&gpg_home)
+            .arg("--verify")
+            .arg(signature_path)
+            .arg(checksums_path)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| SpeechError::Update(format!("failed to run gpg verify: {e}")))?;
+
+        if !verify_output.status.success() {
+            let stderr = String::from_utf8_lossy(&verify_output.stderr)
+                .trim()
+                .chars()
+                .take(240)
+                .collect::<String>();
+            return Err(SpeechError::Update(format!(
+                "checksum signature verification failed: {stderr}"
+            )));
+        }
+
+        if let Some(expected_fp) = expected_fingerprint {
+            let status_text = String::from_utf8_lossy(&verify_output.stdout);
+            let found_fp = parse_validsig_fingerprint(&status_text).ok_or_else(|| {
+                SpeechError::Update(
+                    "gpg verify succeeded but did not emit a VALIDSIG fingerprint".to_owned(),
+                )
+            })?;
+
+            if normalize_hex(&found_fp) != normalize_hex(&expected_fp) {
+                return Err(SpeechError::Update(format!(
+                    "unexpected update signing fingerprint: expected {}, got {}",
+                    normalize_hex(&expected_fp),
+                    normalize_hex(&found_fp)
+                )));
+            }
+        }
+
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_dir_all(&gpg_home);
+    result
+}
+
+fn parse_validsig_fingerprint(status_output: &str) -> Option<String> {
+    for line in status_output.lines() {
+        if let Some(rest) = line.strip_prefix("[GNUPG:] VALIDSIG ") {
+            return rest.split_whitespace().next().map(ToOwned::to_owned);
+        }
+    }
+    None
+}
+
+fn trusted_update_public_key() -> Result<String> {
+    if let Ok(value) = std::env::var("FAE_UPDATE_GPG_PUBLIC_KEY")
+        && !value.trim().is_empty()
+    {
+        return Ok(value);
+    }
+
+    let path = crate::fae_dirs::config_dir().join("update-signing-public-key.asc");
+    if path.exists() {
+        let key = std::fs::read_to_string(&path).map_err(|e| {
+            SpeechError::Update(format!(
+                "cannot read update signing key from {}: {e}",
+                path.display()
+            ))
+        })?;
+        if !key.trim().is_empty() {
+            return Ok(key);
+        }
+    }
+
+    if let Some(value) = option_env!("FAE_UPDATE_GPG_PUBLIC_KEY")
+        && !value.trim().is_empty()
+    {
+        return Ok(value.to_owned());
+    }
+
+    Err(SpeechError::Update(format!(
+        "missing trusted update signing key; set FAE_UPDATE_GPG_PUBLIC_KEY or provide {}",
+        path.display()
+    )))
+}
+
+fn trusted_update_signing_fingerprint() -> Option<String> {
+    if let Ok(value) = std::env::var("FAE_UPDATE_GPG_FINGERPRINT")
+        && !value.trim().is_empty()
+    {
+        return Some(value);
+    }
+    option_env!("FAE_UPDATE_GPG_FINGERPRINT")
+        .filter(|v| !v.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn find_gpg_binary() -> Option<&'static str> {
+    for candidate in ["gpg", "gpg2"] {
+        let status = std::process::Command::new(candidate)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if status.is_ok_and(|s| s.success()) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Install a previously staged binary via a detached helper shell script.
@@ -363,17 +780,16 @@ fn download_binary(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Verify the downloaded binary is valid by running it with `--version`.
+/// Verify basic properties of the downloaded binary.
 ///
-/// On macOS, clears the quarantine extended attribute before execution so
-/// Gatekeeper doesn't block the binary inside the App Sandbox container.
+/// This intentionally does not execute the downloaded file. It only ensures
+/// executable permissions are set and the file exists as a non-empty regular
+/// file. Cryptographic integrity is checked separately via SHA-256 + GPG.
 fn verify_binary(path: &Path) -> Result<()> {
     // Set executable permission first (Unix).
     set_executable(path)?;
 
-    // Clear macOS quarantine attribute BEFORE attempting to run the binary.
-    // Without this, Gatekeeper blocks execution of downloaded binaries inside
-    // the App Sandbox container with "Operation not permitted".
+    // Clear macOS quarantine attribute so relaunch isn't blocked after install.
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("xattr")
@@ -383,26 +799,26 @@ fn verify_binary(path: &Path) -> Result<()> {
             .status();
     }
 
-    let output = std::process::Command::new(path)
-        .arg("--version")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| {
-            SpeechError::Update(format!(
-                "cannot run downloaded binary {}: {e}",
-                path.display()
-            ))
-        })?;
-
-    if !output.status.success() {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        SpeechError::Update(format!(
+            "cannot stat downloaded binary {}: {e}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
         return Err(SpeechError::Update(format!(
-            "downloaded binary failed --version check (exit code {:?})",
-            output.status.code()
+            "downloaded update is not a file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() == 0 {
+        return Err(SpeechError::Update(format!(
+            "downloaded update is empty: {}",
+            path.display()
         )));
     }
 
-    tracing::info!("downloaded binary verified successfully");
+    tracing::info!("downloaded binary verified (permissions + non-empty file)");
     Ok(())
 }
 
@@ -579,15 +995,14 @@ mod tests {
     }
 
     #[test]
-    fn verify_binary_rejects_invalid() {
+    fn verify_binary_accepts_nonempty_file() {
         let dir = std::env::temp_dir().join("fae-test-verify");
         let _ = std::fs::create_dir_all(&dir);
         let file = dir.join("not-a-binary");
         std::fs::write(&file, "this is not an executable").unwrap();
 
         let result = verify_binary(&file);
-        // Should fail because the file can't be executed as a binary.
-        assert!(result.is_err());
+        assert!(result.is_ok());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -694,7 +1109,18 @@ mod tests {
 
     #[test]
     fn stage_update_fails_with_bad_url() {
-        let result = stage_update("http://localhost:1/nonexistent", "99.99.99");
+        let release = crate::update::Release {
+            tag_name: "v99.99.99".to_owned(),
+            version: "99.99.99".to_owned(),
+            download_url: "http://localhost:1/nonexistent".to_owned(),
+            asset_name: binary_filename().to_owned(),
+            checksums_url: Some("http://localhost:1/SHA256SUMS.txt".to_owned()),
+            checksums_signature_url: Some("http://localhost:1/SHA256SUMS.txt.asc".to_owned()),
+            release_notes: String::new(),
+            published_at: String::new(),
+            asset_size: 0,
+        };
+        let result = stage_update(&release);
         assert!(matches!(result, StageResult::Failed(_)));
     }
 

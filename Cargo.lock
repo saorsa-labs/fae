@@ -2986,7 +2986,7 @@ dependencies = [
 
 [[package]]
 name = "fae"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3028,6 +3028,7 @@ dependencies = [
  "security-framework 3.5.1",
  "serde",
  "serde_json",
+ "sha2",
  "similar",
  "symphonia",
  "syntect",

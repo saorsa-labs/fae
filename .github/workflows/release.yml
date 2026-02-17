@@ -482,6 +482,48 @@ jobs:
           find . -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Sign checksums with GPG
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ] || [ -z "$GPG_PASSPHRASE" ]; then
+            echo "::error::GPG_PRIVATE_KEY and GPG_PASSPHRASE secrets are required for release signing"
+            exit 1
+          fi
+
+          cd artifacts
+          export GNUPGHOME="$RUNNER_TEMP/gnupg-release-signing"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+
+          KEY_FILE="$RUNNER_TEMP/release-signing-key.asc"
+          printf "%s" "$GPG_PRIVATE_KEY" > "$KEY_FILE"
+          if ! gpg --batch --import "$KEY_FILE" >/dev/null 2>&1; then
+            DECODED_KEY_FILE="$RUNNER_TEMP/release-signing-key.decoded.asc"
+            if ! base64 --decode "$KEY_FILE" > "$DECODED_KEY_FILE" 2>/dev/null || ! gpg --batch --import "$DECODED_KEY_FILE"; then
+              echo "::error::failed to import GPG_PRIVATE_KEY (expected armored key or base64-encoded armored key)"
+              exit 1
+            fi
+          fi
+
+          KEY_FPR="$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/ {print $10; exit}')"
+          if [ -z "$KEY_FPR" ]; then
+            echo "::error::could not determine signing key fingerprint"
+            exit 1
+          fi
+
+          gpg --batch --yes \
+            --pinentry-mode loopback \
+            --passphrase "$GPG_PASSPHRASE" \
+            --local-user "$KEY_FPR" \
+            --armor --detach-sign \
+            --output SHA256SUMS.txt.asc \
+            SHA256SUMS.txt
+
+          gpg --batch --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+          gpg --batch --armor --export "$KEY_FPR" > FAE_UPDATE_SIGNING_KEY.asc
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -494,5 +536,7 @@ jobs:
             artifacts/**/fae-linux-x86_64
             artifacts/**/fae-windows-x86_64.exe
             artifacts/SHA256SUMS.txt
+            artifacts/SHA256SUMS.txt.asc
+            artifacts/FAE_UPDATE_SIGNING_KEY.asc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

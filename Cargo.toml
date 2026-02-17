@@ -3,7 +3,7 @@ members = ["fae-search"]
 
 [package]
 name = "fae"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "Real-time speech-to-speech AI conversation system"
 license = "AGPL-3.0"
@@ -105,6 +105,7 @@ chrono = { version = "0.4", features = ["clock", "serde"] }
 urlencoding = "2"
 base64 = "0.22"
 blake3 = "1.5"
+sha2 = "0.10"
 similar = "2"
 
 # Progress indicators
