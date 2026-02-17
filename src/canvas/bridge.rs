@@ -336,6 +336,9 @@ impl CanvasBridge {
         tool_input: Option<String>,
         tool_result_text: Option<String>,
     ) {
+        if name.trim().is_empty() || text.trim().is_empty() {
+            return;
+        }
         let ts = self.next_ts;
         self.next_ts += 1;
 

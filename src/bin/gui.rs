@@ -514,6 +514,49 @@ mod gui {
         )
     }
 
+    pub fn tool_activity_message(name: &str, phase: &str) -> String {
+        let pretty = name.replace('_', " ");
+        format!("{phase}: {pretty}")
+    }
+
+    pub fn format_turn_diagnostics(
+        total: std::time::Duration,
+        ttft: Option<std::time::Duration>,
+        first_tool: Option<std::time::Duration>,
+        tools: u32,
+    ) -> String {
+        let total_s = format!("{:.2}s", total.as_secs_f64());
+        let ttft_s = ttft
+            .map(|d| format!("{:.2}s", d.as_secs_f64()))
+            .unwrap_or_else(|| "n/a".to_owned());
+        let first_tool_s = first_tool
+            .map(|d| format!("{:.2}s", d.as_secs_f64()))
+            .unwrap_or_else(|| "n/a".to_owned());
+        format!(
+            "Diag: total {total_s} • first text {ttft_s} • first tool {first_tool_s} • tools {tools}"
+        )
+    }
+
+    pub fn diagnostics_report(
+        diag_line: &str,
+        status_line: &str,
+        active_model: Option<&str>,
+        backend: Option<fae::config::LlmBackend>,
+        tool_mode: Option<fae::config::AgentToolMode>,
+    ) -> String {
+        let timestamp = fae::diagnostics::chrono_timestamp();
+        let model = active_model.unwrap_or("(unknown)");
+        let backend = backend
+            .map(|b| format!("{b:?}"))
+            .unwrap_or_else(|| "(unknown)".to_owned());
+        let tool_mode = tool_mode
+            .map(|m| format!("{m:?}"))
+            .unwrap_or_else(|| "(unknown)".to_owned());
+        format!(
+            "Fae diagnostics\nTimestamp: {timestamp}\nStatus: {status_line}\nModel: {model}\nBackend: {backend}\nTool mode: {tool_mode}\n{diag_line}"
+        )
+    }
+
     /// Whether a scheduler telemetry event should force-open the canvas panel.
     pub fn scheduler_telemetry_opens_canvas(event: &fae::RuntimeEvent) -> bool {
         matches!(
@@ -1074,6 +1117,45 @@ mod gui {
         }
 
         #[test]
+        fn format_turn_diagnostics_includes_all_fields() {
+            let text = format_turn_diagnostics(
+                std::time::Duration::from_millis(3150),
+                Some(std::time::Duration::from_millis(620)),
+                Some(std::time::Duration::from_millis(1700)),
+                3,
+            );
+            assert!(text.contains("total 3.15s"));
+            assert!(text.contains("first text 0.62s"));
+            assert!(text.contains("first tool 1.70s"));
+            assert!(text.contains("tools 3"));
+        }
+
+        #[test]
+        fn format_turn_diagnostics_handles_missing_points() {
+            let text = format_turn_diagnostics(std::time::Duration::from_secs(2), None, None, 0);
+            assert!(text.contains("first text n/a"));
+            assert!(text.contains("first tool n/a"));
+            assert!(text.contains("tools 0"));
+        }
+
+        #[test]
+        fn diagnostics_report_contains_context_fields() {
+            let report = diagnostics_report(
+                "Diag: total 1.20s • first text 0.50s • first tool n/a • tools 0",
+                "Listening...",
+                Some("anthropic/claude-sonnet"),
+                Some(fae::config::LlmBackend::Api),
+                Some(fae::config::AgentToolMode::ReadOnly),
+            );
+            assert!(report.contains("Fae diagnostics"));
+            assert!(report.contains("Status: Listening..."));
+            assert!(report.contains("Model: anthropic/claude-sonnet"));
+            assert!(report.contains("Backend: Api"));
+            assert!(report.contains("Tool mode: ReadOnly"));
+            assert!(report.contains("Diag: total 1.20s"));
+        }
+
+        #[test]
         fn scheduler_restart_decision_tracks_memory_root_and_retention() {
             let base = fae::config::MemoryConfig {
                 root_dir: std::path::PathBuf::from("/tmp/fae-a"),
@@ -1436,9 +1518,13 @@ use dioxus::desktop::{LogicalSize, WindowBuilder, use_muda_event_handler, use_wi
 #[cfg(feature = "gui")]
 use gui::{AppStatus, SharedState, UpdateDialogState, UpdateGatePhase};
 
+#[cfg(feature = "gui")]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "gui")]
 use std::process::Command;
+#[cfg(feature = "gui")]
+use std::process::Stdio;
 #[cfg(feature = "gui")]
 use std::sync::OnceLock;
 
@@ -3635,6 +3721,70 @@ fn run_system_command(program: &str, args: &[&str]) -> Result<(), String> {
 }
 
 #[cfg(feature = "gui")]
+fn copy_text_via_command(program: &str, args: &[&str], text: &str) -> Result<(), String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to launch {program}: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("failed to write to {program} stdin: {e}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for {program}: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        if stderr.is_empty() {
+            Err(format!("{program} exited with status {}", output.status))
+        } else {
+            Err(format!(
+                "{program} exited with status {}: {stderr}",
+                output.status
+            ))
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return copy_text_via_command("pbcopy", &[], text);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return copy_text_via_command("clip", &[], text);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if copy_text_via_command("wl-copy", &[], text).is_ok() {
+            return Ok(());
+        }
+        if copy_text_via_command("xclip", &["-selection", "clipboard"], text).is_ok() {
+            return Ok(());
+        }
+        return Err(
+            "could not copy to clipboard: install wl-copy or xclip for Linux clipboard support"
+                .to_owned(),
+        );
+    }
+
+    #[allow(unreachable_code)]
+    Err("clipboard copy is not supported on this platform".to_owned())
+}
+
+#[cfg(feature = "gui")]
 fn open_external_target(target: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -4051,6 +4201,13 @@ fn app() -> Element {
 
     let mut sub_fae = use_signal(Subtitle::default);
     let mut sub_user = use_signal(Subtitle::default);
+    let diagnostics_enabled = true;
+    let mut diag_text = use_signal(String::new);
+    let mut diag_copy_status = use_signal(String::new);
+    let mut diag_turn_started_at = use_signal(|| None::<std::time::Instant>);
+    let mut diag_first_text_at = use_signal(|| None::<std::time::Instant>);
+    let mut diag_first_tool_at = use_signal(|| None::<std::time::Instant>);
+    let mut diag_tool_count = use_signal(|| 0u32);
 
     // Tick every 500ms to expire subtitles.
     use_future(move || async move {
@@ -4604,6 +4761,12 @@ fn app() -> Element {
                                         assistant_speaking.set(false);
                                         assistant_generating.set(false);
                                         assistant_buf.set(String::new());
+                                        diag_text.set(String::new());
+                                        diag_copy_status.set(String::new());
+                                        diag_turn_started_at.set(None);
+                                        diag_first_text_at.set(None);
+                                        diag_first_tool_at.set(None);
+                                        diag_tool_count.set(0);
                                         llm_backend.set(Some(config.llm.backend));
                                         tool_mode.set(Some(config.llm.tool_mode));
                                         let (runtime_tx, _) =
@@ -4723,7 +4886,44 @@ fn app() -> Element {
                                                             }
                                                             fae::pipeline::messages::ControlEvent::UserSpeechStart { .. } => {}
                                                         },
-                                                        fae::RuntimeEvent::AssistantGenerating { active } => assistant_generating.set(*active),
+                                                        fae::RuntimeEvent::AssistantGenerating { active } => {
+                                                            assistant_generating.set(*active);
+                                                            if *active {
+                                                                let now = std::time::Instant::now();
+                                                                diag_turn_started_at.set(Some(now));
+                                                                diag_first_text_at.set(None);
+                                                                diag_first_tool_at.set(None);
+                                                                diag_tool_count.set(0);
+                                                                if diagnostics_enabled {
+                                                                    diag_text.set("Diag: turn started".to_owned());
+                                                                }
+                                                                let mut sf = sub_fae.write();
+                                                                if sf.text.trim().is_empty() {
+                                                                    sf.set("Thinking...".to_owned());
+                                                                    sf.pinned = true;
+                                                                }
+                                                            } else {
+                                                                if diagnostics_enabled
+                                                                    && let Some(started) = *diag_turn_started_at.read()
+                                                                {
+                                                                    let summary = gui::format_turn_diagnostics(
+                                                                        started.elapsed(),
+                                                                        (*diag_first_text_at.read())
+                                                                            .map(|t| t.duration_since(started)),
+                                                                        (*diag_first_tool_at.read())
+                                                                            .map(|t| t.duration_since(started)),
+                                                                        *diag_tool_count.read(),
+                                                                    );
+                                                                    diag_text.set(summary);
+                                                                }
+                                                                diag_turn_started_at.set(None);
+                                                                let mut sf = sub_fae.write();
+                                                                if sf.pinned && sf.text == "Thinking..." {
+                                                                    sf.pinned = false;
+                                                                    sf.set_at = Some(std::time::Instant::now());
+                                                                }
+                                                            }
+                                                        }
                                                         fae::RuntimeEvent::AssistantAudioLevel { rms } => assistant_rms.set(*rms),
                                                         fae::RuntimeEvent::Transcription(t) => {
                                                             let text = t.text.trim().to_owned();
@@ -4732,7 +4932,20 @@ fn app() -> Element {
                                                             }
                                                         }
                                                         fae::RuntimeEvent::AssistantSentence(chunk) => {
-                                                            if !chunk.text.is_empty() {
+                                                            if !chunk.text.trim().is_empty() {
+                                                                if diagnostics_enabled
+                                                                    && diag_first_text_at.read().is_none()
+                                                                {
+                                                                    let now = std::time::Instant::now();
+                                                                    diag_first_text_at.set(Some(now));
+                                                                    if let Some(started) = *diag_turn_started_at.read() {
+                                                                        let ttft = now.duration_since(started).as_secs_f64();
+                                                                        diag_text.set(format!(
+                                                                            "Diag: first text at +{ttft:.2}s • tools {}",
+                                                                            *diag_tool_count.read()
+                                                                        ));
+                                                                    }
+                                                                }
                                                                 assistant_buf.write().push_str(&chunk.text);
                                                             }
                                                             // Show the current sentence as it streams.
@@ -4761,9 +4974,48 @@ fn app() -> Element {
                                                             if name == "canvas_clear" {
                                                                 canvas_visible.set(false);
                                                             }
+                                                            if diagnostics_enabled {
+                                                                let now = std::time::Instant::now();
+                                                                if diag_first_tool_at.read().is_none() {
+                                                                    diag_first_tool_at.set(Some(now));
+                                                                }
+                                                                let next_tools =
+                                                                    (*diag_tool_count.read()).saturating_add(1);
+                                                                diag_tool_count.set(next_tools);
+                                                                if let Some(started) = *diag_turn_started_at.read() {
+                                                                    let elapsed = now.duration_since(started).as_secs_f64();
+                                                                    let pretty = name.replace('_', " ");
+                                                                    diag_text.set(format!(
+                                                                        "Diag: tool #{next_tools} ({pretty}) at +{elapsed:.2}s"
+                                                                    ));
+                                                                }
+                                                            }
+                                                            let mut sf = sub_fae.write();
+                                                            sf.set(gui::tool_activity_message(name, "Using tool"));
+                                                            sf.pinned = true;
                                                         }
-                                                        fae::RuntimeEvent::ToolExecuting { .. } => {}
-                                                        fae::RuntimeEvent::ToolResult { .. } => {}
+                                                        fae::RuntimeEvent::ToolExecuting { name } => {
+                                                            let mut sf = sub_fae.write();
+                                                            sf.set(gui::tool_activity_message(name, "Running"));
+                                                            sf.pinned = true;
+                                                        }
+                                                        fae::RuntimeEvent::ToolResult { name, success, .. } => {
+                                                            let phase = if *success { "Finished" } else { "Tool failed" };
+                                                            if diagnostics_enabled
+                                                                && let Some(started) = *diag_turn_started_at.read()
+                                                            {
+                                                                let elapsed = started.elapsed().as_secs_f64();
+                                                                let pretty = name.replace('_', " ");
+                                                                let state = if *success { "ok" } else { "failed" };
+                                                                diag_text.set(format!(
+                                                                    "Diag: {pretty} {state} at +{elapsed:.2}s • tools {}",
+                                                                    *diag_tool_count.read()
+                                                                ));
+                                                            }
+                                                            let mut sf = sub_fae.write();
+                                                            sf.set(gui::tool_activity_message(name, phase));
+                                                            sf.pinned = false;
+                                                        }
                                                         fae::RuntimeEvent::ModelSelectionPrompt { .. } => {
                                                             // TODO: Task 5 will implement the model picker UI
                                                         }
@@ -6150,6 +6402,48 @@ fn app() -> Element {
                 p {
                     class: if is_error { "status status-error" } else { "status" },
                     "{status_text}"
+                }
+                if is_running && diagnostics_enabled && !diag_text.read().is_empty() {
+                    {
+                        let diag_value = diag_text.read().clone();
+                        let status_value = status_text.clone();
+                        let active_model_value = active_model.read().clone();
+                        let backend_value = *llm_backend.read();
+                        let tool_mode_value = *tool_mode.read();
+                        rsx! {
+                            div { class: "diag-row",
+                                p { class: "diag-status", "{diag_value}" }
+                                button {
+                                    class: "diag-copy-btn",
+                                    onclick: move |_| {
+                                        let report = gui::diagnostics_report(
+                                            &diag_value,
+                                            &status_value,
+                                            active_model_value.as_deref(),
+                                            backend_value,
+                                            tool_mode_value,
+                                        );
+                                        diag_copy_status.set("Copying diagnostics...".to_owned());
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(move || copy_text_to_clipboard(&report)).await;
+                                            match result {
+                                                Ok(Ok(())) => diag_copy_status
+                                                    .set("Diagnostics copied to clipboard.".to_owned()),
+                                                Ok(Err(e)) => diag_copy_status
+                                                    .set(format!("Copy failed: {e}")),
+                                                Err(e) => diag_copy_status
+                                                    .set(format!("Copy task failed: {e}")),
+                                            }
+                                        });
+                                    },
+                                    "Copy diag"
+                                }
+                            }
+                        }
+                    }
+                    if !diag_copy_status.read().is_empty() {
+                        p { class: "diag-copy-status", "{diag_copy_status.read()}" }
+                    }
                 }
 
                 // Welcome / context message during first-run
@@ -9621,6 +9915,41 @@ const STRUCTURAL_CSS: &str = r#"
         transition: color 0.3s ease;
     }
     .status-error { color: var(--red); }
+    .diag-status {
+        color: var(--text-secondary);
+        font-size: 0.74rem;
+        line-height: 1.25;
+        opacity: 0.85;
+        margin-top: -2px;
+    }
+    .diag-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        width: 100%;
+        max-width: 460px;
+    }
+    .diag-copy-btn {
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-elevated);
+        color: var(--text-secondary);
+        border-radius: var(--radius-pill);
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 0.18rem 0.52rem;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    .diag-copy-btn:hover {
+        border-color: var(--border-medium);
+        color: var(--text-primary);
+    }
+    .diag-copy-status {
+        color: var(--text-tertiary);
+        font-size: 0.7rem;
+        min-height: 1.2em;
+    }
 
     /* --- Status strip --- */
     .status-strip {

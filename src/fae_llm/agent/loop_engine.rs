@@ -28,6 +28,9 @@ use tokio::sync::{broadcast, mpsc};
 
 /// Lower temperature improves tool-calling judgment on smaller local models.
 const TOOL_JUDGMENT_TEMPERATURE: f64 = 0.2;
+/// Spoken status emitted when the model enters a tool-use turn and has not yet
+/// produced user-visible text.
+const TOOL_PROGRESS_FALLBACK: &str = "Working on that now.";
 
 /// The core agent loop engine.
 ///
@@ -387,6 +390,16 @@ impl AgentLoop {
                     });
                 }
 
+                // If the model requested tools without any user-visible text,
+                // emit a short spoken progress cue so the user is not left in silence.
+                if accumulated.text.trim().is_empty()
+                    && let Some(ref ctx) = clause_tx
+                {
+                    let _ = ctx
+                        .send(tool_progress_message(&accumulated.tool_calls))
+                        .await;
+                }
+
                 // Emit live ToolCall events before execution begins
                 if let Some(ref rtx) = self.runtime_tx {
                     for tc in &accumulated.tool_calls {
@@ -651,6 +664,30 @@ impl AgentLoop {
     }
 }
 
+fn tool_progress_message(tool_calls: &[super::accumulator::AccumulatedToolCall]) -> String {
+    let mut names = tool_calls
+        .iter()
+        .filter_map(|tc| {
+            let name = tc.function_name.trim();
+            if name.is_empty() { None } else { Some(name) }
+        })
+        .take(2);
+
+    let first = names.next();
+    let second = names.next();
+    match (first, second, tool_calls.len()) {
+        (Some(name), None, _) => format!("Working on that now with {name}."),
+        (Some(first), Some(second), 2) => {
+            format!("Working on that now with {first} and {second}.")
+        }
+        (Some(first), Some(second), total) => format!(
+            "Working on that now with {first}, {second}, and {} more tools.",
+            total.saturating_sub(2)
+        ),
+        _ => TOOL_PROGRESS_FALLBACK.to_owned(),
+    }
+}
+
 /// Extract the text from the last turn, or empty if no turns.
 fn last_text(turns: &[TurnResult]) -> String {
     turns.last().map_or_else(String::new, |t| t.text.clone())
@@ -717,6 +754,7 @@ pub fn build_messages_from_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fae_llm::agent::accumulator::AccumulatedToolCall;
     use crate::fae_llm::config::types::ToolMode;
     use crate::fae_llm::events::LlmEvent;
     use crate::fae_llm::provider::LlmEventStream;
@@ -938,6 +976,43 @@ mod tests {
             response: "command output",
         }));
         Arc::new(reg)
+    }
+
+    #[test]
+    fn tool_progress_message_single_tool_name() {
+        let calls = vec![AccumulatedToolCall {
+            call_id: "c1".to_owned(),
+            function_name: "web_search".to_owned(),
+            arguments_json: "{}".to_owned(),
+        }];
+        let msg = tool_progress_message(&calls);
+        assert_eq!(msg, "Working on that now with web_search.");
+    }
+
+    #[test]
+    fn tool_progress_message_multiple_tools_summary() {
+        let calls = vec![
+            AccumulatedToolCall {
+                call_id: "c1".to_owned(),
+                function_name: "read".to_owned(),
+                arguments_json: "{}".to_owned(),
+            },
+            AccumulatedToolCall {
+                call_id: "c2".to_owned(),
+                function_name: "bash".to_owned(),
+                arguments_json: "{}".to_owned(),
+            },
+            AccumulatedToolCall {
+                call_id: "c3".to_owned(),
+                function_name: "write".to_owned(),
+                arguments_json: "{}".to_owned(),
+            },
+        ];
+        let msg = tool_progress_message(&calls);
+        assert_eq!(
+            msg,
+            "Working on that now with read, bash, and 1 more tools."
+        );
     }
 
     // ── Text-only response ───────────────────────────────────

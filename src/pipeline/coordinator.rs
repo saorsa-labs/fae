@@ -3187,7 +3187,12 @@ async fn forward_sentences(
 
     /// How many characters of preamble to buffer before deciding this is
     /// normal speech (not JSON). Covers "aaa json ```json" and similar.
-    const DECIDE_THRESHOLD: usize = 120;
+    const DECIDE_THRESHOLD: usize = 48;
+    /// Maximum time to wait before forwarding normal speech while deciding.
+    ///
+    /// This avoids long "dead air" when the assistant starts speaking text
+    /// but no JSON object is present.
+    const DECIDE_MAX_WAIT: Duration = Duration::from_millis(700);
 
     #[derive(PartialEq)]
     enum Mode {
@@ -3202,6 +3207,7 @@ async fn forward_sentences(
     let mut mode = Mode::Deciding;
     let mut pending = String::new(); // buffered text while Deciding
     let mut json_buf = String::new(); // JSON accumulator in Json mode
+    let mut decide_started: Option<Instant> = None;
 
     while let Some(chunk) = rx.recv().await {
         match mode {
@@ -3213,6 +3219,9 @@ async fn forward_sentences(
             }
             Mode::Deciding => {
                 pending.push_str(&chunk.text);
+                if !chunk.text.is_empty() && decide_started.is_none() {
+                    decide_started = Some(Instant::now());
+                }
 
                 // Check the combined pending text for a `{`.
                 if let Some(brace_pos) = pending.find('{') {
@@ -3220,19 +3229,28 @@ async fn forward_sentences(
                     // to json_buf. Everything before is preamble (discarded).
                     mode = Mode::Json;
                     json_buf.push_str(&pending[brace_pos..]);
-                } else if pending.len() >= DECIDE_THRESHOLD {
-                    // Enough text without `{` — this is normal speech.
-                    mode = Mode::Speech;
-                    emit(
-                        &SentenceChunk {
-                            text: std::mem::take(&mut pending),
-                            is_final: false,
-                        },
-                        &runtime_tx,
-                        &tx,
-                        console_output,
-                    )
-                    .await;
+                    decide_started = None;
+                } else {
+                    let decide_timed_out =
+                        decide_started.is_some_and(|start| start.elapsed() >= DECIDE_MAX_WAIT);
+                    if !pending.is_empty()
+                        && (pending.len() >= DECIDE_THRESHOLD || decide_timed_out)
+                    {
+                        // Enough text (or time) without `{` — this is normal speech.
+                        // Preserve `is_final` if this chunk ends the response.
+                        let is_final = chunk.is_final;
+                        mode = Mode::Speech;
+                        emit(
+                            &SentenceChunk {
+                                text: std::mem::take(&mut pending),
+                                is_final,
+                            },
+                            &runtime_tx,
+                            &tx,
+                            console_output,
+                        )
+                        .await;
+                    }
                 }
                 // else: keep buffering
             }
@@ -3316,6 +3334,7 @@ async fn forward_sentences(
             mode = Mode::Deciding;
             pending.clear();
             json_buf.clear();
+            decide_started = None;
         }
     }
 }
