@@ -351,6 +351,18 @@ pub fn import_all_data(backup_path: &Path) -> Result<()> {
             continue;
         }
 
+        // Block path-traversal attacks: reject entries with `..` components
+        // or absolute paths that could escape the destination root.
+        if entry_name.contains("..")
+            || std::path::Path::new(&entry_name).is_absolute()
+            || entry_name.starts_with('/')
+            || entry_name.starts_with('\\')
+        {
+            return Err(SpeechError::Pipeline(format!(
+                "zip entry contains path traversal: {entry_name}"
+            )));
+        }
+
         // Route to the correct destination root.
         let dest_path = if let Some(rest) = entry_name.strip_prefix("config/") {
             config_root.join(rest)

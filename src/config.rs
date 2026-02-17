@@ -675,7 +675,12 @@ impl ConversationConfig {
     /// Returns the effective list of sleep phrases, merging `sleep_phrases`
     /// with the legacy `stop_phrase` if it is non-empty and not already present.
     pub fn effective_sleep_phrases(&self) -> Vec<String> {
-        let mut phrases = self.sleep_phrases.clone();
+        let mut phrases: Vec<String> = self
+            .sleep_phrases
+            .iter()
+            .filter(|p| !p.trim().is_empty())
+            .cloned()
+            .collect();
         let legacy = self.stop_phrase.trim().to_lowercase();
         if !legacy.is_empty()
             && !phrases

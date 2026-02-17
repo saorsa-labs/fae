@@ -5,7 +5,7 @@
 
 use crate::error::{Result, SpeechError};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// User preference for automatic updates.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +30,19 @@ impl std::fmt::Display for AutoUpdatePreference {
     }
 }
 
+/// A pre-downloaded update staged on disk, ready to install on relaunch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedUpdate {
+    /// Version string of the staged binary (e.g. `"0.5.0"`).
+    pub version: String,
+    /// URL the binary was downloaded from.
+    pub download_url: String,
+    /// Absolute path to the staged binary on disk.
+    pub staged_path: PathBuf,
+    /// Unix timestamp when the binary was staged.
+    pub staged_at: u64,
+}
+
 /// Persistent update state for Fae.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -44,6 +57,8 @@ pub struct UpdateState {
     pub dismissed_release: Option<String>,
     /// Cached GitHub ETag for Fae release requests.
     pub etag_fae: Option<String>,
+    /// A pre-downloaded update ready to install on relaunch.
+    pub staged_update: Option<StagedUpdate>,
 }
 
 impl Default for UpdateState {
@@ -54,6 +69,7 @@ impl Default for UpdateState {
             last_check: None,
             dismissed_release: None,
             etag_fae: None,
+            staged_update: None,
         }
     }
 }
@@ -164,6 +180,25 @@ impl UpdateState {
         let elapsed_hours = (now_secs.saturating_sub(last_secs)) / 3600;
         elapsed_hours >= hours
     }
+
+    /// Record a staged update that is ready to install on relaunch.
+    pub fn set_staged_update(&mut self, version: String, download_url: String, staged_path: &Path) {
+        let staged_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.staged_update = Some(StagedUpdate {
+            version,
+            download_url,
+            staged_path: staged_path.to_path_buf(),
+            staged_at,
+        });
+    }
+
+    /// Remove any staged update record (e.g. after successful install or cleanup).
+    pub fn clear_staged_update(&mut self) {
+        self.staged_update = None;
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +237,7 @@ mod tests {
             last_check: Some("1706000000".to_owned()),
             dismissed_release: Some("0.2.0".to_owned()),
             etag_fae: Some("abc123".to_owned()),
+            staged_update: None,
         };
 
         let json = serde_json::to_string(&state).unwrap();
@@ -334,5 +370,76 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let restored: UpdateState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.dismissed_release.as_deref(), Some("0.5.0"));
+    }
+
+    #[test]
+    fn staged_update_serialization_round_trip() {
+        let staged = StagedUpdate {
+            version: "0.5.0".to_owned(),
+            download_url: "https://example.com/fae".to_owned(),
+            staged_path: PathBuf::from("/tmp/staged/fae"),
+            staged_at: 1700000000,
+        };
+        let json = serde_json::to_string(&staged).unwrap();
+        let restored: StagedUpdate = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.version, "0.5.0");
+        assert_eq!(restored.download_url, "https://example.com/fae");
+        assert_eq!(restored.staged_path, PathBuf::from("/tmp/staged/fae"));
+        assert_eq!(restored.staged_at, 1700000000);
+    }
+
+    #[test]
+    fn state_with_staged_update_round_trip() {
+        let mut state = UpdateState::default();
+        state.set_staged_update(
+            "0.6.0".to_owned(),
+            "https://example.com/fae-0.6".to_owned(),
+            Path::new("/tmp/staged/fae"),
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: UpdateState = serde_json::from_str(&json).unwrap();
+        assert!(restored.staged_update.is_some());
+        let staged = restored.staged_update.unwrap();
+        assert_eq!(staged.version, "0.6.0");
+        assert_eq!(staged.download_url, "https://example.com/fae-0.6");
+        assert!(staged.staged_at > 0);
+    }
+
+    #[test]
+    fn set_and_clear_staged_update() {
+        let mut state = UpdateState::default();
+        assert!(state.staged_update.is_none());
+
+        state.set_staged_update(
+            "1.0.0".to_owned(),
+            "https://example.com/fae".to_owned(),
+            Path::new("/tmp/staged/fae"),
+        );
+        assert!(state.staged_update.is_some());
+
+        state.clear_staged_update();
+        assert!(state.staged_update.is_none());
+    }
+
+    #[test]
+    fn default_state_has_no_staged_update() {
+        let state = UpdateState::default();
+        assert!(state.staged_update.is_none());
+    }
+
+    #[test]
+    fn state_deserialize_without_staged_update_field() {
+        // Older JSON without `staged_update` should still deserialize.
+        let json = r#"{
+            "fae_version": "0.3.0",
+            "auto_update": "ask",
+            "last_check": null,
+            "dismissed_release": null,
+            "etag_fae": null
+        }"#;
+        let state: UpdateState = serde_json::from_str(json).unwrap();
+        assert!(state.staged_update.is_none());
+        assert_eq!(state.fae_version, "0.3.0");
     }
 }

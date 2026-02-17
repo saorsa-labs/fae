@@ -48,12 +48,9 @@ fn main() {
         .with(file_layer)
         .init();
 
-    // Clean up any .old backup left by a previous self-update.
-    // If we reach this point the new binary launched successfully,
-    // so we can safely remove the backup to free disk space.
-    if let Err(e) = fae::update::cleanup_old_backup() {
-        tracing::warn!("failed to clean up old update backup: {e}");
-    }
+    // Clean up staging files and backups from a previous self-update.
+    // If we reach this point the new binary launched successfully.
+    fae::startup::cleanup_after_successful_update();
 
     // Build native menu bar.
     // On macOS, this creates a standard application menu bar (not a system tray/status bar item).
@@ -3831,7 +3828,11 @@ fn spawn_current_exe() -> Result<(), String> {
     Ok(())
 }
 
-/// Apply a downloaded update and relaunch Fae.
+/// Install a staged update and relaunch Fae via a detached helper script.
+///
+/// If a staged binary exists on disk, uses [`fae::update::install_via_helper`]
+/// for a clean quit → replace → relaunch cycle. If no staged binary is found,
+/// falls back to the legacy inline download-and-replace path.
 ///
 /// Used by the startup gate, in-session banner, and scheduler notification paths
 /// so there is exactly one code path for install-and-relaunch.
@@ -3853,6 +3854,26 @@ fn apply_and_relaunch(
     spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
             let current = fae::update::applier::current_exe_path()?;
+
+            // Try the staged update path first (Sparkle-style: binary already
+            // downloaded, just quit → helper replaces → relaunch).
+            let staging_dir = fae::update::staging_directory();
+            let staged_binary = staging_dir.join(if cfg!(target_os = "windows") {
+                "fae.exe"
+            } else {
+                "fae"
+            });
+
+            if staged_binary.exists() {
+                tracing::info!("installing staged update from {}", staged_binary.display());
+                fae::update::install_via_helper(&staged_binary, &current)?;
+                // install_via_helper launched the helper; we just need to exit.
+                std::process::exit(0);
+            }
+
+            // Fallback: no staged binary — download and replace inline
+            // (legacy path, used when staging failed or was skipped).
+            tracing::info!("no staged binary found, falling back to inline update");
             fae::update::applier::apply_update(&download_url, &current)
         })
         .await;
@@ -4216,6 +4237,18 @@ fn app() -> Element {
 
                     if !is_dismissed {
                         tracing::info!("update available: Fae v{}", release.version);
+
+                        // Stage the download in the background so it's ready
+                        // when the user clicks "Install & Relaunch".
+                        if !release.download_url.is_empty() {
+                            let dl_url = release.download_url.clone();
+                            let version = release.version.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                fae::update::stage_update(&dl_url, &version)
+                            })
+                            .await;
+                        }
+
                         // Store the release for the in-session banner too.
                         update_available.set(Some(release.clone()));
                         // Show the gate dialog.
@@ -4329,6 +4362,15 @@ fn app() -> Element {
                                     })
                                     .await;
                                     if let Ok(Ok((Some(release), _))) = result {
+                                        // Stage the download so it's ready when user acts.
+                                        if !release.download_url.is_empty() {
+                                            let dl_url = release.download_url.clone();
+                                            let version = release.version.clone();
+                                            let _ = tokio::task::spawn_blocking(move || {
+                                                fae::update::stage_update(&dl_url, &version)
+                                            })
+                                            .await;
+                                        }
                                         update_available.set(Some(release));
                                     }
                                 }
@@ -5525,11 +5567,17 @@ fn app() -> Element {
                     let ver = update_available.read().as_ref()
                         .map(|r| r.version.clone())
                         .unwrap_or_default();
+                    // Check if a staged binary is ready on disk.
+                    let staged_ready = fae::update::staging_directory()
+                        .join(if cfg!(target_os = "windows") { "fae.exe" } else { "fae" })
+                        .exists();
                     rsx! {
                         div { class: "update-banner",
                             span { class: "update-banner-text",
                                 if installing {
                                     "Installing Fae v{ver}..."
+                                } else if staged_ready {
+                                    "Fae v{ver} ready \u{2014} Relaunch to install"
                                 } else {
                                     "Fae v{ver} is available."
                                 }
@@ -5548,7 +5596,7 @@ fn app() -> Element {
                                             );
                                         }
                                     },
-                                    "Install Now"
+                                    if staged_ready { "Relaunch" } else { "Install Now" }
                                 }
                                 button {
                                     class: "update-banner-dismiss",
@@ -5918,7 +5966,7 @@ fn app() -> Element {
                         rsx! {
                             div { class: "update-gate",
                                 p { class: "update-gate-title", "Installing Fae v{ver}..." }
-                                p { class: "update-gate-subtitle", "Downloading and replacing binary. Fae will relaunch automatically." }
+                                p { class: "update-gate-subtitle", "Installing update. Fae will relaunch automatically." }
                             }
                         }
                     },

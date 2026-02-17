@@ -2986,7 +2986,7 @@ dependencies = [
 
 [[package]]
 name = "fae"
-version = "0.3.8"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-stream",

@@ -556,23 +556,104 @@ pub fn preflight_check(config: &SpeechConfig) -> Result<PreFlightResult> {
     })
 }
 
+/// Result of a startup update check that may include a staged download.
+pub struct UpdateCheckResult {
+    /// The release that was found (if any).
+    pub release: Option<crate::update::Release>,
+    /// A staged binary ready to install (pre-existing or freshly downloaded).
+    pub staged: Option<crate::update::StagedUpdate>,
+}
+
+/// Clean up leftover staging files from a previous successful update.
+///
+/// Call this early at startup. Also clears the `staged_update` record from the
+/// persistent state if the staged version matches the running version (meaning
+/// the update was successfully installed).
+pub fn cleanup_after_successful_update() {
+    let mut state = crate::update::UpdateState::load();
+
+    // If the staged version matches the running version, the update succeeded.
+    let update_completed = state
+        .staged_update
+        .as_ref()
+        .is_some_and(|s| s.version == env!("CARGO_PKG_VERSION"));
+
+    if update_completed || state.staged_update.is_some() {
+        state.clear_staged_update();
+        let _ = state.save();
+    }
+
+    // Always clean up staging directory (leftover files from any previous attempt).
+    if let Err(e) = crate::update::cleanup_staged_update() {
+        tracing::debug!("staging cleanup: {e}");
+    }
+
+    // Also clean up old backup from in-place updates.
+    if let Err(e) = crate::update::cleanup_old_backup() {
+        tracing::debug!("old backup cleanup: {e}");
+    }
+}
+
 /// Run a background update check for Fae.
 ///
 /// Respects the user's auto-update preference and only checks if the last
 /// check was more than `stale_hours` hours ago. Returns `Some(release)` if
 /// a newer version is available, `None` otherwise.
 ///
+/// When a newer release is found, the binary is also staged (downloaded in
+/// the background) so it is ready to install instantly when the user clicks
+/// "Install & Relaunch".
+///
 /// This function is safe to call from any async context — it spawns the
 /// HTTP request on a blocking thread.
 pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Release> {
+    let result = check_for_fae_update_with_staging(stale_hours).await;
+    result.release
+}
+
+/// Run a background update check and stage the download if a new version is found.
+///
+/// Returns both the release info and any staged binary path. The staged binary
+/// can be installed immediately via [`crate::update::install_via_helper`].
+pub async fn check_for_fae_update_with_staging(stale_hours: u64) -> UpdateCheckResult {
     let state = crate::update::UpdateState::load();
 
+    // Check for an already-staged update from a previous check.
+    if let Some(ref staged) = state.staged_update
+        && std::path::Path::new(&staged.staged_path).exists()
+    {
+        info!(
+            "found already-staged update v{} at {}",
+            staged.version,
+            staged.staged_path.display()
+        );
+        // Synthesise a release from the staged info so the GUI can display it.
+        let release = crate::update::Release {
+            tag_name: format!("v{}", staged.version),
+            version: staged.version.clone(),
+            download_url: staged.download_url.clone(),
+            release_notes: String::new(),
+            published_at: String::new(),
+            asset_size: 0,
+        };
+        return UpdateCheckResult {
+            release: Some(release),
+            staged: Some(staged.clone()),
+        };
+    }
+
     if !state.check_is_stale(stale_hours) {
-        return None;
+        return UpdateCheckResult {
+            release: None,
+            staged: None,
+        };
     }
 
     if state.auto_update == crate::update::AutoUpdatePreference::Never {
-        return None;
+        return UpdateCheckResult {
+            release: None,
+            staged: None,
+        };
     }
 
     let etag = state.etag_fae.clone();
@@ -586,11 +667,17 @@ pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Rel
         Ok(Ok((release, new_etag))) => (release, new_etag),
         Ok(Err(e)) => {
             tracing::debug!("update check failed: {e}");
-            return None;
+            return UpdateCheckResult {
+                release: None,
+                staged: None,
+            };
         }
         Err(e) => {
             tracing::debug!("update check task failed: {e}");
-            return None;
+            return UpdateCheckResult {
+                release: None,
+                staged: None,
+            };
         }
     };
 
@@ -605,16 +692,62 @@ pub async fn check_for_fae_update(stale_hours: u64) -> Option<crate::update::Rel
         None => false,
     };
 
+    let mut staged = None;
+
+    // Stage the download in the background if we have a release to offer.
+    if should_return_release
+        && let Some(ref rel) = release
+        && !rel.download_url.is_empty()
+    {
+        let dl_url = rel.download_url.clone();
+        let version = rel.version.clone();
+        let stage_result =
+            tokio::task::spawn_blocking(move || crate::update::stage_update(&dl_url, &version))
+                .await;
+
+        match stage_result {
+            Ok(crate::update::StageResult::Staged(s)) => {
+                info!(
+                    "update v{} staged at {}",
+                    s.version,
+                    s.staged_path.display()
+                );
+                new_state.set_staged_update(
+                    s.version.clone(),
+                    s.download_url.clone(),
+                    &s.staged_path,
+                );
+                staged = Some(s);
+            }
+            Ok(crate::update::StageResult::AlreadyStaged(s)) => {
+                info!("update v{} already staged", s.version);
+                staged = Some(s);
+            }
+            Ok(crate::update::StageResult::Failed(e)) => {
+                warn!("failed to stage update: {e}");
+            }
+            Err(e) => {
+                warn!("stage task panicked: {e}");
+            }
+        }
+    }
+
     // Persist state update.
     let _ = tokio::task::spawn_blocking(move || new_state.save()).await;
 
     // Return release if available and not dismissed.
     if should_return_release && let Some(rel) = release {
         info!("update available: Fae v{}", rel.version);
-        return Some(rel);
+        return UpdateCheckResult {
+            release: Some(rel),
+            staged,
+        };
     }
 
-    None
+    UpdateCheckResult {
+        release: None,
+        staged: None,
+    }
 }
 
 /// Start the background scheduler with built-in update check tasks.

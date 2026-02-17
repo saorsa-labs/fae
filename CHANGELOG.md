@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.4.1] - 2026-02-17
+
+### Fixed
+
+- **macOS Self-Update: Staged Download + Relaunch Helper** — replaces in-place binary replacement with a Sparkle-style staged update flow that works reliably on macOS.
+  - New `StagedUpdate` state persisted across sessions
+  - Background download to staging directory (`~/Library/Application Support/fae/staged-update/`)
+  - Detached shell helper script waits for app exit, replaces binary, removes quarantine, relaunches
+  - Automatic cleanup of staging files on next successful startup
+  - Banner text updates: "Fae vX.Y.Z ready — Relaunch to install" when staged
+  - Falls back to legacy inline download if staging was skipped
+- Filter empty strings from sleep phrase list in conversation config
+- Block path-traversal attacks in zip import (diagnostics)
+
 ## [v0.4.0] - 2026-02-16
 
 ### Added

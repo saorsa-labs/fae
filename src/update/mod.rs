@@ -8,6 +8,9 @@ pub mod applier;
 pub mod checker;
 pub mod state;
 
-pub use applier::{cleanup_old_backup, rollback_update};
+pub use applier::{
+    StageResult, cleanup_old_backup, cleanup_staged_update, install_via_helper, rollback_update,
+    stage_update, staging_directory,
+};
 pub use checker::{Release, UpdateChecker};
-pub use state::{AutoUpdatePreference, UpdateState};
+pub use state::{AutoUpdatePreference, StagedUpdate, UpdateState};

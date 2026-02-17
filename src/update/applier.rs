@@ -5,6 +5,7 @@
 //! helper script on Windows).
 
 use crate::error::{Result, SpeechError};
+use crate::update::state::StagedUpdate;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -109,6 +110,224 @@ pub fn cleanup_old_backup() -> Result<()> {
         tracing::info!("removed old backup at {}", backup.display());
     }
     Ok(())
+}
+
+// ── Staged update support ───────────────────────────────────────────────────
+
+/// Result of a staging attempt.
+#[derive(Debug)]
+pub enum StageResult {
+    /// Binary was downloaded and staged successfully.
+    Staged(StagedUpdate),
+    /// A valid staged binary already exists for this version.
+    AlreadyStaged(StagedUpdate),
+    /// Staging failed.
+    Failed(String),
+}
+
+/// Returns the staging directory for pre-downloaded updates.
+///
+/// - macOS: `~/Library/Application Support/fae/staged-update/`
+/// - Linux/other: `$XDG_DATA_HOME/fae/staged-update/` (via [`crate::fae_dirs::data_dir`])
+pub fn staging_directory() -> PathBuf {
+    crate::fae_dirs::data_dir().join("staged-update")
+}
+
+/// Download a release binary to the staging directory and verify it.
+///
+/// The staged binary can later be installed via [`install_via_helper`] when the
+/// user chooses to relaunch. Returns [`StageResult::AlreadyStaged`] if a valid
+/// staged binary for this version already exists.
+///
+/// # Errors
+///
+/// Returns [`StageResult::Failed`] if the download or verification fails.
+pub fn stage_update(download_url: &str, version: &str) -> StageResult {
+    let staging_dir = staging_directory();
+
+    // Check for an existing staged binary for this version.
+    let staged_binary = staging_dir.join(binary_filename());
+    if staged_binary.exists() {
+        if verify_binary(&staged_binary).is_ok() {
+            let staged_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            return StageResult::AlreadyStaged(StagedUpdate {
+                version: version.to_owned(),
+                download_url: download_url.to_owned(),
+                staged_path: staged_binary,
+                staged_at,
+            });
+        }
+        // Invalid existing staged binary — remove and re-download.
+        let _ = std::fs::remove_dir_all(&staging_dir);
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&staging_dir) {
+        return StageResult::Failed(format!("cannot create staging dir: {e}"));
+    }
+
+    tracing::info!("staging update v{version} from {download_url}");
+    if let Err(e) = download_binary(download_url, &staged_binary) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return StageResult::Failed(format!("download failed: {e}"));
+    }
+
+    if let Err(e) = verify_binary(&staged_binary) {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return StageResult::Failed(format!("verification failed: {e}"));
+    }
+
+    let staged_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    tracing::info!("update v{version} staged at {}", staged_binary.display());
+
+    StageResult::Staged(StagedUpdate {
+        version: version.to_owned(),
+        download_url: download_url.to_owned(),
+        staged_path: staged_binary,
+        staged_at,
+    })
+}
+
+/// Install a previously staged binary via a detached helper shell script.
+///
+/// The helper script:
+/// 1. Waits for the current process to exit
+/// 2. Backs up the current binary
+/// 3. Copies the staged binary into place
+/// 4. Clears the macOS quarantine attribute
+/// 5. Relaunches via `open -n` (for .app bundles) or direct exec
+/// 6. Cleans up the staging directory and backup
+///
+/// The caller should call `std::process::exit(0)` after this function returns.
+///
+/// # Errors
+///
+/// Returns an error if the helper script cannot be written or launched.
+pub fn install_via_helper(staged_path: &Path, target_binary: &Path) -> Result<()> {
+    let pid = std::process::id();
+
+    // Determine relaunch command: `open -n Bundle.app` for .app bundles,
+    // or direct exec for CLI installs.
+    let relaunch_cmd = macos_app_bundle_root(target_binary)
+        .map(|bundle| format!("open -n \"{}\"", bundle.display()))
+        .unwrap_or_else(|| format!("\"{}\" &", target_binary.display()));
+
+    let staging_dir = staged_path.parent().unwrap_or_else(|| Path::new("/tmp"));
+
+    let script = format!(
+        r#"#!/bin/bash
+# Fae self-update helper — auto-generated, safe to delete.
+set -e
+
+PID={pid}
+STAGED="{staged}"
+TARGET="{target}"
+BACKUP="{backup}"
+STAGING_DIR="{staging_dir}"
+
+# Wait for the running process to exit.
+while kill -0 "$PID" 2>/dev/null; do
+    sleep 0.2
+done
+
+# Back up current binary.
+if [ -f "$TARGET" ]; then
+    cp "$TARGET" "$BACKUP"
+fi
+
+# Install staged binary.
+cp "$STAGED" "$TARGET"
+chmod +x "$TARGET"
+
+# Remove macOS quarantine attribute.
+xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
+
+# Relaunch.
+{relaunch_cmd}
+
+# Cleanup: remove staging dir and backup (best-effort).
+sleep 1
+rm -rf "$STAGING_DIR"
+rm -f "$BACKUP"
+
+# Self-delete.
+rm -f "$0"
+"#,
+        pid = pid,
+        staged = staged_path.display(),
+        target = target_binary.display(),
+        backup = target_binary.with_extension("backup").display(),
+        staging_dir = staging_dir.display(),
+        relaunch_cmd = relaunch_cmd,
+    );
+
+    let script_path = std::env::temp_dir().join("fae-update-helper.sh");
+    std::fs::write(&script_path, &script).map_err(|e| {
+        SpeechError::Update(format!(
+            "cannot write update helper script to {}: {e}",
+            script_path.display()
+        ))
+    })?;
+
+    set_executable(&script_path)?;
+
+    // Launch the helper as a fully detached process.
+    std::process::Command::new("/bin/bash")
+        .arg(&script_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            SpeechError::Update(format!(
+                "cannot launch update helper script {}: {e}",
+                script_path.display()
+            ))
+        })?;
+
+    tracing::info!("update helper launched (pid {}), app should exit now", pid);
+    Ok(())
+}
+
+/// Remove leftover staging files from a previous successful (or abandoned) update.
+///
+/// Safe to call when no staging directory exists — returns `Ok(())`.
+pub fn cleanup_staged_update() -> Result<()> {
+    let staging_dir = staging_directory();
+    if staging_dir.exists() {
+        std::fs::remove_dir_all(&staging_dir).map_err(|e| {
+            SpeechError::Update(format!(
+                "cannot remove staging directory {}: {e}",
+                staging_dir.display()
+            ))
+        })?;
+        tracing::info!("cleaned up staging directory at {}", staging_dir.display());
+    }
+    Ok(())
+}
+
+/// Find the `.app` bundle root containing a binary, if any.
+///
+/// Walks up from the binary path looking for a parent with a `.app` extension.
+fn macos_app_bundle_root(binary: &Path) -> Option<PathBuf> {
+    let mut current = binary;
+    while let Some(parent) = current.parent() {
+        if parent
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+        {
+            return Some(parent.to_path_buf());
+        }
+        current = parent;
+    }
+    None
 }
 
 /// Returns the expected binary filename for the current platform.
@@ -439,5 +658,91 @@ mod tests {
         assert!(!backup.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_directory_is_under_data_dir() {
+        let dir = staging_directory();
+        let data = crate::fae_dirs::data_dir();
+        assert!(
+            dir.starts_with(&data),
+            "staging dir {} should be under data dir {}",
+            dir.display(),
+            data.display()
+        );
+        assert!(dir.ends_with("staged-update"));
+    }
+
+    #[test]
+    fn cleanup_staged_update_ok_when_no_dir() {
+        // Should succeed even when no staging directory exists.
+        let result = cleanup_staged_update();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cleanup_staged_update_removes_dir() {
+        let dir = staging_directory();
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("fae"), "dummy").unwrap();
+        assert!(dir.exists());
+
+        let result = cleanup_staged_update();
+        assert!(result.is_ok());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn stage_update_fails_with_bad_url() {
+        let result = stage_update("http://localhost:1/nonexistent", "99.99.99");
+        assert!(matches!(result, StageResult::Failed(_)));
+    }
+
+    #[test]
+    fn macos_app_bundle_root_finds_app() {
+        let path = Path::new("/Applications/Fae.app/Contents/MacOS/fae");
+        let bundle = macos_app_bundle_root(path);
+        assert_eq!(bundle, Some(PathBuf::from("/Applications/Fae.app")));
+    }
+
+    #[test]
+    fn macos_app_bundle_root_returns_none_for_cli() {
+        let path = Path::new("/usr/local/bin/fae");
+        let bundle = macos_app_bundle_root(path);
+        assert!(bundle.is_none());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn install_via_helper_generates_script() {
+        let dir = std::env::temp_dir().join("fae-test-helper-gen");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let staged = dir.join("fae");
+        let target = dir.join("fae-target");
+        std::fs::write(&staged, "new-binary").unwrap();
+        std::fs::write(&target, "old-binary").unwrap();
+
+        // We can't actually run the helper (it waits for our PID to exit),
+        // but we can verify the script is written and contains the right content.
+        // install_via_helper will spawn the script, which will wait for us to exit
+        // (which we won't), so it's harmless in tests.
+        let result = install_via_helper(&staged, &target);
+        assert!(result.is_ok());
+
+        // Verify the helper script was written.
+        let script_path = std::env::temp_dir().join("fae-update-helper.sh");
+        assert!(script_path.exists());
+
+        let script_content = std::fs::read_to_string(&script_path).unwrap();
+        assert!(script_content.contains("kill -0"));
+        assert!(script_content.contains(&staged.display().to_string()));
+        assert!(script_content.contains(&target.display().to_string()));
+        assert!(script_content.contains("xattr"));
+        assert!(script_content.contains("chmod +x"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&script_path);
     }
 }
