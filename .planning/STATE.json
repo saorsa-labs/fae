@@ -1,27 +1,21 @@
 {
   "version": 1,
-  "project": "companion-presence-mode",
+  "project": "fix-xdotool-bugs",
   "active": true,
   "milestone": {
     "number": 1,
-    "name": "Companion Presence Mode"
+    "name": "Fix Linux Desktop Automation Bugs"
   },
   "phase": {
-    "number": "1.4",
-    "name": "Integration Testing",
-    "plan": "PLAN-phase-1.4.md",
-    "status": "complete"
+    "number": "1.1",
+    "name": "Fix click-by-label (P1)",
+    "plan": null
   },
   "progress": {
-    "total_tasks": 3,
-    "completed_tasks": 3,
-    "current_task": 3
+    "total_tasks": 0,
+    "completed_tasks": 0,
+    "current_task": null
   },
-  "review": {
-    "status": "passed",
-    "iteration": 0,
-    "last_verdict": "PASS"
-  },
-  "status": "milestone_complete",
-  "last_updated": "2026-02-16T15:30:00Z"
+  "status": "designed",
+  "last_updated": "2026-02-17T12:00:00Z"
 }
