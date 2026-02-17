@@ -84,6 +84,3 @@ jobs:
 
       - name: Build release (GUI)
         run: cargo build --release --features gui
-
-      - name: Build release (record-wakeword)
-        run: cargo build --release --bin fae-record-wakeword --no-default-features

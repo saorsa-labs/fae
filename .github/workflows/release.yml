@@ -69,9 +69,7 @@ jobs:
           restore-keys: ${{ runner.os }}-aarch64-release-
 
       - name: Build release binaries
-        run: |
-          cargo build --release --features gui
-          cargo build --release --bin fae-record-wakeword --no-default-features
+        run: cargo build --release --features gui
 
       - name: Import signing certificate
         env:
@@ -120,12 +118,6 @@ jobs:
             --timestamp \
             target/release/fae
 
-          codesign --force --options runtime \
-            --sign "$MACOS_SIGNING_IDENTITY" \
-            --entitlements Entitlements.plist \
-            --timestamp \
-            target/release/fae-record-wakeword
-
       - name: Notarize binaries
         if: env.SIGNING_ENABLED == 'true'
         env:
@@ -137,15 +129,6 @@ jobs:
           ditto -c -k --keepParent target/release/fae "$NOTARIZE_ZIP"
 
           xcrun notarytool submit "$NOTARIZE_ZIP" \
-            --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
-            --password "$MACOS_NOTARIZATION_PASSWORD" \
-            --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
-            --wait
-
-          NOTARIZE_ZIP2="$RUNNER_TEMP/fae-wakeword-notarize.zip"
-          ditto -c -k --keepParent target/release/fae-record-wakeword "$NOTARIZE_ZIP2"
-
-          xcrun notarytool submit "$NOTARIZE_ZIP2" \
             --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
             --password "$MACOS_NOTARIZATION_PASSWORD" \
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
@@ -247,11 +230,10 @@ jobs:
 
           # Dev-focused archive (CLI/source users) with bundled Pi.
           cp target/release/fae "$ARCHIVE_STAGING/"
-          cp target/release/fae-record-wakeword "$ARCHIVE_STAGING/"
           cp "${PI_BINARY}" "$ARCHIVE_STAGING/pi"
           cp README.md "$ARCHIVE_STAGING/"
           cp LICENSE "$ARCHIVE_STAGING/" 2>/dev/null || true
-          chmod +x "$ARCHIVE_STAGING/fae" "$ARCHIVE_STAGING/fae-record-wakeword" "$ARCHIVE_STAGING/pi"
+          chmod +x "$ARCHIVE_STAGING/fae" "$ARCHIVE_STAGING/pi"
           tar -czf "$ARCHIVE" -C "$ARCHIVE_STAGING" .
 
           echo "DIST_DIR=$DIST_DIR" >> "$GITHUB_ENV"
