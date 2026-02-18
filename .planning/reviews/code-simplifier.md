@@ -1,58 +1,24 @@
-# Code Simplifier Review — Phase 1.1 FFI Surface
+# Code Simplification Review
+**Date**: 2026-02-18
+**Mode**: gsd (phase 1.2)
 
-## Reviewer: Code Simplifier
+## Analysis
 
-### Findings
+Reviewed the git diff for: Package.swift, FaeNativeApp.swift, EmbeddedCoreSender.swift, src/ffi.rs, src/host/channel.rs.
 
-**FINDING SIMP-1: [SHOULD FIX] Replace inlined fn type with FaeEventCallback alias**
-File: `src/ffi.rs:354-355`
-Current:
-```rust
-callback: Option<unsafe extern "C" fn(*const c_char, *mut c_void)>,
-```
-Simplified:
-```rust
-callback: Option<FaeEventCallback>,
-```
-Two characters versus a complex inline type. Use the alias.
-Vote: SHOULD FIX
+## Findings
 
-**FINDING SIMP-2: [SHOULD FIX] Remove `log_level` field or prefix with `_`**
-File: `src/ffi.rs:48-49`
-Current:
-```rust
-#[allow(dead_code)]
-log_level: Option<String>,
-```
-Simplified option A (remove):
-```rust
-// (field deleted)
-```
-Simplified option B (prefix underscore, keeps JSON field parsing):
-```rust
-_log_level: Option<String>,
-```
-Option A is cleaner for Phase 1.1. Option B preserves forward compatibility.
-Vote: MUST FIX
+- [LOW] src/ffi.rs:79-97 — drain_events() has three separate Mutex::lock() calls that each drop their guard before the next lock. This is correct (avoids lock ordering issues) but could be noted as intentional. A comment would help.
+- [LOW] src/ffi.rs:370-375 — fae_core_set_event_callback acquires callback and callback_user_data in separate lock operations. Correct for avoiding deadlock, could be clarified with a comment about the deliberate split.
+- [OK] src/host/channel.rs route() — The large match block is inherently a dispatch table. No simplification needed; adding it as a table-driven approach would add indirection without benefit.
+- [OK] EmbeddedCoreSender.swift sendCommand() — The JSON serialization guard chain (isValidJSONObject → data → String) is idiomatic Swift. Cannot be simplified.
+- [LOW] FaeNativeApp.swift init() — The `let sender = EmbeddedCoreSender(...)` + try/catch + `commandSender = sender` pattern results in `commandSender` being `Optional<EmbeddedCoreSender>`. This is clear but could use a local helper to reduce nesting. Minor.
 
-**FINDING SIMP-3: [PASS] `drain_events` locking pattern cannot be simplified without UB**
-The sequential separate-lock approach is necessary. No simplification available without introducing lock ordering issues.
-Vote: PASS
+## Simplification Opportunities
 
-**FINDING SIMP-4: [PASS] `string_to_c` helper is minimal and clear**
-Vote: PASS
+1. src/ffi.rs drain_events() — Add a comment above the lock sequence: `// Locks acquired separately to prevent deadlock if callback calls back into Fae (SAFETY: callback must NOT call fae_core_* functions)`.
+2. src/ffi.rs — FaeInitConfig._log_level could have a doc comment: `/// Reserved for Phase 1.3 — parsed but not yet wired to a tracing subscriber.`
 
-**FINDING SIMP-5: [PASS] `cstr_to_str` helper is minimal and clear**
-Vote: PASS
+Neither warrants a code change. Both are documentation improvements only.
 
-**FINDING SIMP-6: [PASS] `borrow_runtime` helper is minimal and clear**
-Vote: PASS
-
-**FINDING SIMP-7: [PASS] New channel handlers follow DRY principle**
-The emit_event + ok response pattern is consistent with all other handlers.
-Vote: PASS
-
-### Summary
-- MUST FIX: 1 (SIMP-2 = same as EH-1/CQ-1/QP-3)
-- SHOULD FIX: 1 (SIMP-1 = same as CQ-5/TS-1/QP-6)
-- PASS: 5
+## Grade: A-

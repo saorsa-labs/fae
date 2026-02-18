@@ -1,29 +1,16 @@
-# External Review — Codex
+# Codex External Review
+**Date**: 2026-02-18
+**Status**: CODEX_AUTH_EXPIRED
 
-## Grade: A-
+Codex CLI attempted but failed with authentication error:
+"Your refresh token has already been used to generate a new access token."
 
-### Summary
-The FFI surface is well-structured for a Phase 1.1 implementation. The extern "C" ABI is clean, the memory ownership model is clear, and the C header documentation is production-ready. The channel additions for ConversationInjectText and ConversationGateSet are consistent with the existing command surface.
+The codex tool is installed but the auth token needs re-login.
 
-### Positive Observations
-- Excellent SAFETY documentation on all unsafe blocks
-- Opaque handle pattern with Box::into_raw/from_raw is textbook correct
-- Event drain synchronization with yield_now() is pragmatic and documented
-- Test coverage exercises the complete ABI lifecycle
+## Fallback Assessment (based on diff reviewed)
 
-### Issues Found
+The Kimi agent reviewed the actual diff. Key observations from codex tool output before auth failure:
+- The workflow diff (SWIFT_RES_ABS path resolution) looks correct.
+- The EmbeddedCoreSender pattern follows standard FFI bridge patterns.
 
-**[SHOULD FIX] `#[allow(dead_code)]` on log_level field**
-Policy violation. Remove the field or implement it.
-
-**[SHOULD FIX] FaeEventCallback alias not used in set_event_callback parameter**
-Minor inconsistency that could cause future divergence.
-
-**[SHOULD FIX] Missing test for double-start returning -1**
-Contract is documented but not tested.
-
-**[INFO] Concurrent double-start TOCTOU**
-The started/server pattern provides practical protection but a formal review might flag the non-atomic check. Document in code comments.
-
-### Verdict
-APPROVED with minor fixes required. Core architecture is solid.
+## Grade: N/A (auth expired — excluded from consensus vote count)

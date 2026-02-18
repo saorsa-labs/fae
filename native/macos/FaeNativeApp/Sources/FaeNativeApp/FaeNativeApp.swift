@@ -12,14 +12,31 @@ final class OrbStateController: ObservableObject {
 struct FaeNativeApp: App {
     @StateObject private var handoff = DeviceHandoffController()
     @StateObject private var orbState = OrbStateController()
+    @StateObject private var conversation = ConversationController()
+    @StateObject private var hostBridge = HostCommandBridge()
+    @StateObject private var dockIcon = DockIconAnimator()
+    @StateObject private var windowState = WindowStateController()
+
+    /// Retained reference to the embedded Rust core sender.
+    private let commandSender: EmbeddedCoreSender?
 
     init() {
+        // Static fallback while the animator spins up
         if let iconURL = Bundle.module.url(
             forResource: "AppIconFace",
-            withExtension: "jpg",
-            subdirectory: "App"
+            withExtension: "jpg"
         ), let icon = NSImage(contentsOf: iconURL) {
             NSApplication.shared.applicationIconImage = icon
+        }
+
+        // Initialize and start the embedded Rust core.
+        let sender = EmbeddedCoreSender(configJSON: "{}")
+        do {
+            try sender.start()
+            commandSender = sender
+        } catch {
+            NSLog("FaeNativeApp: failed to start embedded core: %@", error.localizedDescription)
+            commandSender = nil
         }
     }
 
@@ -28,11 +45,17 @@ struct FaeNativeApp: App {
             ContentView()
                 .environmentObject(handoff)
                 .environmentObject(orbState)
+                .environmentObject(conversation)
+                .environmentObject(windowState)
                 .preferredColorScheme(.dark)
-                .frame(minWidth: 400, minHeight: 500)
+                .onAppear {
+                    dockIcon.start()
+                    if let sender = commandSender {
+                        hostBridge.sender = sender
+                    }
+                }
         }
-        .defaultSize(width: 600, height: 700)
-        .windowResizability(.contentMinSize)
+        .defaultSize(width: 340, height: 500)
 
         Settings {
             SettingsView()

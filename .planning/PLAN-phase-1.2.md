@@ -1,12 +1,47 @@
-# Phase 1.2: Fix availability check (P2)
+# Phase 1.2: Swift Integration — EmbeddedCoreSender
 
-## Task 1: Update is_available() to check all required binaries
-**Files**: `src/fae_llm/tools/desktop/xdotool.rs` (lines 111-113)
-**Description**: Change `is_available()` to check xdotool AND scrot AND xdg-open.
-All three are required for full functionality.
+## Objective
 
-## Task 2: Add per-action missing-tool diagnostics and tests
-**Files**: `src/fae_llm/tools/desktop/xdotool.rs`
-**Description**: In execute(), add early checks for scrot (screenshot) and xdg-open (launch_app)
-with descriptive error messages like "scrot is required for screenshots: sudo apt install scrot".
-Add tests verifying the availability check logic.
+Replace `ProcessCommandSender` (subprocess IPC) with `EmbeddedCoreSender`
+that calls the C FFI functions from `libfae.a` directly in-process.
+
+## Quality gates
+
+```bash
+swift build --package-path native/macos/FaeNativeApp -c release
+# Must produce a clean build with zero warnings.
+```
+
+---
+
+## Task 1 — Create CLibFae C module for SPM
+
+Files: Sources/CLibFae/include/fae.h (copy), Sources/CLibFae/include/module.modulemap (NEW), Sources/CLibFae/shim.c (NEW)
+
+Expose the Fae C header to Swift via a SPM-compatible C library target.
+
+## Task 2 — Update Package.swift
+
+Files: Package.swift
+
+Add CLibFae target. Add libfae.a linker settings to FaeNativeApp target.
+Needs `-L` path to Rust build output and `-lfae` plus system frameworks.
+
+## Task 3 — Create EmbeddedCoreSender.swift
+
+Files: Sources/FaeNativeApp/EmbeddedCoreSender.swift (NEW)
+
+Implements `HostCommandSender`. Calls `fae_core_init`, `fae_core_start`,
+`fae_core_send_command`, `fae_core_stop`, `fae_core_destroy`. Registers
+event callback that posts to NotificationCenter.
+
+## Task 4 — Wire into FaeNativeApp.swift
+
+Files: Sources/FaeNativeApp/FaeNativeApp.swift
+
+Replace `ProcessCommandSender` with `EmbeddedCoreSender`. Remove
+`locateHostBinary()`. Update init/onAppear/deinit.
+
+## Task 5 — Build verification
+
+Build libfae.a for arm64, then swift build. Verify clean compilation.

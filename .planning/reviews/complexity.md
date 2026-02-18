@@ -1,45 +1,20 @@
-# Complexity Review — Phase 1.1 FFI Surface
+# Complexity Review
+**Date**: 2026-02-18
+**Mode**: gsd (phase 1.2)
 
-## Reviewer: Complexity Analyst
+## Statistics
 
-### Findings
+### New/modified files (phase 1.2)
+- src/ffi.rs: 438 lines (new)
+- src/host/channel.rs: 764 lines (modified, was ~570)
 
-**FINDING COMP-1: [PASS] `FaeRuntime` has 7 Mutex-wrapped fields — necessary complexity**
-File: `src/ffi.rs:57-66`
-The number of Mutex wrappers reflects the FFI constraint: each field must be independently lockable from any C-calling thread. This is not accidental complexity but required for thread safety. No refactor opportunity without sacrificing safety.
-Vote: PASS
+### Complexity analysis
 
-**FINDING COMP-2: [PASS] `drain_events` locking pattern is verbose but safe**
-File: `src/ffi.rs:78-113`
-Three sequential lock acquisitions (callback, user_data, event_rx) followed by the drain loop. Could be combined but the separate locks allow other threads to proceed. The verbosity is justified.
-Vote: PASS
+- [OK] src/ffi.rs — 8 extern "C" functions, each follows the same pattern: null check → borrow_runtime → dispatch → return. Low cyclomatic complexity per function. The most complex is fae_core_send_command at ~30 lines.
+- [OK] src/host/channel.rs:164 — route() function dispatches ~14 command variants via match. Each arm is a single function call. Appropriate for a command router.
+- [LOW] src/host/channel.rs — The HostCommandServer::route() match covers 14 variants across 200 lines. Not a problem — it's a command dispatch table, inherently O(commands) in length.
+- [OK] EmbeddedCoreSender.swift — 106 lines total, 3 substantive methods. No deep nesting.
+- [OK] FaeNativeApp.swift — 66 lines, clean SwiftUI App body.
+- [OK] No function exceeds 80 lines in new phase 1.2 code.
 
-**FINDING COMP-3: [LOW] `fae_core_start` has 4 separate mutex lock calls for what is essentially one operation**
-File: `src/ffi.rs:222-248`
-```rust
-let mut started = match rt.started.lock() {...};
-if *started { return -1; }
-let server = { let mut guard = match rt.server.lock() {...}; ... };
-let join_handle = rt.tokio_rt.spawn(server.run());
-if let Ok(mut guard) = rt.server_handle.lock() {...}
-*started = true;
-```
-There's a TOCTOU gap: `started` is checked and set non-atomically (four separate locks). If two threads call `fae_core_start` concurrently, both could pass the `*started` check. While the header says "safe to call from any thread," concurrent double-start is technically a data race here. The server take() acts as a secondary guard, making the actual impact benign, but it's subtle.
-Vote: SHOULD FIX (consolidate into single lock or document the secondary protection)
-
-**FINDING COMP-4: [PASS] stdio bridge complexity is appropriate**
-File: `src/host/stdio.rs`
-Three-task pattern with Arc<Mutex<BufWriter>> is the standard tokio approach. No simpler correct design exists.
-Vote: PASS
-
-**FINDING COMP-5: [PASS] `parse_conversation_text` and `parse_gate_active` are clean single-responsibility parsers**
-File: `src/host/channel.rs:623-642`
-Well-factored, no unnecessary complexity.
-Vote: PASS
-
-### Summary
-- CRITICAL: 0
-- HIGH: 0
-- MEDIUM: 0
-- LOW: 1 (COMP-3)
-- PASS: 4
+## Grade: A

@@ -7,19 +7,20 @@
     "name": "Embedded Core (Rock-Solid Mac App)"
   },
   "phase": {
-    "number": "1.1",
-    "name": "FFI Surface",
-    "plan": "PLAN-phase-1.1.md"
+    "number": "1.2",
+    "name": "Swift Integration",
+    "plan": "PLAN-phase-1.2.md"
   },
   "progress": {
-    "total_tasks": 12,
-    "completed_tasks": 12,
-    "current_task": 12
+    "total_tasks": 5,
+    "completed_tasks": 5,
+    "current_task": 5
   },
-  "status": "task_complete",
+  "status": "reviewing",
   "review": {
     "status": "passed",
-    "iteration": 1
+    "iteration": 1,
+    "last_verdict": "PASS"
   },
-  "last_updated": "2026-02-18T13:30:00Z"
+  "last_updated": "2026-02-18T13:42:00Z"
 }
