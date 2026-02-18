@@ -1,201 +1,136 @@
-# Fae v1.0: Production-Ready Release + Orb Follows You
+# Fae Onboarding + Skill-Gated Permission System
 
 ## Problem Statement
 
-Fae's macOS app runs the Rust core as a subprocess (stdin/stdout JSON pipes) — fragile, adds
-IPC latency, and prevents companion apps from connecting. Users can't use Fae on iPhone or
-Apple Watch, can't hand off sessions across devices, and the app isn't distributed via App Store.
+Fae currently has no guided first-run experience — users are dropped into a raw voice
+interface with no permissions granted. The existing LLM-conversational onboarding (asks
+questions mid-chat) needs a proper visual UI flow. System permissions (mic, contacts,
+calendar) aren't wired to skills, so Fae can't actually use them even when granted.
 
 ## Success Criteria
 
-- Rust core embedded in-process via C ABI (zero IPC overhead)
-- Single `.app` bundle, code-signed + notarized
-- Optional Unix socket listener for external clients
-- iPhone companion with "orb follows" Handoff
-- Apple Watch companion with orb complication
-- App Store submission with privacy nutrition labels
-- All latency SLOs met (C ABI dispatch p95 <= 0.25ms)
-- Zero compilation errors and warnings
-- All tests pass
+- 3-screen visual onboarding (Welcome → Permissions → Ready)
+- Permission-gated skill system — skills only activate when required permissions granted
+- TTS help button — Fae speaks to explain each permission and reassure about privacy
+- Apple Contacts integration for personalization ("Hi, Benjamin")
+- Deferred permission flow — skills request permissions just-in-time when first needed
+- All existing tests pass, zero warnings, zero compilation errors
+- Production ready: tested, polished, documented
 
 ---
 
-## Milestone 1: Embedded Core (Rock-Solid Mac App)
+## Milestone 1: Permission-Gated Skill Engine
 
-Replace interim subprocess bridge with in-process Rust via C ABI. Ship a single-binary
-macOS app where Swift and Rust share the same process.
+Build the core permission registry and skill trait system in Rust. Each skill declares
+required permissions; skills only activate when those permissions are granted. Wire the
+existing `capability.request`/`capability.grant` host commands to persist permission
+state and control skill activation.
 
-### Phase 1.1: FFI Surface
+### Phase 1.1: Permission Store + Config Schema
 
-Create `src/ffi.rs` with C ABI exports:
-- `fae_core_init(config_json) -> *mut FaeRuntime`
-- `fae_core_start(rt) -> i32`
-- `fae_core_send_command(rt, json) -> *mut c_char`
-- `fae_core_poll_event(rt) -> *mut c_char`
-- `fae_core_set_event_callback(rt, cb, ctx)`
-- `fae_core_stop(rt)`
-- `fae_string_free(s)`
+Add `PermissionStore` to config — persistent map of permission name → granted/denied
+status with timestamps. Add `PermissionKind` enum (Microphone, Contacts, Calendar,
+Reminders, Mail, Files, Notifications, Location, Camera, DesktopAutomation). Serialize
+to config.toml under `[permissions]`.
 
-Add `crate-type = ["staticlib", "lib"]` to `Cargo.toml`.
-Generate C header with `cbindgen`.
+**CRITICAL:** Add `onboarded: bool` flag to `SpeechConfig` (default `false`). The Swift
+app checks this flag at launch — if `false`, show onboarding flow instead of main
+conversation view. This catches existing test users who never completed onboarding.
+The flag is set to `true` only when the user completes the final onboarding screen.
+Query via `onboarding.get_state` host command, set via `onboarding.complete`.
 
-**Key files:** `src/ffi.rs` (new), `Cargo.toml`, `cbindgen.toml` (new), `include/libfae.h` (generated)
+**Key files:** `src/permissions.rs` (new), `src/config.rs`, `src/lib.rs`
 
-### Phase 1.2: Swift Integration
+### Phase 1.2: FaeSkill Trait + Built-in Skill Definitions
 
-Create `EmbeddedCoreSender` implementing `HostCommandSender` protocol.
-Update `Package.swift` to link `libfae.a` static library.
-Wire `EmbeddedCoreSender` into `FaeNativeApp.swift` replacing `ProcessCommandSender`.
+Create `FaeSkill` trait with `name()`, `description()`, `required_permissions()`,
+`is_available()`, `prompt_fragment()`. Build skill definitions for Calendar, Contacts,
+Mail, Reminders, Files, Notifications, Location, Camera, DesktopAutomation. Each
+returns a prompt fragment that gets injected when the skill is active.
 
-**Key files:** `EmbeddedCoreSender.swift` (new), `Package.swift`, `FaeNativeApp.swift`
+**Key files:** `src/skills/trait_def.rs` (new), `src/skills/builtins/` (new), `src/skills.rs`
 
-### Phase 1.3: Real DeviceTransferHandler
+### Phase 1.3: Wire Capability Bridge
 
-Wire a production `DeviceTransferHandler` implementation that routes commands to
-`PipelineCoordinator` — replacing the current `NoopDeviceTransferHandler`.
+Wire `FaeDeviceTransferHandler.request_capability()` and `grant_capability()` to
+persist permission grants in `PermissionStore`. When a permission is granted, activate
+corresponding skills. When denied, deactivate. Emit events so Swift UI can update.
 
-Bridge all 24 host commands end-to-end: conversation inject/gate, orb controls,
-device move/go_home, scheduler CRUD, approval, config get/patch.
-
-**Key files:** `src/host/channel.rs`, `src/host/mod.rs`, `HostCommandBridge.swift`
-
-### Phase 1.4: Release Workflow + Production Polish
-
-Update `release.yml`: remove `fae-backend` from bundle, single binary only.
-Add proper `Info.plist` with `NSUserActivityTypes`, deep link URL types.
-Add login item registration (launch at boot, optional).
-Add lightweight crash reporting (local crash logs).
-Accessibility labels and VoiceOver support.
-
-**Key files:** `.github/workflows/release.yml`, `Entitlements.plist`, `Info.plist`
-
-### Phase 1.5: Integration Testing + Latency Validation
-
-Full lifecycle test: init → start → send commands → receive events → stop.
-Latency microbenchmarks: C ABI dispatch p95 <= 0.25ms.
-Verify sandbox/entitlements work with in-process Rust.
-Memory leak check with Instruments/LeakSanitizer.
-
-**Key files:** `tests/ffi_lifecycle.rs` (new), `src/host/latency.rs`
+**Key files:** `src/host/handler.rs`, `src/host/channel.rs`, `src/permissions.rs`
 
 ---
 
-## Milestone 2: Socket Listener + Handoff Infrastructure
+## Milestone 2: Onboarding UI + TTS Help
 
-Enable external frontends (CLI tools, companion apps) to connect to the running
-Fae.app via Unix domain socket. Prepare cross-device Handoff payloads.
+Build the 3-screen onboarding flow matching the mockup, with native macOS permission
+requests, TTS-powered help button, and Apple Contacts integration.
 
-### Phase 2.1: UDS Socket Listener
+### Phase 2.1: Onboarding State Machine (Rust)
 
-Add tokio task in libfae: `tokio::net::UnixListener` on `~/.fae/fae.sock`.
-Reuse `HostCommandServer` with same routing logic.
-Gate behind config flag (disabled by default).
+Add `OnboardingPhase` enum (Welcome, Permissions, Ready, Complete) tracked in config.
+Add host commands: `onboarding.get_state`, `onboarding.advance`, `onboarding.complete`.
+Emit events when phase changes so Swift UI transitions.
 
-**Key files:** `src/host/socket.rs` (new), `src/ffi.rs`, config
+**Key files:** `src/onboarding.rs` (new), `src/host/contract.rs`, `src/host/channel.rs`
 
-### Phase 2.2: Bonjour/mDNS Discovery
+### Phase 2.2: Onboarding HTML/JS Screens
 
-Advertise the running Fae instance on local network via Bonjour.
-Companion apps discover the Mac automatically (same WiFi).
-Service type: `_fae._tcp.local.`
+Build the 3-screen onboarding UI in HTML/JS/CSS matching the mockup. Screens:
+Welcome (Fae intro speech bubble), Permissions (mic + contacts toggles with help
+buttons), Ready (personalized greeting + listening indicator). Animated transitions,
+dot indicators, speaking animation.
 
-**Key files:** `src/host/discovery.rs` (new) or Swift-side `NWBrowser`
+**Key files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html` (new)
 
-### Phase 2.3: Enhanced Handoff Payload
+### Phase 2.3: Swift Bridge + Native Permission Requests
 
-Extend `FaeHandoffContract` with orb state (mode, feeling, palette),
-conversation tail (last N turns), active tasks, and backend endpoint.
+Create `OnboardingWebView.swift` to host the onboarding HTML. Wire JS message
+handlers for permission toggles. Trigger native macOS permission dialogs
+(`AVCaptureDevice.requestAccess`, `CNContactStore.requestAccess`). Report results
+back to JS and Rust via host commands.
 
-**Key files:** `FaeHandoffContract.swift`, `DeviceHandoff.swift`
+**Key files:** `OnboardingWebView.swift` (new), `OnboardingController.swift` (new)
 
-### Phase 2.4: Entitlements for Cross-Device Handoff
+### Phase 2.4: TTS Help Button + Privacy Reassurance Audio
 
-Add `NSUserActivityTypes` to macOS `Info.plist`.
-Add `com.apple.developer.associated-domains` entitlement.
-Add `com.apple.security.application-groups` for shared keychain.
-Verify same Team ID across macOS/iOS/watchOS targets.
+When user taps help button on a permission card, Fae speaks via local TTS explaining
+why the permission matters and reassuring about local-only processing. Pre-generate
+help audio or synthesize on-demand via Kokoro TTS. Audio snippets:
+- Microphone: "I need to hear you so we can talk naturally..."
+- Contacts: "Your contact card helps me know your name..."
+- Privacy: "Everything stays right here on your Mac..."
 
-**Key files:** `Entitlements.plist`, `Info.plist`, signing configs
+**Key files:** `src/tts/` integration, `OnboardingController.swift`, JS handlers
 
----
+### Phase 2.5: Apple Contacts Integration
 
-## Milestone 3: iPhone Companion ("Orb Follows You")
+Read the user's "Me" contact card via CNContactStore when contacts permission is
+granted. Extract first name, email, phone. Send to Rust via `config.patch` or
+dedicated command. Use in the "Ready" screen greeting and in the onboarding memory
+records.
 
-Build a minimal iPhone app that receives Handoff from the Mac, displays the orb,
-and relays voice input back to the Mac's embedded Rust core.
-
-### Phase 3.1: Xcode Project Setup
-
-Create proper iOS target (not just templates).
-Share `FaeHandoffKit` package between macOS and iOS targets.
-Set up signing, entitlements, and provisioning.
-
-**Key files:** `native/apple/FaeCompanion/` (full Xcode project)
-
-### Phase 3.2: Shared Orb Renderer + Conversation UI
-
-Port the orb WebView renderer to iOS (WKWebView or native Core Animation).
-Minimal conversation panel (text display + voice input).
-Match Mac's orb palette, feeling, and mode fidelity.
-
-**Key files:** iOS orb view, shared HTML/JS resources
-
-### Phase 3.3: Handoff Receiver + IPC Client
-
-Implement `NSUserActivity` continuation handler.
-Connect to Mac's socket listener via Bonjour-discovered endpoint.
-Display orb state from handoff payload while connecting.
-Fallback to handoff payload content when Mac unreachable.
-
-**Key files:** iOS app delegate, IPC client module
-
-### Phase 3.4: Voice Relay
-
-Use Apple Speech framework for on-device transcription.
-Relay transcribed text to Mac via IPC (`conversation.inject_text`).
-Receive assistant responses via event stream.
-On-device TTS playback from text (or relay audio stream later).
-
-**Key files:** iOS speech module, IPC event handler
+**Key files:** `ContactsReader.swift` (new), `OnboardingController.swift`
 
 ---
 
-## Milestone 4: Watch Companion
+## Milestone 3: Deferred Permission Flow + Integration
 
-Minimal Apple Watch experience: orb complication showing status, voice input.
+Just-in-time permission requests when skills need them, plus end-to-end testing.
 
-### Phase 4.1: WatchKit Target + WCSession Bridge
+### Phase 3.1: Just-in-Time Permission Request UI
 
-Create watchOS target in same Xcode workspace.
-Use `WCSession` to bridge Watch ↔ iPhone ↔ Mac relay.
-Share `FaeHandoffKit` types.
+When a skill needs an ungranted permission (e.g., user says "What's on my schedule?"
+but Calendar isn't granted), Fae: (1) explains what she needs and why, (2) triggers
+the native permission dialog via `capability.request`, (3) if granted, activates the
+skill and fulfills the request. UI: permission sheet/popover with Fae explanation +
+native dialog.
 
-**Key files:** `native/apple/FaeCompanion/watchOS/`
+**Key files:** `ConversationWebView.swift`, `conversation.html`, `src/host/handler.rs`
 
-### Phase 4.2: Orb Complication + Voice Input
+### Phase 3.2: End-to-End Integration Tests
 
-Orb complication showing current mode/feeling with palette colors.
-Voice input via Watch mic → iPhone relay → Mac.
-"Go home" gesture (crown press or wrist raise).
+Full integration tests: onboarding lifecycle (init → advance → complete), permission
+grant/deny → skill activation/deactivation, deferred permission flow, contacts
+integration, TTS help synthesis. Rust-side tests + manual Swift verification checklist.
 
-**Key files:** watchOS complication, voice handler
-
----
-
-## Milestone 5: App Store Submission
-
-### Phase 5.1: Privacy Labels + TestFlight
-
-Privacy nutrition labels for all three targets (macOS, iOS, watchOS).
-TestFlight beta distribution.
-Beta feedback collection.
-
-**Key files:** App Store Connect metadata
-
-### Phase 5.2: App Store Connect + Submission
-
-App descriptions, screenshots, keywords for all three platforms.
-Review compliance (mic usage, network access, data handling).
-Submit for App Review.
-
-**Key files:** App Store Connect, marketing materials
+**Key files:** `tests/onboarding_lifecycle.rs` (new), `tests/permission_skill_gate.rs` (new)

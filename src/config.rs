@@ -38,6 +38,13 @@ pub struct SpeechConfig {
     pub channels: ChannelsConfig,
     /// UI theme settings (light/dark/auto).
     pub theme: ThemeConfig,
+    /// System permission grants (microphone, contacts, calendar, etc.).
+    #[serde(default)]
+    pub permissions: crate::permissions::PermissionStore,
+    /// Whether the user has completed the onboarding flow.
+    /// Defaults to `false` — existing users who never onboarded will see the flow.
+    #[serde(default)]
+    pub onboarded: bool,
     /// Security-scoped bookmarks for persistent file access under App Sandbox.
     pub bookmarks: Vec<BookmarkEntry>,
 }
