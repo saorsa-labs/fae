@@ -68,22 +68,18 @@ jobs:
           key: ${{ runner.os }}-aarch64-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-aarch64-release-
 
-      - name: Build release binaries (Rust backend + native Swift shell)
+      - name: Build libfae.a static library
         run: |
-          cargo build --release --no-default-features
-
-          RUST_BACKEND_BINARY="target/release/fae"
-          if [ ! -x "$RUST_BACKEND_BINARY" ]; then
-            echo "::warning::No backend binary at $RUST_BACKEND_BINARY after --no-default-features build; building fallback fae binary with GUI feature enabled."
-            cargo build --release --features gui --bin fae
-          fi
-          if [ ! -x "$RUST_BACKEND_BINARY" ]; then
-            echo "::error::Could not locate backend binary at $RUST_BACKEND_BINARY"
-            ls -la target/release || true
+          rustup target add aarch64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin --lib
+          if [ ! -f "target/aarch64-apple-darwin/release/libfae.a" ]; then
+            echo "::error::libfae.a not found after build"
             exit 1
           fi
-          echo "RUST_BACKEND_BINARY=$RUST_BACKEND_BINARY" >> "$GITHUB_ENV"
+          echo "Built libfae.a: $(du -h target/aarch64-apple-darwin/release/libfae.a | cut -f1)"
 
+      - name: Build native Swift shell (links against libfae.a)
+        run: |
           pushd native/macos/FaeNativeApp
           swift build -c release
           SWIFT_BIN_REL="$(find .build -type f -perm -111 -name FaeNativeApp | head -n 1)"
@@ -93,6 +89,14 @@ jobs:
           fi
           SWIFT_BIN_ABS="$(cd "$(dirname "$SWIFT_BIN_REL")" && pwd)/$(basename "$SWIFT_BIN_REL")"
           echo "SWIFT_APP_BINARY=$SWIFT_BIN_ABS" >> "$GITHUB_ENV"
+
+          SWIFT_RES_REL="$(find .build -type d -name 'FaeNativeApp_FaeNativeApp.bundle' | head -n 1)"
+          if [ -z "$SWIFT_RES_REL" ]; then
+            echo "::error::Could not locate FaeNativeApp_FaeNativeApp.bundle resource bundle"
+            exit 1
+          fi
+          SWIFT_RES_ABS="$(cd "$SWIFT_RES_REL" && pwd)"
+          echo "SWIFT_RESOURCE_BUNDLE=$SWIFT_RES_ABS" >> "$GITHUB_ENV"
           popd
 
       - name: Import signing certificate
@@ -183,60 +187,20 @@ jobs:
           cp "$SWIFT_APP_BINARY" "$UPDATE_ASSET"
           chmod +x "$UPDATE_ASSET"
 
-          # Build native macOS app bundle from Swift shell.
+          # Build native macOS app bundle (single binary — Rust core is statically linked).
           cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
-          cp "$RUST_BACKEND_BINARY" "$APP_BUNDLE/Contents/Resources/fae-backend"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-          chmod +x "$APP_BUNDLE/Contents/MacOS/FaeNativeApp" "$APP_BUNDLE/Contents/Resources/fae-backend"
-          cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleDisplayName</key>
-            <string>Fae</string>
-            <key>CFBundleExecutable</key>
-            <string>FaeNativeApp</string>
-            <key>CFBundleIdentifier</key>
-            <string>com.saorsalabs.fae</string>
-            <key>CFBundleName</key>
-            <string>Fae</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleShortVersionString</key>
-            <string>${VERSION}</string>
-            <key>CFBundleVersion</key>
-            <string>${VERSION}</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>13.0</string>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-            <key>NSSupportsAutomaticGraphicsSwitching</key>
-            <true/>
-            <key>NSMicrophoneUsageDescription</key>
-            <string>Fae needs microphone access to hear your voice commands.</string>
-            <key>NSDesktopFolderUsageDescription</key>
-            <string>Fae needs access to your Desktop to help manage files when you ask.</string>
-            <key>NSDocumentsFolderUsageDescription</key>
-            <string>Fae needs access to your Documents to help manage files when you ask.</string>
-            <key>NSDownloadsFolderUsageDescription</key>
-            <string>Fae needs access to your Downloads to help manage files when you ask.</string>
-            <key>NSSpeechRecognitionUsageDescription</key>
-            <string>Fae uses speech recognition to understand your voice commands.</string>
-            <key>NSAppleEventsUsageDescription</key>
-            <string>Fae can automate supported apps only when you explicitly request actions.</string>
-            <key>CFBundleIconFile</key>
-            <string>AppIcon</string>
-          </dict>
-          </plist>
-          EOF
+          cp -R "$SWIFT_RESOURCE_BUNDLE" "$APP_BUNDLE/"
+          chmod +x "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
 
-          # Archive includes native app bundle and backend binary.
+          # Use checked-in Info.plist with version substitution.
+          cp native/macos/FaeNativeApp/Info.plist "$APP_BUNDLE/Contents/Info.plist"
+          sed -i '' "s/__VERSION__/${VERSION}/g" "$APP_BUNDLE/Contents/Info.plist"
+
+          # Archive includes native app bundle.
           cp -R "$APP_BUNDLE" "$ARCHIVE_STAGING/Fae.app"
-          cp "$RUST_BACKEND_BINARY" "$ARCHIVE_STAGING/fae-backend"
           cp README.md "$ARCHIVE_STAGING/"
           cp LICENSE "$ARCHIVE_STAGING/" 2>/dev/null || true
-          chmod +x "$ARCHIVE_STAGING/fae-backend"
           tar -czf "$ARCHIVE" -C "$ARCHIVE_STAGING" .
 
           echo "DIST_DIR=$DIST_DIR" >> "$GITHUB_ENV"
@@ -249,12 +213,6 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
-          codesign --force --options runtime \
-            --sign "$MACOS_SIGNING_IDENTITY" \
-            --entitlements Entitlements.plist \
-            --timestamp \
-            "$APP_BUNDLE/Contents/Resources/fae-backend"
-
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
