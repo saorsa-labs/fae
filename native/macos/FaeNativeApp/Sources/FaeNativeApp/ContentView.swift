@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var windowState: WindowStateController
     @StateObject private var onboarding = OnboardingController()
+    private let onboardingTTS = OnboardingTTSHelper()
     @State private var viewLoaded = false
 
     var body: some View {
@@ -48,8 +49,7 @@ struct ContentView: View {
                 }
             },
             onPermissionHelp: { permission in
-                // Phase 2.4 wires TTS help audio here.
-                NSLog("ContentView: permission help requested for %@", permission)
+                onboardingTTS.speak(permission: permission)
             },
             onComplete: {
                 withAnimation { onboarding.complete() }
