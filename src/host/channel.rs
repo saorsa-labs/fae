@@ -414,7 +414,8 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
                 "request_id": envelope.request_id,
                 "capability": request.capability,
                 "scope": request.scope,
-                "reason": request.reason
+                "reason": request.reason,
+                "jit": request.jit
             }),
         );
 
@@ -823,6 +824,8 @@ struct CapabilityRequestPayload {
     capability: String,
     reason: String,
     scope: Option<String>,
+    /// Whether this is a just-in-time request triggered mid-conversation.
+    jit: bool,
 }
 
 #[derive(Debug)]
@@ -835,10 +838,15 @@ fn parse_capability_request(payload: &serde_json::Value) -> Result<CapabilityReq
     let capability = parse_non_empty_field(payload, "capability", "capability.request")?;
     let reason = parse_non_empty_field(payload, "reason", "capability.request")?;
     let scope = parse_optional_scope(payload, "capability.request")?;
+    let jit = payload
+        .get("jit")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     Ok(CapabilityRequestPayload {
         capability,
         reason,
         scope,
+        jit,
     })
 }
 

@@ -14,3 +14,49 @@
 - [x] Task 11: tests/ffi_abi.rs — 6 ABI-level tests, all passing
 - [x] Task 12: justfile staticlib recipes + nm symbol verification (8/8 symbols)
 - [ ] Phase review pending
+
+## Phase 2.1: Onboarding State Machine (Rust) - COMPLETE
+
+- [x] Task 1: src/onboarding.rs - OnboardingPhase enum with advance/as_str/parse/Display (6 unit tests)
+- [x] Task 2: src/config.rs - onboarding_phase field in SpeechConfig
+- [x] Task 3: src/lib.rs - pub mod onboarding registered
+- [x] Task 4: src/host/contract.rs - OnboardingAdvance command ("onboarding.advance")
+- [x] Task 5: src/host/channel.rs - advance_onboarding_phase() trait + route handler + event
+- [x] Task 6: tests/host_contract_v0.rs + tests/host_command_channel_v0.rs - 4 new tests
+
+Commit: 9fccad1
+Results: 2261/2261 tests pass, zero clippy warnings, zero doc warnings
+
+## Phase 2.2: Onboarding HTML/JS Screens - COMPLETE
+
+- [x] Task 1: native/.../Resources/Onboarding/onboarding.html — 3-screen onboarding UI with orb animation, permission cards, dot indicators, Swift bridge
+
+Commit: a28e118
+
+## Phase 2.3: Swift Bridge + Native Permission Requests - COMPLETE
+
+- [x] Task 1: OnboardingController.swift — @MainActor ObservableObject, requestMicrophone/requestContacts, notifications
+- [x] Task 2: OnboardingWebView.swift — NSViewRepresentable, WKWebView, JS message handlers, setPermissionState/setUserName push APIs
+- [x] Task 3: ContentView.swift — onboarding gate (isComplete), onboardingView/conversationView split
+- [x] Task 4: HostCommandBridge.swift — faeOnboardingAdvance/Complete notification observers
+
+Commit: d256956
+
+## Phase 2.4: TTS Help Button + Privacy Reassurance Audio - COMPLETE
+
+- [x] Task 1: OnboardingTTSHelper.swift — AVSpeechSynthesizer wrapper with microphone/contacts/privacy help scripts
+- [x] Task 2: ContentView.swift — onPermissionHelp wired to onboardingTTS.speak(permission:)
+
+Commit: e4cf4ed
+
+## Phase 2.5: Apple Contacts Integration - COMPLETE
+
+- [x] Task 1: OnboardingController.swift — permissionStates @Published property, readMeCard from CNContactStore Me card
+- [x] Task 2: OnboardingWebView.swift — userName/permissionStates input props, lastUserName/lastPermissionStates tracking, updateNSView push logic
+- [x] Task 3: ContentView.swift — pass userName/permissionStates to OnboardingWebView
+
+Commit: 8710191
+Swift build: clean (zero errors, zero source warnings)
+
+### Milestone 2 Complete — 2026-02-18
+### Phase 3.1 Starting...

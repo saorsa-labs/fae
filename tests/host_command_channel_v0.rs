@@ -1019,3 +1019,78 @@ async fn onboarding_advance_returns_accepted_with_phase() {
 
     handle.abort();
 }
+
+// ---- capability.request jit field tests ----
+
+#[tokio::test]
+async fn capability_request_jit_true_included_in_event() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-cap-jit-true",
+            CommandName::CapabilityRequest,
+            serde_json::json!({
+                "capability": "microphone",
+                "reason": "Need mic to hear you during conversation",
+                "jit": true
+            }),
+        ))
+        .await
+        .expect("capability.request with jit:true should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "capability.requested");
+    assert_eq!(event.payload["capability"], "microphone");
+    assert_eq!(
+        event.payload["jit"],
+        true,
+        "jit flag must be propagated into capability.requested event"
+    );
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn capability_request_jit_defaults_to_false() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-cap-jit-default",
+            CommandName::CapabilityRequest,
+            serde_json::json!({
+                "capability": "contacts",
+                "reason": "Read your name from your contact card"
+            }),
+        ))
+        .await
+        .expect("capability.request without jit field should succeed");
+
+    assert!(response.ok);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "capability.requested");
+    assert_eq!(
+        event.payload["jit"],
+        false,
+        "jit must default to false when not provided"
+    );
+
+    handle.abort();
+}

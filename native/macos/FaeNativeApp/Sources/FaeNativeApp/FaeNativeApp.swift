@@ -16,6 +16,9 @@ struct FaeNativeApp: App {
     @StateObject private var hostBridge = HostCommandBridge()
     @StateObject private var dockIcon = DockIconAnimator()
     @StateObject private var windowState = WindowStateController()
+    /// Retained for the app lifetime — observes JIT capability.requested events and
+    /// triggers native macOS permission dialogs mid-conversation.
+    @StateObject private var jitPermissions = JitPermissionController()
 
     /// Retained reference to the embedded Rust core sender.
     private let commandSender: EmbeddedCoreSender?

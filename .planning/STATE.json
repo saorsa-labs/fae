@@ -3,18 +3,18 @@
   "project": "fae-onboarding-skill-system",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "Onboarding UI + TTS Help"
+    "number": 3,
+    "name": "Deferred Permission Flow + Integration"
   },
   "phase": {
-    "number": "2.4",
-    "name": "TTS Help Button + Privacy Reassurance Audio",
-    "plan": "PLAN-phase-2.4.md"
+    "number": "3.1",
+    "name": "Just-in-Time Permission Request UI",
+    "plan": "PLAN-phase-3.1.md"
   },
   "progress": {
-    "total_tasks": 0,
+    "total_tasks": 6,
     "completed_tasks": 0,
-    "current_task": null
+    "current_task": 1
   },
   "status": "executing",
   "review": {
@@ -22,5 +22,5 @@
     "iteration": 0,
     "last_verdict": null
   },
-  "last_updated": "2026-02-18T20:00:00Z"
+  "last_updated": "2026-02-18T21:10:00Z"
 }

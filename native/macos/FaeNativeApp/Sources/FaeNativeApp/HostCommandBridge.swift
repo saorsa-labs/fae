@@ -64,6 +64,34 @@ final class HostCommandBridge: ObservableObject {
                 }
             }
         )
+        observations.append(
+            center.addObserver(
+                forName: .faeCapabilityGranted,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let capability = notification.userInfo?["capability"] as? String else {
+                    return
+                }
+                Task { @MainActor in
+                    self?.dispatch("capability.grant", payload: ["capability": capability])
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
+                forName: .faeCapabilityDenied,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let capability = notification.userInfo?["capability"] as? String else {
+                    return
+                }
+                Task { @MainActor in
+                    self?.dispatch("capability.deny", payload: ["capability": capability])
+                }
+            }
+        )
     }
 
     deinit {
