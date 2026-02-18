@@ -87,6 +87,23 @@ doc:
 clean:
     cargo clean
 
+# Build libfae static library for macOS arm64 (for Swift embedding)
+build-staticlib:
+    cargo build --release --no-default-features --target aarch64-apple-darwin
+
+# Build libfae static library for macOS x86_64 (Intel / CI)
+build-staticlib-x86:
+    cargo build --release --no-default-features --target x86_64-apple-darwin
+
+# Create a universal (fat) libfae.a for macOS (arm64 + x86_64)
+build-staticlib-universal: build-staticlib build-staticlib-x86
+    mkdir -p target/universal-apple-darwin/release
+    lipo -create \
+        target/aarch64-apple-darwin/release/libfae.a \
+        target/x86_64-apple-darwin/release/libfae.a \
+        -output target/universal-apple-darwin/release/libfae.a
+    @echo "Universal libfae.a: target/universal-apple-darwin/release/libfae.a"
+
 # Full validation (CI equivalent)
 check: fmt-check lint build-strict test doc panic-scan
 

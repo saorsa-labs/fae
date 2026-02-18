@@ -11,6 +11,10 @@ repository = "https://github.com/saorsa-labs/fae"
 autobins = false
 default-run = "fae"
 
+[lib]
+name = "fae"
+crate-type = ["staticlib", "lib"]
+
 [[bin]]
 name = "fae"
 path = "src/bin/gui.rs"
@@ -29,6 +33,10 @@ path = "src/bin/latency_harness.rs"
 name = "fae-skill-package"
 path = "src/bin/skill_package.rs"
 
+[[bin]]
+name = "fae-host"
+path = "src/bin/host_bridge.rs"
+
 [features]
 default = ["gui"]
 metal = ["mistralrs/metal"]
@@ -41,6 +49,8 @@ cuda = ["ort/cuda"]
 # Voice cloning TTS backend (Fish Speech).
 fish-speech = []
 # Embedded web search (fae-search crate) — always compiled.
+# Local chatterbox TTS server integration tests.
+chatterbox = []
 
 
 [dependencies]

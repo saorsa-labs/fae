@@ -1,27 +1,25 @@
 {
   "version": 1,
-  "project": "fae-v050-always-on",
-  "active": false,
+  "project": "fae-v1-production-release",
+  "active": true,
   "milestone": {
     "number": 1,
-    "name": "Always-On Companion + Speed + Feedback"
+    "name": "Embedded Core (Rock-Solid Mac App)"
   },
   "phase": {
-    "number": "1.5",
-    "name": "Integration Testing & Polish",
-    "plan": null,
-    "status": "complete"
+    "number": "1.1",
+    "name": "FFI Surface",
+    "plan": "PLAN-phase-1.1.md"
   },
   "progress": {
-    "total_tasks": 5,
-    "completed_tasks": 5,
-    "current_task": 5
+    "total_tasks": 12,
+    "completed_tasks": 12,
+    "current_task": 12
   },
+  "status": "task_complete",
   "review": {
     "status": "passed",
-    "iteration": 1,
-    "last_verdict": "PASS"
+    "iteration": 1
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-02-17T13:55:00Z"
+  "last_updated": "2026-02-18T13:30:00Z"
 }

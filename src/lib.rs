@@ -26,6 +26,8 @@ compile_error!(
 pub mod agent;
 pub mod approval;
 pub mod audio;
+
+// C ABI surface for embedding in native shells (Swift, Obj-C, etc.).
 pub mod canvas;
 pub mod channels;
 pub mod config;
@@ -36,6 +38,7 @@ pub mod error;
 pub mod external_llm;
 pub mod fae_dirs;
 pub mod fae_llm;
+pub mod ffi;
 pub mod host;
 pub mod huggingface;
 pub mod intelligence;
