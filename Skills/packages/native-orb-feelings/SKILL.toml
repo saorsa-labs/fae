@@ -1,0 +1,4 @@
+id = "native_orb_feelings"
+name = "Native Orb Feelings"
+version = "0.1.0"
+entry_file = "SKILL.md"

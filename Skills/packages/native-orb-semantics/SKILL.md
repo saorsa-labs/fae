@@ -8,7 +8,7 @@ Apply it when user intent is about:
 - explicit state words ("show listening", "set speaking mode", "go idle")
 - visual behavior ("reduce pulse", "make orb feel alive but subtle")
 
-This skill controls orb state semantics only. It does not control device transfer.
+This skill controls orb state semantics only. It does not control device transfer or emotional expression. For emotional modulation, see `native-orb-feelings`.
 
 ## Runtime contract
 

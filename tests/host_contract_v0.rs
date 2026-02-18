@@ -18,12 +18,22 @@ fn command_name_parse_known_and_unknown() {
     let capability_grant = CommandName::parse("capability.grant");
     assert_eq!(capability_grant, Some(CommandName::CapabilityGrant));
 
+    let orb_feeling_set = CommandName::parse("orb.feeling.set");
+    assert_eq!(orb_feeling_set, Some(CommandName::OrbFeelingSet));
+    let orb_urgency_set = CommandName::parse("orb.urgency.set");
+    assert_eq!(orb_urgency_set, Some(CommandName::OrbUrgencySet));
+    let orb_flash = CommandName::parse("orb.flash");
+    assert_eq!(orb_flash, Some(CommandName::OrbFlash));
+
     let unknown = CommandName::parse("runtime.not_real");
     assert!(unknown.is_none());
 
     assert_eq!(CommandName::DeviceMove.as_str(), "device.move");
     assert_eq!(CommandName::OrbPaletteSet.as_str(), "orb.palette.set");
     assert_eq!(CommandName::OrbPaletteClear.as_str(), "orb.palette.clear");
+    assert_eq!(CommandName::OrbFeelingSet.as_str(), "orb.feeling.set");
+    assert_eq!(CommandName::OrbUrgencySet.as_str(), "orb.urgency.set");
+    assert_eq!(CommandName::OrbFlash.as_str(), "orb.flash");
     assert_eq!(
         CommandName::CapabilityRequest.as_str(),
         "capability.request"
@@ -88,4 +98,51 @@ fn response_envelope_json_shape_matches_v0_contract() {
     assert_eq!(err_json["ok"], false);
     assert_eq!(err_json["payload"], serde_json::Value::Null);
     assert_eq!(err_json["error"], "bad payload");
+}
+
+#[test]
+fn command_name_orb_feeling_set_roundtrip() {
+    let name = CommandName::OrbFeelingSet;
+    let wire = name.as_str();
+    assert_eq!(wire, "orb.feeling.set");
+    let parsed = CommandName::parse(wire).expect("parse orb.feeling.set");
+    assert_eq!(parsed, name);
+
+    // Serde roundtrip
+    let json = serde_json::to_value(name).expect("serialize OrbFeelingSet");
+    assert_eq!(json, "orb.feeling.set");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OrbFeelingSet");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_orb_urgency_set_roundtrip() {
+    let name = CommandName::OrbUrgencySet;
+    let wire = name.as_str();
+    assert_eq!(wire, "orb.urgency.set");
+    let parsed = CommandName::parse(wire).expect("parse orb.urgency.set");
+    assert_eq!(parsed, name);
+
+    // Serde roundtrip
+    let json = serde_json::to_value(name).expect("serialize OrbUrgencySet");
+    assert_eq!(json, "orb.urgency.set");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OrbUrgencySet");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_orb_flash_roundtrip() {
+    let name = CommandName::OrbFlash;
+    let wire = name.as_str();
+    assert_eq!(wire, "orb.flash");
+    let parsed = CommandName::parse(wire).expect("parse orb.flash");
+    assert_eq!(parsed, name);
+
+    // Serde roundtrip
+    let json = serde_json::to_value(name).expect("serialize OrbFlash");
+    assert_eq!(json, "orb.flash");
+    let deserialized: CommandName = serde_json::from_value(json).expect("deserialize OrbFlash");
+    assert_eq!(deserialized, name);
 }

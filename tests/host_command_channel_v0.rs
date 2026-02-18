@@ -13,6 +13,9 @@ struct RecordingHandler {
     go_home_calls: Arc<AtomicUsize>,
     palettes: Arc<Mutex<Vec<String>>>,
     palette_clear_calls: Arc<AtomicUsize>,
+    feelings: Arc<Mutex<Vec<String>>>,
+    urgencies: Arc<Mutex<Vec<f32>>>,
+    flashes: Arc<Mutex<Vec<String>>>,
     capability_requests: Arc<Mutex<Vec<CapabilityRequestRecord>>>,
     capability_grants: Arc<Mutex<Vec<CapabilityGrantRecord>>>,
 }
@@ -38,6 +41,30 @@ impl DeviceTransferHandler for RecordingHandler {
 
     fn request_orb_palette_clear(&self) -> fae::Result<()> {
         self.palette_clear_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn request_orb_feeling_set(&self, feeling: &str) -> fae::Result<()> {
+        self.feelings
+            .lock()
+            .expect("lock feeling records")
+            .push(feeling.to_owned());
+        Ok(())
+    }
+
+    fn request_orb_urgency_set(&self, urgency: f32) -> fae::Result<()> {
+        self.urgencies
+            .lock()
+            .expect("lock urgency records")
+            .push(urgency);
+        Ok(())
+    }
+
+    fn request_orb_flash(&self, flash_type: &str) -> fae::Result<()> {
+        self.flashes
+            .lock()
+            .expect("lock flash records")
+            .push(flash_type.to_owned());
         Ok(())
     }
 
@@ -424,6 +451,274 @@ async fn capability_grant_rejects_empty_capability() {
 
     let msg = response.to_string();
     assert!(msg.contains("non-empty payload.capability"), "{msg}");
+
+    handle.abort();
+}
+
+// ---- OrbFeelingSet tests ----
+
+#[tokio::test]
+async fn orb_feeling_set_accepted() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-feeling-set",
+            CommandName::OrbFeelingSet,
+            serde_json::json!({"feeling": "calm"}),
+        ))
+        .await
+        .expect("orb feeling set should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["feeling"], "calm");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "orb.feeling_set_requested");
+    assert_eq!(event.payload["feeling"], "calm");
+
+    let feelings = tracker.feelings.lock().expect("lock feeling records");
+    assert_eq!(feelings.as_slice(), &["calm"]);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn orb_feeling_set_unsupported_feeling() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-feeling-bad",
+            CommandName::OrbFeelingSet,
+            serde_json::json!({"feeling": "angry"}),
+        ))
+        .await
+        .expect_err("unsupported feeling should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("unsupported orb feeling"), "{msg}");
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn orb_feeling_set_missing_field() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-feeling-empty",
+            CommandName::OrbFeelingSet,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect_err("missing feeling should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("payload.feeling"), "{msg}");
+
+    handle.abort();
+}
+
+// ---- OrbUrgencySet tests ----
+
+#[tokio::test]
+async fn orb_urgency_set_accepted() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-urgency-set",
+            CommandName::OrbUrgencySet,
+            serde_json::json!({"urgency": 0.5}),
+        ))
+        .await
+        .expect("orb urgency set should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["urgency"], 0.5);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "orb.urgency_set_requested");
+    assert_eq!(event.payload["urgency"], 0.5);
+
+    let urgencies = tracker.urgencies.lock().expect("lock urgency records");
+    assert_eq!(urgencies.as_slice(), &[0.5_f32]);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn orb_urgency_set_out_of_range() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-urgency-bad",
+            CommandName::OrbUrgencySet,
+            serde_json::json!({"urgency": 1.5}),
+        ))
+        .await
+        .expect_err("out-of-range urgency should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("range 0.0-1.0"), "{msg}");
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn orb_urgency_set_missing_field() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-urgency-empty",
+            CommandName::OrbUrgencySet,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect_err("missing urgency should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("payload.urgency"), "{msg}");
+
+    handle.abort();
+}
+
+// ---- OrbFlash tests ----
+
+#[tokio::test]
+async fn orb_flash_accepted() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-flash-error",
+            CommandName::OrbFlash,
+            serde_json::json!({"flash_type": "error"}),
+        ))
+        .await
+        .expect("orb flash should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["flash_type"], "error");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "orb.flash_requested");
+    assert_eq!(event.payload["flash_type"], "error");
+
+    let flashes = tracker.flashes.lock().expect("lock flash records");
+    assert_eq!(flashes.as_slice(), &["error"]);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn orb_flash_success_accepted() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-flash-success",
+            CommandName::OrbFlash,
+            serde_json::json!({"flash_type": "success"}),
+        ))
+        .await
+        .expect("orb flash success should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["flash_type"], "success");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "orb.flash_requested");
+    assert_eq!(event.payload["flash_type"], "success");
+
+    let flashes = tracker.flashes.lock().expect("lock flash records");
+    assert_eq!(flashes.as_slice(), &["success"]);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn orb_flash_invalid_type() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-flash-bad",
+            CommandName::OrbFlash,
+            serde_json::json!({"flash_type": "warning"}),
+        ))
+        .await
+        .expect_err("unsupported flash type should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("unsupported orb flash type"), "{msg}");
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn orb_flash_missing_field() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-orb-flash-empty",
+            CommandName::OrbFlash,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect_err("missing flash_type should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("payload.flash_type"), "{msg}");
 
     handle.abort();
 }

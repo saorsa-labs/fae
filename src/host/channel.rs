@@ -42,6 +42,15 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn request_orb_palette_clear(&self) -> Result<()> {
         Ok(())
     }
+    fn request_orb_feeling_set(&self, _feeling: &str) -> Result<()> {
+        Ok(())
+    }
+    fn request_orb_urgency_set(&self, _urgency: f32) -> Result<()> {
+        Ok(())
+    }
+    fn request_orb_flash(&self, _flash_type: &str) -> Result<()> {
+        Ok(())
+    }
     fn request_capability(
         &self,
         _capability: &str,
@@ -163,6 +172,9 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::DeviceGoHome => self.handle_device_go_home(envelope),
             CommandName::OrbPaletteSet => self.handle_orb_palette_set(envelope),
             CommandName::OrbPaletteClear => self.handle_orb_palette_clear(envelope),
+            CommandName::OrbFeelingSet => self.handle_orb_feeling_set(envelope),
+            CommandName::OrbUrgencySet => self.handle_orb_urgency_set(envelope),
+            CommandName::OrbFlash => self.handle_orb_flash(envelope),
             CommandName::CapabilityRequest => self.handle_capability_request(envelope),
             CommandName::CapabilityGrant => self.handle_capability_grant(envelope),
             _ => Ok(ResponseEnvelope::error(
@@ -247,6 +259,69 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true}),
+        ))
+    }
+
+    fn handle_orb_feeling_set(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let feeling = parse_orb_feeling(&envelope.payload)?;
+        self.handler.request_orb_feeling_set(&feeling)?;
+
+        self.emit_event(
+            "orb.feeling_set_requested",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "feeling": feeling
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "feeling": feeling
+            }),
+        ))
+    }
+
+    fn handle_orb_urgency_set(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let urgency = parse_orb_urgency(&envelope.payload)?;
+        self.handler.request_orb_urgency_set(urgency)?;
+
+        self.emit_event(
+            "orb.urgency_set_requested",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "urgency": urgency
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "urgency": urgency
+            }),
+        ))
+    }
+
+    fn handle_orb_flash(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let flash_type = parse_orb_flash(&envelope.payload)?;
+        self.handler.request_orb_flash(&flash_type)?;
+
+        self.emit_event(
+            "orb.flash_requested",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "flash_type": flash_type
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "flash_type": flash_type
+            }),
         ))
     }
 
@@ -360,6 +435,73 @@ fn is_supported_orb_palette(palette: &str) -> bool {
             | "dawn-light"
             | "peat-earth"
     )
+}
+
+fn parse_orb_feeling(payload: &serde_json::Value) -> Result<String> {
+    let Some(raw_feeling) = payload.get("feeling").and_then(serde_json::Value::as_str) else {
+        return Err(SpeechError::Pipeline(
+            "orb.feeling.set requires payload.feeling".to_owned(),
+        ));
+    };
+
+    let normalized = raw_feeling.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(SpeechError::Pipeline(
+            "orb.feeling.set requires a non-empty feeling value".to_owned(),
+        ));
+    }
+
+    if !is_supported_orb_feeling(&normalized) {
+        return Err(SpeechError::Pipeline(format!(
+            "unsupported orb feeling `{raw_feeling}`"
+        )));
+    }
+
+    Ok(normalized)
+}
+
+fn is_supported_orb_feeling(feeling: &str) -> bool {
+    matches!(
+        feeling,
+        "neutral" | "calm" | "curiosity" | "warmth" | "concern" | "delight" | "focus" | "playful"
+    )
+}
+
+fn parse_orb_urgency(payload: &serde_json::Value) -> Result<f32> {
+    let Some(raw_urgency) = payload.get("urgency").and_then(serde_json::Value::as_f64) else {
+        return Err(SpeechError::Pipeline(
+            "orb.urgency.set requires payload.urgency (number)".to_owned(),
+        ));
+    };
+
+    let urgency = raw_urgency as f32;
+    if !(0.0..=1.0).contains(&urgency) {
+        return Err(SpeechError::Pipeline(format!(
+            "orb.urgency.set requires urgency in range 0.0-1.0, got {urgency}"
+        )));
+    }
+
+    Ok(urgency)
+}
+
+fn parse_orb_flash(payload: &serde_json::Value) -> Result<String> {
+    let Some(raw_flash) = payload
+        .get("flash_type")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Err(SpeechError::Pipeline(
+            "orb.flash requires payload.flash_type".to_owned(),
+        ));
+    };
+
+    let normalized = raw_flash.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "error" | "success") {
+        return Err(SpeechError::Pipeline(format!(
+            "unsupported orb flash type `{raw_flash}` (expected error/success)"
+        )));
+    }
+
+    Ok(normalized)
 }
 
 #[derive(Debug)]

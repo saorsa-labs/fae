@@ -86,6 +86,10 @@ final class DeviceHandoffController: ObservableObject {
 
     private var activeActivity: NSUserActivity?
 
+    deinit {
+        activeActivity?.invalidate()
+    }
+
     func execute(commandText: String) -> DeviceCommand {
         let command = DeviceCommandParser.parse(commandText)
         switch command {

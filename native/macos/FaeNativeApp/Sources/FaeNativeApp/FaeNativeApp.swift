@@ -1,9 +1,17 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+final class OrbStateController: ObservableObject {
+    @Published var mode: OrbMode = .idle
+    @Published var palette: OrbPalette = .modeDefault
+    @Published var feeling: OrbFeeling = .neutral
+}
+
 @main
 struct FaeNativeApp: App {
     @StateObject private var handoff = DeviceHandoffController()
+    @StateObject private var orbState = OrbStateController()
 
     init() {
         if let iconURL = Bundle.module.url(
@@ -19,10 +27,17 @@ struct FaeNativeApp: App {
         WindowGroup("Fae") {
             ContentView()
                 .environmentObject(handoff)
+                .environmentObject(orbState)
                 .preferredColorScheme(.dark)
-                .frame(minWidth: 920, minHeight: 760)
+                .frame(minWidth: 400, minHeight: 500)
         }
-        .defaultSize(width: 980, height: 780)
+        .defaultSize(width: 600, height: 700)
         .windowResizability(.contentMinSize)
+
+        Settings {
+            SettingsView()
+                .environmentObject(orbState)
+                .environmentObject(handoff)
+        }
     }
 }

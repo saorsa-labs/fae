@@ -5,12 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Fae Orb</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;500&display=swap');
-
   :root {
     --bg: #0a0b0d;
-    --label: rgba(200, 211, 213, 0.2);
-    --hint: rgba(200, 211, 213, 0.12);
+    --label: rgba(200, 211, 213, 0.4);
+    --hint: rgba(200, 211, 213, 0.22);
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -19,8 +17,8 @@
     background: radial-gradient(circle at 20% 12%, #101216 0%, #090a0d 46%, #060709 100%);
     min-height: 100vh;
     overflow: hidden;
-    font-family: 'Cormorant Garamond', serif;
-    cursor: crosshair;
+    font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+    cursor: default;
   }
 
   .scene {
@@ -34,16 +32,12 @@
 
   .orb-wrapper {
     position: relative;
-    width: 340px;
-    height: 340px;
     display: flex;
     align-items: center;
     justify-content: center;
   }
 
   .orb {
-    width: 320px;
-    height: 320px;
     border-radius: 50%;
     overflow: hidden;
     position: relative;
@@ -51,15 +45,12 @@
   }
 
   #orbCanvas {
-    width: 320px;
-    height: 320px;
     border-radius: 50%;
+    display: block;
   }
 
   #pulseCanvas {
     position: absolute;
-    width: 560px;
-    height: 560px;
     pointer-events: none;
   }
 
@@ -83,9 +74,9 @@
     border: 1px solid rgba(200, 211, 213, 0.05);
   }
 
-  .aura-1 { width: 380px; height: 380px; animation: auraExpand 10s ease-in-out infinite; }
-  .aura-2 { width: 450px; height: 450px; animation: auraExpand 10s ease-in-out infinite 3.2s; }
-  .aura-3 { width: 520px; height: 520px; animation: auraExpand 10s ease-in-out infinite 6.4s; }
+  .aura-1 { animation: auraExpand 10s ease-in-out infinite; }
+  .aura-2 { animation: auraExpand 10s ease-in-out infinite 3.2s; }
+  .aura-3 { animation: auraExpand 10s ease-in-out infinite 6.4s; }
 
   .label {
     position: absolute;
@@ -93,7 +84,7 @@
     color: var(--label);
     letter-spacing: 0.42em;
     text-transform: uppercase;
-    font-size: 13px;
+    font-size: 0.82rem;
     pointer-events: none;
   }
 
@@ -103,7 +94,7 @@
     color: var(--hint);
     letter-spacing: 0.25em;
     text-transform: uppercase;
-    font-size: 11px;
+    font-size: 0.68rem;
     pointer-events: none;
   }
 
@@ -120,14 +111,14 @@
 </head>
 <body>
   <div class="scene" id="scene">
-    <div class="aura aura-1"></div>
-    <div class="aura aura-2"></div>
-    <div class="aura aura-3"></div>
+    <div class="aura aura-1" id="aura1"></div>
+    <div class="aura aura-2" id="aura2"></div>
+    <div class="aura aura-3" id="aura3"></div>
 
     <div class="orb-wrapper" id="orbWrapper">
-      <canvas id="pulseCanvas" width="1120" height="1120"></canvas>
-      <div class="orb">
-        <canvas id="orbCanvas" width="640" height="640"></canvas>
+      <canvas id="pulseCanvas"></canvas>
+      <div class="orb" id="orbContainer">
+        <canvas id="orbCanvas"></canvas>
       </div>
       <div class="orb-highlight"></div>
     </div>
@@ -137,7 +128,149 @@
   </div>
 
 <script>
-const PALETTE = {
+/* =========================================================
+   Fae Orb Animation Engine v2
+   Single-file Canvas 2D orb with noise-driven blobs,
+   particle system, feelings, transitions, and flash overlays.
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   1. HSL Color Utilities
+   --------------------------------------------------------- */
+function hexToRgb(hex) {
+  var c = hex.replace("#", "");
+  var n = parseInt(c, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function hexToHsl(hex) {
+  var c = hexToRgb(hex);
+  var r = c.r / 255, g = c.g / 255, b = c.b / 255;
+  var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  var h = 0, s = 0, l = (mx + mn) / 2;
+  if (mx !== mn) {
+    var d = mx - mn;
+    s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (mx === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  var S = s / 100, L = l / 100;
+  var c = (1 - Math.abs(2 * L - 1)) * S;
+  var x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  var m = L - c / 2;
+  var r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+  return {
+    r: Math.round((r + m) * 255),
+    g: Math.round((g + m) * 255),
+    b: Math.round((b + m) * 255)
+  };
+}
+
+function lerpHsl(from, to, t) {
+  var dh = to.h - from.h;
+  if (dh > 180) dh -= 360;
+  if (dh < -180) dh += 360;
+  return {
+    h: from.h + dh * t,
+    s: from.s + (to.s - from.s) * t,
+    l: from.l + (to.l - from.l) * t
+  };
+}
+
+function hslToHex(h, s, l) {
+  var rgb = hslToRgb(h, s, l);
+  return "#" + ((1 << 24) | (rgb.r << 16) | (rgb.g << 8) | rgb.b).toString(16).slice(1);
+}
+
+function lerpColorHex(fromHex, toHex, t) {
+  var a = hexToHsl(fromHex);
+  var b = hexToHsl(toHex);
+  var c = lerpHsl(a, b, t);
+  return hslToHex(c.h, c.s, c.l);
+}
+
+function lerpN(a, b, t) { return a + (b - a) * t; }
+
+/* ---------------------------------------------------------
+   2. Inline 2D Simplex Noise
+   --------------------------------------------------------- */
+var SimplexNoise = (function() {
+  var F2 = 0.5 * (Math.sqrt(3) - 1);
+  var G2 = (3 - Math.sqrt(3)) / 6;
+  var grad3 = [[1,1],[- 1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+
+  function SimplexNoise(seed) {
+    this.perm = new Uint8Array(512);
+    this.permMod8 = new Uint8Array(512);
+    var p = new Uint8Array(256);
+    var s = seed || Math.random() * 2147483647;
+    for (var i = 0; i < 256; i++) p[i] = i;
+    for (var i = 255; i > 0; i--) {
+      s = (s * 16807 + 0) % 2147483647;
+      var j = s % (i + 1);
+      var tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+    }
+    for (var i = 0; i < 512; i++) {
+      this.perm[i] = p[i & 255];
+      this.permMod8[i] = this.perm[i] % 8;
+    }
+  }
+
+  SimplexNoise.prototype.noise2D = function(xin, yin) {
+    var s = (xin + yin) * F2;
+    var i = Math.floor(xin + s);
+    var j = Math.floor(yin + s);
+    var t = (i + j) * G2;
+    var X0 = i - t, Y0 = j - t;
+    var x0 = xin - X0, y0 = yin - Y0;
+    var i1, j1;
+    if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+    var x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+    var x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+    var ii = i & 255, jj = j & 255;
+    var n0 = 0, n1 = 0, n2 = 0;
+    var t0 = 0.5 - x0 * x0 - y0 * y0;
+    if (t0 >= 0) {
+      t0 *= t0;
+      var gi0 = this.permMod8[ii + this.perm[jj]];
+      n0 = t0 * t0 * (grad3[gi0][0] * x0 + grad3[gi0][1] * y0);
+    }
+    var t1 = 0.5 - x1 * x1 - y1 * y1;
+    if (t1 >= 0) {
+      t1 *= t1;
+      var gi1 = this.permMod8[ii + i1 + this.perm[jj + j1]];
+      n1 = t1 * t1 * (grad3[gi1][0] * x1 + grad3[gi1][1] * y1);
+    }
+    var t2 = 0.5 - x2 * x2 - y2 * y2;
+    if (t2 >= 0) {
+      t2 *= t2;
+      var gi2 = this.permMod8[ii + 1 + this.perm[jj + 1]];
+      n2 = t2 * t2 * (grad3[gi2][0] * x2 + grad3[gi2][1] * y2);
+    }
+    return 70 * (n0 + n1 + n2);
+  };
+
+  return SimplexNoise;
+})();
+
+var noise = new SimplexNoise(42);
+
+/* ---------------------------------------------------------
+   3. Palettes, Modes, Overrides (preserved exactly)
+   --------------------------------------------------------- */
+var PALETTE = {
   heatherMist: "#B4A8C4",
   glenGreen: "#5F7F6F",
   lochGreyGreen: "#7A9B8E",
@@ -149,7 +282,7 @@ const PALETTE = {
   peatEarth: "#3D3630"
 };
 
-const MODES = {
+var MODES = {
   idle: {
     base: [PALETTE.heatherMist, PALETTE.lochGreyGreen, PALETTE.silverMist],
     pulseSpeed: 0.6,
@@ -176,7 +309,7 @@ const MODES = {
   }
 };
 
-const PALETTE_OVERRIDES = {
+var PALETTE_OVERRIDES = {
   "heather-mist": [PALETTE.heatherMist, PALETTE.lochGreyGreen, PALETTE.silverMist],
   "glen-green": [PALETTE.glenGreen, PALETTE.lochGreyGreen, PALETTE.mossStone],
   "loch-grey-green": [PALETTE.lochGreyGreen, PALETTE.silverMist, PALETTE.glenGreen],
@@ -188,29 +321,209 @@ const PALETTE_OVERRIDES = {
   "peat-earth": [PALETTE.peatEarth, PALETTE.mossStone, PALETTE.dawnLight]
 };
 
-let mode = "idle";
-let paletteOverride = "mode-default";
-let lastRingAt = 0;
-let rings = [];
-let pointer = { x: 0.5, y: 0.5, influence: 0 };
+/* ---------------------------------------------------------
+   4. Feelings System
+   --------------------------------------------------------- */
+var FEELINGS = {
+  neutral:   { hueShift: 0,   speedScale: 1.0,  wobbleScale: 1.0, ringRateScale: 1.0,  breathAmplitude: 0.012, particleEnergy: 1.0, blobRadiusScale: 1.0 },
+  calm:      { hueShift: -5,  speedScale: 0.7,  wobbleScale: 0.5, ringRateScale: 1.4,  breathAmplitude: 0.02,  particleEnergy: 0.6, blobRadiusScale: 1.05 },
+  curiosity: { hueShift: 15,  speedScale: 1.15, wobbleScale: 1.2, ringRateScale: 0.85, breathAmplitude: 0.014, particleEnergy: 1.3, blobRadiusScale: 1.0 },
+  warmth:    { hueShift: 25,  speedScale: 0.9,  wobbleScale: 0.8, ringRateScale: 1.1,  breathAmplitude: 0.016, particleEnergy: 0.9, blobRadiusScale: 1.15 },
+  concern:   { hueShift: -10, speedScale: 0.85, wobbleScale: 0.7, ringRateScale: 1.2,  breathAmplitude: 0.008, particleEnergy: 0.7, blobRadiusScale: 0.95 },
+  delight:   { hueShift: 10,  speedScale: 1.3,  wobbleScale: 1.3, ringRateScale: 0.6,  breathAmplitude: 0.018, particleEnergy: 1.5, blobRadiusScale: 1.1 },
+  focus:     { hueShift: 5,   speedScale: 1.1,  wobbleScale: 0.6, ringRateScale: 1.3,  breathAmplitude: 0.01,  particleEnergy: 0.5, blobRadiusScale: 0.85 },
+  playful:   { hueShift: 20,  speedScale: 1.2,  wobbleScale: 1.5, ringRateScale: 0.7,  breathAmplitude: 0.015, particleEnergy: 1.6, blobRadiusScale: 1.1 }
+};
 
-const orbCanvas = document.getElementById("orbCanvas");
-const orbCtx = orbCanvas.getContext("2d");
-const pulseCanvas = document.getElementById("pulseCanvas");
-const pulseCtx = pulseCanvas.getContext("2d");
-const modeLabel = document.getElementById("modeLabel");
+/* ---------------------------------------------------------
+   5. State
+   --------------------------------------------------------- */
+var mode = "idle";
+var paletteOverride = "mode-default";
+var currentFeeling = "neutral";
+var urgencyLevel = 0;
+var lastRingAt = 0;
+var rings = [];
+var pointer = { x: 0.5, y: 0.5, influence: 0 };
+var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-const W = orbCanvas.width;
-const H = orbCanvas.height;
-const CX = W / 2;
-const CY = H / 2;
-const R = W / 2;
+/* Flash state */
+var flashState = { active: false, type: "error", startTime: 0, duration: 1000 };
 
-const PW = pulseCanvas.width;
-const PH = pulseCanvas.height;
-const PCX = PW / 2;
-const PCY = PH / 2;
+/* Anticipation state */
+var anticipation = { active: false, type: "none", startTime: 0, duration: 300, scale: 1.0 };
 
+/* Transition engine state */
+var TRANSITION_DURATION = 500;
+var transition = {
+  active: false,
+  startTime: 0,
+  from: null,
+  to: null,
+  progress: 1
+};
+
+/* ---------------------------------------------------------
+   6. Canvas Elements and Sizing
+   --------------------------------------------------------- */
+var orbCanvas = document.getElementById("orbCanvas");
+var orbCtx = orbCanvas.getContext("2d");
+var pulseCanvas = document.getElementById("pulseCanvas");
+var pulseCtx = pulseCanvas.getContext("2d");
+var modeLabel = document.getElementById("modeLabel");
+var orbWrapper = document.getElementById("orbWrapper");
+var orbContainer = document.getElementById("orbContainer");
+var sceneEl = document.getElementById("scene");
+var aura1 = document.getElementById("aura1");
+var aura2 = document.getElementById("aura2");
+var aura3 = document.getElementById("aura3");
+
+/* Noise grain overlay canvas */
+var grainCanvas = document.createElement("canvas");
+var grainCtx = grainCanvas.getContext("2d");
+var grainPattern = null;
+var grainTileSize = 128;
+
+/* Sizing state */
+var orbDiameter = 320;
+var orbRadius = 160;
+var canvasSize = 640;
+var pulseSize = 1120;
+var dpr = window.devicePixelRatio || 1;
+
+function recalcSize() {
+  var vw = window.innerWidth;
+  var vh = window.innerHeight;
+  var minDim = Math.min(vw, vh);
+  orbDiameter = Math.round(minDim * 0.72);
+  orbRadius = orbDiameter / 2;
+  dpr = window.devicePixelRatio || 1;
+  canvasSize = Math.round(orbDiameter * dpr);
+  pulseSize = Math.round(orbDiameter * 1.75 * dpr);
+
+  var pulseCss = Math.round(orbDiameter * 1.75);
+
+  orbCanvas.width = canvasSize;
+  orbCanvas.height = canvasSize;
+  orbCanvas.style.width = orbDiameter + "px";
+  orbCanvas.style.height = orbDiameter + "px";
+
+  orbContainer.style.width = orbDiameter + "px";
+  orbContainer.style.height = orbDiameter + "px";
+
+  pulseCanvas.width = pulseSize;
+  pulseCanvas.height = pulseSize;
+  pulseCanvas.style.width = pulseCss + "px";
+  pulseCanvas.style.height = pulseCss + "px";
+
+  orbWrapper.style.width = pulseCss + "px";
+  orbWrapper.style.height = pulseCss + "px";
+
+  /* Aura sizes relative to orb */
+  var a1 = Math.round(orbDiameter * 1.19);
+  var a2 = Math.round(orbDiameter * 1.41);
+  var a3 = Math.round(orbDiameter * 1.63);
+  aura1.style.width = a1 + "px"; aura1.style.height = a1 + "px";
+  aura2.style.width = a2 + "px"; aura2.style.height = a2 + "px";
+  aura3.style.width = a3 + "px"; aura3.style.height = a3 + "px";
+
+  /* Grain uses a fixed low-res tile to avoid heavy per-frame pixel writes. */
+  if (grainCanvas.width !== grainTileSize || grainCanvas.height !== grainTileSize) {
+    grainCanvas.width = grainTileSize;
+    grainCanvas.height = grainTileSize;
+  }
+  regenerateGrain();
+}
+
+recalcSize();
+
+if (typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(function() { recalcSize(); }).observe(document.body);
+} else {
+  window.addEventListener("resize", recalcSize);
+}
+
+/* ---------------------------------------------------------
+   7. Snapshot / Transition Engine
+   --------------------------------------------------------- */
+function snapshotState() {
+  var pal = activePalette();
+  var m = MODES[mode];
+  var f = FEELINGS[currentFeeling];
+  return {
+    colors: pal.slice(),
+    pulseSpeed: m.pulseSpeed * f.speedScale,
+    ringRate: m.ringRate * f.ringRateScale,
+    ringAlpha: m.ringAlpha,
+    hueShift: f.hueShift,
+    speedScale: f.speedScale,
+    wobbleScale: f.wobbleScale,
+    breathAmplitude: f.breathAmplitude,
+    particleEnergy: f.particleEnergy,
+    blobRadiusScale: f.blobRadiusScale
+  };
+}
+
+function lerpSnapshot(a, b, t) {
+  var colors = [];
+  var len = Math.max(a.colors.length, b.colors.length);
+  for (var i = 0; i < len; i++) {
+    var ca = a.colors[i % a.colors.length];
+    var cb = b.colors[i % b.colors.length];
+    colors.push(lerpColorHex(ca, cb, t));
+  }
+  return {
+    colors: colors,
+    pulseSpeed: lerpN(a.pulseSpeed, b.pulseSpeed, t),
+    ringRate: lerpN(a.ringRate, b.ringRate, t),
+    ringAlpha: lerpN(a.ringAlpha, b.ringAlpha, t),
+    hueShift: lerpN(a.hueShift, b.hueShift, t),
+    speedScale: lerpN(a.speedScale, b.speedScale, t),
+    wobbleScale: lerpN(a.wobbleScale, b.wobbleScale, t),
+    breathAmplitude: lerpN(a.breathAmplitude, b.breathAmplitude, t),
+    particleEnergy: lerpN(a.particleEnergy, b.particleEnergy, t),
+    blobRadiusScale: lerpN(a.blobRadiusScale, b.blobRadiusScale, t)
+  };
+}
+
+function springEase(t) {
+  /* Critically-damped spring approximation */
+  return 1 - Math.exp(-6 * t) * Math.cos(t * 2.5);
+}
+
+/* Two-phase transition: capture "from" before state changes, then set "to" after */
+function captureTransitionFrom(nowMs) {
+  if (transition.active) {
+    transition.from = lerpSnapshot(transition.from, transition.to, springEase(transition.progress));
+  } else {
+    transition.from = snapshotState();
+  }
+  transition.startTime = nowMs || performance.now();
+}
+
+function completeTransition(nowMs) {
+  transition.to = snapshotState();
+  transition.startTime = nowMs || performance.now();
+  transition.active = true;
+  transition.progress = 0;
+}
+
+function currentSnapshot(nowMs) {
+  if (transition.active) {
+    var elapsed = nowMs - transition.startTime;
+    transition.progress = Math.min(elapsed / TRANSITION_DURATION, 1);
+    var t = springEase(transition.progress);
+    if (transition.progress >= 1) {
+      transition.active = false;
+    }
+    return lerpSnapshot(transition.from, transition.to, t);
+  }
+  return snapshotState();
+}
+
+/* ---------------------------------------------------------
+   8. Helpers
+   --------------------------------------------------------- */
 function normalizePaletteKey(value) {
   return String(value || "")
     .trim()
@@ -231,178 +544,476 @@ function paletteLabel(key) {
 }
 
 function refreshModeLabel() {
-  modeLabel.textContent = paletteOverride === "mode-default"
-    ? mode
-    : `${mode} · ${paletteLabel(paletteOverride)}`;
+  var text = mode;
+  if (paletteOverride !== "mode-default") {
+    text += " \u00B7 " + paletteLabel(paletteOverride);
+  }
+  if (currentFeeling !== "neutral") {
+    text += " \u00B7 " + currentFeeling;
+  }
+  modeLabel.textContent = text;
 }
 
+/* ---------------------------------------------------------
+   9. Anticipation Triggers
+   --------------------------------------------------------- */
+function triggerAnticipation(type, nowMs) {
+  anticipation.active = true;
+  anticipation.type = type;
+  anticipation.startTime = nowMs;
+  if (type === "contract") {
+    anticipation.duration = 180;
+  } else if (type === "pause") {
+    anticipation.duration = 220;
+  } else if (type === "burst") {
+    anticipation.duration = 280;
+  }
+}
+
+function getAnticipationScale(nowMs) {
+  if (!anticipation.active) return 1.0;
+  var elapsed = nowMs - anticipation.startTime;
+  var t = Math.min(elapsed / anticipation.duration, 1);
+  if (t >= 1) {
+    anticipation.active = false;
+    return 1.0;
+  }
+  var eased = Math.sin(t * Math.PI);
+  if (anticipation.type === "contract") {
+    return 1.0 - 0.04 * eased;
+  } else if (anticipation.type === "pause") {
+    return 1.0 - 0.02 * eased;
+  } else if (anticipation.type === "burst") {
+    return 1.0 + 0.06 * eased;
+  }
+  return 1.0;
+}
+
+/* ---------------------------------------------------------
+   10. Window API
+   --------------------------------------------------------- */
 window.setOrbMode = function setOrbMode(next) {
   if (!MODES[next]) return;
+  var prev = mode;
+  var nowMs = performance.now();
+  /* Capture current state BEFORE changing mode */
+  captureTransitionFrom(nowMs);
   mode = next;
   refreshModeLabel();
+  /* Anticipation animations based on transition type */
+  if (next === "thinking" && prev !== "thinking") {
+    triggerAnticipation("contract", nowMs);
+  } else if (next === "listening" && prev !== "listening") {
+    triggerAnticipation("pause", nowMs);
+  } else if (next === "speaking" && prev !== "speaking") {
+    triggerAnticipation("burst", nowMs);
+  }
+  completeTransition(nowMs);
 };
 
 window.setOrbPalette = function setOrbPalette(next) {
-  const key = normalizePaletteKey(next);
+  var key = normalizePaletteKey(next);
   if (!key || key === "mode-default" || key === "default") {
+    var nowMs = performance.now();
+    captureTransitionFrom(nowMs);
     paletteOverride = "mode-default";
     refreshModeLabel();
+    completeTransition(nowMs);
     return;
   }
-  if (!PALETTE_OVERRIDES[key]) {
-    return;
-  }
+  if (!PALETTE_OVERRIDES[key]) return;
+  var nowMs = performance.now();
+  captureTransitionFrom(nowMs);
   paletteOverride = key;
   refreshModeLabel();
+  completeTransition(nowMs);
 };
 
 window.clearOrbPalette = function clearOrbPalette() {
+  var nowMs = performance.now();
+  captureTransitionFrom(nowMs);
   paletteOverride = "mode-default";
   refreshModeLabel();
+  completeTransition(nowMs);
 };
 
-function hexToRgb(hex) {
-  const clean = hex.replace("#", "");
-  const bigint = parseInt(clean, 16);
-  return {
-    r: (bigint >> 16) & 255,
-    g: (bigint >> 8) & 255,
-    b: bigint & 255
-  };
-}
+window.setOrbFeeling = function setOrbFeeling(feeling) {
+  if (!FEELINGS[feeling]) return;
+  var nowMs = performance.now();
+  captureTransitionFrom(nowMs);
+  currentFeeling = feeling;
+  refreshModeLabel();
+  completeTransition(nowMs);
+};
 
-function addRing(nowSec) {
-  const state = MODES[mode];
-  const basePalette = activePalette();
-  const baseSpeed = 90 + (state.pulseSpeed * 42);
-  const color = basePalette[Math.floor(Math.random() * basePalette.length)];
-  rings.push({
-    born: nowSec,
-    speed: baseSpeed + (Math.random() * 26),
-    thickness: 16 + (Math.random() * 20),
-    max: 300,
-    color,
-    alpha: state.ringAlpha + (Math.random() * 0.03)
+window.setOrbUrgency = function setOrbUrgency(level) {
+  urgencyLevel = Math.max(0, Math.min(1, level));
+};
+
+window.setOrbFlash = function setOrbFlash(type) {
+  if (type !== "error" && type !== "success") return;
+  flashState.active = true;
+  flashState.type = type;
+  flashState.startTime = performance.now();
+  flashState.duration = type === "error" ? 1000 : 1000;
+};
+
+/* ---------------------------------------------------------
+   11. Blob Definitions (15 layers)
+   --------------------------------------------------------- */
+var BLOB_COUNT = reducedMotion ? 6 : 15;
+var blobs = [];
+for (var i = 0; i < 15; i++) {
+  blobs.push({
+    orbitRadius: 0.1 + (i / 15) * 0.35,
+    phaseOffset: (i * 2.399) % (Math.PI * 2),
+    speedVariance: 0.7 + Math.random() * 0.6,
+    noiseSeed: i * 137.5,
+    colorIdx: i % 3
   });
 }
 
-function drawRings(nowSec) {
+/* ---------------------------------------------------------
+   12. Particle System
+   --------------------------------------------------------- */
+var PARTICLE_COUNT = reducedMotion ? 0 : 45;
+var particles = [];
+
+function spawnParticle(nowSec) {
+  var angle = Math.random() * Math.PI * 2;
+  var dist = 0.3 + Math.random() * 0.3;
+  var lifespan = 3 + Math.random() * 9;
+  return {
+    angle: angle,
+    dist: dist,
+    speed: 0.05 + Math.random() * 0.15,
+    size: 1 + Math.random() * 2.5,
+    born: nowSec,
+    lifespan: lifespan,
+    noiseSeed: Math.random() * 1000,
+    colorIdx: Math.floor(Math.random() * 3)
+  };
+}
+
+/* Initialize particles */
+for (var i = 0; i < PARTICLE_COUNT; i++) {
+  var p = spawnParticle(0);
+  p.born = -(Math.random() * p.lifespan);
+  particles.push(p);
+}
+
+/* ---------------------------------------------------------
+   13. Noise Grain Generator
+   --------------------------------------------------------- */
+function regenerateGrain() {
+  var w = grainCanvas.width;
+  var h = grainCanvas.height;
+  if (w === 0 || h === 0) return;
+  var imgData = grainCtx.createImageData(w, h);
+  var data = imgData.data;
+  for (var i = 0; i < data.length; i += 4) {
+    var v = Math.random() * 255;
+    data[i] = v;
+    data[i + 1] = v;
+    data[i + 2] = v;
+    data[i + 3] = 255;
+  }
+  grainCtx.putImageData(imgData, 0, 0);
+  grainPattern = orbCtx.createPattern(grainCanvas, "repeat");
+}
+
+/* ---------------------------------------------------------
+   14. Ring System
+   --------------------------------------------------------- */
+function addRing(nowSec, snap) {
+  var baseSpeed = 90 + (snap.pulseSpeed * 42);
+  var colorHex = snap.colors[Math.floor(Math.random() * snap.colors.length)];
+  rings.push({
+    born: nowSec,
+    speed: (baseSpeed + Math.random() * 26) * dpr,
+    thickness: (16 + Math.random() * 20) * dpr,
+    max: (orbDiameter * 0.95) * dpr,
+    color: colorHex,
+    alpha: snap.ringAlpha + Math.random() * 0.03
+  });
+}
+
+function drawRings(nowSec, snap) {
+  var PW = pulseCanvas.width;
+  var PH = pulseCanvas.height;
+  var PCX = PW / 2;
+  var PCY = PH / 2;
   pulseCtx.clearRect(0, 0, PW, PH);
-  rings = rings.filter((ring) => {
-    const age = nowSec - ring.born;
-    const radius = age * ring.speed;
+  rings = rings.filter(function(ring) {
+    var age = nowSec - ring.born;
+    var radius = age * ring.speed;
     if (radius > ring.max) return false;
-
-    const t = radius / ring.max;
-    const fade = t < 0.12 ? t / 0.12 : 1 - ((t - 0.12) / 0.88);
-    const alpha = Math.max(0, fade * ring.alpha);
+    var t = radius / ring.max;
+    var fade = t < 0.12 ? t / 0.12 : 1 - ((t - 0.12) / 0.88);
+    var alpha = Math.max(0, fade * ring.alpha);
     if (alpha < 0.003) return true;
-
-    const c = hexToRgb(ring.color);
-    const inner = Math.max(0, radius - ring.thickness / 2);
-    const outer = radius + ring.thickness / 2;
-    const grad = pulseCtx.createRadialGradient(PCX, PCY, inner, PCX, PCY, outer);
-    grad.addColorStop(0, `rgba(${c.r},${c.g},${c.b},0)`);
-    grad.addColorStop(0.42, `rgba(${c.r},${c.g},${c.b},${alpha})`);
-    grad.addColorStop(0.7, `rgba(${c.r},${c.g},${c.b},${alpha * 0.6})`);
-    grad.addColorStop(1, `rgba(${c.r},${c.g},${c.b},0)`);
-
+    var c = hexToRgb(ring.color);
+    var inner = Math.max(0, radius - ring.thickness / 2);
+    var outer = radius + ring.thickness / 2;
+    var grad = pulseCtx.createRadialGradient(PCX, PCY, inner, PCX, PCY, outer);
+    grad.addColorStop(0, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
+    grad.addColorStop(0.42, "rgba(" + c.r + "," + c.g + "," + c.b + "," + alpha + ")");
+    grad.addColorStop(0.7, "rgba(" + c.r + "," + c.g + "," + c.b + "," + (alpha * 0.6) + ")");
+    grad.addColorStop(1, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
     pulseCtx.fillStyle = grad;
     pulseCtx.beginPath();
     pulseCtx.arc(PCX, PCY, outer, 0, Math.PI * 2);
     pulseCtx.fill();
-
     return true;
   });
 }
 
-function drawOrb(nowSec) {
-  const state = MODES[mode];
-  const colors = activePalette().map(hexToRgb);
+/* ---------------------------------------------------------
+   15. Orb Drawing
+   --------------------------------------------------------- */
+function drawOrb(nowSec, nowMs, snap) {
+  var W = orbCanvas.width;
+  var H = orbCanvas.height;
+  var CX = W / 2;
+  var CY = H / 2;
+  var R = W / 2;
+
+  var colors = snap.colors.map(hexToRgb);
   orbCtx.clearRect(0, 0, W, H);
 
-  const influence = pointer.influence;
-  const driftX = (pointer.x - 0.5) * 52 * influence;
-  const driftY = (pointer.y - 0.5) * 52 * influence;
-  const wobble = Math.sin(nowSec * (0.35 + state.pulseSpeed * 0.08)) * 8;
-  const throb = 1 + (Math.sin(nowSec * 0.42) * 0.012);
+  /* Urgency modifiers */
+  var urg = urgencyLevel;
+  var urgSpeed = 1 + urg * 0.5;
+  var urgWobble = 1 + urg * 0.4;
+
+  /* Pointer influence */
+  var influence = pointer.influence;
+  var driftX = (pointer.x - 0.5) * 52 * dpr * influence;
+  var driftY = (pointer.y - 0.5) * 52 * dpr * influence;
+
+  /* Wobble driven by snap values and urgency */
+  var wobbleAmt = snap.wobbleScale * urgWobble;
+  var wobble = Math.sin(nowSec * (0.35 + snap.pulseSpeed * 0.08)) * 8 * dpr * wobbleAmt;
+
+  /* Breathing */
+  var breathAmp = snap.breathAmplitude;
+  var throb = 1 + Math.sin(nowSec * 0.42) * breathAmp;
+
+  /* Anticipation scale */
+  var antScale = getAnticipationScale(nowMs);
+  throb *= antScale;
+
+  /* Hue shift: apply to colors */
+  var hueShift = snap.hueShift;
+  function shiftColor(c) {
+    if (hueShift === 0) return c;
+    var hsl = hexToHsl("#" + ((1 << 24) | (c.r << 16) | (c.g << 8) | c.b).toString(16).slice(1));
+    var shifted = hslToRgb(hsl.h + hueShift, hsl.s, hsl.l);
+    return shifted;
+  }
+  var sColors = colors.map(shiftColor);
+
+  orbCtx.save();
+  /* Clip to circle */
+  orbCtx.beginPath();
+  orbCtx.arc(CX, CY, R, 0, Math.PI * 2);
+  orbCtx.clip();
 
   orbCtx.save();
   orbCtx.translate(CX, CY);
   orbCtx.scale(throb, throb);
   orbCtx.translate(-CX, -CY);
 
-  const baseGrad = orbCtx.createRadialGradient(
-    CX - 32 + driftX * 0.6,
-    CY - 38 + driftY * 0.5,
-    20,
-    CX,
-    CY,
-    R
+  /* Base radial gradient */
+  var baseGrad = orbCtx.createRadialGradient(
+    CX - 32 * dpr + driftX * 0.6,
+    CY - 38 * dpr + driftY * 0.5,
+    20 * dpr,
+    CX, CY, R
   );
-
-  baseGrad.addColorStop(0, `rgba(${colors[2].r},${colors[2].g},${colors[2].b},0.84)`);
-  baseGrad.addColorStop(0.46, `rgba(${colors[0].r},${colors[0].g},${colors[0].b},0.56)`);
-  baseGrad.addColorStop(1, `rgba(${colors[1].r},${colors[1].g},${colors[1].b},0.45)`);
-
+  baseGrad.addColorStop(0, "rgba(" + sColors[2 % sColors.length].r + "," + sColors[2 % sColors.length].g + "," + sColors[2 % sColors.length].b + ",0.84)");
+  baseGrad.addColorStop(0.46, "rgba(" + sColors[0].r + "," + sColors[0].g + "," + sColors[0].b + ",0.56)");
+  baseGrad.addColorStop(1, "rgba(" + sColors[1 % sColors.length].r + "," + sColors[1 % sColors.length].g + "," + sColors[1 % sColors.length].b + ",0.45)");
   orbCtx.fillStyle = baseGrad;
-  orbCtx.beginPath();
-  orbCtx.arc(CX, CY, R, 0, Math.PI * 2);
-  orbCtx.fill();
+  orbCtx.fillRect(0, 0, W, H);
 
-  for (let i = 0; i < 6; i += 1) {
-    const phase = nowSec * (0.2 + (i * 0.11) + state.pulseSpeed * 0.1);
-    const x = CX + Math.cos(phase + i) * (48 + (i * 14)) + driftX * (0.4 + i * 0.03);
-    const y = CY + Math.sin((phase * 0.9) + i * 0.7) * (42 + (i * 11)) + driftY * (0.4 + i * 0.03);
-    const radius = 110 + (Math.sin(phase * 1.7) * 20) + wobble;
-    const color = colors[i % colors.length];
+  /* Blob layers */
+  var blobCount = reducedMotion ? 6 : BLOB_COUNT;
+  for (var i = 0; i < blobCount; i++) {
+    var blob = blobs[i];
+    var speed = snap.pulseSpeed * blob.speedVariance * urgSpeed;
+    if (reducedMotion) speed *= 0.5;
+    var phase = nowSec * (0.2 + (i * 0.07) + speed * 0.08) + blob.phaseOffset;
 
-    const blob = orbCtx.createRadialGradient(x, y, 0, x, y, radius);
-    blob.addColorStop(0, `rgba(${color.r},${color.g},${color.b},0.12)`);
-    blob.addColorStop(1, `rgba(${color.r},${color.g},${color.b},0)`);
-    orbCtx.fillStyle = blob;
+    /* Noise-driven displacement */
+    var nx = noise.noise2D(blob.noiseSeed + nowSec * 0.15 * speed, i * 0.3);
+    var ny = noise.noise2D(blob.noiseSeed + 100 + nowSec * 0.13 * speed, i * 0.3 + 50);
+
+    var orbitR = blob.orbitRadius * R;
+    var x = CX + Math.cos(phase) * orbitR + nx * orbitR * 0.6 + driftX * (0.3 + i * 0.02);
+    var y = CY + Math.sin(phase * 0.9) * orbitR + ny * orbitR * 0.6 + driftY * (0.3 + i * 0.02);
+
+    var blobR = (R * 0.28 + Math.sin(phase * 1.7) * R * 0.06 + wobble) * snap.blobRadiusScale;
+    var color = sColors[blob.colorIdx % sColors.length];
+
+    var blobGrad = orbCtx.createRadialGradient(x, y, 0, x, y, blobR);
+    blobGrad.addColorStop(0, "rgba(" + color.r + "," + color.g + "," + color.b + ",0.13)");
+    blobGrad.addColorStop(1, "rgba(" + color.r + "," + color.g + "," + color.b + ",0)");
+    orbCtx.fillStyle = blobGrad;
     orbCtx.fillRect(0, 0, W, H);
   }
 
+  /* Particles */
+  if (!reducedMotion && PARTICLE_COUNT > 0) {
+    var pEnergy = snap.particleEnergy * (1 + urgencyLevel * 0.5);
+    for (var i = 0; i < particles.length; i++) {
+      var pt = particles[i];
+      var age = nowSec - pt.born;
+      if (age > pt.lifespan) {
+        particles[i] = spawnParticle(nowSec);
+        continue;
+      }
+      var lifeT = age / pt.lifespan;
+      /* Fade in/out */
+      var alpha = lifeT < 0.15 ? lifeT / 0.15 : lifeT > 0.8 ? (1 - lifeT) / 0.2 : 1.0;
+      alpha *= 0.45 * pEnergy;
+      if (alpha < 0.005) continue;
+
+      var pNx = noise.noise2D(pt.noiseSeed + nowSec * 0.1, pt.noiseSeed * 0.5);
+      var pNy = noise.noise2D(pt.noiseSeed + 200 + nowSec * 0.1, pt.noiseSeed * 0.5 + 100);
+      var pAngle = pt.angle + nowSec * pt.speed * pEnergy;
+      var pDist = pt.dist * R + pNx * R * 0.08;
+      var px = CX + Math.cos(pAngle) * pDist + pNy * R * 0.04;
+      var py = CY + Math.sin(pAngle) * pDist + pNx * R * 0.04;
+      var pColor = sColors[pt.colorIdx % sColors.length];
+
+      orbCtx.beginPath();
+      orbCtx.arc(px, py, pt.size * dpr, 0, Math.PI * 2);
+      orbCtx.fillStyle = "rgba(" + pColor.r + "," + pColor.g + "," + pColor.b + "," + alpha + ")";
+      orbCtx.fill();
+    }
+  }
+
+  /* Sheen overlay */
   orbCtx.globalCompositeOperation = "soft-light";
-  const sheen = orbCtx.createLinearGradient(0, 0, W, H);
+  var sheen = orbCtx.createLinearGradient(0, 0, W, H);
   sheen.addColorStop(0, "rgba(255,255,255,0.08)");
   sheen.addColorStop(0.4, "rgba(255,255,255,0.02)");
   sheen.addColorStop(1, "rgba(20,20,30,0.2)");
   orbCtx.fillStyle = sheen;
   orbCtx.fillRect(0, 0, W, H);
   orbCtx.globalCompositeOperation = "source-over";
-  orbCtx.restore();
+
+  orbCtx.restore(); /* Undo throb transform */
+
+  /* Noise grain overlay (cheap tiled pattern with subtle drift) */
+  if (grainPattern) {
+    var grainDriftX = (nowSec * 12 * dpr) % grainTileSize;
+    var grainDriftY = (nowSec * 7 * dpr) % grainTileSize;
+    orbCtx.save();
+    orbCtx.globalAlpha = 0.03;
+    orbCtx.translate(grainDriftX, grainDriftY);
+    orbCtx.fillStyle = grainPattern;
+    orbCtx.fillRect(
+      -grainTileSize,
+      -grainTileSize,
+      W + (grainTileSize * 2),
+      H + (grainTileSize * 2)
+    );
+    orbCtx.restore();
+  }
+
+  /* Flash overlay */
+  if (flashState.active) {
+    var flashElapsed = nowMs - flashState.startTime;
+    if (flashElapsed > flashState.duration) {
+      flashState.active = false;
+    } else {
+      var flashT = flashElapsed / flashState.duration;
+      /* Bell curve: peak at 0.3 */
+      var flashAlpha;
+      if (flashT < 0.3) {
+        flashAlpha = flashT / 0.3;
+      } else {
+        flashAlpha = 1 - (flashT - 0.3) / 0.7;
+      }
+      flashAlpha = Math.max(0, flashAlpha * 0.35);
+      var flashColor;
+      if (flashState.type === "error") {
+        flashColor = "rgba(180,60,50," + flashAlpha + ")";
+      } else {
+        flashColor = "rgba(210,180,60," + flashAlpha + ")";
+      }
+      orbCtx.fillStyle = flashColor;
+      orbCtx.fillRect(0, 0, W, H);
+    }
+  }
+
+  orbCtx.restore(); /* Undo clip */
 }
 
+/* ---------------------------------------------------------
+   16. Animation Loop
+   --------------------------------------------------------- */
 function loop(t) {
-  const nowSec = t / 1000;
-  const state = MODES[mode];
-  if (nowSec - lastRingAt >= state.ringRate) {
-    addRing(nowSec);
+  var nowMs = t;
+  var nowSec = t / 1000;
+
+  var snap = currentSnapshot(nowMs);
+
+  /* Ring emission */
+  var effectiveRingRate = snap.ringRate / (1 + urgencyLevel * 0.3);
+  if (nowSec - lastRingAt >= effectiveRingRate) {
+    addRing(nowSec, snap);
     if (mode === "speaking" && Math.random() < 0.45) {
-      addRing(nowSec + 0.08);
+      addRing(nowSec + 0.08, snap);
     }
     lastRingAt = nowSec;
   }
 
-  drawOrb(nowSec);
-  drawRings(nowSec);
+  drawOrb(nowSec, nowMs, snap);
+  drawRings(nowSec, snap);
   requestAnimationFrame(loop);
 }
 
-document.getElementById("scene").addEventListener("mousemove", (event) => {
-  const rect = event.currentTarget.getBoundingClientRect();
+/* ---------------------------------------------------------
+   17. Pointer Events
+   --------------------------------------------------------- */
+sceneEl.addEventListener("mousemove", function(event) {
+  var rect = sceneEl.getBoundingClientRect();
   pointer.x = (event.clientX - rect.left) / rect.width;
   pointer.y = (event.clientY - rect.top) / rect.height;
   pointer.influence = 1;
 });
 
-document.getElementById("scene").addEventListener("mouseleave", () => {
+sceneEl.addEventListener("mouseleave", function() {
   pointer.influence = 0;
 });
 
+/* ---------------------------------------------------------
+   18. Reduced Motion Listener
+   --------------------------------------------------------- */
+window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", function(e) {
+  reducedMotion = e.matches;
+  BLOB_COUNT = reducedMotion ? 6 : 15;
+  PARTICLE_COUNT = reducedMotion ? 0 : 45;
+  if (reducedMotion) {
+    particles = [];
+  } else {
+    particles = [];
+    for (var i = 0; i < PARTICLE_COUNT; i++) {
+      var p = spawnParticle(0);
+      p.born = -(Math.random() * p.lifespan);
+      particles.push(p);
+    }
+  }
+});
+
+/* ---------------------------------------------------------
+   19. Init
+   --------------------------------------------------------- */
 refreshModeLabel();
+regenerateGrain();
 requestAnimationFrame(loop);
 </script>
 </body>

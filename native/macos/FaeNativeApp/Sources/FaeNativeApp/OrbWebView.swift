@@ -49,6 +49,86 @@ enum OrbMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum OrbFeeling: String, CaseIterable, Identifiable {
+    case neutral
+    case calm
+    case curiosity
+    case warmth
+    case concern
+    case delight
+    case focus
+    case playful
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .neutral: return "Neutral"
+        case .calm: return "Calm"
+        case .curiosity: return "Curiosity"
+        case .warmth: return "Warmth"
+        case .concern: return "Concern"
+        case .delight: return "Delight"
+        case .focus: return "Focus"
+        case .playful: return "Playful"
+        }
+    }
+
+    static func commandOverride(in text: String) -> OrbFeeling? {
+        let normalized = text
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+
+        if normalized.contains("set feeling neutral")
+            || normalized.contains("feel neutral")
+        {
+            return .neutral
+        }
+        if normalized.contains("set feeling calm")
+            || normalized.contains("feel calm")
+        {
+            return .calm
+        }
+        if normalized.contains("set feeling curiosity")
+            || normalized.contains("feel curious")
+            || normalized.contains("feel curiosity")
+        {
+            return .curiosity
+        }
+        if normalized.contains("set feeling warmth")
+            || normalized.contains("feel warm")
+            || normalized.contains("feel warmth")
+        {
+            return .warmth
+        }
+        if normalized.contains("set feeling concern")
+            || normalized.contains("feel concern")
+            || normalized.contains("feel concerned")
+        {
+            return .concern
+        }
+        if normalized.contains("set feeling delight")
+            || normalized.contains("feel delight")
+            || normalized.contains("feel delighted")
+        {
+            return .delight
+        }
+        if normalized.contains("set feeling focus")
+            || normalized.contains("feel focused")
+            || normalized.contains("feel focus")
+        {
+            return .focus
+        }
+        if normalized.contains("set feeling playful")
+            || normalized.contains("feel playful")
+        {
+            return .playful
+        }
+        return nil
+    }
+}
+
 enum OrbPalette: String, CaseIterable, Identifiable {
     case modeDefault = "mode-default"
     case heatherMist = "heather-mist"
@@ -121,15 +201,27 @@ enum OrbPalette: String, CaseIterable, Identifiable {
 struct OrbWebView: NSViewRepresentable {
     var mode: OrbMode
     var palette: OrbPalette
+    var feeling: OrbFeeling
+    var onLoad: (() -> Void)?
 
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         var loaded = false
         var lastMode: OrbMode?
         var lastPalette: OrbPalette?
+        var lastFeeling: OrbFeeling?
+        var onLoad: (() -> Void)?
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            _ = webView
+            _ = navigation
+            onLoad?()
+        }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        let coordinator = Coordinator()
+        coordinator.onLoad = onLoad
+        return coordinator
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -137,26 +229,38 @@ struct OrbWebView: NSViewRepresentable {
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
         let view = WKWebView(frame: .zero, configuration: config)
+        // KNOWN: drawsBackground is private KVC; no public API exists for
+        // transparent WKWebView backgrounds on macOS. Tracked for future
+        // replacement if Apple adds a public alternative.
         view.setValue(false, forKey: "drawsBackground")
+        view.navigationDelegate = context.coordinator
         loadOrbHTML(in: view)
         context.coordinator.lastMode = mode
         context.coordinator.lastPalette = palette
+        context.coordinator.lastFeeling = feeling
         return view
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        if context.coordinator.lastMode == mode && context.coordinator.lastPalette == palette {
+        context.coordinator.onLoad = onLoad
+
+        if context.coordinator.lastMode == mode
+            && context.coordinator.lastPalette == palette
+            && context.coordinator.lastFeeling == feeling
+        {
             return
         }
         context.coordinator.lastMode = mode
         context.coordinator.lastPalette = palette
+        context.coordinator.lastFeeling = feeling
         let js = """
         window.setOrbMode && window.setOrbMode('\(mode.rawValue)');
         window.setOrbPalette && window.setOrbPalette('\(palette.rawValue)');
+        window.setOrbFeeling && window.setOrbFeeling('\(feeling.rawValue)');
         """
         webView.evaluateJavaScript(js) { _, error in
             if let error {
-                NSLog("Orb mode update failed: %@", error.localizedDescription)
+                NSLog("Orb update failed: %@", error.localizedDescription)
             }
         }
     }

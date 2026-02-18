@@ -42,6 +42,12 @@ pub enum CommandName {
     OrbPaletteSet,
     #[serde(rename = "orb.palette.clear")]
     OrbPaletteClear,
+    #[serde(rename = "orb.feeling.set")]
+    OrbFeelingSet,
+    #[serde(rename = "orb.urgency.set")]
+    OrbUrgencySet,
+    #[serde(rename = "orb.flash")]
+    OrbFlash,
     #[serde(rename = "capability.request")]
     CapabilityRequest,
     #[serde(rename = "capability.grant")]
@@ -74,6 +80,9 @@ impl CommandName {
             Self::DeviceGoHome => "device.go_home",
             Self::OrbPaletteSet => "orb.palette.set",
             Self::OrbPaletteClear => "orb.palette.clear",
+            Self::OrbFeelingSet => "orb.feeling.set",
+            Self::OrbUrgencySet => "orb.urgency.set",
+            Self::OrbFlash => "orb.flash",
             Self::CapabilityRequest => "capability.request",
             Self::CapabilityGrant => "capability.grant",
             Self::ConfigGet => "config.get",
@@ -102,6 +111,9 @@ impl CommandName {
             "device.go_home" => Some(Self::DeviceGoHome),
             "orb.palette.set" => Some(Self::OrbPaletteSet),
             "orb.palette.clear" => Some(Self::OrbPaletteClear),
+            "orb.feeling.set" => Some(Self::OrbFeelingSet),
+            "orb.urgency.set" => Some(Self::OrbUrgencySet),
+            "orb.flash" => Some(Self::OrbFlash),
             "capability.request" => Some(Self::CapabilityRequest),
             "capability.grant" => Some(Self::CapabilityGrant),
             "config.get" => Some(Self::ConfigGet),
