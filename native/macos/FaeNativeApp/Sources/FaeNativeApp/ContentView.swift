@@ -36,7 +36,7 @@ struct ContentView: View {
     private var onboardingView: some View {
         OnboardingWebView(
             onLoad: {
-                // Onboarding HTML loaded — nothing to push yet on initial load.
+                // Onboarding HTML loaded — nothing extra to push on initial load.
             },
             onRequestPermission: { permission in
                 switch permission {
@@ -56,7 +56,9 @@ struct ContentView: View {
             },
             onAdvance: {
                 onboarding.advance()
-            }
+            },
+            userName: onboarding.userName,
+            permissionStates: onboarding.permissionStates
         )
     }
 

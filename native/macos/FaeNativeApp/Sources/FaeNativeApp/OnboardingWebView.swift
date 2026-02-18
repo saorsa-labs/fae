@@ -25,6 +25,13 @@ struct OnboardingWebView: NSViewRepresentable {
     /// Fired when the JS layer advances to the next onboarding phase.
     var onAdvance: (() -> Void)?
 
+    /// User's first name to push into the Ready screen greeting (nil = not yet known).
+    var userName: String?
+
+    /// Permission states to push into the permission cards as they are resolved.
+    /// Format: `["microphone": "granted", "contacts": "denied"]`
+    var permissionStates: [String: String] = [:]
+
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -36,6 +43,11 @@ struct OnboardingWebView: NSViewRepresentable {
         var onPermissionHelp: ((String) -> Void)?
         var onComplete: (() -> Void)?
         var onAdvance: (() -> Void)?
+
+        /// Tracks the last pushed user name to avoid redundant JS calls.
+        var lastUserName: String?
+        /// Tracks the last pushed permission states to avoid redundant JS calls.
+        var lastPermissionStates: [String: String] = [:]
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             _ = navigation
@@ -114,13 +126,13 @@ struct OnboardingWebView: NSViewRepresentable {
     // MARK: - NSViewRepresentable
 
     func makeCoordinator() -> Coordinator {
-        let c = Coordinator()
-        c.onLoad = onLoad
-        c.onRequestPermission = onRequestPermission
-        c.onPermissionHelp = onPermissionHelp
-        c.onComplete = onComplete
-        c.onAdvance = onAdvance
-        return c
+        let coordinator = Coordinator()
+        coordinator.onLoad = onLoad
+        coordinator.onRequestPermission = onRequestPermission
+        coordinator.onPermissionHelp = onPermissionHelp
+        coordinator.onComplete = onComplete
+        coordinator.onAdvance = onAdvance
+        return coordinator
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -151,11 +163,25 @@ struct OnboardingWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.onLoad = onLoad
-        context.coordinator.onRequestPermission = onRequestPermission
-        context.coordinator.onPermissionHelp = onPermissionHelp
-        context.coordinator.onComplete = onComplete
-        context.coordinator.onAdvance = onAdvance
+        let coordinator = context.coordinator
+        coordinator.onLoad = onLoad
+        coordinator.onRequestPermission = onRequestPermission
+        coordinator.onPermissionHelp = onPermissionHelp
+        coordinator.onComplete = onComplete
+        coordinator.onAdvance = onAdvance
+
+        // Push user name when it becomes available for the first time.
+        if let name = userName, name != coordinator.lastUserName {
+            coordinator.lastUserName = name
+            coordinator.setUserName(name)
+        }
+
+        // Push any changed permission states.
+        for (permission, state) in permissionStates
+        where coordinator.lastPermissionStates[permission] != state {
+            coordinator.lastPermissionStates[permission] = state
+            coordinator.setPermissionState(permission, state: state)
+        }
     }
 
     // MARK: - HTML Loading

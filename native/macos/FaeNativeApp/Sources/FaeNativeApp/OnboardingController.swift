@@ -1,5 +1,5 @@
 import AVFoundation
-import Contacts
+@preconcurrency import Contacts
 import Foundation
 
 /// Manages onboarding state and native system permission requests.
@@ -15,6 +15,13 @@ final class OnboardingController: ObservableObject {
 
     /// First name extracted from the user's "Me" contacts card, if available.
     @Published var userName: String? = nil
+
+    /// Current permission states for web layer synchronisation.
+    /// Keys: "microphone", "contacts". Values: "pending" | "granted" | "denied".
+    @Published var permissionStates: [String: String] = [
+        "microphone": "pending",
+        "contacts": "pending"
+    ]
 
     // MARK: - Permission Request Callbacks
 
@@ -38,6 +45,7 @@ final class OnboardingController: ObservableObject {
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             micGranted = granted
             let state = granted ? "granted" : "denied"
+            permissionStates["microphone"] = state
             onPermissionResult?("microphone", state)
         }
     }
@@ -51,6 +59,7 @@ final class OnboardingController: ObservableObject {
                 guard let self else { return }
                 self.contactsGranted = granted
                 let state = granted ? "granted" : "denied"
+                self.permissionStates["contacts"] = state
                 self.onPermissionResult?("contacts", state)
                 if granted {
                     self.readMeCard(store: store)
