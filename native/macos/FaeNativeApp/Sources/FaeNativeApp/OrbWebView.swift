@@ -268,8 +268,7 @@ struct OrbWebView: NSViewRepresentable {
     private func loadOrbHTML(in webView: WKWebView) {
         guard let url = Bundle.module.url(
             forResource: "index",
-            withExtension: "html",
-            subdirectory: "Orb"
+            withExtension: "html"
         ) else {
             webView.loadHTMLString("<html><body style='background:#0a0b0d;color:#eee;'>Orb resource missing.</body></html>", baseURL: nil)
             return

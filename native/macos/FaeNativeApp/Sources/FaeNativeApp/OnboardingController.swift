@@ -10,6 +10,11 @@ import Foundation
 @MainActor
 final class OnboardingController: ObservableObject {
 
+    /// Whether the backend onboarding state has been queried.
+    /// `ContentView` shows a blank background until this is `true` to avoid
+    /// flashing onboarding content for users who already completed it.
+    @Published var isStateRestored: Bool = false
+
     /// Whether onboarding has been completed by the user.
     @Published var isComplete: Bool = false
 

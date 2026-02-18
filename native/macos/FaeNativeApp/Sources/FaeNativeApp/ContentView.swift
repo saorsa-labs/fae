@@ -4,13 +4,15 @@ struct ContentView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var windowState: WindowStateController
-    @StateObject private var onboarding = OnboardingController()
+    @EnvironmentObject private var onboarding: OnboardingController
     private let onboardingTTS = OnboardingTTSHelper()
     @State private var viewLoaded = false
 
     var body: some View {
         ZStack {
-            if !onboarding.isComplete {
+            if !onboarding.isStateRestored {
+                Color.black
+            } else if !onboarding.isComplete {
                 onboardingView
                     .transition(.opacity)
             } else {
@@ -29,6 +31,7 @@ struct ContentView: View {
             }
         )
         .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
+        .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
     }
 
     // MARK: - Onboarding View
@@ -90,7 +93,8 @@ struct ContentView: View {
                     if windowState.mode == .collapsed {
                         windowState.transitionToCompact()
                     }
-                }
+                },
+                panelCloseGeneration: windowState.panelCloseGeneration
             )
             .opacity(viewLoaded ? 1 : 0)
 

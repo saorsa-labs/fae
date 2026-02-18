@@ -97,6 +97,73 @@ Human contract document:
 
 - `SOUL.md`
 
+## Native app architecture (embedded Rust core)
+
+Fae's macOS native app embeds the Rust core directly as a linked library (`libfae`),
+not as a subprocess. The app IS the brain — zero IPC overhead for the primary UI.
+
+Architecture doc: `docs/architecture/native-app-v0.md`
+Detailed embedding plan: `docs/architecture/embedded-core.md`
+
+### Two integration modes
+
+| Mode | Description | Latency |
+|------|-------------|---------|
+| **Embedded (Mode A)** | Swift links `libfae` via C ABI. Rust core runs in-process. | ~0ms (function call) |
+| **IPC (Mode B)** | External frontends connect to `~/.fae/fae.sock`. Same JSON protocol. | ~3ms (UDS roundtrip) |
+
+The Fae.app always uses Mode A. Mode B is for third-party UIs, CLI tools, or companion apps.
+
+### Key principles
+
+- The Swift app never spawns a backend subprocess in production.
+- The Rust core is compiled as a static library (`crate-type = ["staticlib", "lib"]`).
+- FFI surface is thin: `extern "C"` functions in `src/ffi.rs` (or UniFFI bindings).
+- The embedded core can optionally listen on a Unix socket for external clients.
+- Scheduler authority, memory, pipeline, and safety policy all live in the Rust core.
+- macOS sandbox and entitlements apply naturally to the in-process Rust code.
+
+### Current state (interim)
+
+The current implementation uses a subprocess sidecar (`fae-host` binary via stdin/stdout
+pipes in `ProcessCommandSender.swift`). This is a development stepping stone. The migration
+to embedded `libfae` is tracked in `docs/architecture/embedded-core.md`.
+
+### Swift-side files
+
+| File | Role |
+|------|------|
+| `native/macos/.../FaeNativeApp.swift` | App entry, environment wiring |
+| `native/macos/.../ContentView.swift` | Main view, window state |
+| `native/macos/.../ConversationWebView.swift` | WKWebView bridge (orb + conversation) |
+| `native/macos/.../ConversationController.swift` | Conversation state (listening, panels) |
+| `native/macos/.../WindowStateController.swift` | Adaptive window (collapsed/compact/expanded) |
+| `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
+| `native/macos/.../ProcessCommandSender.swift` | Interim subprocess bridge (to be replaced) |
+
+### Rust-side host layer
+
+| File | Role |
+|------|------|
+| `src/host/mod.rs` | Host module root |
+| `src/host/contract.rs` | Command/event envelope schemas |
+| `src/host/channel.rs` | Command channel, router, handler trait |
+| `src/host/stdio.rs` | Stdin/stdout JSON bridge (for IPC mode / interim) |
+| `src/bin/host_bridge.rs` | Headless host bridge binary (interim sidecar) |
+
+### Adaptive window system
+
+The native app uses a three-mode adaptive window:
+
+| Mode | Size | Style |
+|------|------|-------|
+| Collapsed | 80x80 | Borderless floating orb, always-on-top |
+| Compact | 340x500 | Normal titled window |
+| Expanded | 340+420/panel | Extends sideways toward more screen space |
+
+Auto-hide after 30s inactivity. Click orb to restore. Panels extend window sideways
+rather than overlaying. See `WindowStateController.swift`.
+
 ## Platform module (App Sandbox)
 
 `src/platform/` provides cross-platform security-scoped bookmark support:

@@ -176,7 +176,10 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         drop(guard);
 
         self.save_config()?;
-        info!(phase = new_phase.as_str(), "onboarding.advance persisted to config");
+        info!(
+            phase = new_phase.as_str(),
+            "onboarding.advance persisted to config"
+        );
         Ok(new_phase)
     }
 

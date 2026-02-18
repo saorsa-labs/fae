@@ -19,6 +19,7 @@ struct RecordingHandler {
     flashes: Arc<Mutex<Vec<String>>>,
     capability_requests: Arc<Mutex<Vec<CapabilityRequestRecord>>>,
     capability_grants: Arc<Mutex<Vec<CapabilityGrantRecord>>>,
+    capability_denials: Arc<Mutex<Vec<CapabilityGrantRecord>>>,
     conversation_texts: Arc<Mutex<Vec<String>>>,
     gate_sets: Arc<Mutex<Vec<bool>>>,
 }
@@ -92,6 +93,14 @@ impl DeviceTransferHandler for RecordingHandler {
         self.capability_grants
             .lock()
             .expect("lock capability grant records")
+            .push((capability.to_owned(), scope.map(ToOwned::to_owned)));
+        Ok(())
+    }
+
+    fn deny_capability(&self, capability: &str, scope: Option<&str>) -> fae::Result<()> {
+        self.capability_denials
+            .lock()
+            .expect("lock capability denial records")
             .push((capability.to_owned(), scope.map(ToOwned::to_owned)));
         Ok(())
     }
@@ -458,6 +467,74 @@ async fn capability_grant_rejects_empty_capability() {
         .send(CommandEnvelope::new(
             "req-capability-empty",
             CommandName::CapabilityGrant,
+            serde_json::json!({"capability": "   "}),
+        ))
+        .await
+        .expect_err("empty capability should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("non-empty payload.capability"), "{msg}");
+
+    handle.abort();
+}
+
+// ---- capability.deny tests ----
+
+#[tokio::test]
+async fn capability_deny_routes_to_handler_and_event_stream() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-capability-deny",
+            CommandName::CapabilityDeny,
+            serde_json::json!({
+                "capability": "calendar",
+                "scope": "session"
+            }),
+        ))
+        .await
+        .expect("capability deny should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["capability"], "calendar");
+    assert_eq!(response.payload["scope"], "session");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "capability.denied");
+    assert_eq!(event.payload["capability"], "calendar");
+    assert_eq!(event.payload["scope"], "session");
+
+    let denials = tracker
+        .capability_denials
+        .lock()
+        .expect("lock capability denial records");
+    assert_eq!(
+        denials.as_slice(),
+        &[("calendar".to_owned(), Some("session".to_owned()))]
+    );
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn capability_deny_rejects_empty_capability() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-deny-empty",
+            CommandName::CapabilityDeny,
             serde_json::json!({"capability": "   "}),
         ))
         .await
@@ -1052,8 +1129,7 @@ async fn capability_request_jit_true_included_in_event() {
     assert_eq!(event.event, "capability.requested");
     assert_eq!(event.payload["capability"], "microphone");
     assert_eq!(
-        event.payload["jit"],
-        true,
+        event.payload["jit"], true,
         "jit flag must be propagated into capability.requested event"
     );
 
@@ -1087,8 +1163,7 @@ async fn capability_request_jit_defaults_to_false() {
         .expect("event recv");
     assert_eq!(event.event, "capability.requested");
     assert_eq!(
-        event.payload["jit"],
-        false,
+        event.payload["jit"], false,
         "jit must default to false when not provided"
     );
 

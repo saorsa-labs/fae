@@ -1,6 +1,9 @@
 # Native App Architecture v0 (Hybrid C ABI + Local IPC)
 
-Status: Draft v0 for implementation in `fae-native-app-v0`.
+Status: Approved. Definitive architecture for Fae.app.
+
+See also: `docs/architecture/embedded-core.md` for the detailed embedding plan,
+FFI surface design, and migration path from the current interim subprocess model.
 
 ## Decision
 
@@ -270,28 +273,35 @@ v0.1 implementation note:
 
 ## Migration Phases
 
-### Phase 0: Contract + Harness
+### Phase 0: Contract + Harness ✅
 
-- define command/event schema
-- add host trait abstraction in Rust (no behavior change)
-- add scheduler leader lease implementation behind feature flag
+- command/event schema defined (`src/host/contract.rs`)
+- host trait abstraction (`DeviceTransferHandler`) in Rust
+- host command channel and router (`src/host/channel.rs`)
+- scheduler leader lease implementation
+- native macOS Swift shell with adaptive window system
+- interim subprocess bridge (`fae-host` via stdin/stdout)
 
-### Phase 1: macOS In-Process Host
+### Phase 1: macOS In-Process Host (next)
 
-- create `libfae` C ABI shim over host trait
-- wire native macOS shell to ABI
-- keep Dioxus shell as parity harness
+- create `libfae` C ABI shim over host trait (`src/ffi.rs`)
+- compile Rust core as static library (`crate-type = ["staticlib"]`)
+- create `EmbeddedCoreSender` in Swift (replace `ProcessCommandSender`)
+- wire native macOS shell directly to ABI
+- detailed plan: `docs/architecture/embedded-core.md`
 
 ### Phase 2: IPC Host
 
-- introduce `faed` and local transport
-- reuse same command/event schema
+- add optional Unix socket listener in embedded core
+- introduce `faed` standalone daemon (repurpose `host_bridge.rs`)
+- reuse same command/event schema over socket transport
 - frontends consume via IPC client library
 
 ### Phase 3: Frontend Rollout
 
 - move non-mac frontends to IPC
 - keep scheduler ownership only in backend host
+- retire interim subprocess code
 
 ## Acceptance Gates (Architecture)
 

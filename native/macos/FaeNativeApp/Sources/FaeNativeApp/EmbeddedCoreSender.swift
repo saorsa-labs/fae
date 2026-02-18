@@ -1,15 +1,28 @@
 import CLibFae
 import Foundation
 
+/// Wrapper so the opaque C handle can be passed across isolation boundaries.
+/// Safe because the handle is only accessed from the serial `commandQueue`.
+private struct SendableHandle: @unchecked Sendable {
+    let raw: FaeCoreHandle
+}
+
 /// Sends host commands to the embedded Rust core via the C ABI (libfae.a).
 ///
 /// Replaces `ProcessCommandSender` — no subprocess, no pipes, zero IPC.
-/// Commands are dispatched synchronously through `fae_core_send_command`
-/// which blocks on the internal tokio runtime.
+/// Commands are serialised on a dedicated background queue so the blocking
+/// `fae_core_send_command` call never stalls the main thread.
 final class EmbeddedCoreSender: HostCommandSender {
     /// Opaque handle to the Fae runtime (owned, must be destroyed on deinit).
     private var handle: FaeCoreHandle?
+
+    /// Monotonic counter for generating unique request IDs.
+    /// Only accessed from `commandQueue` to avoid data races.
     private var requestCounter: UInt64 = 0
+
+    /// Serial queue for all C ABI calls so they never block the main actor.
+    /// Also serialises `requestCounter` access.
+    private let commandQueue = DispatchQueue(label: "com.saorsalabs.fae.command-sender")
 
     /// Initialize the Rust runtime with a JSON configuration string.
     ///
@@ -42,41 +55,62 @@ final class EmbeddedCoreSender: HostCommandSender {
         NSLog("EmbeddedCoreSender: runtime started with event callback")
     }
 
-    /// Send a command to the Rust backend and log the response.
+    /// Send a fire-and-forget command to the Rust backend on a background queue.
     func sendCommand(name: String, payload: [String: Any]) {
         guard let handle else {
             NSLog("EmbeddedCoreSender: not initialized, cannot send %@", name)
             return
         }
 
-        requestCounter += 1
-        let requestId = "swift-\(requestCounter)"
+        let sendable = SendableHandle(raw: handle)
+        commandQueue.async { [weak self] in
+            guard let self else { return }
+            self.requestCounter += 1
+            let requestId = "swift-\(self.requestCounter)"
 
-        let envelope: [String: Any] = [
-            "v": 1,
-            "request_id": requestId,
-            "command": name,
-            "payload": payload,
-        ]
+            guard let jsonString = Self.buildEnvelopeJSON(
+                requestId: requestId, command: name, payload: payload
+            ) else {
+                NSLog("EmbeddedCoreSender: failed to serialize command %@", name)
+                return
+            }
 
-        guard JSONSerialization.isValidJSONObject(envelope),
-              let data = try? JSONSerialization.data(withJSONObject: envelope),
-              let jsonString = String(data: data, encoding: .utf8)
-        else {
-            NSLog("EmbeddedCoreSender: failed to serialize command %@", name)
-            return
+            Self.executeCommand(sendable.raw, json: jsonString, label: name)
+        }
+    }
+
+    /// Query the backend on the serial queue and return the parsed response
+    /// payload. Use for startup queries like `onboarding.get_state`.
+    func queryCommand(name: String, payload: [String: Any]) async -> [String: Any]? {
+        guard let handle else {
+            NSLog("EmbeddedCoreSender: not initialized, cannot query %@", name)
+            return nil
         }
 
-        let responsePtr = jsonString.withCString { ptr in
-            fae_core_send_command(handle, ptr)
-        }
+        let sendable = SendableHandle(raw: handle)
+        let localQueue = commandQueue
+        return await withCheckedContinuation { [weak self] continuation in
+            localQueue.async {
+                guard let self else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                self.requestCounter += 1
+                let requestId = "swift-\(self.requestCounter)"
 
-        if let responsePtr {
-            let responseStr = String(cString: responsePtr)
-            NSLog("EmbeddedCoreSender [response]: %@", responseStr)
-            fae_string_free(responsePtr)
-        } else {
-            NSLog("EmbeddedCoreSender: send_command returned null for %@", name)
+                guard let jsonString = Self.buildEnvelopeJSON(
+                    requestId: requestId, command: name, payload: payload
+                ) else {
+                    NSLog("EmbeddedCoreSender: failed to serialize query %@", name)
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let result = Self.executeCommandWithResponse(
+                    sendable.raw, json: jsonString, label: name
+                )
+                continuation.resume(returning: result)
+            }
         }
     }
 
@@ -91,6 +125,61 @@ final class EmbeddedCoreSender: HostCommandSender {
 
     deinit {
         stop()
+    }
+
+    // MARK: - Private helpers
+
+    private static func buildEnvelopeJSON(
+        requestId: String, command: String, payload: [String: Any]
+    ) -> String? {
+        let envelope: [String: Any] = [
+            "v": 1,
+            "request_id": requestId,
+            "command": command,
+            "payload": payload,
+        ]
+        guard JSONSerialization.isValidJSONObject(envelope),
+              let data = try? JSONSerialization.data(withJSONObject: envelope),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return json
+    }
+
+    private static func executeCommand(
+        _ handle: FaeCoreHandle, json: String, label: String
+    ) {
+        let responsePtr = json.withCString { ptr in
+            fae_core_send_command(handle, ptr)
+        }
+        if let responsePtr {
+            let responseStr = String(cString: responsePtr)
+            NSLog("EmbeddedCoreSender [response]: %@", responseStr)
+            fae_string_free(responsePtr)
+        } else {
+            NSLog("EmbeddedCoreSender: send_command returned null for %@", label)
+        }
+    }
+
+    private static func executeCommandWithResponse(
+        _ handle: FaeCoreHandle, json: String, label: String
+    ) -> [String: Any]? {
+        let responsePtr = json.withCString { ptr in
+            fae_core_send_command(handle, ptr)
+        }
+        guard let responsePtr else {
+            NSLog("EmbeddedCoreSender: send_command returned null for %@", label)
+            return nil
+        }
+        let responseStr = String(cString: responsePtr)
+        fae_string_free(responsePtr)
+
+        guard let data = responseStr.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            NSLog("EmbeddedCoreSender: failed to parse response for %@", label)
+            return nil
+        }
+        return parsed
     }
 }
 

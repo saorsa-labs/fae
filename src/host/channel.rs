@@ -88,6 +88,9 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn request_conversation_gate_set(&self, _active: bool) -> Result<()> {
         Ok(())
     }
+    fn request_conversation_link_detected(&self, _url: &str) -> Result<()> {
+        Ok(())
+    }
     fn request_runtime_start(&self) -> Result<()> {
         Ok(())
     }
@@ -248,6 +251,9 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::OnboardingComplete => self.handle_onboarding_complete(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
+            CommandName::ConversationLinkDetected => {
+                self.handle_conversation_link_detected(envelope)
+            }
             CommandName::RuntimeStart => self.handle_runtime_start(envelope),
             CommandName::RuntimeStop => self.handle_runtime_stop(envelope),
             CommandName::RuntimeStatus => self.handle_runtime_status(envelope),
@@ -430,7 +436,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
     }
 
     fn handle_capability_grant(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
-        let grant = parse_capability_grant(&envelope.payload)?;
+        let grant = parse_capability_action(&envelope.payload, "capability.grant")?;
         self.handler
             .grant_capability(&grant.capability, grant.scope.as_deref())?;
 
@@ -454,7 +460,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
     }
 
     fn handle_capability_deny(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
-        let deny = parse_capability_grant(&envelope.payload)?;
+        let deny = parse_capability_action(&envelope.payload, "capability.deny")?;
         self.handler
             .deny_capability(&deny.capability, deny.scope.as_deref())?;
 
@@ -538,6 +544,30 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             serde_json::json!({
                 "accepted": true,
                 "text": text
+            }),
+        ))
+    }
+
+    fn handle_conversation_link_detected(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let url = parse_conversation_url(&envelope.payload)?;
+        self.handler.request_conversation_link_detected(&url)?;
+
+        self.emit_event(
+            "conversation.link_detected",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "url": url
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "url": url
             }),
         ))
     }
@@ -850,9 +880,12 @@ fn parse_capability_request(payload: &serde_json::Value) -> Result<CapabilityReq
     })
 }
 
-fn parse_capability_grant(payload: &serde_json::Value) -> Result<CapabilityGrantPayload> {
-    let capability = parse_non_empty_field(payload, "capability", "capability.grant")?;
-    let scope = parse_optional_scope(payload, "capability.grant")?;
+fn parse_capability_action(
+    payload: &serde_json::Value,
+    command: &str,
+) -> Result<CapabilityGrantPayload> {
+    let capability = parse_non_empty_field(payload, "capability", command)?;
+    let scope = parse_optional_scope(payload, command)?;
     Ok(CapabilityGrantPayload { capability, scope })
 }
 
@@ -908,6 +941,34 @@ fn parse_conversation_text(payload: &serde_json::Value) -> Result<String> {
     }
 
     Ok(text.to_owned())
+}
+
+/// Allowed URL schemes for link-detected events.
+const ALLOWED_LINK_SCHEMES: &[&str] = &["http://", "https://", "mailto:"];
+
+fn parse_conversation_url(payload: &serde_json::Value) -> Result<String> {
+    let Some(raw_url) = payload.get("url").and_then(serde_json::Value::as_str) else {
+        return Err(SpeechError::Pipeline(
+            "conversation.link_detected requires payload.url".to_owned(),
+        ));
+    };
+
+    let url = raw_url.trim();
+    if url.is_empty() {
+        return Err(SpeechError::Pipeline(
+            "conversation.link_detected requires a non-empty payload.url".to_owned(),
+        ));
+    }
+
+    let lower = url.to_ascii_lowercase();
+    if !ALLOWED_LINK_SCHEMES.iter().any(|s| lower.starts_with(s)) {
+        return Err(SpeechError::Pipeline(format!(
+            "conversation.link_detected: unsupported URL scheme in `{url}` \
+             (allowed: http, https, mailto)"
+        )));
+    }
+
+    Ok(url.to_owned())
 }
 
 fn parse_gate_active(payload: &serde_json::Value) -> Result<bool> {
@@ -1045,6 +1106,49 @@ mod tests {
     fn conversation_gate_set_missing_field_returns_error() {
         let server = make_server();
         let envelope = make_envelope(CommandName::ConversationGateSet, serde_json::json!({}));
+        let resp = server.route(&envelope);
+        assert!(resp.is_err());
+    }
+
+    #[test]
+    fn conversation_link_detected_accepted() {
+        let server = make_server();
+        let envelope = make_envelope(
+            CommandName::ConversationLinkDetected,
+            serde_json::json!({"url": "https://example.com"}),
+        );
+        let resp = server.route(&envelope).unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.payload["accepted"], true);
+        assert_eq!(resp.payload["url"], "https://example.com");
+    }
+
+    #[test]
+    fn conversation_link_detected_empty_returns_error() {
+        let server = make_server();
+        let envelope = make_envelope(
+            CommandName::ConversationLinkDetected,
+            serde_json::json!({"url": "   "}),
+        );
+        let resp = server.route(&envelope);
+        assert!(resp.is_err());
+    }
+
+    #[test]
+    fn conversation_link_detected_bad_scheme_returns_error() {
+        let server = make_server();
+        let envelope = make_envelope(
+            CommandName::ConversationLinkDetected,
+            serde_json::json!({"url": "javascript:alert(1)"}),
+        );
+        let resp = server.route(&envelope);
+        assert!(resp.is_err());
+    }
+
+    #[test]
+    fn conversation_link_detected_missing_field_returns_error() {
+        let server = make_server();
+        let envelope = make_envelope(CommandName::ConversationLinkDetected, serde_json::json!({}));
         let resp = server.route(&envelope);
         assert!(resp.is_err());
     }

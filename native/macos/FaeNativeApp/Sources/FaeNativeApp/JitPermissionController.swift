@@ -5,8 +5,8 @@ import Foundation
 /// Handles just-in-time (JIT) native permission requests during an active conversation.
 ///
 /// When the Rust backend emits a `capability.requested` event with `jit: true`,
-/// `ProcessCommandSender` posts a `faeCapabilityRequested` notification. This
-/// controller observes that notification, triggers the appropriate macOS native
+/// `BackendEventRouter` translates it into a `faeCapabilityRequested` notification.
+/// This controller observes that notification, triggers the appropriate macOS native
 /// permission dialog, and posts the result as `faeCapabilityGranted` or
 /// `faeCapabilityDenied` so `HostCommandBridge` can relay it to the backend.
 ///
@@ -108,7 +108,7 @@ final class JitPermissionController: ObservableObject {
 // MARK: - Notification Names
 
 extension Notification.Name {
-    /// Posted by `ProcessCommandSender` when the backend emits a JIT `capability.requested` event.
+    /// Posted by `BackendEventRouter` when the backend emits a JIT `capability.requested` event.
     /// userInfo keys: `"capability"` (String), `"reason"` (String), `"jit"` (Bool).
     static let faeCapabilityRequested = Notification.Name("faeCapabilityRequested")
 

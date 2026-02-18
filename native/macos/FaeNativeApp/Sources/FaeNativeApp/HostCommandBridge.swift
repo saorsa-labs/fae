@@ -66,6 +66,18 @@ final class HostCommandBridge: ObservableObject {
         )
         observations.append(
             center.addObserver(
+                forName: .faeConversationLinkDetected,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let url = notification.userInfo?["url"] as? String else { return }
+                Task { @MainActor in
+                    self?.dispatch("conversation.link_detected", payload: ["url": url])
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
                 forName: .faeCapabilityGranted,
                 object: nil,
                 queue: .main

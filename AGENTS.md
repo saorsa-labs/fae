@@ -129,6 +129,61 @@ Tool modes:
 - `full`
 - `full_no_approval`
 
+## Native app architecture (embedded Rust core)
+
+Fae's macOS app embeds the Rust core directly via C ABI. The app is the brain.
+
+### Integration modes
+
+- **Mode A (Embedded)**: Swift links `libfae` as a static library. Rust runs in-process.
+  Zero IPC overhead. This is the production model for Fae.app.
+- **Mode B (IPC)**: External frontends connect via Unix socket (`~/.fae/fae.sock`).
+  Same JSON command/event protocol. For third-party UIs, CLI tools, companion apps.
+
+### Non-negotiables for native app work
+
+- Never introduce a subprocess/sidecar dependency for the primary Swift→Rust path.
+  The current `ProcessCommandSender` (stdin/stdout subprocess) is interim scaffolding.
+- The FFI surface (`src/ffi.rs`) must remain thin — only control-plane operations.
+- Data-plane operations (mic capture, STT, LLM, TTS, playback) stay in-process.
+- No PCM audio or high-frequency token deltas across process boundaries.
+- Scheduler authority always lives in the Rust core, never in Swift.
+- Memory writes and audit logs always go through the Rust core, never Swift-side.
+- The embedded core inherits macOS sandbox/entitlements naturally.
+
+### Current state (interim)
+
+`ProcessCommandSender.swift` spawns `fae-host` as a subprocess with stdin/stdout pipes.
+This will be replaced by direct C ABI calls when `libfae` is ready. The host command
+protocol (`src/host/contract.rs`) remains unchanged — it just moves from pipe transport
+to direct function calls.
+
+### File map
+
+Swift-side:
+
+| File | Role |
+|------|------|
+| `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
+| `native/macos/.../ProcessCommandSender.swift` | Interim subprocess bridge (to be replaced by FFI sender) |
+| `native/macos/.../WindowStateController.swift` | Adaptive window modes (collapsed/compact/expanded) |
+| `native/macos/.../ConversationWebView.swift` | WKWebView bridge for orb + conversation UI |
+
+Rust-side:
+
+| File | Role |
+|------|------|
+| `src/host/contract.rs` | Command/event envelope schemas (shared by both modes) |
+| `src/host/channel.rs` | Command router and `DeviceTransferHandler` trait |
+| `src/host/stdio.rs` | Stdin/stdout bridge (interim, becomes IPC-only) |
+| `src/bin/host_bridge.rs` | Headless bridge binary (interim, becomes `faed` for Mode B) |
+
+Architecture docs:
+
+- `docs/architecture/native-app-v0.md` — full architecture spec
+- `docs/architecture/embedded-core.md` — embedding plan, FFI surface, migration path
+- `docs/architecture/native-app-latency-plan.md` — latency SLOs and benchmarks
+
 ## Quality gates
 
 Before shipping memory/proactive/personalization changes:
