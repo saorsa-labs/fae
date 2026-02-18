@@ -115,11 +115,18 @@ final class EmbeddedCoreSender: HostCommandSender {
     }
 
     /// Stop the runtime and release the handle.
+    ///
+    /// Synchronously drains the command queue before destroying the handle so
+    /// that in-flight commands using a captured `SendableHandle` finish before
+    /// the underlying pointer is freed.
     func stop() {
         guard let handle else { return }
+        // Nil the handle first so no new work is enqueued.
+        self.handle = nil
+        // Drain any in-flight commands that captured the old handle value.
+        commandQueue.sync {}
         fae_core_stop(handle)
         fae_core_destroy(handle)
-        self.handle = nil
         NSLog("EmbeddedCoreSender: stopped and destroyed")
     }
 
@@ -153,7 +160,7 @@ final class EmbeddedCoreSender: HostCommandSender {
         }
         if let responsePtr {
             let responseStr = String(cString: responsePtr)
-            NSLog("EmbeddedCoreSender [response]: %@", responseStr)
+            NSLog("EmbeddedCoreSender: send_command ok for %@ (%d bytes)", label, responseStr.count)
             fae_string_free(responsePtr)
         } else {
             NSLog("EmbeddedCoreSender: send_command returned null for %@", label)

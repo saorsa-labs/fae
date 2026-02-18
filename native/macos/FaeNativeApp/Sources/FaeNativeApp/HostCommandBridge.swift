@@ -116,7 +116,7 @@ final class HostCommandBridge: ObservableObject {
         if let sender {
             sender.sendCommand(name: name, payload: payload)
         } else {
-            NSLog("HostCommandBridge: no backend connected, buffered %@ %@", name, "\(payload)")
+            NSLog("HostCommandBridge: no backend connected, dropped %@", name)
         }
     }
 }

@@ -107,7 +107,7 @@ final class ProcessCommandSender: HostCommandSender {
                     continue
                 }
 
-                NSLog("ProcessCommandSender [stdout]: %@", lineStr)
+                NSLog("ProcessCommandSender: received stdout line (%d bytes)", lineStr.count)
                 parseEventLine(lineStr)
             }
         }

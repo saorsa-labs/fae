@@ -147,13 +147,28 @@ struct FaeNativeApp: App {
 
     /// Query the Rust backend for persisted onboarding state so users who
     /// already completed onboarding don't see it again after restart.
+    ///
+    /// A 5-second timeout prevents the UI from hanging on a black screen
+    /// indefinitely if the backend is unresponsive.
     private func restoreOnboardingState(sender: EmbeddedCoreSender) {
         Task {
             defer { onboarding.isStateRestored = true }
 
-            guard let response = await sender.queryCommand(
-                name: "onboarding.get_state", payload: [:]
-            ) else { return }
+            let response: [String: Any]? = await withTaskGroup(of: [String: Any]?.self) { group in
+                group.addTask {
+                    await sender.queryCommand(name: "onboarding.get_state", payload: [:])
+                }
+                group.addTask {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    return nil // timeout sentinel
+                }
+                // Return whichever finishes first.
+                let first = await group.next() ?? nil
+                group.cancelAll()
+                return first
+            }
+
+            guard let response else { return }
 
             // The response envelope wraps the payload under "payload".
             let payload = response["payload"] as? [String: Any] ?? response

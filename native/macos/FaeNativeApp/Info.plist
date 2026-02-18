@@ -58,6 +58,8 @@
   <string>Fae needs access to your Downloads to help manage files when you ask.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Fae uses speech recognition to understand your voice commands.</string>
+  <key>NSContactsUsageDescription</key>
+  <string>Fae reads your contact card to personalise your experience with your name.</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Fae can automate supported apps only when you explicitly request actions.</string>
 </dict>

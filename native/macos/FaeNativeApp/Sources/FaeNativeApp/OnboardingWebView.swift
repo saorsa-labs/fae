@@ -36,7 +36,7 @@ struct OnboardingWebView: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var loaded = false
-        var webView: WKWebView?
+        weak var webView: WKWebView?
 
         var onLoad: (() -> Void)?
         var onRequestPermission: ((String) -> Void)?
