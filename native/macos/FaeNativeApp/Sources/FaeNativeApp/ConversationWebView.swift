@@ -189,7 +189,7 @@ struct ConversationWebView: NSViewRepresentable {
     }
 
     private func loadConversationHTML(in webView: WKWebView) {
-        guard let url = Bundle.module.url(
+        guard let url = Bundle.faeResources.url(
             forResource: "conversation",
             withExtension: "html"
         ) else {

@@ -33,13 +33,9 @@ struct FaeNativeApp: App {
         // Force the router to be initialized (retained for app lifetime).
         _ = Self.backendEventRouter
 
-        // Static fallback while the animator spins up
-        if let iconURL = Bundle.module.url(
-            forResource: "AppIconFace",
-            withExtension: "jpg"
-        ), let icon = NSImage(contentsOf: iconURL) {
-            NSApplication.shared.applicationIconImage = icon
-        }
+        // Render an initial orb icon immediately so the dock never shows
+        // the generic app icon. DockIconAnimator takes over in .onAppear.
+        NSApplication.shared.applicationIconImage = Self.renderStaticOrb()
 
         // Initialize and start the embedded Rust core.
         let sender = EmbeddedCoreSender(configJSON: "{}")
@@ -80,6 +76,73 @@ struct FaeNativeApp: App {
                 .environmentObject(orbState)
                 .environmentObject(handoff)
         }
+    }
+
+    /// Renders a static orb icon matching the DockIconAnimator style at
+    /// the default (heather-mist) palette stop.
+    private static func renderStaticOrb() -> NSImage {
+        let size: CGFloat = 256
+        let nsSize = NSSize(width: size, height: size)
+        let image = NSImage(size: nsSize)
+        image.lockFocus()
+
+        guard let ctx = NSGraphicsContext.current?.cgContext else {
+            image.unlockFocus()
+            return image
+        }
+
+        let rect = CGRect(origin: .zero, size: CGSize(width: size, height: size))
+        let center = CGPoint(x: size / 2, y: size / 2)
+        let radius = size / 2
+
+        // Background: near-black rounded rect (matches app bg)
+        let bgPath = CGPath(
+            roundedRect: rect, cornerWidth: size * 0.22, cornerHeight: size * 0.22, transform: nil
+        )
+        ctx.setFillColor(CGColor(red: 0.04, green: 0.043, blue: 0.051, alpha: 1))
+        ctx.addPath(bgPath)
+        ctx.fillPath()
+
+        // Use the heather-mist palette stop as the default colour.
+        let color = NSColor(hue: 270.0 / 360.0, saturation: 0.15, brightness: 0.77, alpha: 1)
+
+        // Outer glow
+        if let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [color.withAlphaComponent(0.18).cgColor, color.withAlphaComponent(0).cgColor] as CFArray,
+            locations: [0, 1]
+        ) {
+            ctx.drawRadialGradient(gradient, startCenter: center, startRadius: 0,
+                                   endCenter: center, endRadius: radius * 0.95, options: [])
+        }
+
+        // Core orb
+        if let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [NSColor.white.withAlphaComponent(0.85).cgColor,
+                     color.withAlphaComponent(0.9).cgColor,
+                     color.withAlphaComponent(0.25).cgColor] as CFArray,
+            locations: [0, 0.35, 1]
+        ) {
+            let lightCenter = CGPoint(x: center.x - radius * 0.15, y: center.y + radius * 0.15)
+            ctx.drawRadialGradient(gradient, startCenter: lightCenter, startRadius: 0,
+                                   endCenter: center, endRadius: radius * 0.42, options: [])
+        }
+
+        // Specular highlight
+        let specCenter = CGPoint(x: center.x - radius * 0.12, y: center.y + radius * 0.14)
+        if let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [NSColor.white.withAlphaComponent(0.7).cgColor,
+                     NSColor.white.withAlphaComponent(0).cgColor] as CFArray,
+            locations: [0, 1]
+        ) {
+            ctx.drawRadialGradient(gradient, startCenter: specCenter, startRadius: 0,
+                                   endCenter: specCenter, endRadius: radius * 0.14, options: [])
+        }
+
+        image.unlockFocus()
+        return image
     }
 
     /// Query the Rust backend for persisted onboarding state so users who

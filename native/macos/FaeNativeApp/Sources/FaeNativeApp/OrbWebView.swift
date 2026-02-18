@@ -266,7 +266,7 @@ struct OrbWebView: NSViewRepresentable {
     }
 
     private func loadOrbHTML(in webView: WKWebView) {
-        guard let url = Bundle.module.url(
+        guard let url = Bundle.faeResources.url(
             forResource: "index",
             withExtension: "html"
         ) else {

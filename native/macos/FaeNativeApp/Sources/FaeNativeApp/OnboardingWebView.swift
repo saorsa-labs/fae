@@ -187,7 +187,7 @@ struct OnboardingWebView: NSViewRepresentable {
     // MARK: - HTML Loading
 
     private func loadOnboardingHTML(in webView: WKWebView) {
-        guard let url = Bundle.module.url(
+        guard let url = Bundle.faeResources.url(
             forResource: "onboarding",
             withExtension: "html"
         ) else {
