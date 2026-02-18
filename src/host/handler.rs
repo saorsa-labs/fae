@@ -3,6 +3,7 @@
 use crate::config::SpeechConfig;
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
+use crate::onboarding::OnboardingPhase;
 use crate::permissions::PermissionKind;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -153,6 +154,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
     fn query_onboarding_state(&self) -> Result<serde_json::Value> {
         let guard = self.lock_config()?;
         let onboarded = guard.onboarded;
+        let phase = guard.onboarding_phase;
         let granted: Vec<String> = guard
             .permissions
             .all_granted()
@@ -161,8 +163,21 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             .collect();
         Ok(serde_json::json!({
             "onboarded": onboarded,
+            "phase": phase.as_str(),
             "granted_permissions": granted
         }))
+    }
+
+    fn advance_onboarding_phase(&self) -> Result<OnboardingPhase> {
+        let mut guard = self.lock_config()?;
+        let current = guard.onboarding_phase;
+        let new_phase = current.advance().unwrap_or(current);
+        guard.onboarding_phase = new_phase;
+        drop(guard);
+
+        self.save_config()?;
+        info!(phase = new_phase.as_str(), "onboarding.advance persisted to config");
+        Ok(new_phase)
     }
 
     fn complete_onboarding(&self) -> Result<()> {
@@ -389,5 +404,47 @@ mod tests {
         assert_eq!(state["onboarded"], false);
         let granted = state["granted_permissions"].as_array().unwrap();
         assert_eq!(granted.len(), 2);
+    }
+
+    #[test]
+    fn query_onboarding_state_includes_phase_field() {
+        let (handler, _dir) = temp_handler();
+
+        let state = handler.query_onboarding_state().unwrap();
+        // Default phase is Welcome
+        assert_eq!(state["phase"], "welcome");
+    }
+
+    #[test]
+    fn advance_onboarding_phase_cycles_through_phases() {
+        let (handler, _dir) = temp_handler();
+
+        // Welcome → Permissions
+        let p1 = handler.advance_onboarding_phase().unwrap();
+        assert_eq!(p1.as_str(), "permissions");
+
+        // Permissions → Ready
+        let p2 = handler.advance_onboarding_phase().unwrap();
+        assert_eq!(p2.as_str(), "ready");
+
+        // Ready → Complete
+        let p3 = handler.advance_onboarding_phase().unwrap();
+        assert_eq!(p3.as_str(), "complete");
+
+        // Complete stays at Complete (no further advance)
+        let p4 = handler.advance_onboarding_phase().unwrap();
+        assert_eq!(p4.as_str(), "complete");
+    }
+
+    #[test]
+    fn advance_onboarding_phase_persists_to_disk() {
+        let (handler, dir) = temp_handler();
+        let path = dir.path().join("config.toml");
+
+        handler.advance_onboarding_phase().unwrap();
+
+        let loaded = SpeechConfig::from_file(&path).unwrap();
+        // Should have advanced from Welcome to Permissions
+        assert_eq!(loaded.onboarding_phase.as_str(), "permissions");
     }
 }

@@ -7,12 +7,12 @@
     "name": "Deferred Permission Flow + Integration"
   },
   "phase": {
-    "number": "3.1",
-    "name": "Just-in-Time Permission Request UI",
-    "plan": "PLAN-phase-3.1.md"
+    "number": "3.2",
+    "name": "End-to-End Integration Tests",
+    "plan": "PLAN-phase-3.2.md"
   },
   "progress": {
-    "total_tasks": 6,
+    "total_tasks": 4,
     "completed_tasks": 0,
     "current_task": 1
   },
@@ -22,5 +22,5 @@
     "iteration": 0,
     "last_verdict": null
   },
-  "last_updated": "2026-02-18T21:10:00Z"
+  "last_updated": "2026-02-18T21:40:00Z"
 }

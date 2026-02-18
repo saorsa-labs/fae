@@ -173,6 +173,68 @@ fn capability_request_validates_but_does_not_persist() {
     assert!(!config_path.is_file());
 }
 
+// ---- JIT capability integration tests ----
+
+#[test]
+fn capability_request_jit_true_validates_and_succeeds() {
+    let (handler, _dir) = temp_handler();
+    let (_client, server) = command_channel(8, 8, handler);
+
+    let envelope = CommandEnvelope::new(
+        "req-jit-true",
+        CommandName::CapabilityRequest,
+        serde_json::json!({
+            "capability": "microphone",
+            "reason": "Need to hear you mid-conversation",
+            "jit": true
+        }),
+    );
+
+    let resp = server.route(&envelope).expect("route");
+    assert!(resp.ok, "jit:true capability.request should succeed");
+    assert_eq!(resp.payload["accepted"], true);
+    assert_eq!(resp.payload["capability"], "microphone");
+}
+
+#[test]
+fn capability_request_jit_false_also_validates_successfully() {
+    let (handler, _dir) = temp_handler();
+    let (_client, server) = command_channel(8, 8, handler);
+
+    let envelope = CommandEnvelope::new(
+        "req-jit-false",
+        CommandName::CapabilityRequest,
+        serde_json::json!({
+            "capability": "contacts",
+            "reason": "Read your name from contacts",
+            "jit": false
+        }),
+    );
+
+    let resp = server.route(&envelope).expect("route");
+    assert!(resp.ok, "jit:false capability.request should succeed");
+    assert_eq!(resp.payload["accepted"], true);
+}
+
+#[test]
+fn capability_request_jit_omitted_defaults_to_non_jit() {
+    let (handler, _dir) = temp_handler();
+    let (_client, server) = command_channel(8, 8, handler);
+
+    // No jit field at all — should succeed with default false behaviour
+    let envelope = CommandEnvelope::new(
+        "req-jit-omit",
+        CommandName::CapabilityRequest,
+        serde_json::json!({
+            "capability": "calendar",
+            "reason": "Check your schedule"
+        }),
+    );
+
+    let resp = server.route(&envelope).expect("route");
+    assert!(resp.ok, "capability.request without jit should succeed");
+}
+
 #[test]
 fn full_onboarding_lifecycle() {
     let (handler, dir) = temp_handler();

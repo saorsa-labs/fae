@@ -1,59 +1,56 @@
-# Phase 3.2: Integration Tests
+# Phase 3.2: End-to-End Integration Tests
 
-## Overview
+## Goal
 
-Add comprehensive live integration tests for fae-search. All tests are `#[ignore]` since they
-require network access. Run manually with `cargo test -p fae-search -- --ignored`.
+Wire the onboarding phase advance to the real `FaeDeviceTransferHandler`, update
+`query_onboarding_state` to include the current phase, and add comprehensive
+integration tests for the full onboarding and JIT permission flow.
 
-We already have basic live tests per engine. This phase adds multi-engine orchestration,
-quality validation, and selector breakage detection.
+## Task List
 
----
+### Task 1: Implement advance_onboarding_phase in FaeDeviceTransferHandler
 
-## Task 1: Multi-engine live orchestration tests
+The `FaeDeviceTransferHandler` currently uses the default trait impl for
+`advance_onboarding_phase`, which always returns `OnboardingPhase::Welcome`.
+Implement it to actually advance the phase stored in config and persist to disk.
 
-**File:** `fae-search/tests/orchestrator_integration.rs`
+Also update `query_onboarding_state` to include `"phase": current_phase.as_str()`
+in the returned JSON.
 
-Add `#[ignore]` live tests:
-- `live_multi_engine_search` — query with all 4 engines, verify results from multiple engines
-- `live_search_dedup_works` — search a common query, verify deduplication reduces total count
-- `live_search_respects_max_results` — verify truncation with max_results=3
+File: `src/host/handler.rs`
 
----
+Changes:
+- Add `advance_onboarding_phase` impl that reads `onboarding_phase`, calls `advance()`,
+  stores the new phase, saves to disk, and returns the new phase
+- Update `query_onboarding_state` to include `"phase"` in the payload
 
-## Task 2: Cross-engine quality and selector breakage detection
+### Task 2: Add onboarding handler unit tests
 
-**File:** `fae-search/tests/orchestrator_integration.rs`
+In `src/host/handler.rs` internal `#[cfg(test)]` module, add:
+- `advance_onboarding_phase_cycles_through_phases` — Welcome → Permissions → Ready → Complete
+- `advance_onboarding_phase_persists_to_disk`
+- `query_onboarding_state_includes_phase`
 
-Add `#[ignore]` tests:
-- `live_each_engine_returns_results` — query each engine individually, fail if any returns 0
-  (selector breakage detection)
-- `live_results_have_valid_urls` — verify all result URLs parse as valid `url::Url`
-- `live_results_have_non_empty_snippets` — verify snippet quality
+File: `src/host/handler.rs`
 
----
+### Task 3: Create tests/onboarding_lifecycle.rs
 
-## Task 3: Content extraction live test
+Full integration tests via the host command channel + real `FaeDeviceTransferHandler`:
+- `onboarding_advance_cycles_through_all_phases` — Welcome → Permissions → Ready → Complete
+- `onboarding_advance_persists_phase_to_disk`
+- `onboarding_complete_after_full_advance_cycle`
+- `onboarding_state_includes_phase_field`
+- `onboarding_phase_resets_not_needed_stays_at_complete` — advance from Complete returns None/Complete
 
-**File:** `fae-search/tests/orchestrator_integration.rs`
+File: `tests/onboarding_lifecycle.rs` (NEW)
 
-Add `#[ignore]` test:
-- `live_fetch_page_content` — fetch a known stable URL (rust-lang.org), verify title extracted,
-  word count > 0, content non-empty
+### Task 4: Add JIT capability integration tests
 
----
+Extend `tests/capability_bridge_e2e.rs` with:
+- `capability_request_jit_true_validates_and_succeeds`
+- `capability_request_jit_false_also_validates_successfully`
 
-## Task 4: Cache integration test
+These verify that the `jit` field passes through the full command channel with
+the real handler correctly.
 
-**File:** `fae-search/tests/orchestrator_integration.rs`
-
-Add `#[ignore]` test:
-- `live_cached_search_returns_same_results` — run same query twice, second should use cache
-  (verify results match)
-
----
-
-## Summary
-
-~10 new integration tests, all `#[ignore]`, covering live orchestration, quality validation,
-selector breakage, and content extraction.
+File: `tests/capability_bridge_e2e.rs`
