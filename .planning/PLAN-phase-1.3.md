@@ -1,60 +1,46 @@
-# Phase 1.3: Route All Host Commands End-to-End
+# Phase 1.3: Wire Capability Bridge
 
-## Objective
-
-Replace `NoopDeviceTransferHandler` with a production handler, add route()
-handlers for the 10 unhandled commands, and wire the Swift event callback.
-
-## Current State
-
-- 13 of 23 commands are routed (ping, version, device, orb, capability, conversation)
-- 10 commands fall through to "not implemented" catch-all
-- FFI uses `NoopDeviceTransferHandler` which does nothing
-- Swift `EmbeddedCoreSender` doesn't register an event callback
+## Goal
+Wire `capability.request`, `capability.grant`, and new `capability.deny` host
+commands to persist permission grants in `PermissionStore`. Add onboarding state
+commands (`onboarding.get_state`, `onboarding.complete`). When a permission is
+granted/denied, emit events so Swift UI can update.
 
 ## Tasks
 
-### Task 1 — Extend DeviceTransferHandler trait and add all route handlers
+### Task 1: Add capability.deny + onboarding commands to contract
+Add `CapabilityDeny`, `OnboardingGetState`, `OnboardingComplete` to `CommandName`
+enum. Add `as_str()` and `parse()` entries. Add route handlers in channel.rs.
 
-Files: `src/host/channel.rs`
+**Files:** `src/host/contract.rs`, `src/host/channel.rs`
 
-Add trait methods for the remaining commands (runtime, scheduler, approval, config)
-with default stub returns. Add route() handlers for all 10 remaining commands.
-Remove the `_ =>` catch-all — every CommandName variant is now explicitly matched.
+### Task 2: Add config-aware handler with shared state
+Give `FaeDeviceTransferHandler` an `Arc<Mutex<SpeechConfig>>` and config path.
+Add constructor `FaeDeviceTransferHandler::new(config, config_path)`.
+Add `deny_capability()`, `query_onboarding_state()`, `complete_onboarding()` to
+the `DeviceTransferHandler` trait.
 
-### Task 2 — Create FaeDeviceTransferHandler
+**Files:** `src/host/channel.rs`, `src/host/handler.rs`
 
-Files: `src/host/handler.rs` (NEW)
+### Task 3: Wire grant/deny/onboarding to persist permissions
+Implement `grant_capability()`: parse capability string → `PermissionKind`,
+call `store.grant()`, save config to disk.
+Implement `deny_capability()`: parse → `store.deny()`, save.
+Implement `query_onboarding_state()`: return `{onboarded: bool}`.
+Implement `complete_onboarding()`: set `onboarded = true`, save.
 
-Production handler holding channels:
-- `mpsc::UnboundedSender<TextInjection>` for conversation.inject_text
-- `mpsc::UnboundedSender<GateCommand>` for conversation.gate_set
-- Remaining commands (scheduler, config, approval) log + return OK stubs
+**Files:** `src/host/handler.rs`
 
-### Task 3 — Wire FFI to use FaeDeviceTransferHandler
+### Task 4: Unit tests for capability persistence
+Test: grant via handler persists to config, deny revokes, unknown capability
+returns error, onboarding state query, onboarding complete sets flag.
+Test channel routing for all new commands.
 
-Files: `src/ffi.rs`, `src/host/mod.rs`
+**Files:** `src/host/handler.rs` (test module), `src/host/channel.rs` (test additions)
 
-Replace `NoopDeviceTransferHandler` with `FaeDeviceTransferHandler`.
-Create channels in `fae_core_init`, store receivers for future pipeline wiring.
+### Task 5: Integration test — end-to-end capability bridge
+Create config on disk, send capability.grant via channel, verify config file
+updated. Send capability.deny, verify revoked. Send onboarding.complete,
+verify flag set. Verify events emitted.
 
-### Task 4 — Wire event callback in EmbeddedCoreSender
-
-Files: `EmbeddedCoreSender.swift`
-
-Call `fae_core_set_event_callback` after start(). Parse event JSON,
-post to NotificationCenter so HostCommandBridge and UI can observe.
-
-### Task 5 — Add tests for all route handlers
-
-Files: `tests/host_command_channel_v0.rs`, `src/host/channel.rs`
-
-Cover all 23 commands in route() tests. Ensure no `_ =>` catch-all exists.
-
-## Quality gates
-
-```bash
-cargo clippy --no-default-features --all-targets -- -D warnings
-cargo test --no-default-features
-swift build --package-path native/macos/FaeNativeApp -c release
-```
+**Files:** `tests/capability_bridge_e2e.rs` (new)

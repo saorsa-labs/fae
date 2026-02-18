@@ -1,17 +1,80 @@
 //! Production host command handler for the embedded Fae runtime.
 
-use crate::error::Result;
+use crate::config::SpeechConfig;
+use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
+use crate::permissions::PermissionKind;
+use std::path::PathBuf;
+use std::sync::Mutex;
 use tracing::info;
 
-/// Production device transfer handler that logs all commands.
+/// Production device transfer handler that persists permission grants and
+/// onboarding state to `config.toml`.
 ///
-/// Replaces `NoopDeviceTransferHandler` in the FFI layer. Commands that
-/// require deeper pipeline integration (text injection, gate control,
-/// scheduler CRUD) are logged and acknowledged; channel-based forwarding
-/// to the `PipelineCoordinator` will be wired in a future phase.
-#[derive(Debug)]
-pub struct FaeDeviceTransferHandler;
+/// Commands that require deeper pipeline integration (text injection, gate
+/// control, scheduler CRUD) are logged and acknowledged; channel-based
+/// forwarding to the `PipelineCoordinator` will be wired in a future phase.
+pub struct FaeDeviceTransferHandler {
+    config: Mutex<SpeechConfig>,
+    config_path: PathBuf,
+}
+
+impl std::fmt::Debug for FaeDeviceTransferHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FaeDeviceTransferHandler")
+            .field("config_path", &self.config_path)
+            .finish()
+    }
+}
+
+impl FaeDeviceTransferHandler {
+    /// Create a handler that reads/writes config at the given path.
+    pub fn new(config: SpeechConfig, config_path: PathBuf) -> Self {
+        Self {
+            config: Mutex::new(config),
+            config_path,
+        }
+    }
+
+    /// Create a handler using the default config path.
+    pub fn from_default_path() -> Result<Self> {
+        let path = SpeechConfig::default_config_path();
+        let config = if path.is_file() {
+            SpeechConfig::from_file(&path)?
+        } else {
+            SpeechConfig::default()
+        };
+        Ok(Self::new(config, path))
+    }
+
+    /// Save the current config to disk.
+    fn save_config(&self) -> Result<()> {
+        let guard = self.lock_config()?;
+        guard.save_to_file(&self.config_path)
+    }
+
+    /// Acquire a lock on the mutable config, mapping a poisoned mutex to a
+    /// `SpeechError::Config`.
+    fn lock_config(&self) -> Result<std::sync::MutexGuard<'_, SpeechConfig>> {
+        self.config
+            .lock()
+            .map_err(|e| SpeechError::Config(format!("config lock poisoned: {e}")))
+    }
+
+    /// Parse a capability string to a `PermissionKind`.
+    fn parse_permission(capability: &str) -> Result<PermissionKind> {
+        capability.parse::<PermissionKind>().map_err(|_| {
+            SpeechError::Pipeline(format!(
+                "unknown capability `{capability}`; expected one of: {}",
+                PermissionKind::all()
+                    .iter()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+    }
+}
 
 impl DeviceTransferHandler for FaeDeviceTransferHandler {
     fn request_move(&self, target: DeviceTarget) -> Result<()> {
@@ -56,11 +119,61 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         scope: Option<&str>,
     ) -> Result<()> {
         info!(capability, reason, ?scope, "capability.request received");
+        // Validate the capability is known (fail early on typos).
+        let _kind = Self::parse_permission(capability)?;
         Ok(())
     }
 
     fn grant_capability(&self, capability: &str, scope: Option<&str>) -> Result<()> {
-        info!(capability, ?scope, "capability.grant received");
+        let kind = Self::parse_permission(capability)?;
+        info!(%kind, ?scope, "capability.grant — persisting");
+
+        let mut guard = self.lock_config()?;
+        guard.permissions.grant(kind);
+        drop(guard);
+
+        self.save_config()?;
+        info!(%kind, "capability.grant persisted to config");
+        Ok(())
+    }
+
+    fn deny_capability(&self, capability: &str, scope: Option<&str>) -> Result<()> {
+        let kind = Self::parse_permission(capability)?;
+        info!(%kind, ?scope, "capability.deny — persisting");
+
+        let mut guard = self.lock_config()?;
+        guard.permissions.deny(kind);
+        drop(guard);
+
+        self.save_config()?;
+        info!(%kind, "capability.deny persisted to config");
+        Ok(())
+    }
+
+    fn query_onboarding_state(&self) -> Result<serde_json::Value> {
+        let guard = self.lock_config()?;
+        let onboarded = guard.onboarded;
+        let granted: Vec<String> = guard
+            .permissions
+            .all_granted()
+            .iter()
+            .map(|k| k.to_string())
+            .collect();
+        Ok(serde_json::json!({
+            "onboarded": onboarded,
+            "granted_permissions": granted
+        }))
+    }
+
+    fn complete_onboarding(&self) -> Result<()> {
+        info!("onboarding.complete — setting onboarded = true");
+
+        let mut guard = self.lock_config()?;
+        guard.onboarded = true;
+        drop(guard);
+
+        self.save_config()?;
+        info!("onboarding.complete persisted to config");
         Ok(())
     }
 
@@ -126,11 +239,155 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
     fn query_config_get(&self, key: Option<&str>) -> Result<serde_json::Value> {
         info!(?key, "config.get queried");
-        Ok(serde_json::json!({}))
+        let guard = self.lock_config()?;
+        // Return the full permissions state when key is "permissions" or None.
+        match key {
+            Some("permissions") => {
+                let granted: Vec<String> = guard
+                    .permissions
+                    .all_granted()
+                    .iter()
+                    .map(|k| k.to_string())
+                    .collect();
+                Ok(serde_json::json!({"permissions": granted}))
+            }
+            Some("onboarded") => Ok(serde_json::json!({"onboarded": guard.onboarded})),
+            _ => Ok(serde_json::json!({})),
+        }
     }
 
     fn request_config_patch(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         info!(key, ?value, "config.patch requested");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    fn temp_handler() -> (FaeDeviceTransferHandler, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("config.toml");
+        let config = SpeechConfig::default();
+        let handler = FaeDeviceTransferHandler::new(config, path);
+        (handler, dir)
+    }
+
+    #[test]
+    fn grant_capability_persists_to_config() {
+        let (handler, _dir) = temp_handler();
+
+        handler.grant_capability("calendar", None).unwrap();
+
+        let guard = handler.config.lock().unwrap();
+        assert!(guard.permissions.is_granted(PermissionKind::Calendar));
+    }
+
+    #[test]
+    fn deny_capability_revokes_permission() {
+        let (handler, _dir) = temp_handler();
+
+        handler.grant_capability("contacts", None).unwrap();
+        handler.deny_capability("contacts", None).unwrap();
+
+        let guard = handler.config.lock().unwrap();
+        assert!(!guard.permissions.is_granted(PermissionKind::Contacts));
+    }
+
+    #[test]
+    fn unknown_capability_returns_error() {
+        let (handler, _dir) = temp_handler();
+
+        let result = handler.grant_capability("teleportation", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn onboarding_state_default_false() {
+        let (handler, _dir) = temp_handler();
+
+        let state = handler.query_onboarding_state().unwrap();
+        assert_eq!(state["onboarded"], false);
+        assert!(state["granted_permissions"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn complete_onboarding_sets_flag() {
+        let (handler, _dir) = temp_handler();
+
+        handler.complete_onboarding().unwrap();
+
+        let guard = handler.config.lock().unwrap();
+        assert!(guard.onboarded);
+    }
+
+    #[test]
+    fn grant_capability_saves_to_disk() {
+        let (handler, dir) = temp_handler();
+        let path = dir.path().join("config.toml");
+
+        handler.grant_capability("mail", None).unwrap();
+
+        // Read from disk and verify
+        let loaded = SpeechConfig::from_file(&path).unwrap();
+        assert!(loaded.permissions.is_granted(PermissionKind::Mail));
+    }
+
+    #[test]
+    fn complete_onboarding_saves_to_disk() {
+        let (handler, dir) = temp_handler();
+        let path = dir.path().join("config.toml");
+
+        handler.complete_onboarding().unwrap();
+
+        let loaded = SpeechConfig::from_file(&path).unwrap();
+        assert!(loaded.onboarded);
+    }
+
+    #[test]
+    fn request_capability_validates_known_capability() {
+        let (handler, _dir) = temp_handler();
+
+        // Known capability should succeed
+        assert!(
+            handler
+                .request_capability("microphone", "need to listen", None)
+                .is_ok()
+        );
+
+        // Unknown capability should fail
+        assert!(
+            handler
+                .request_capability("xray_vision", "seeing through walls", None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn config_get_permissions_returns_granted() {
+        let (handler, _dir) = temp_handler();
+
+        handler.grant_capability("files", None).unwrap();
+        handler.grant_capability("location", None).unwrap();
+
+        let result = handler.query_config_get(Some("permissions")).unwrap();
+        let perms = result["permissions"].as_array().unwrap();
+        assert_eq!(perms.len(), 2);
+    }
+
+    #[test]
+    fn onboarding_state_includes_granted_permissions() {
+        let (handler, _dir) = temp_handler();
+
+        handler.grant_capability("calendar", None).unwrap();
+        handler.grant_capability("reminders", None).unwrap();
+
+        let state = handler.query_onboarding_state().unwrap();
+        assert_eq!(state["onboarded"], false);
+        let granted = state["granted_permissions"].as_array().unwrap();
+        assert_eq!(granted.len(), 2);
     }
 }

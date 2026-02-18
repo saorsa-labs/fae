@@ -186,7 +186,16 @@ pub unsafe extern "C" fn fae_core_init(config_json: *const c_char) -> *mut c_voi
     };
 
     let event_capacity = config.event_buffer_size.unwrap_or(64).max(1);
-    let handler = FaeDeviceTransferHandler;
+    let handler = match FaeDeviceTransferHandler::from_default_path() {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("failed to load config for host handler, using defaults: {e}");
+            FaeDeviceTransferHandler::new(
+                crate::config::SpeechConfig::default(),
+                crate::config::SpeechConfig::default_config_path(),
+            )
+        }
+    };
     let (client, server) = command_channel(32, event_capacity, handler);
     let event_rx = client.subscribe_events();
 

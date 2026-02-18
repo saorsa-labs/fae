@@ -17,6 +17,12 @@ fn command_name_parse_known_and_unknown() {
     assert_eq!(capability_request, Some(CommandName::CapabilityRequest));
     let capability_grant = CommandName::parse("capability.grant");
     assert_eq!(capability_grant, Some(CommandName::CapabilityGrant));
+    let capability_deny = CommandName::parse("capability.deny");
+    assert_eq!(capability_deny, Some(CommandName::CapabilityDeny));
+    let onboarding_get_state = CommandName::parse("onboarding.get_state");
+    assert_eq!(onboarding_get_state, Some(CommandName::OnboardingGetState));
+    let onboarding_complete = CommandName::parse("onboarding.complete");
+    assert_eq!(onboarding_complete, Some(CommandName::OnboardingComplete));
 
     let orb_feeling_set = CommandName::parse("orb.feeling.set");
     assert_eq!(orb_feeling_set, Some(CommandName::OrbFeelingSet));
@@ -24,6 +30,14 @@ fn command_name_parse_known_and_unknown() {
     assert_eq!(orb_urgency_set, Some(CommandName::OrbUrgencySet));
     let orb_flash = CommandName::parse("orb.flash");
     assert_eq!(orb_flash, Some(CommandName::OrbFlash));
+
+    let conversation_inject = CommandName::parse("conversation.inject_text");
+    assert_eq!(
+        conversation_inject,
+        Some(CommandName::ConversationInjectText)
+    );
+    let conversation_gate = CommandName::parse("conversation.gate_set");
+    assert_eq!(conversation_gate, Some(CommandName::ConversationGateSet));
 
     let unknown = CommandName::parse("runtime.not_real");
     assert!(unknown.is_none());
@@ -39,6 +53,23 @@ fn command_name_parse_known_and_unknown() {
         "capability.request"
     );
     assert_eq!(CommandName::CapabilityGrant.as_str(), "capability.grant");
+    assert_eq!(CommandName::CapabilityDeny.as_str(), "capability.deny");
+    assert_eq!(
+        CommandName::OnboardingGetState.as_str(),
+        "onboarding.get_state"
+    );
+    assert_eq!(
+        CommandName::OnboardingComplete.as_str(),
+        "onboarding.complete"
+    );
+    assert_eq!(
+        CommandName::ConversationInjectText.as_str(),
+        "conversation.inject_text"
+    );
+    assert_eq!(
+        CommandName::ConversationGateSet.as_str(),
+        "conversation.gate_set"
+    );
 }
 
 #[test]
@@ -144,5 +175,80 @@ fn command_name_orb_flash_roundtrip() {
     let json = serde_json::to_value(name).expect("serialize OrbFlash");
     assert_eq!(json, "orb.flash");
     let deserialized: CommandName = serde_json::from_value(json).expect("deserialize OrbFlash");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_conversation_inject_text_roundtrip() {
+    let name = CommandName::ConversationInjectText;
+    let wire = name.as_str();
+    assert_eq!(wire, "conversation.inject_text");
+    let parsed = CommandName::parse(wire).expect("parse conversation.inject_text");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize ConversationInjectText");
+    assert_eq!(json, "conversation.inject_text");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize ConversationInjectText");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_conversation_gate_set_roundtrip() {
+    let name = CommandName::ConversationGateSet;
+    let wire = name.as_str();
+    assert_eq!(wire, "conversation.gate_set");
+    let parsed = CommandName::parse(wire).expect("parse conversation.gate_set");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize ConversationGateSet");
+    assert_eq!(json, "conversation.gate_set");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize ConversationGateSet");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_capability_deny_roundtrip() {
+    let name = CommandName::CapabilityDeny;
+    let wire = name.as_str();
+    assert_eq!(wire, "capability.deny");
+    let parsed = CommandName::parse(wire).expect("parse capability.deny");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize CapabilityDeny");
+    assert_eq!(json, "capability.deny");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize CapabilityDeny");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_onboarding_get_state_roundtrip() {
+    let name = CommandName::OnboardingGetState;
+    let wire = name.as_str();
+    assert_eq!(wire, "onboarding.get_state");
+    let parsed = CommandName::parse(wire).expect("parse onboarding.get_state");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize OnboardingGetState");
+    assert_eq!(json, "onboarding.get_state");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OnboardingGetState");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_onboarding_complete_roundtrip() {
+    let name = CommandName::OnboardingComplete;
+    let wire = name.as_str();
+    assert_eq!(wire, "onboarding.complete");
+    let parsed = CommandName::parse(wire).expect("parse onboarding.complete");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize OnboardingComplete");
+    assert_eq!(json, "onboarding.complete");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OnboardingComplete");
     assert_eq!(deserialized, name);
 }

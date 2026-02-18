@@ -52,6 +52,12 @@ pub enum CommandName {
     CapabilityRequest,
     #[serde(rename = "capability.grant")]
     CapabilityGrant,
+    #[serde(rename = "capability.deny")]
+    CapabilityDeny,
+    #[serde(rename = "onboarding.get_state")]
+    OnboardingGetState,
+    #[serde(rename = "onboarding.complete")]
+    OnboardingComplete,
     #[serde(rename = "config.get")]
     ConfigGet,
     #[serde(rename = "config.patch")]
@@ -85,6 +91,9 @@ impl CommandName {
             Self::OrbFlash => "orb.flash",
             Self::CapabilityRequest => "capability.request",
             Self::CapabilityGrant => "capability.grant",
+            Self::CapabilityDeny => "capability.deny",
+            Self::OnboardingGetState => "onboarding.get_state",
+            Self::OnboardingComplete => "onboarding.complete",
             Self::ConfigGet => "config.get",
             Self::ConfigPatch => "config.patch",
         }
@@ -116,6 +125,9 @@ impl CommandName {
             "orb.flash" => Some(Self::OrbFlash),
             "capability.request" => Some(Self::CapabilityRequest),
             "capability.grant" => Some(Self::CapabilityGrant),
+            "capability.deny" => Some(Self::CapabilityDeny),
+            "onboarding.get_state" => Some(Self::OnboardingGetState),
+            "onboarding.complete" => Some(Self::OnboardingComplete),
             "config.get" => Some(Self::ConfigGet),
             "config.patch" => Some(Self::ConfigPatch),
             _ => None,

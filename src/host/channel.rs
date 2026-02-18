@@ -62,6 +62,18 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn grant_capability(&self, _capability: &str, _scope: Option<&str>) -> Result<()> {
         Ok(())
     }
+    /// Deny (revoke) a previously granted capability, persisting to config.
+    fn deny_capability(&self, _capability: &str, _scope: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+    /// Query the current onboarding state (onboarded flag + granted permissions).
+    fn query_onboarding_state(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({"onboarded": false}))
+    }
+    /// Mark onboarding as complete, persisting to config.
+    fn complete_onboarding(&self) -> Result<()> {
+        Ok(())
+    }
     fn request_conversation_inject_text(&self, _text: &str) -> Result<()> {
         Ok(())
     }
@@ -199,7 +211,8 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         }
     }
 
-    fn route(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+    /// Route a command envelope to the appropriate handler.
+    pub fn route(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         match envelope.command {
             CommandName::HostPing => Ok(ResponseEnvelope::ok(
                 envelope.request_id.clone(),
@@ -221,6 +234,9 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::OrbFlash => self.handle_orb_flash(envelope),
             CommandName::CapabilityRequest => self.handle_capability_request(envelope),
             CommandName::CapabilityGrant => self.handle_capability_grant(envelope),
+            CommandName::CapabilityDeny => self.handle_capability_deny(envelope),
+            CommandName::OnboardingGetState => self.handle_onboarding_get_state(envelope),
+            CommandName::OnboardingComplete => self.handle_onboarding_complete(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::RuntimeStart => self.handle_runtime_start(envelope),
@@ -424,6 +440,51 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
                 "capability": grant.capability,
                 "scope": grant.scope
             }),
+        ))
+    }
+
+    fn handle_capability_deny(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let deny = parse_capability_grant(&envelope.payload)?;
+        self.handler
+            .deny_capability(&deny.capability, deny.scope.as_deref())?;
+
+        self.emit_event(
+            "capability.denied",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "capability": deny.capability,
+                "scope": deny.scope
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "capability": deny.capability,
+                "scope": deny.scope
+            }),
+        ))
+    }
+
+    fn handle_onboarding_get_state(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let state = self.handler.query_onboarding_state()?;
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), state))
+    }
+
+    fn handle_onboarding_complete(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        self.handler.complete_onboarding()?;
+
+        self.emit_event(
+            "onboarding.completed",
+            serde_json::json!({
+                "request_id": envelope.request_id
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "onboarded": true}),
         ))
     }
 
