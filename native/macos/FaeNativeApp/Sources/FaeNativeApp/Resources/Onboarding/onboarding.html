@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fae — Welcome</title>
+<style>
+  /* =========================================================
+     Global Reset and Base
+     ========================================================= */
+  :root {
+    --bg: #0a0b0d;
+    --heather: #B4A8C4;
+    --heather-rgb: 180, 168, 196;
+    --text-primary: rgba(255, 255, 255, 0.92);
+    --text-secondary: rgba(255, 255, 255, 0.6);
+    --text-muted: rgba(255, 255, 255, 0.38);
+    --panel-bg: rgba(12, 13, 16, 0.88);
+    --panel-border: rgba(255, 255, 255, 0.07);
+    --green-glow: rgba(74, 222, 128, 0.4);
+    --green: #4ade80;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: radial-gradient(circle at 20% 12%, #101216 0%, #090a0d 46%, #060709 100%);
+    min-height: 100vh;
+    overflow: hidden;
+    font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+    cursor: default;
+    color: var(--text-primary);
+  }
+
+  /* =========================================================
+     Orb Background Layer
+     ========================================================= */
+  .orb-layer {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    z-index: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .orb-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .orb {
+    border-radius: 50%;
+    overflow: hidden;
+    position: relative;
+    box-shadow: inset 0 0 40px rgba(255, 255, 255, 0.03);
+  }
+
+  #orbCanvas { border-radius: 50%; display: block; }
+
+  #pulseCanvas {
+    position: absolute;
+    pointer-events: none;
+  }
+
+  .orb-highlight {
+    position: absolute;
+    top: 12%; left: 23%;
+    width: 20%; height: 13%;
+    background: radial-gradient(ellipse, rgba(255,255,255,0.12) 0%, transparent 70%);
+    border-radius: 50%;
+    transform: rotate(-18deg);
+    pointer-events: none;
+    animation: highlightShift 12s ease-in-out infinite;
+  }
+
+  .aura {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    border: 1px solid rgba(200, 211, 213, 0.05);
+  }
+
+  .aura-1 { animation: auraExpand 10s ease-in-out infinite; }
+  .aura-2 { animation: auraExpand 10s ease-in-out infinite 3.2s; }
+  .aura-3 { animation: auraExpand 10s ease-in-out infinite 6.4s; }
+
+  @keyframes highlightShift {
+    0%, 100% { opacity: 0.35; transform: rotate(-18deg) translateY(0); }
+    50% { opacity: 0.12; transform: rotate(-12deg) translateY(5px); }
+  }
+
+  @keyframes auraExpand {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.06); opacity: 0.35; }
+  }
+
+  /* =========================================================
+     Screen System
+     ========================================================= */
+  .screen {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    pointer-events: none;
+  }
+
+  .screen.active {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .screen.exit {
+    opacity: 0;
+    transform: translateY(-16px);
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+
+  /* =========================================================
+     Dot Indicator
+     ========================================================= */
+  .dot-indicator {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 20;
+  }
+
+  .dot-indicator span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    transition: background 0.3s ease, transform 0.3s ease;
+  }
+
+  .dot-indicator span.active {
+    background: var(--heather);
+    transform: scale(1.3);
+  }
+
+  /* =========================================================
+     Fae Speech Bubble
+     ========================================================= */
+  .fae-bubble {
+    background: rgba(var(--heather-rgb), 0.1);
+    border: 1px solid rgba(var(--heather-rgb), 0.18);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    backdrop-filter: blur(20px) saturate(160%);
+    border-radius: 18px 18px 18px 4px;
+    padding: 14px 18px;
+    max-width: 320px;
+    margin-bottom: 20px;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+    animation: bubbleIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  @keyframes bubbleIn {
+    from { transform: scale(0.88); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  /* =========================================================
+     Orb Speaking Animation (dots)
+     ========================================================= */
+  .orb-speaking {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 16px;
+    height: 12px;
+  }
+
+  .orb-speaking .dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: rgba(var(--heather-rgb), 0.65);
+    animation: dotBounce 1.4s ease-in-out infinite;
+  }
+
+  .orb-speaking .dot:nth-child(1) { animation-delay: 0s; }
+  .orb-speaking .dot:nth-child(2) { animation-delay: 0.18s; }
+  .orb-speaking .dot:nth-child(3) { animation-delay: 0.36s; }
+
+  @keyframes dotBounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+    30% { transform: translateY(-5px); opacity: 1; }
+  }
+
+  /* =========================================================
+     Primary Action Button
+     ========================================================= */
+  .btn-primary {
+    background: rgba(var(--heather-rgb), 0.18);
+    border: 1px solid rgba(var(--heather-rgb), 0.28);
+    border-radius: 24px;
+    padding: 12px 32px;
+    font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+    font-size: 0.92rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    letter-spacing: 0.03em;
+    transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+    outline: none;
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    margin-top: 24px;
+  }
+
+  .btn-primary:hover {
+    background: rgba(var(--heather-rgb), 0.28);
+    transform: scale(1.03);
+    box-shadow: 0 4px 20px rgba(var(--heather-rgb), 0.15);
+  }
+
+  .btn-primary:active {
+    transform: scale(0.98);
+  }
+
+  /* =========================================================
+     Screen 1: Welcome
+     ========================================================= */
+  #screenWelcome {
+    text-align: center;
+  }
+
+  .welcome-title {
+    font-size: 1.6rem;
+    letter-spacing: 0.06em;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    font-weight: normal;
+  }
+
+  .welcome-subtitle {
+    font-size: 0.82rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 32px;
+  }
+
+  /* =========================================================
+     Screen 2: Permissions
+     ========================================================= */
+  #screenPermissions {
+    align-items: flex-start;
+    max-width: 360px;
+    margin: 0 auto;
+  }
+
+  .permissions-title {
+    font-size: 1.1rem;
+    letter-spacing: 0.04em;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    font-weight: normal;
+    align-self: center;
+  }
+
+  .permissions-subtitle {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    align-self: center;
+    text-align: center;
+    letter-spacing: 0.05em;
+  }
+
+  .permission-card {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .permission-card.granted {
+    background: rgba(74, 222, 128, 0.06);
+    border-color: rgba(74, 222, 128, 0.18);
+  }
+
+  .permission-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    background: rgba(var(--heather-rgb), 0.12);
+    border: 1px solid rgba(var(--heather-rgb), 0.16);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 1.1rem;
+  }
+
+  .permission-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .permission-name {
+    font-size: 0.88rem;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+  }
+
+  .permission-desc {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  .permission-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .permission-status {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    padding: 3px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+    outline: none;
+  }
+
+  .permission-status.granted {
+    background: rgba(74, 222, 128, 0.1);
+    border-color: rgba(74, 222, 128, 0.25);
+    color: var(--green);
+    cursor: default;
+  }
+
+  .permission-status.denied {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.2);
+    color: rgba(239, 68, 68, 0.7);
+    cursor: pointer;
+  }
+
+  .btn-help {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    outline: none;
+    font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  }
+
+  .btn-help:hover {
+    background: rgba(var(--heather-rgb), 0.15);
+    border-color: rgba(var(--heather-rgb), 0.25);
+    color: var(--text-secondary);
+  }
+
+  /* =========================================================
+     Screen 3: Ready
+     ========================================================= */
+  #screenReady {
+    text-align: center;
+  }
+
+  .ready-greeting {
+    font-size: 1.4rem;
+    letter-spacing: 0.04em;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    font-weight: normal;
+  }
+
+  .listening-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 28px;
+  }
+
+  .listening-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green-glow);
+    animation: listeningPulse 2s ease-in-out infinite;
+  }
+
+  @keyframes listeningPulse {
+    0%, 100% { box-shadow: 0 0 8px var(--green-glow); }
+    50% { box-shadow: 0 0 14px var(--green-glow), 0 0 26px rgba(74, 222, 128, 0.15); }
+  }
+
+  .listening-label {
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+</style>
+</head>
+<body>
+
+  <!-- =========================================================
+       Orb Background Layer (shared aesthetic with conversation.html)
+       ========================================================= -->
+  <div class="orb-layer" id="scene">
+    <div class="aura aura-1" id="aura1"></div>
+    <div class="aura aura-2" id="aura2"></div>
+    <div class="aura aura-3" id="aura3"></div>
+
+    <div class="orb-wrapper" id="orbWrapper">
+      <canvas id="pulseCanvas"></canvas>
+      <div class="orb" id="orbContainer">
+        <canvas id="orbCanvas"></canvas>
+      </div>
+      <div class="orb-highlight"></div>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       Screen 1: Welcome
+       ========================================================= -->
+  <div class="screen active" id="screenWelcome">
+    <div class="orb-speaking" id="welcomeSpeaking">
+      <span class="dot"></span>
+      <span class="dot"></span>
+      <span class="dot"></span>
+    </div>
+    <div class="fae-bubble" id="welcomeBubble">
+      Hello. I'm Fae — your private, always-available AI companion.
+      I live right here on your Mac, and I'm ready to get to know you.
+    </div>
+    <p style="font-size:0.78rem;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.28);margin-top:4px;">
+      tap anywhere to continue
+    </p>
+    <button class="btn-primary" id="btnWelcomeNext">Get started</button>
+  </div>
+
+  <!-- =========================================================
+       Screen 2: Permissions
+       ========================================================= -->
+  <div class="screen" id="screenPermissions">
+    <p class="permissions-title">A few things to set up</p>
+    <p class="permissions-subtitle">These help Fae work naturally with you</p>
+
+    <!-- Microphone Permission Card -->
+    <div class="permission-card" id="cardMic">
+      <div class="permission-icon">🎙️</div>
+      <div class="permission-info">
+        <div class="permission-name">Microphone</div>
+        <div class="permission-desc">Hear your voice for conversation</div>
+      </div>
+      <div class="permission-actions">
+        <button class="btn-help" data-permission="microphone" aria-label="Learn about microphone permission">?</button>
+        <button class="permission-status" id="statusMic" data-permission="microphone">Allow</button>
+      </div>
+    </div>
+
+    <!-- Contacts Permission Card -->
+    <div class="permission-card" id="cardContacts">
+      <div class="permission-icon">👤</div>
+      <div class="permission-info">
+        <div class="permission-name">Contacts</div>
+        <div class="permission-desc">Know your name for personalisation</div>
+      </div>
+      <div class="permission-actions">
+        <button class="btn-help" data-permission="contacts" aria-label="Learn about contacts permission">?</button>
+        <button class="permission-status" id="statusContacts" data-permission="contacts">Allow</button>
+      </div>
+    </div>
+
+    <button class="btn-primary" id="btnPermissionsNext">Continue</button>
+  </div>
+
+  <!-- =========================================================
+       Screen 3: Ready
+       ========================================================= -->
+  <div class="screen" id="screenReady">
+    <div class="orb-speaking" id="readySpeaking">
+      <span class="dot"></span>
+      <span class="dot"></span>
+      <span class="dot"></span>
+    </div>
+    <div class="fae-bubble" id="readyBubble">
+      I'm all set. Just speak — I'm always here, always listening,
+      and everything stays right here on your Mac.
+    </div>
+    <div class="listening-indicator">
+      <div class="listening-dot"></div>
+      <span class="listening-label">Listening</span>
+    </div>
+    <button class="btn-primary" id="btnReady">Start conversation</button>
+  </div>
+
+  <!-- =========================================================
+       Dot Indicator
+       ========================================================= -->
+  <div class="dot-indicator">
+    <span class="active" id="dot0"></span>
+    <span id="dot1"></span>
+    <span id="dot2"></span>
+  </div>
+
+<script>
+/* =========================================================
+   Fae Onboarding — Orb Animation + Screen State Machine
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   0. Helper: post to Swift
+   --------------------------------------------------------- */
+function postToSwift(handler, data) {
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers[handler]) {
+    window.webkit.messageHandlers[handler].postMessage(data || {});
+  }
+}
+
+/* ---------------------------------------------------------
+   1. HSL Color Utilities (same as conversation.html)
+   --------------------------------------------------------- */
+function hexToRgb(hex) {
+  var c = hex.replace("#", "");
+  var n = parseInt(c, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function hexToHsl(hex) {
+  var c = hexToRgb(hex);
+  var r = c.r / 255, g = c.g / 255, b = c.b / 255;
+  var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  var h = 0, s = 0, l = (mx + mn) / 2;
+  if (mx !== mn) {
+    var d = mx - mn;
+    s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (mx === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  var S = s / 100, L = l / 100;
+  var c = (1 - Math.abs(2 * L - 1)) * S;
+  var x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  var m = L - c / 2;
+  var r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+  return { r: Math.round((r + m) * 255), g: Math.round((g + m) * 255), b: Math.round((b + m) * 255) };
+}
+
+function lerpHsl(from, to, t) {
+  var dh = to.h - from.h;
+  if (dh > 180) dh -= 360;
+  if (dh < -180) dh += 360;
+  return { h: from.h + dh * t, s: from.s + (to.s - from.s) * t, l: from.l + (to.l - from.l) * t };
+}
+
+function hslToHex(h, s, l) {
+  var rgb = hslToRgb(h, s, l);
+  return "#" + ((1 << 24) | (rgb.r << 16) | (rgb.g << 8) | rgb.b).toString(16).slice(1);
+}
+
+function lerpColorHex(fromHex, toHex, t) {
+  var a = hexToHsl(fromHex);
+  var b = hexToHsl(toHex);
+  var c = lerpHsl(a, b, t);
+  return hslToHex(c.h, c.s, c.l);
+}
+
+function lerpN(a, b, t) { return a + (b - a) * t; }
+
+/* ---------------------------------------------------------
+   2. Inline 2D Simplex Noise
+   --------------------------------------------------------- */
+var SimplexNoise = (function() {
+  var F2 = 0.5 * (Math.sqrt(3) - 1);
+  var G2 = (3 - Math.sqrt(3)) / 6;
+  var grad3 = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+
+  function SimplexNoise(seed) {
+    this.perm = new Uint8Array(512);
+    this.permMod8 = new Uint8Array(512);
+    var p = new Uint8Array(256);
+    var s = seed || Math.random() * 2147483647;
+    for (var i = 0; i < 256; i++) { p[i] = i; }
+    for (var i = 255; i > 0; i--) {
+      s = (s * 16807 + 0) % 2147483647;
+      var j = s % (i + 1);
+      var tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+    }
+    for (var i = 0; i < 512; i++) {
+      this.perm[i] = p[i & 255];
+      this.permMod8[i] = this.perm[i] % 8;
+    }
+  }
+
+  SimplexNoise.prototype.noise2D = function(xin, yin) {
+    var s = (xin + yin) * F2;
+    var i = Math.floor(xin + s);
+    var j = Math.floor(yin + s);
+    var t = (i + j) * G2;
+    var x0 = xin - (i - t), y0 = yin - (j - t);
+    var i1, j1;
+    if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+    var x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+    var x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+    var ii = i & 255, jj = j & 255;
+    var n0 = 0, n1 = 0, n2 = 0;
+    var t0 = 0.5 - x0 * x0 - y0 * y0;
+    if (t0 >= 0) { t0 *= t0; var gi0 = this.permMod8[ii + this.perm[jj]]; n0 = t0 * t0 * (grad3[gi0][0] * x0 + grad3[gi0][1] * y0); }
+    var t1 = 0.5 - x1 * x1 - y1 * y1;
+    if (t1 >= 0) { t1 *= t1; var gi1 = this.permMod8[ii + i1 + this.perm[jj + j1]]; n1 = t1 * t1 * (grad3[gi1][0] * x1 + grad3[gi1][1] * y1); }
+    var t2 = 0.5 - x2 * x2 - y2 * y2;
+    if (t2 >= 0) { t2 *= t2; var gi2 = this.permMod8[ii + 1 + this.perm[jj + 1]]; n2 = t2 * t2 * (grad3[gi2][0] * x2 + grad3[gi2][1] * y2); }
+    return 70 * (n0 + n1 + n2);
+  };
+
+  return SimplexNoise;
+})();
+
+var noise = new SimplexNoise(42);
+
+/* ---------------------------------------------------------
+   3. Orb State
+   --------------------------------------------------------- */
+var PALETTE = {
+  heatherMist: "#B4A8C4",
+  glenGreen: "#5F7F6F",
+  lochGreyGreen: "#7A9B8E",
+  silverMist: "#C8D3D5",
+  dawnLight: "#E8DED2"
+};
+
+var orbMode = "speaking";
+var orbColors = [PALETTE.heatherMist, PALETTE.lochGreyGreen, PALETTE.silverMist];
+var rings = [];
+var lastRingAt = 0;
+var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------------------------------------------------------
+   4. Canvas Setup
+   --------------------------------------------------------- */
+var orbCanvas = document.getElementById("orbCanvas");
+var orbCtx = orbCanvas.getContext("2d");
+var pulseCanvas = document.getElementById("pulseCanvas");
+var pulseCtx = pulseCanvas.getContext("2d");
+var orbWrapper = document.getElementById("orbWrapper");
+var orbContainer = document.getElementById("orbContainer");
+var aura1 = document.getElementById("aura1");
+var aura2 = document.getElementById("aura2");
+var aura3 = document.getElementById("aura3");
+
+var grainCanvas = document.createElement("canvas");
+var grainCtx = grainCanvas.getContext("2d");
+var grainPattern = null;
+var grainTileSize = 128;
+
+var orbDiameter, orbRadius, canvasSize, pulseSize, dpr;
+
+function recalcSize() {
+  var vw = window.innerWidth;
+  var vh = window.innerHeight;
+  orbDiameter = Math.round(Math.min(vw, vh) * 0.62);
+  orbRadius = orbDiameter / 2;
+  dpr = window.devicePixelRatio || 1;
+  canvasSize = Math.round(orbDiameter * dpr);
+  pulseSize = Math.round(orbDiameter * 1.75 * dpr);
+
+  var pulseCss = Math.round(orbDiameter * 1.75);
+
+  orbCanvas.width = canvasSize; orbCanvas.height = canvasSize;
+  orbCanvas.style.width = orbDiameter + "px"; orbCanvas.style.height = orbDiameter + "px";
+  orbContainer.style.width = orbDiameter + "px"; orbContainer.style.height = orbDiameter + "px";
+  pulseCanvas.width = pulseSize; pulseCanvas.height = pulseSize;
+  pulseCanvas.style.width = pulseCss + "px"; pulseCanvas.style.height = pulseCss + "px";
+  orbWrapper.style.width = pulseCss + "px"; orbWrapper.style.height = pulseCss + "px";
+
+  var a1 = Math.round(orbDiameter * 1.19);
+  var a2 = Math.round(orbDiameter * 1.41);
+  var a3 = Math.round(orbDiameter * 1.63);
+  aura1.style.width = a1 + "px"; aura1.style.height = a1 + "px";
+  aura2.style.width = a2 + "px"; aura2.style.height = a2 + "px";
+  aura3.style.width = a3 + "px"; aura3.style.height = a3 + "px";
+
+  grainCanvas.width = grainTileSize; grainCanvas.height = grainTileSize;
+  regenerateGrain();
+}
+
+recalcSize();
+if (typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(function() { recalcSize(); }).observe(document.body);
+} else {
+  window.addEventListener("resize", recalcSize);
+}
+
+/* ---------------------------------------------------------
+   5. Grain
+   --------------------------------------------------------- */
+function regenerateGrain() {
+  var w = grainCanvas.width, h = grainCanvas.height;
+  if (w === 0 || h === 0) return;
+  var imgData = grainCtx.createImageData(w, h);
+  var data = imgData.data;
+  for (var i = 0; i < data.length; i += 4) {
+    var v = Math.random() * 255;
+    data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
+  }
+  grainCtx.putImageData(imgData, 0, 0);
+  grainPattern = orbCtx.createPattern(grainCanvas, "repeat");
+}
+
+/* ---------------------------------------------------------
+   6. Blobs
+   --------------------------------------------------------- */
+var BLOB_COUNT = reducedMotion ? 4 : 10;
+var blobs = [];
+for (var bi = 0; bi < 10; bi++) {
+  blobs.push({
+    orbitRadius: 0.1 + (bi / 10) * 0.35,
+    phaseOffset: (bi * 2.399) % (Math.PI * 2),
+    speedVariance: 0.7 + Math.random() * 0.6,
+    noiseSeed: bi * 137.5,
+    colorIdx: bi % 3
+  });
+}
+
+/* ---------------------------------------------------------
+   7. Ring System
+   --------------------------------------------------------- */
+function addRing(nowSec) {
+  var baseSpeed = 90 + (1.9 * 42);
+  var color = orbColors[Math.floor(Math.random() * orbColors.length)];
+  rings.push({
+    born: nowSec,
+    speed: (baseSpeed + Math.random() * 26) * dpr,
+    thickness: (16 + Math.random() * 20) * dpr,
+    max: (orbDiameter * 0.95) * dpr,
+    color: color,
+    alpha: 0.08 + Math.random() * 0.03
+  });
+}
+
+function drawRings(nowSec) {
+  var PW = pulseCanvas.width, PH = pulseCanvas.height;
+  var PCX = PW / 2, PCY = PH / 2;
+  pulseCtx.clearRect(0, 0, PW, PH);
+  rings = rings.filter(function(ring) {
+    var age = nowSec - ring.born;
+    var radius = age * ring.speed;
+    if (radius > ring.max) return false;
+    var t = radius / ring.max;
+    var fade = t < 0.12 ? t / 0.12 : 1 - ((t - 0.12) / 0.88);
+    var alpha = Math.max(0, fade * ring.alpha);
+    if (alpha < 0.003) return true;
+    var c = hexToRgb(ring.color);
+    var inner = Math.max(0, radius - ring.thickness / 2);
+    var outer = radius + ring.thickness / 2;
+    var grad = pulseCtx.createRadialGradient(PCX, PCY, inner, PCX, PCY, outer);
+    grad.addColorStop(0, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
+    grad.addColorStop(0.42, "rgba(" + c.r + "," + c.g + "," + c.b + "," + alpha + ")");
+    grad.addColorStop(0.7, "rgba(" + c.r + "," + c.g + "," + c.b + "," + (alpha * 0.6) + ")");
+    grad.addColorStop(1, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
+    pulseCtx.fillStyle = grad;
+    pulseCtx.beginPath();
+    pulseCtx.arc(PCX, PCY, outer, 0, Math.PI * 2);
+    pulseCtx.fill();
+    return true;
+  });
+}
+
+/* ---------------------------------------------------------
+   8. Orb Drawing
+   --------------------------------------------------------- */
+function drawOrb(nowSec) {
+  var W = orbCanvas.width, H = orbCanvas.height;
+  var CX = W / 2, CY = H / 2, R = W / 2;
+  var colors = orbColors.map(hexToRgb);
+
+  orbCtx.clearRect(0, 0, W, H);
+
+  var wobble = Math.sin(nowSec * 0.52) * 8 * dpr;
+  var throb = 1 + Math.sin(nowSec * 0.42) * 0.018;
+
+  orbCtx.save();
+  orbCtx.beginPath();
+  orbCtx.arc(CX, CY, R, 0, Math.PI * 2);
+  orbCtx.clip();
+
+  orbCtx.save();
+  orbCtx.translate(CX, CY);
+  orbCtx.scale(throb, throb);
+  orbCtx.translate(-CX, -CY);
+
+  var baseGrad = orbCtx.createRadialGradient(CX - 32 * dpr, CY - 38 * dpr, 20 * dpr, CX, CY, R);
+  baseGrad.addColorStop(0, "rgba(" + colors[2 % colors.length].r + "," + colors[2 % colors.length].g + "," + colors[2 % colors.length].b + ",0.84)");
+  baseGrad.addColorStop(0.46, "rgba(" + colors[0].r + "," + colors[0].g + "," + colors[0].b + ",0.56)");
+  baseGrad.addColorStop(1, "rgba(" + colors[1 % colors.length].r + "," + colors[1 % colors.length].g + "," + colors[1 % colors.length].b + ",0.45)");
+  orbCtx.fillStyle = baseGrad;
+  orbCtx.fillRect(0, 0, W, H);
+
+  var blobCount = reducedMotion ? 4 : BLOB_COUNT;
+  for (var i = 0; i < blobCount; i++) {
+    var blob = blobs[i];
+    var speed = 1.9 * blob.speedVariance;
+    if (reducedMotion) speed *= 0.5;
+    var phase = nowSec * (0.2 + (i * 0.07) + speed * 0.08) + blob.phaseOffset;
+
+    var nx = noise.noise2D(blob.noiseSeed + nowSec * 0.15 * speed, i * 0.3);
+    var ny = noise.noise2D(blob.noiseSeed + 100 + nowSec * 0.13 * speed, i * 0.3 + 50);
+
+    var orbitR = blob.orbitRadius * R;
+    var x = CX + Math.cos(phase) * orbitR + nx * orbitR * 0.6;
+    var y = CY + Math.sin(phase * 0.9) * orbitR + ny * orbitR * 0.6;
+
+    var blobR = R * 0.28 + Math.sin(phase * 1.7) * R * 0.06 + wobble;
+    var color = colors[blob.colorIdx % colors.length];
+
+    var blobGrad = orbCtx.createRadialGradient(x, y, 0, x, y, blobR);
+    blobGrad.addColorStop(0, "rgba(" + color.r + "," + color.g + "," + color.b + ",0.13)");
+    blobGrad.addColorStop(1, "rgba(" + color.r + "," + color.g + "," + color.b + ",0)");
+    orbCtx.fillStyle = blobGrad;
+    orbCtx.fillRect(0, 0, W, H);
+  }
+
+  orbCtx.globalCompositeOperation = "soft-light";
+  var sheen = orbCtx.createLinearGradient(0, 0, W, H);
+  sheen.addColorStop(0, "rgba(255,255,255,0.08)");
+  sheen.addColorStop(0.4, "rgba(255,255,255,0.02)");
+  sheen.addColorStop(1, "rgba(20,20,30,0.2)");
+  orbCtx.fillStyle = sheen;
+  orbCtx.fillRect(0, 0, W, H);
+  orbCtx.globalCompositeOperation = "source-over";
+
+  orbCtx.restore();
+
+  if (grainPattern) {
+    var gx = (nowSec * 12 * dpr) % grainTileSize;
+    var gy = (nowSec * 7 * dpr) % grainTileSize;
+    orbCtx.save();
+    orbCtx.globalAlpha = 0.03;
+    orbCtx.translate(gx, gy);
+    orbCtx.fillStyle = grainPattern;
+    orbCtx.fillRect(-grainTileSize, -grainTileSize, W + grainTileSize * 2, H + grainTileSize * 2);
+    orbCtx.restore();
+  }
+
+  orbCtx.restore();
+}
+
+/* ---------------------------------------------------------
+   9. Animation Loop
+   --------------------------------------------------------- */
+function loop(t) {
+  var nowSec = t / 1000;
+  if (nowSec - lastRingAt >= 0.8) {
+    addRing(nowSec);
+    if (Math.random() < 0.45) addRing(nowSec + 0.08);
+    lastRingAt = nowSec;
+  }
+  drawOrb(nowSec);
+  drawRings(nowSec);
+  requestAnimationFrame(loop);
+}
+
+regenerateGrain();
+requestAnimationFrame(loop);
+
+/* =========================================================
+   Screen State Machine
+   ========================================================= */
+
+var currentPhase = "welcome";  // welcome | permissions | ready
+var permissionState = { microphone: "pending", contacts: "pending" };
+
+var screens = {
+  welcome: document.getElementById("screenWelcome"),
+  permissions: document.getElementById("screenPermissions"),
+  ready: document.getElementById("screenReady")
+};
+
+var dots = [
+  document.getElementById("dot0"),
+  document.getElementById("dot1"),
+  document.getElementById("dot2")
+];
+
+var phaseOrder = ["welcome", "permissions", "ready"];
+
+function updateDots(phase) {
+  var idx = phaseOrder.indexOf(phase);
+  dots.forEach(function(d, i) {
+    if (i === idx) {
+      d.classList.add("active");
+    } else {
+      d.classList.remove("active");
+    }
+  });
+}
+
+function transitionTo(phase) {
+  if (phase === currentPhase) return;
+
+  var fromEl = screens[currentPhase];
+  var toEl = screens[phase];
+
+  fromEl.classList.add("exit");
+  fromEl.classList.remove("active");
+
+  setTimeout(function() {
+    fromEl.classList.remove("exit");
+    toEl.classList.add("active");
+    currentPhase = phase;
+    updateDots(phase);
+
+    /* Update orb feel based on phase */
+    if (phase === "permissions") {
+      orbColors = [PALETTE.lochGreyGreen, PALETTE.heatherMist, PALETTE.silverMist];
+    } else if (phase === "ready") {
+      orbColors = [PALETTE.glenGreen, PALETTE.lochGreyGreen, PALETTE.dawnLight];
+    }
+
+    /* Notify Swift host of phase change */
+    postToSwift("onboardingPhaseChanged", { phase: phase });
+  }, 280);
+}
+
+/* ---------------------------------------------------------
+   Permission Handling
+   --------------------------------------------------------- */
+function updatePermissionCard(permission, state) {
+  permissionState[permission] = state;
+
+  var statusEl = document.getElementById(
+    permission === "microphone" ? "statusMic" : "statusContacts"
+  );
+  var cardEl = document.getElementById(
+    permission === "microphone" ? "cardMic" : "cardContacts"
+  );
+
+  statusEl.className = "permission-status " + state;
+  if (state === "granted") {
+    statusEl.textContent = "Granted";
+    cardEl.classList.add("granted");
+  } else if (state === "denied") {
+    statusEl.textContent = "Denied";
+    cardEl.classList.remove("granted");
+  } else {
+    statusEl.textContent = "Allow";
+    cardEl.classList.remove("granted");
+  }
+}
+
+/* Called by Swift to update permission UI after native dialog */
+window.setPermissionState = function(permission, state) {
+  updatePermissionCard(permission, state);
+};
+
+/* ---------------------------------------------------------
+   Button Handlers
+   --------------------------------------------------------- */
+document.getElementById("btnWelcomeNext").addEventListener("click", function() {
+  postToSwift("onboardingAdvance", {});
+  transitionTo("permissions");
+});
+
+document.getElementById("btnPermissionsNext").addEventListener("click", function() {
+  postToSwift("onboardingAdvance", {});
+  transitionTo("ready");
+});
+
+document.getElementById("btnReady").addEventListener("click", function() {
+  postToSwift("onboardingComplete", {});
+  /* Swift will dismiss this webview and show conversation */
+});
+
+/* Permission "Allow" buttons */
+document.querySelectorAll(".permission-status").forEach(function(btn) {
+  btn.addEventListener("click", function() {
+    var permission = this.getAttribute("data-permission");
+    if (permissionState[permission] === "granted") return;
+    postToSwift("requestPermission", { permission: permission });
+  });
+});
+
+/* Help "?" buttons */
+document.querySelectorAll(".btn-help").forEach(function(btn) {
+  btn.addEventListener("click", function() {
+    var permission = this.getAttribute("data-permission");
+    postToSwift("permissionHelp", { permission: permission });
+  });
+});
+
+/* ---------------------------------------------------------
+   Swift → JS API
+   --------------------------------------------------------- */
+/* Set personalised name on ready screen */
+window.setUserName = function(name) {
+  var bubble = document.getElementById("readyBubble");
+  if (name && name.trim()) {
+    bubble.textContent = "Hello, " + name.trim() + ". I'm all set — just speak. " +
+      "Everything stays right here on your Mac.";
+  }
+};
+
+/* Signal ready */
+postToSwift("ready", {});
+</script>
+</body>
+</html>
