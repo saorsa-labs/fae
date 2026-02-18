@@ -13,7 +13,6 @@
 - [x] Task 10: include/fae.h C header with full documentation
 - [x] Task 11: tests/ffi_abi.rs — 6 ABI-level tests, all passing
 - [x] Task 12: justfile staticlib recipes + nm symbol verification (8/8 symbols)
-- [ ] Phase review pending
 
 ## Phase 2.1: Onboarding State Machine (Rust) - COMPLETE
 
@@ -59,4 +58,28 @@ Commit: 8710191
 Swift build: clean (zero errors, zero source warnings)
 
 ### Milestone 2 Complete — 2026-02-18
-### Phase 3.1 Starting...
+
+## Phase 3.1: Just-in-Time Permission Request UI - COMPLETE
+
+- [x] Task 1: src/host/channel.rs — jit field in CapabilityRequestPayload + event propagation
+- [x] Task 2: tests/host_command_channel_v0.rs — 2 new jit field tests
+- [x] Task 3: ProcessCommandSender.swift — parseEventLine dispatches faeCapabilityRequested
+- [x] Task 4: JitPermissionController.swift (NEW) — native permission dialogs mid-conversation
+- [x] Task 5: HostCommandBridge.swift — faeCapabilityGranted/Denied observers → grant/deny dispatch
+- [x] Task 6: FaeNativeApp.swift — JitPermissionController @StateObject retained
+
+Commit: 5544595
+Results: 2263/2263 Rust tests pass, Swift build clean
+
+## Phase 3.2: End-to-End Integration Tests - COMPLETE
+
+- [x] Task 1: src/host/handler.rs — advance_onboarding_phase() impl + phase in query_onboarding_state
+- [x] Task 2: src/host/handler.rs — 4 new handler unit tests (phase cycling, persistence, state)
+- [x] Task 3: tests/onboarding_lifecycle.rs (NEW) — 6 full lifecycle integration tests
+- [x] Task 4: tests/capability_bridge_e2e.rs — 3 JIT capability integration tests
+
+Commit: 4d165f4
+Results: 2275/2275 Rust tests pass, zero warnings
+
+### Milestone 3 Complete — 2026-02-18
+### All milestones complete — project fae-onboarding-skill-system DONE
