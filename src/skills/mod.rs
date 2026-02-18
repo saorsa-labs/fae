@@ -10,18 +10,21 @@
 //! 3. Managed package skills (`SKILL.toml` + markdown entry) installed into
 //!    the same directory with state tracked in `.state/registry.json`.
 
+pub mod builtins;
+pub mod trait_def;
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The built-in canvas skill, compiled from `Skills/canvas.md`.
-pub const CANVAS_SKILL: &str = include_str!("../Skills/canvas.md");
+pub const CANVAS_SKILL: &str = include_str!("../../Skills/canvas.md");
 /// Built-in skill for external LLM setup and operations.
-pub const EXTERNAL_LLM_SKILL: &str = include_str!("../Skills/external-llm.md");
+pub const EXTERNAL_LLM_SKILL: &str = include_str!("../../Skills/external-llm.md");
 /// Built-in skill for Python helper scripts executed via uv.
-pub const UV_SCRIPTS_SKILL: &str = include_str!("../Skills/uv-scripts.md");
+pub const UV_SCRIPTS_SKILL: &str = include_str!("../../Skills/uv-scripts.md");
 /// Built-in skill for desktop automation (screenshots, clicks, window management).
-pub const DESKTOP_SKILL: &str = include_str!("../Skills/desktop.md");
+pub const DESKTOP_SKILL: &str = include_str!("../../Skills/desktop.md");
 
 /// Package manifest accepted by installer.
 #[derive(Debug, Clone, Deserialize)]

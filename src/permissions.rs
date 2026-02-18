@@ -121,7 +121,14 @@ pub struct PermissionGrant {
 pub struct PermissionStore {
     /// Individual permission grant records.
     #[serde(default)]
-    pub grants: Vec<PermissionGrant>,
+    grants: Vec<PermissionGrant>,
+}
+
+impl PermissionStore {
+    /// Read-only access to the underlying grant records.
+    pub fn grants(&self) -> &[PermissionGrant] {
+        &self.grants
+    }
 }
 
 impl PermissionStore {

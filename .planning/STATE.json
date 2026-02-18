@@ -7,9 +7,9 @@
     "name": "Permission-Gated Skill Engine"
   },
   "phase": {
-    "number": "1.1",
-    "name": "Permission Store + Config Schema",
-    "plan": "PLAN-phase-1.1.md"
+    "number": "1.2",
+    "name": "FaeSkill Trait + Built-in Skill Definitions",
+    "plan": "PLAN-phase-1.2.md"
   },
   "progress": {
     "total_tasks": 5,
@@ -22,5 +22,5 @@
     "iteration": 2,
     "last_verdict": "APPROVED"
   },
-  "last_updated": "2026-02-18T15:45:00Z"
+  "last_updated": "2026-02-18T16:15:00Z"
 }

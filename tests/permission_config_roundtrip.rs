@@ -26,7 +26,7 @@ fn config_without_permissions_section_deserializes() {
     let toml_str = "";
     let config: SpeechConfig = toml::from_str(toml_str).expect("deserialize empty TOML");
 
-    assert!(config.permissions.grants.is_empty());
+    assert!(config.permissions.grants().is_empty());
     assert!(!config.onboarded);
 }
 

@@ -1,47 +1,45 @@
-# Phase 1.2: Swift Integration — EmbeddedCoreSender
+# Phase 1.2: FaeSkill Trait + Built-in Skill Definitions
 
-## Objective
+## Goal
+Create the `FaeSkill` trait that defines a permission-gated skill, and implement
+built-in skill definitions for each system capability. Skills check their
+required permissions against the `PermissionStore` and only inject prompt
+fragments when active.
 
-Replace `ProcessCommandSender` (subprocess IPC) with `EmbeddedCoreSender`
-that calls the C FFI functions from `libfae.a` directly in-process.
+## Tasks
 
-## Quality gates
+### Task 1: Convert `src/skills.rs` to module directory
+Move `src/skills.rs` → `src/skills/mod.rs` preserving all existing code.
+Verify `cargo check` passes with zero changes to public API.
 
-```bash
-swift build --package-path native/macos/FaeNativeApp -c release
-# Must produce a clean build with zero warnings.
-```
+**Files:** `src/skills.rs` → `src/skills/mod.rs`
 
----
+### Task 2: Create `FaeSkill` trait in `src/skills/trait_def.rs`
+Define the trait with: `name()`, `description()`, `required_permissions()`,
+`is_available()` (default impl checking PermissionStore), `prompt_fragment()`.
+Add `SkillSet` type that holds all registered skills and can query
+available skills given a PermissionStore.
 
-## Task 1 — Create CLibFae C module for SPM
+**Files:** `src/skills/trait_def.rs` (new)
 
-Files: Sources/CLibFae/include/fae.h (copy), Sources/CLibFae/include/module.modulemap (NEW), Sources/CLibFae/shim.c (NEW)
+### Task 3: Create built-in skill definitions
+Implement 9 built-in skills: Calendar, Contacts, Mail, Reminders, Files,
+Notifications, Location, Camera, DesktopAutomation. Each struct implements
+`FaeSkill` with appropriate permission requirements and prompt fragments.
+Add `builtin_skills()` constructor in builtins module.
 
-Expose the Fae C header to Swift via a SPM-compatible C library target.
+**Files:** `src/skills/builtins.rs` (new)
 
-## Task 2 — Update Package.swift
+### Task 4: Unit tests for trait + builtins
+Test: default availability with empty store, availability after granting
+required permissions, unavailability when permission denied, prompt fragment
+non-empty for all builtins, SkillSet filtering.
 
-Files: Package.swift
+**Files:** `src/skills/trait_def.rs` (test module), `src/skills/builtins.rs` (test module)
 
-Add CLibFae target. Add libfae.a linker settings to FaeNativeApp target.
-Needs `-L` path to Rust build output and `-lfae` plus system frameworks.
+### Task 5: Integration test — permission grant activates skills
+End-to-end test: create PermissionStore, grant specific permissions, verify
+correct subset of skills report as available. Verify skill prompt fragments
+are only collected for available skills.
 
-## Task 3 — Create EmbeddedCoreSender.swift
-
-Files: Sources/FaeNativeApp/EmbeddedCoreSender.swift (NEW)
-
-Implements `HostCommandSender`. Calls `fae_core_init`, `fae_core_start`,
-`fae_core_send_command`, `fae_core_stop`, `fae_core_destroy`. Registers
-event callback that posts to NotificationCenter.
-
-## Task 4 — Wire into FaeNativeApp.swift
-
-Files: Sources/FaeNativeApp/FaeNativeApp.swift
-
-Replace `ProcessCommandSender` with `EmbeddedCoreSender`. Remove
-`locateHostBinary()`. Update init/onAppear/deinit.
-
-## Task 5 — Build verification
-
-Build libfae.a for arm64, then swift build. Verify clean compilation.
+**Files:** `tests/permission_skill_gate.rs` (new)
