@@ -215,14 +215,6 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
-          # Sign inside-out: resources first, then binary, then bundle
-          if [ -d "$APP_BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle" ]; then
-            codesign --force --options runtime \
-              --sign "$MACOS_SIGNING_IDENTITY" \
-              --timestamp \
-              "$APP_BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle"
-          fi
-
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
