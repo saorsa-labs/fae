@@ -24,8 +24,9 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::Mutex;
 
-use crate::host::channel::{HostCommandServer, NoopDeviceTransferHandler, command_channel};
+use crate::host::channel::{HostCommandServer, command_channel};
 use crate::host::contract::{CommandEnvelope, EventEnvelope};
+use crate::host::handler::FaeDeviceTransferHandler;
 use tokio::sync::broadcast;
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ struct FaeRuntime {
     callback: Mutex<Option<FaeEventCallback>>,
     callback_user_data: Mutex<*mut c_void>,
     started: Mutex<bool>,
-    server: Mutex<Option<HostCommandServer<NoopDeviceTransferHandler>>>,
+    server: Mutex<Option<HostCommandServer<FaeDeviceTransferHandler>>>,
     server_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -185,7 +186,7 @@ pub unsafe extern "C" fn fae_core_init(config_json: *const c_char) -> *mut c_voi
     };
 
     let event_capacity = config.event_buffer_size.unwrap_or(64).max(1);
-    let handler = NoopDeviceTransferHandler;
+    let handler = FaeDeviceTransferHandler;
     let (client, server) = command_channel(32, event_capacity, handler);
     let event_rx = client.subscribe_events();
 

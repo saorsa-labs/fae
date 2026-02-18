@@ -25,7 +25,8 @@ final class EmbeddedCoreSender: HostCommandSender {
 
     /// Start the Rust runtime (spawns the command server on the tokio runtime).
     ///
-    /// Must be called before `sendCommand`.
+    /// Must be called before `sendCommand`. Registers an event callback that
+    /// posts Rust-side events to `NotificationCenter` as `.faeBackendEvent`.
     func start() throws {
         guard let handle else {
             throw EmbeddedCoreError.notInitialized
@@ -34,7 +35,11 @@ final class EmbeddedCoreSender: HostCommandSender {
         if rc != 0 {
             throw EmbeddedCoreError.startFailed(code: rc)
         }
-        NSLog("EmbeddedCoreSender: runtime started")
+
+        // Register the event callback so Rust events reach the Swift UI.
+        fae_core_set_event_callback(handle, faeEventCallback, nil)
+
+        NSLog("EmbeddedCoreSender: runtime started with event callback")
     }
 
     /// Send a command to the Rust backend and log the response.
@@ -87,6 +92,33 @@ final class EmbeddedCoreSender: HostCommandSender {
     deinit {
         stop()
     }
+}
+
+/// C-level callback invoked synchronously by the Rust runtime during
+/// `fae_core_send_command`. Parses the event JSON and posts a notification
+/// on the main thread so the UI layer can observe backend events.
+private func faeEventCallback(eventJson: UnsafePointer<CChar>?, userData: UnsafeMutableRawPointer?) {
+    guard let eventJson else { return }
+    let jsonString = String(cString: eventJson)
+
+    guard let data = jsonString.data(using: .utf8),
+          let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else {
+        NSLog("EmbeddedCoreSender: failed to parse event JSON")
+        return
+    }
+
+    DispatchQueue.main.async {
+        NotificationCenter.default.post(
+            name: .faeBackendEvent,
+            object: nil,
+            userInfo: parsed
+        )
+    }
+}
+
+extension Notification.Name {
+    static let faeBackendEvent = Notification.Name("faeBackendEvent")
 }
 
 /// Errors specific to the embedded Rust core lifecycle.

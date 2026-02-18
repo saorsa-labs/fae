@@ -62,6 +62,50 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn grant_capability(&self, _capability: &str, _scope: Option<&str>) -> Result<()> {
         Ok(())
     }
+    fn request_conversation_inject_text(&self, _text: &str) -> Result<()> {
+        Ok(())
+    }
+    fn request_conversation_gate_set(&self, _active: bool) -> Result<()> {
+        Ok(())
+    }
+    fn request_runtime_start(&self) -> Result<()> {
+        Ok(())
+    }
+    fn request_runtime_stop(&self) -> Result<()> {
+        Ok(())
+    }
+    fn query_runtime_status(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({"status": "unknown"}))
+    }
+    fn request_approval_respond(
+        &self,
+        _request_id: &str,
+        _approved: bool,
+        _reason: Option<&str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn query_scheduler_list(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({"tasks": []}))
+    }
+    fn request_scheduler_create(&self, _spec: &serde_json::Value) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({"id": null}))
+    }
+    fn request_scheduler_update(&self, _id: &str, _spec: &serde_json::Value) -> Result<()> {
+        Ok(())
+    }
+    fn request_scheduler_delete(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+    fn request_scheduler_trigger_now(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+    fn query_config_get(&self, _key: Option<&str>) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({}))
+    }
+    fn request_config_patch(&self, _key: &str, _value: &serde_json::Value) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -177,13 +221,19 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::OrbFlash => self.handle_orb_flash(envelope),
             CommandName::CapabilityRequest => self.handle_capability_request(envelope),
             CommandName::CapabilityGrant => self.handle_capability_grant(envelope),
-            _ => Ok(ResponseEnvelope::error(
-                envelope.request_id.clone(),
-                format!(
-                    "command not implemented in host channel: {}",
-                    envelope.command.as_str()
-                ),
-            )),
+            CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
+            CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
+            CommandName::RuntimeStart => self.handle_runtime_start(envelope),
+            CommandName::RuntimeStop => self.handle_runtime_stop(envelope),
+            CommandName::RuntimeStatus => self.handle_runtime_status(envelope),
+            CommandName::ApprovalRespond => self.handle_approval_respond(envelope),
+            CommandName::SchedulerList => self.handle_scheduler_list(envelope),
+            CommandName::SchedulerCreate => self.handle_scheduler_create(envelope),
+            CommandName::SchedulerUpdate => self.handle_scheduler_update(envelope),
+            CommandName::SchedulerDelete => self.handle_scheduler_delete(envelope),
+            CommandName::SchedulerTriggerNow => self.handle_scheduler_trigger_now(envelope),
+            CommandName::ConfigGet => self.handle_config_get(envelope),
+            CommandName::ConfigPatch => self.handle_config_patch(envelope),
         }
     }
 
@@ -374,6 +424,180 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
                 "capability": grant.capability,
                 "scope": grant.scope
             }),
+        ))
+    }
+
+    fn handle_conversation_inject_text(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let text = parse_conversation_text(&envelope.payload)?;
+        self.handler.request_conversation_inject_text(&text)?;
+
+        self.emit_event(
+            "conversation.text_injected",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "text": text
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "text": text
+            }),
+        ))
+    }
+
+    fn handle_conversation_gate_set(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let active = parse_gate_active(&envelope.payload)?;
+        self.handler.request_conversation_gate_set(active)?;
+
+        self.emit_event(
+            "conversation.gate_set",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "active": active
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "active": active
+            }),
+        ))
+    }
+
+    fn handle_runtime_start(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        self.handler.request_runtime_start()?;
+        self.emit_event(
+            "runtime.started",
+            serde_json::json!({"request_id": envelope.request_id}),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
+        ))
+    }
+
+    fn handle_runtime_stop(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        self.handler.request_runtime_stop()?;
+        self.emit_event(
+            "runtime.stopped",
+            serde_json::json!({"request_id": envelope.request_id}),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
+        ))
+    }
+
+    fn handle_runtime_status(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let status = self.handler.query_runtime_status()?;
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), status))
+    }
+
+    fn handle_approval_respond(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let (req_id, approved, reason) = parse_approval_respond(&envelope.payload)?;
+        self.handler
+            .request_approval_respond(&req_id, approved, reason.as_deref())?;
+        self.emit_event(
+            "approval.responded",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "approval_request_id": req_id,
+                "approved": approved
+            }),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "approved": approved}),
+        ))
+    }
+
+    fn handle_scheduler_list(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let list = self.handler.query_scheduler_list()?;
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), list))
+    }
+
+    fn handle_scheduler_create(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let result = self.handler.request_scheduler_create(&envelope.payload)?;
+        self.emit_event(
+            "scheduler.created",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "result": result
+            }),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "result": result}),
+        ))
+    }
+
+    fn handle_scheduler_update(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let id = parse_scheduler_id(&envelope.payload)?;
+        self.handler
+            .request_scheduler_update(&id, &envelope.payload)?;
+        self.emit_event(
+            "scheduler.updated",
+            serde_json::json!({"request_id": envelope.request_id, "id": id}),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "id": id}),
+        ))
+    }
+
+    fn handle_scheduler_delete(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let id = parse_scheduler_id(&envelope.payload)?;
+        self.handler.request_scheduler_delete(&id)?;
+        self.emit_event(
+            "scheduler.deleted",
+            serde_json::json!({"request_id": envelope.request_id, "id": id}),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "id": id}),
+        ))
+    }
+
+    fn handle_scheduler_trigger_now(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let id = parse_scheduler_id(&envelope.payload)?;
+        self.handler.request_scheduler_trigger_now(&id)?;
+        self.emit_event(
+            "scheduler.triggered",
+            serde_json::json!({"request_id": envelope.request_id, "id": id}),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "id": id}),
+        ))
+    }
+
+    fn handle_config_get(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let key = envelope
+            .payload
+            .get("key")
+            .and_then(serde_json::Value::as_str);
+        let config = self.handler.query_config_get(key)?;
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), config))
+    }
+
+    fn handle_config_patch(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let (key, value) = parse_config_patch(&envelope.payload)?;
+        self.handler.request_config_patch(&key, &value)?;
+        self.emit_event(
+            "config.patched",
+            serde_json::json!({"request_id": envelope.request_id, "key": key}),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "key": key}),
         ))
     }
 
@@ -568,5 +792,173 @@ fn parse_optional_scope(payload: &serde_json::Value, command: &str) -> Result<Op
         Some(_) => Err(SpeechError::Pipeline(format!(
             "{command} payload.scope must be a string when provided"
         ))),
+    }
+}
+
+fn parse_conversation_text(payload: &serde_json::Value) -> Result<String> {
+    let Some(raw_text) = payload.get("text").and_then(serde_json::Value::as_str) else {
+        return Err(SpeechError::Pipeline(
+            "conversation.inject_text requires payload.text".to_owned(),
+        ));
+    };
+
+    let text = raw_text.trim();
+    if text.is_empty() {
+        return Err(SpeechError::Pipeline(
+            "conversation.inject_text requires a non-empty payload.text".to_owned(),
+        ));
+    }
+
+    Ok(text.to_owned())
+}
+
+fn parse_gate_active(payload: &serde_json::Value) -> Result<bool> {
+    let Some(active) = payload.get("active").and_then(serde_json::Value::as_bool) else {
+        return Err(SpeechError::Pipeline(
+            "conversation.gate_set requires payload.active (boolean)".to_owned(),
+        ));
+    };
+    Ok(active)
+}
+
+fn parse_approval_respond(payload: &serde_json::Value) -> Result<(String, bool, Option<String>)> {
+    let req_id = parse_non_empty_field(payload, "request_id", "approval.respond")?;
+    let Some(approved) = payload.get("approved").and_then(serde_json::Value::as_bool) else {
+        return Err(SpeechError::Pipeline(
+            "approval.respond requires payload.approved (boolean)".to_owned(),
+        ));
+    };
+    let reason = payload
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    Ok((req_id, approved, reason))
+}
+
+fn parse_scheduler_id(payload: &serde_json::Value) -> Result<String> {
+    parse_non_empty_field(payload, "id", "scheduler")
+}
+
+fn parse_config_patch(payload: &serde_json::Value) -> Result<(String, serde_json::Value)> {
+    let key = parse_non_empty_field(payload, "key", "config.patch")?;
+    let Some(value) = payload.get("value") else {
+        return Err(SpeechError::Pipeline(
+            "config.patch requires payload.value".to_owned(),
+        ));
+    };
+    Ok((key, value.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::contract::{CommandEnvelope, CommandName};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct TestHandler {
+        inject_called: Arc<AtomicBool>,
+        gate_called: Arc<AtomicBool>,
+    }
+
+    impl TestHandler {
+        fn new() -> Self {
+            Self {
+                inject_called: Arc::new(AtomicBool::new(false)),
+                gate_called: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    impl DeviceTransferHandler for TestHandler {
+        fn request_move(&self, _target: DeviceTarget) -> Result<()> {
+            Ok(())
+        }
+        fn request_go_home(&self) -> Result<()> {
+            Ok(())
+        }
+        fn request_conversation_inject_text(&self, _text: &str) -> Result<()> {
+            self.inject_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn request_conversation_gate_set(&self, _active: bool) -> Result<()> {
+            self.gate_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn make_server() -> HostCommandServer<TestHandler> {
+        let handler = TestHandler::new();
+        let (_client, server) = command_channel(8, 8, handler);
+        server
+    }
+
+    fn make_envelope(command: CommandName, payload: serde_json::Value) -> CommandEnvelope {
+        CommandEnvelope::new("test-req-1", command, payload)
+    }
+
+    #[test]
+    fn conversation_inject_text_accepted() {
+        let server = make_server();
+        let envelope = make_envelope(
+            CommandName::ConversationInjectText,
+            serde_json::json!({"text": "Hello Fae"}),
+        );
+        let resp = server.route(&envelope).unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.payload["accepted"], true);
+        assert_eq!(resp.payload["text"], "Hello Fae");
+    }
+
+    #[test]
+    fn conversation_inject_text_empty_returns_error() {
+        let server = make_server();
+        let envelope = make_envelope(
+            CommandName::ConversationInjectText,
+            serde_json::json!({"text": "   "}),
+        );
+        let resp = server.route(&envelope);
+        assert!(resp.is_err() || !resp.unwrap().ok);
+    }
+
+    #[test]
+    fn conversation_inject_text_missing_field_returns_error() {
+        let server = make_server();
+        let envelope = make_envelope(CommandName::ConversationInjectText, serde_json::json!({}));
+        let resp = server.route(&envelope);
+        assert!(resp.is_err());
+    }
+
+    #[test]
+    fn conversation_gate_set_active_accepted() {
+        let server = make_server();
+        let envelope = make_envelope(
+            CommandName::ConversationGateSet,
+            serde_json::json!({"active": true}),
+        );
+        let resp = server.route(&envelope).unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.payload["accepted"], true);
+        assert_eq!(resp.payload["active"], true);
+    }
+
+    #[test]
+    fn conversation_gate_set_missing_field_returns_error() {
+        let server = make_server();
+        let envelope = make_envelope(CommandName::ConversationGateSet, serde_json::json!({}));
+        let resp = server.route(&envelope);
+        assert!(resp.is_err());
+    }
+
+    #[test]
+    fn conversation_gate_set_non_bool_returns_error() {
+        let server = make_server();
+        let envelope = make_envelope(
+            CommandName::ConversationGateSet,
+            serde_json::json!({"active": "yes"}),
+        );
+        let resp = server.route(&envelope);
+        assert!(resp.is_err());
     }
 }

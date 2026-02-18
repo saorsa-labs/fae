@@ -18,6 +18,8 @@ struct RecordingHandler {
     flashes: Arc<Mutex<Vec<String>>>,
     capability_requests: Arc<Mutex<Vec<CapabilityRequestRecord>>>,
     capability_grants: Arc<Mutex<Vec<CapabilityGrantRecord>>>,
+    conversation_texts: Arc<Mutex<Vec<String>>>,
+    gate_sets: Arc<Mutex<Vec<bool>>>,
 }
 
 impl DeviceTransferHandler for RecordingHandler {
@@ -90,6 +92,22 @@ impl DeviceTransferHandler for RecordingHandler {
             .lock()
             .expect("lock capability grant records")
             .push((capability.to_owned(), scope.map(ToOwned::to_owned)));
+        Ok(())
+    }
+
+    fn request_conversation_inject_text(&self, text: &str) -> fae::Result<()> {
+        self.conversation_texts
+            .lock()
+            .expect("lock conversation text records")
+            .push(text.to_owned());
+        Ok(())
+    }
+
+    fn request_conversation_gate_set(&self, active: bool) -> fae::Result<()> {
+        self.gate_sets
+            .lock()
+            .expect("lock gate set records")
+            .push(active);
         Ok(())
     }
 }
@@ -204,7 +222,7 @@ async fn invalid_device_target_returns_error_response() {
 }
 
 #[tokio::test]
-async fn unsupported_command_returns_error_envelope() {
+async fn runtime_start_returns_accepted() {
     let handler = RecordingHandler::default();
     let (client, server) = command_channel(8, 8, handler);
     let handle = tokio::spawn(server.run());
@@ -216,15 +234,10 @@ async fn unsupported_command_returns_error_envelope() {
             serde_json::json!({}),
         ))
         .await
-        .expect("unsupported command should still produce response envelope");
+        .expect("runtime.start should return response");
 
-    assert!(!response.ok);
-    assert!(
-        response
-            .error
-            .expect("error message present")
-            .contains("not implemented"),
-    );
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
 
     handle.abort();
 }
@@ -719,6 +732,199 @@ async fn orb_flash_missing_field() {
 
     let msg = response.to_string();
     assert!(msg.contains("payload.flash_type"), "{msg}");
+
+    handle.abort();
+}
+
+// ---- ConversationInjectText tests ----
+
+#[tokio::test]
+async fn conversation_inject_text_routes_to_handler_and_event_stream() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-conv-inject",
+            CommandName::ConversationInjectText,
+            serde_json::json!({"text": "Hello Fae"}),
+        ))
+        .await
+        .expect("conversation inject text should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["text"], "Hello Fae");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "conversation.text_injected");
+    assert_eq!(event.payload["text"], "Hello Fae");
+
+    let texts = tracker
+        .conversation_texts
+        .lock()
+        .expect("lock conversation text records");
+    assert_eq!(texts.as_slice(), &["Hello Fae"]);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn conversation_inject_text_rejects_empty_text() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-conv-inject-empty",
+            CommandName::ConversationInjectText,
+            serde_json::json!({"text": "   "}),
+        ))
+        .await
+        .expect_err("empty text should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("non-empty"), "{msg}");
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn conversation_inject_text_missing_field() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-conv-inject-missing",
+            CommandName::ConversationInjectText,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect_err("missing text should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("payload.text"), "{msg}");
+
+    handle.abort();
+}
+
+// ---- ConversationGateSet tests ----
+
+#[tokio::test]
+async fn conversation_gate_set_routes_to_handler_and_event_stream() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-conv-gate-set",
+            CommandName::ConversationGateSet,
+            serde_json::json!({"active": true}),
+        ))
+        .await
+        .expect("conversation gate set should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["active"], true);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "conversation.gate_set");
+    assert_eq!(event.payload["active"], true);
+
+    let gates = tracker.gate_sets.lock().expect("lock gate set records");
+    assert_eq!(gates.as_slice(), &[true]);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn conversation_gate_set_false_accepted() {
+    let handler = RecordingHandler::default();
+    let tracker = handler.clone();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-conv-gate-false",
+            CommandName::ConversationGateSet,
+            serde_json::json!({"active": false}),
+        ))
+        .await
+        .expect("conversation gate set false should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["active"], false);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "conversation.gate_set");
+    assert_eq!(event.payload["active"], false);
+
+    let gates = tracker.gate_sets.lock().expect("lock gate set records");
+    assert_eq!(gates.as_slice(), &[false]);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn conversation_gate_set_missing_field() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-conv-gate-missing",
+            CommandName::ConversationGateSet,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect_err("missing active should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("payload.active"), "{msg}");
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn conversation_gate_set_non_bool() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-conv-gate-nonbool",
+            CommandName::ConversationGateSet,
+            serde_json::json!({"active": "yes"}),
+        ))
+        .await
+        .expect_err("non-bool active should return channel error");
+
+    let msg = response.to_string();
+    assert!(msg.contains("payload.active"), "{msg}");
 
     handle.abort();
 }

@@ -2,4 +2,6 @@
 
 pub mod channel;
 pub mod contract;
+pub mod handler;
 pub mod latency;
+pub mod stdio;
