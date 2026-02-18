@@ -56,6 +56,8 @@ pub enum CommandName {
     CapabilityDeny,
     #[serde(rename = "onboarding.get_state")]
     OnboardingGetState,
+    #[serde(rename = "onboarding.advance")]
+    OnboardingAdvance,
     #[serde(rename = "onboarding.complete")]
     OnboardingComplete,
     #[serde(rename = "config.get")]
@@ -93,6 +95,7 @@ impl CommandName {
             Self::CapabilityGrant => "capability.grant",
             Self::CapabilityDeny => "capability.deny",
             Self::OnboardingGetState => "onboarding.get_state",
+            Self::OnboardingAdvance => "onboarding.advance",
             Self::OnboardingComplete => "onboarding.complete",
             Self::ConfigGet => "config.get",
             Self::ConfigPatch => "config.patch",
@@ -127,6 +130,7 @@ impl CommandName {
             "capability.grant" => Some(Self::CapabilityGrant),
             "capability.deny" => Some(Self::CapabilityDeny),
             "onboarding.get_state" => Some(Self::OnboardingGetState),
+            "onboarding.advance" => Some(Self::OnboardingAdvance),
             "onboarding.complete" => Some(Self::OnboardingComplete),
             "config.get" => Some(Self::ConfigGet),
             "config.patch" => Some(Self::ConfigPatch),

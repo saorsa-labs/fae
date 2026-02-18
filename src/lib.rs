@@ -48,6 +48,7 @@ pub mod model_picker;
 pub mod model_selection;
 pub mod model_tier;
 pub mod models;
+pub mod onboarding;
 pub mod permissions;
 pub mod personality;
 pub mod pipeline;

@@ -45,6 +45,10 @@ pub struct SpeechConfig {
     /// Defaults to `false` — existing users who never onboarded will see the flow.
     #[serde(default)]
     pub onboarded: bool,
+    /// Current phase in the onboarding state machine.
+    /// Defaults to `Welcome` for new users.
+    #[serde(default)]
+    pub onboarding_phase: crate::onboarding::OnboardingPhase,
     /// Security-scoped bookmarks for persistent file access under App Sandbox.
     pub bookmarks: Vec<BookmarkEntry>,
 }

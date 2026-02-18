@@ -1,5 +1,6 @@
 use fae::host::channel::{DeviceTarget, DeviceTransferHandler, command_channel};
 use fae::host::contract::{CommandEnvelope, CommandName};
+use fae::onboarding::OnboardingPhase;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -925,6 +926,96 @@ async fn conversation_gate_set_non_bool() {
 
     let msg = response.to_string();
     assert!(msg.contains("payload.active"), "{msg}");
+
+    handle.abort();
+}
+
+// ---- Onboarding command tests ----
+
+#[tokio::test]
+async fn onboarding_get_state_returns_state_payload() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-onboarding-get-state",
+            CommandName::OnboardingGetState,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("onboarding.get_state should succeed");
+
+    assert!(response.ok);
+    // Default noop handler returns onboarded: false
+    assert_eq!(response.payload["onboarded"], false);
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn onboarding_complete_emits_event_and_returns_accepted() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-onboarding-complete",
+            CommandName::OnboardingComplete,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("onboarding.complete should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["onboarded"], true);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "onboarding.completed");
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn onboarding_advance_returns_accepted_with_phase() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-onboarding-advance",
+            CommandName::OnboardingAdvance,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("onboarding.advance should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    // Response must include a valid phase string
+    let phase_str = response.payload["phase"]
+        .as_str()
+        .expect("phase must be a string");
+    assert!(
+        OnboardingPhase::parse(phase_str).is_some(),
+        "phase `{phase_str}` must be a known OnboardingPhase variant"
+    );
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "onboarding.phase_advanced");
+    assert!(event.payload["phase"].is_string());
 
     handle.abort();
 }

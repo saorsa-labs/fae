@@ -21,6 +21,8 @@ fn command_name_parse_known_and_unknown() {
     assert_eq!(capability_deny, Some(CommandName::CapabilityDeny));
     let onboarding_get_state = CommandName::parse("onboarding.get_state");
     assert_eq!(onboarding_get_state, Some(CommandName::OnboardingGetState));
+    let onboarding_advance = CommandName::parse("onboarding.advance");
+    assert_eq!(onboarding_advance, Some(CommandName::OnboardingAdvance));
     let onboarding_complete = CommandName::parse("onboarding.complete");
     assert_eq!(onboarding_complete, Some(CommandName::OnboardingComplete));
 
@@ -57,6 +59,10 @@ fn command_name_parse_known_and_unknown() {
     assert_eq!(
         CommandName::OnboardingGetState.as_str(),
         "onboarding.get_state"
+    );
+    assert_eq!(
+        CommandName::OnboardingAdvance.as_str(),
+        "onboarding.advance"
     );
     assert_eq!(
         CommandName::OnboardingComplete.as_str(),
@@ -235,6 +241,21 @@ fn command_name_onboarding_get_state_roundtrip() {
     assert_eq!(json, "onboarding.get_state");
     let deserialized: CommandName =
         serde_json::from_value(json).expect("deserialize OnboardingGetState");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_onboarding_advance_roundtrip() {
+    let name = CommandName::OnboardingAdvance;
+    let wire = name.as_str();
+    assert_eq!(wire, "onboarding.advance");
+    let parsed = CommandName::parse(wire).expect("parse onboarding.advance");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize OnboardingAdvance");
+    assert_eq!(json, "onboarding.advance");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OnboardingAdvance");
     assert_eq!(deserialized, name);
 }
 

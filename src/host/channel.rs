@@ -2,6 +2,7 @@
 
 use crate::error::{Result, SpeechError};
 use crate::host::contract::{CommandEnvelope, CommandName, EventEnvelope, ResponseEnvelope};
+use crate::onboarding::OnboardingPhase;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -66,9 +67,16 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn deny_capability(&self, _capability: &str, _scope: Option<&str>) -> Result<()> {
         Ok(())
     }
-    /// Query the current onboarding state (onboarded flag + granted permissions).
+    /// Query the current onboarding state (onboarded flag + current phase).
     fn query_onboarding_state(&self) -> Result<serde_json::Value> {
-        Ok(serde_json::json!({"onboarded": false}))
+        Ok(serde_json::json!({"onboarded": false, "phase": "welcome"}))
+    }
+    /// Advance the onboarding phase by one step.
+    ///
+    /// Returns the new phase after advancing. Returns the current phase
+    /// unchanged if already at `Complete`.
+    fn advance_onboarding_phase(&self) -> Result<OnboardingPhase> {
+        Ok(OnboardingPhase::Welcome)
     }
     /// Mark onboarding as complete, persisting to config.
     fn complete_onboarding(&self) -> Result<()> {
@@ -236,6 +244,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::CapabilityGrant => self.handle_capability_grant(envelope),
             CommandName::CapabilityDeny => self.handle_capability_deny(envelope),
             CommandName::OnboardingGetState => self.handle_onboarding_get_state(envelope),
+            CommandName::OnboardingAdvance => self.handle_onboarding_advance(envelope),
             CommandName::OnboardingComplete => self.handle_onboarding_complete(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
@@ -470,6 +479,26 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
     fn handle_onboarding_get_state(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         let state = self.handler.query_onboarding_state()?;
         Ok(ResponseEnvelope::ok(envelope.request_id.clone(), state))
+    }
+
+    fn handle_onboarding_advance(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let new_phase = self.handler.advance_onboarding_phase()?;
+
+        self.emit_event(
+            "onboarding.phase_advanced",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "phase": new_phase.as_str()
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "phase": new_phase.as_str()
+            }),
+        ))
     }
 
     fn handle_onboarding_complete(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {

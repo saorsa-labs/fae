@@ -1,169 +1,187 @@
-# Phase 2.1: WebSearchTool & FetchUrlTool
+# Phase 2.1: Onboarding State Machine (Rust)
 
-Implement Fae's `Tool` trait for web search and URL fetching. These tools bridge the sync `Tool::execute()` interface to the async `fae_search` API using `tokio::runtime::Handle::current().block_on()`.
+Add `OnboardingPhase` enum tracked in config, add `onboarding.advance` host command,
+wire `onboarding.get_state` and `onboarding.complete` to the real state machine, and
+emit events on phase transitions.
 
-## Architecture Notes
+## Architecture
 
-- `Tool::execute(&self, args: Value) -> Result<ToolResult, FaeLlmError>` is **synchronous**
-- `fae_search::search()` is **async** — bridge via `Handle::current().block_on()`
-- Both tools are **read-only** (`allowed_in_mode` returns true for all modes)
-- Feature-gated behind `web-search` feature flag (optional dependency)
-- Results formatted as structured text for LLM consumption
+- `src/onboarding.rs` (new): `OnboardingPhase` enum + `OnboardingState` struct
+- `src/config.rs`: add `onboarding_phase: OnboardingPhase` field to `SpeechConfig`
+- `src/host/contract.rs`: add `OnboardingAdvance` command variant
+- `src/host/channel.rs`: add `advance_onboarding_phase()` to `DeviceTransferHandler` trait
+  and wire `handle_onboarding_advance()` in the server router
+- `tests/host_contract_v0.rs`: add contract roundtrip tests for `onboarding.advance`
+- `tests/host_command_channel_v0.rs`: add channel integration tests for all three
+  onboarding commands
+
+## Phase transitions
+
+```
+Welcome → Permissions → Ready → Complete
+```
+
+Calling `onboarding.advance` moves forward one step. Calling `onboarding.complete`
+jumps directly to `Complete` and also sets `config.onboarded = true`. The
+`onboarding.get_state` returns `{ phase, onboarded }`.
 
 ---
 
-## Task 1: Add fae-search as optional dependency behind feature flag
+## Task 1: Create src/onboarding.rs with OnboardingPhase enum and state helpers
 
-Add fae-search to the root Cargo.toml as an optional path dependency gated by the `web-search` feature flag. This is a prerequisite for all subsequent tasks.
+Create the onboarding module with the phase enum and serialization.
 
 **Files:**
-- Modify: `Cargo.toml` (add `web-search` feature, add `fae-search` dependency)
+- Create: `src/onboarding.rs`
+
+**Content:**
+```rust
+/// Four-phase onboarding state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingPhase {
+    #[default]
+    Welcome,
+    Permissions,
+    Ready,
+    Complete,
+}
+
+impl OnboardingPhase {
+    /// Advance to the next phase, returning None if already Complete.
+    pub fn advance(self) -> Option<Self> { ... }
+    /// Wire format string.
+    pub fn as_str(self) -> &'static str { ... }
+    /// Parse from wire format.
+    pub fn parse(raw: &str) -> Option<Self> { ... }
+}
+```
+
+Full doc comments on every public item. Tests inside the module:
+- `advance_welcome_yields_permissions`
+- `advance_permissions_yields_ready`
+- `advance_ready_yields_complete`
+- `advance_complete_yields_none`
+- `serde_roundtrip_for_all_phases`
+- `as_str_and_parse_roundtrip`
+
+**Acceptance criteria:**
+- Zero warnings
+- All 6 module-level tests pass
+- All public items documented
+
+---
+
+## Task 2: Add onboarding_phase field to SpeechConfig in src/config.rs
+
+Wire the `OnboardingPhase` into config so it persists.
+
+**Files:**
+- Modify: `src/config.rs`
 
 **Changes:**
-- Add `web-search = ["dep:fae-search"]` to `[features]`
-- Add `fae-search = { path = "fae-search", optional = true }` to `[dependencies]`
-- Verify: `cargo check --features web-search` passes
+- Add `pub onboarding_phase: OnboardingPhase` field to `SpeechConfig` with `#[serde(default)]`
+- Field goes after `pub onboarded: bool`
 
 **Acceptance criteria:**
-- Feature flag `web-search` exists and compiles
-- `fae-search` is only included when feature is enabled
-- `cargo check` without the feature still passes
+- `cargo check` passes with zero warnings
+- Existing config tests still pass
+- `onboarding_phase` defaults to `OnboardingPhase::Welcome` via `#[derive(Default)]`
 
 ---
 
-## Task 2: Create WebSearchTool implementing Tool trait (TDD)
+## Task 3: Add OnboardingAdvance to contract (TDD - tests first)
 
-Create the `WebSearchTool` struct that wraps `fae_search::search()` for LLM use.
+Add the `onboarding.advance` command to `CommandName` in contract.rs, and add
+roundtrip tests to `tests/host_contract_v0.rs`.
 
-**JSON Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "query": { "type": "string", "description": "Search query" },
-    "max_results": { "type": "integer", "description": "Max results (default 5)" }
-  },
-  "required": ["query"]
-}
-```
+**Files:**
+- Modify: `src/host/contract.rs`
+- Modify: `tests/host_contract_v0.rs`
 
-**Sync-async bridge:**
+**Changes to contract.rs:**
+- Add `OnboardingAdvance` variant with `#[serde(rename = "onboarding.advance")]`
+- Add `"onboarding.advance"` to `as_str()` match arm
+- Add `"onboarding.advance"` to `parse()` match arm
+
+**Tests to add (host_contract_v0.rs):**
 ```rust
-fn execute(&self, args: Value) -> Result<ToolResult, FaeLlmError> {
-    let handle = tokio::runtime::Handle::current();
-    handle.block_on(async { /* call fae_search::search() */ })
-}
+#[test]
+fn command_name_onboarding_advance_roundtrip() { ... }
 ```
-
-**Result formatting for LLM:**
-```
-## Search Results for "query"
-
-1. **Title**
-   URL: https://example.com
-   Snippet text here...
-
-2. **Title 2**
-   ...
-```
-
-**Files:**
-- Create: `src/fae_llm/tools/web_search.rs`
+And add `onboarding.advance` to `command_name_parse_known_and_unknown`.
 
 **Acceptance criteria:**
-- Tests: schema has required `query` field
-- Tests: execute with valid args returns formatted results (mock/synthetic)
-- Tests: missing query returns ToolValidationError
-- Tests: allowed_in_mode returns true for both ReadOnly and Full
-- Tests: empty results returns "No results found" message
-- Tests: result output is properly truncated for large result sets
-- Zero clippy warnings
+- `OnboardingAdvance` parses from "onboarding.advance"
+- Serde roundtrip: serializes to "onboarding.advance"
+- `as_str()` returns "onboarding.advance"
+- Zero warnings
 
 ---
 
-## Task 3: Create FetchUrlTool implementing Tool trait (TDD)
+## Task 4: Add advance_onboarding_phase to DeviceTransferHandler and wire channel
 
-Create the `FetchUrlTool` struct that wraps `fae_search::fetch_page_content()`.
-
-**JSON Schema:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "url": { "type": "string", "description": "URL to fetch" }
-  },
-  "required": ["url"]
-}
-```
-
-**Note:** `fetch_page_content()` currently returns a stub error. The tool should handle this gracefully — it will work once Phase 2.3 implements content extraction.
-
-**Result formatting for LLM:**
-```
-## Page Content: Title
-
-URL: https://example.com
-Words: 1234
-
-Content text here...
-```
+Add the trait method and route handler for `onboarding.advance`.
 
 **Files:**
-- Create: `src/fae_llm/tools/fetch_url.rs`
-
-**Acceptance criteria:**
-- Tests: schema has required `url` field
-- Tests: execute handles stub error gracefully (returns ToolResult::failure, not panic)
-- Tests: missing url returns ToolValidationError
-- Tests: allowed_in_mode returns true for both ReadOnly and Full
-- Tests: invalid URL format returns clear error message
-- Zero clippy warnings
-
----
-
-## Task 4: Wire modules into tools/mod.rs
-
-Add module declarations and re-exports for both new tools. Gate behind `web-search` feature.
-
-**Files:**
-- Modify: `src/fae_llm/tools/mod.rs`
+- Modify: `src/host/channel.rs`
 
 **Changes:**
-```rust
-#[cfg(feature = "web-search")]
-pub mod fetch_url;
-#[cfg(feature = "web-search")]
-pub mod web_search;
-
-#[cfg(feature = "web-search")]
-pub use fetch_url::FetchUrlTool;
-#[cfg(feature = "web-search")]
-pub use web_search::WebSearchTool;
-```
+- Add `fn advance_onboarding_phase(&self) -> Result<OnboardingPhase>` to
+  `DeviceTransferHandler` trait with a default impl returning `Ok(OnboardingPhase::Welcome)`
+- Add `CommandName::OnboardingAdvance => self.handle_onboarding_advance(envelope)` to
+  the `route()` match
+- Implement `handle_onboarding_advance()`:
+  - Calls `self.handler.advance_onboarding_phase()`
+  - Emits event `"onboarding.phase_advanced"` with `{ new_phase: <str>, request_id }`
+  - Returns response `{ accepted: true, phase: <str> }`
 
 **Acceptance criteria:**
-- Compiles without `web-search` feature (no changes to existing tools)
-- Compiles with `web-search` feature (new tools available)
-- All existing tests still pass
-- `cargo check --all-features` passes
-- Zero clippy warnings
+- `cargo check` passes
+- Existing tests still pass
+- Zero warnings
 
 ---
 
-## Task 5: Validate all tests pass and documentation complete
+## Task 5: Add onboarding channel integration tests
 
-Final validation pass ensuring everything compiles and tests pass in both feature configurations.
+Add full integration tests for `onboarding.get_state`, `onboarding.complete`, and
+`onboarding.advance` to `tests/host_command_channel_v0.rs`.
 
-**Verification:**
-- `cargo check` (without web-search) — passes
-- `cargo check --features web-search` — passes
+**Files:**
+- Modify: `tests/host_command_channel_v0.rs`
+
+**Tests to add:**
+- `onboarding_get_state_returns_state_payload` — default handler returns `{"onboarded": false}`
+- `onboarding_complete_emits_event_and_returns_accepted` — checks event `onboarding.completed`,
+  payload `{"accepted": true, "onboarded": true}`
+- `onboarding_advance_returns_accepted_with_phase` — default handler, checks response has
+  `{"accepted": true, "phase": <str>}` and event `"onboarding.phase_advanced"`
+
+**Acceptance criteria:**
+- All 3 new tests pass
+- Zero warnings
+- Existing tests unaffected
+
+---
+
+## Task 6: Add onboarding module to lib.rs and final validation
+
+Wire up `pub mod onboarding` in lib.rs and run full validation.
+
+**Files:**
+- Modify: `src/lib.rs`
+
+**Changes:**
+- Add `pub mod onboarding;` in alphabetical order
+
+**Validation:**
+- `cargo check --all-features` — zero errors
 - `cargo clippy --all-features --all-targets -- -D warnings` — zero warnings
 - `cargo nextest run --all-features` — all tests pass
 - `cargo doc --all-features --no-deps` — zero doc warnings
-- All public items documented
 
 **Acceptance criteria:**
-- Both feature configurations compile clean
-- All tests pass
-- All public items have doc comments
+- All tasks integrated cleanly
 - Zero warnings in any mode
+- All public items in `onboarding` have doc comments
