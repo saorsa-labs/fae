@@ -228,11 +228,18 @@ struct OrbWebView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
+        // Inject transparent background CSS so native views behind the
+        // WKWebView show through. The HTML content renders its own background.
+        let transparentCSS = "html, body { background: transparent !important; }"
+        let cssScript = WKUserScript(
+            source: "const s=document.createElement('style');s.textContent=`\(transparentCSS)`;document.documentElement.appendChild(s);",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(cssScript)
+
         let view = WKWebView(frame: .zero, configuration: config)
-        // KNOWN: drawsBackground is private KVC; no public API exists for
-        // transparent WKWebView backgrounds on macOS. Tracked for future
-        // replacement if Apple adds a public alternative.
-        view.setValue(false, forKey: "drawsBackground")
+        view.underPageBackgroundColor = .clear
         view.navigationDelegate = context.coordinator
         loadOrbHTML(in: view)
         context.coordinator.lastMode = mode

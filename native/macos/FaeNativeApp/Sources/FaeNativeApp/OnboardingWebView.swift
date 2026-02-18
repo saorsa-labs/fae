@@ -152,11 +152,18 @@ struct OnboardingWebView: NSViewRepresentable {
             contentController.add(context.coordinator, name: handler)
         }
 
+        // Inject transparent background CSS so native views behind the
+        // WKWebView show through. The HTML content renders its own background.
+        let transparentCSS = "html, body { background: transparent !important; }"
+        let cssScript = WKUserScript(
+            source: "const s=document.createElement('style');s.textContent=`\(transparentCSS)`;document.documentElement.appendChild(s);",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        configuration.userContentController.addUserScript(cssScript)
+
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        // KNOWN: drawsBackground is private KVC; no public API exists for
-        // transparent WKWebView backgrounds on macOS. Tracked for future
-        // replacement if Apple adds a public alternative.
-        webView.setValue(false, forKey: "drawsBackground")
+        webView.underPageBackgroundColor = .clear
         webView.navigationDelegate = context.coordinator
         loadOnboardingHTML(in: webView)
         return webView
