@@ -12,7 +12,12 @@ private struct SendableHandle: @unchecked Sendable {
 /// Replaces `ProcessCommandSender` — no subprocess, no pipes, zero IPC.
 /// Commands are serialised on a dedicated background queue so the blocking
 /// `fae_core_send_command` call never stalls the main thread.
-final class EmbeddedCoreSender: HostCommandSender {
+///
+/// Marked `@unchecked Sendable` because all mutable state is properly
+/// synchronised: `handle` is set during init and only nil'd in `stop()`
+/// (called from main thread / deinit), `requestCounter` is exclusively
+/// accessed from the serial `commandQueue`.
+final class EmbeddedCoreSender: HostCommandSender, @unchecked Sendable {
     /// Opaque handle to the Fae runtime (owned, must be destroyed on deinit).
     private var handle: FaeCoreHandle?
 
