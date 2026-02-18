@@ -192,7 +192,7 @@ jobs:
           # Build native macOS app bundle (single binary — Rust core is statically linked).
           cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-          cp -R "$SWIFT_RESOURCE_BUNDLE" "$APP_BUNDLE/"
+          cp -R "$SWIFT_RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
           chmod +x "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
 
           # Use checked-in Info.plist with version substitution.
@@ -215,6 +215,14 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
+          # Sign inside-out: resources first, then binary, then bundle
+          if [ -d "$APP_BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle" ]; then
+            codesign --force --options runtime \
+              --sign "$MACOS_SIGNING_IDENTITY" \
+              --timestamp \
+              "$APP_BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle"
+          fi
+
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
