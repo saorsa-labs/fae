@@ -72,6 +72,18 @@ jobs:
         run: |
           cargo build --release --no-default-features
 
+          RUST_BACKEND_BINARY="target/release/fae"
+          if [ ! -x "$RUST_BACKEND_BINARY" ]; then
+            echo "::warning::No backend binary at $RUST_BACKEND_BINARY after --no-default-features build; building fallback fae binary with GUI feature enabled."
+            cargo build --release --features gui --bin fae
+          fi
+          if [ ! -x "$RUST_BACKEND_BINARY" ]; then
+            echo "::error::Could not locate backend binary at $RUST_BACKEND_BINARY"
+            ls -la target/release || true
+            exit 1
+          fi
+          echo "RUST_BACKEND_BINARY=$RUST_BACKEND_BINARY" >> "$GITHUB_ENV"
+
           pushd native/macos/FaeNativeApp
           swift build -c release
           SWIFT_BIN_REL="$(find .build -type f -perm -111 -name FaeNativeApp | head -n 1)"
@@ -173,7 +185,7 @@ jobs:
 
           # Build native macOS app bundle from Swift shell.
           cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
-          cp target/release/fae "$APP_BUNDLE/Contents/Resources/fae-backend"
+          cp "$RUST_BACKEND_BINARY" "$APP_BUNDLE/Contents/Resources/fae-backend"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
           chmod +x "$APP_BUNDLE/Contents/MacOS/FaeNativeApp" "$APP_BUNDLE/Contents/Resources/fae-backend"
           cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
@@ -221,7 +233,7 @@ jobs:
 
           # Archive includes native app bundle and backend binary.
           cp -R "$APP_BUNDLE" "$ARCHIVE_STAGING/Fae.app"
-          cp target/release/fae "$ARCHIVE_STAGING/fae-backend"
+          cp "$RUST_BACKEND_BINARY" "$ARCHIVE_STAGING/fae-backend"
           cp README.md "$ARCHIVE_STAGING/"
           cp LICENSE "$ARCHIVE_STAGING/" 2>/dev/null || true
           chmod +x "$ARCHIVE_STAGING/fae-backend"
