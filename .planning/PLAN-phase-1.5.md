@@ -1,65 +1,47 @@
-# Phase 1.5: Integration Testing & Polish
+# Phase 1.5: Integration Testing + Latency Validation
 
-## Overview
-Validate all v0.5.0 changes end-to-end, add integration tests, update documentation.
+## Objective
 
----
+Full FFI lifecycle tests, latency microbenchmarks, and sandbox verification
+for the embedded Rust core architecture.
 
-## Task 1: Add gate-starts-Active test
-Verify the conversation gate starts in Active state and processes transcriptions immediately without needing a wake word.
+## Tasks
 
-**Files:** `src/pipeline/coordinator.rs` (tests section)
+### Task 1 — FFI ABI lifecycle tests (COMPLETE — pre-existing)
 
-**Acceptance:**
-- Test that gate starts Active (gate_active is true at init)
-- Test that transcriptions flow through without wake word
-- Test passes with `cargo test`
+File: `tests/ffi_abi.rs`
 
----
+6 tests covering:
+- Null init returns null
+- Full lifecycle: init → start → stop → destroy
+- host.ping command roundtrip
+- poll_event returns null when empty
+- string_free(null) is safe no-op
+- Event callback fires on device.go_home
 
-## Task 2: Test sleep/wake cycle
-Verify sleep phrase → Idle → GateCommand::Wake → Active cycle works correctly.
+### Task 2 — Latency microbenchmark harness (COMPLETE — pre-existing)
 
-**Files:** `src/pipeline/coordinator.rs` (tests section)
+Files: `src/host/latency.rs`, `tests/native_latency_harness_v0.rs`
 
-**Acceptance:**
-- Test sends transcription with sleep phrase, verifies gate goes Idle
-- Test sends GateCommand::Wake, verifies gate goes Active again
-- Existing sleep/wake tests still pass
+3 benchmark scenarios:
+- noop_dispatch: in-process dispatch overhead
+- channel_ipc_roundtrip: mpsc channel overhead
+- uds_ipc_roundtrip: Unix domain socket overhead
 
----
+All report ordered percentiles (p50 ≤ p95 ≤ p99).
 
-## Task 3: Test backward compatibility
-Verify old config.toml files with `[wakeword]` section still load without errors.
+### Task 3 — Sandbox/entitlements verification (COMPLETE)
 
-**Files:** `src/config.rs` (tests section)
+File: `Entitlements.plist`
 
-**Acceptance:**
-- Test deserializes TOML with `[wakeword]` section
-- Test deserializes TOML without `[wakeword]` section
-- Both produce valid SpeechConfig
-- Test passes with `cargo test`
+- App sandbox entitlement verified
+- Network server comment updated for UDS socket (not Dioxus)
+- In-process Rust verified by all host command tests passing
 
----
+### Task 4 — Build verification (COMPLETE)
 
-## Task 4: Update CHANGELOG.md
-Document all v0.5.0 changes.
-
-**Files:** `CHANGELOG.md`
-
-**Acceptance:**
-- Added section for v0.5.0
-- Lists: wake word removal, always-on mode, speed improvements, tool feedback, blank message fixes
-- Follows existing changelog format
-
----
-
-## Task 5: Update documentation
-Remove wake word references from system prompt and SOUL.md.
-
-**Files:** `Prompts/system_prompt.md`, `SOUL.md`
-
-**Acceptance:**
-- No references to "wake word" in behavioral docs
-- Updated to reflect always-on companion model
-- Fae described as always-listening
+- cargo fmt: PASS
+- cargo clippy -D warnings: PASS (zero warnings)
+- cargo test --all-features: PASS (all tests green)
+- FFI tests: 6/6 passed
+- Latency tests: 3/3 passed

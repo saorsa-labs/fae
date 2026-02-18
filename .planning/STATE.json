@@ -7,9 +7,9 @@
     "name": "Embedded Core (Rock-Solid Mac App)"
   },
   "phase": {
-    "number": "1.4",
-    "name": "Release Workflow + Production Polish",
-    "plan": "PLAN-phase-1.4.md"
+    "number": "1.5",
+    "name": "Integration Testing + Latency Validation",
+    "plan": "PLAN-phase-1.5.md"
   },
   "progress": {
     "total_tasks": 4,
@@ -22,5 +22,5 @@
     "iteration": 1,
     "last_verdict": "PASS"
   },
-  "last_updated": "2026-02-18T15:00:00Z"
+  "last_updated": "2026-02-18T15:15:00Z"
 }
