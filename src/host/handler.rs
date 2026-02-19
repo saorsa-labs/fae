@@ -96,6 +96,9 @@ pub struct FaeDeviceTransferHandler {
     last_restart_at: Arc<Mutex<Option<Instant>>>,
     /// Handle for the crash-recovery watcher task.
     restart_watcher_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Flag shared with the restart watcher to distinguish a clean stop from a crash.
+    /// Set to `true` by `request_runtime_stop()` *before* cancelling the token.
+    clean_exit_flag: Arc<std::sync::atomic::AtomicBool>,
     /// Handle for the audio device hot-swap watcher task.
     device_watcher_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Handle for the memory pressure monitor task.
@@ -143,6 +146,7 @@ impl FaeDeviceTransferHandler {
             restart_count: Arc::new(Mutex::new(0)),
             last_restart_at: Arc::new(Mutex::new(None)),
             restart_watcher_handle: Mutex::new(None),
+            clean_exit_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             device_watcher_handle: Mutex::new(None),
             memory_pressure_handle: Mutex::new(None),
             pipeline_mode: Mutex::new(crate::pipeline::coordinator::PipelineMode::Conversation),
@@ -726,11 +730,15 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         // while the pipeline runs are immediately visible to the tool gate.
         let shared_perms_for_pipeline = Arc::clone(&self.shared_permissions);
 
-        // Shared flag: set to true when the pipeline exits due to clean cancellation
-        // rather than a crash. The restart watcher uses this to decide whether
-        // to attempt recovery.
-        let clean_exit_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let clean_exit_for_pipeline = Arc::clone(&clean_exit_flag);
+        // Reset clean-exit flag for this run. The restart watcher reads this
+        // to distinguish a clean stop from a crash. `request_runtime_stop()`
+        // sets it to `true` *before* cancelling the token, eliminating the
+        // race where the watcher wakes and reads before the pipeline task
+        // has a chance to set the flag.
+        self.clean_exit_flag
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let clean_exit_flag = Arc::clone(&self.clean_exit_flag);
+        let clean_exit_for_pipeline = Arc::clone(&self.clean_exit_flag);
 
         // Spawn the async startup + pipeline task.
         let pipeline_jh = self.tokio_handle.spawn(async move {
@@ -1060,6 +1068,12 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         if let Ok(mut guard) = self.pipeline_state.lock() {
             *guard = PipelineState::Stopping;
         }
+
+        // Signal clean exit BEFORE cancelling the token so the restart watcher
+        // always sees the flag set when it wakes up — eliminates the race where
+        // the watcher wakes and reads `false` before the pipeline task sets it.
+        self.clean_exit_flag
+            .store(true, std::sync::atomic::Ordering::SeqCst);
 
         // Cancel via token
         if let Ok(guard) = self.cancel_token.lock()
