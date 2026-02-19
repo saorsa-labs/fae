@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var handoff: DeviceHandoffController
+    @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     @StateObject private var audio = AudioDeviceController()
     @State private var commandText: String = ""
 
@@ -117,6 +118,27 @@ struct SettingsView: View {
                 Text("Route output to nearby Apple devices (iPhone, Watch, AirPods, HomePod).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            Section("Pipeline") {
+                HStack {
+                    Text("Status")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Text(pipelineAux.status)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Audio RMS")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Spacer()
+                    ProgressView(value: pipelineAux.audioRMS, total: 1.0)
+                        .frame(width: 100)
+                    Text(String(format: "%.2f", pipelineAux.audioRMS))
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
             }
         }
         .formStyle(.grouped)

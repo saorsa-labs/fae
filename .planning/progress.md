@@ -162,3 +162,37 @@ Previously only capability.requested was handled; now BackendEventRouter covers 
 
 Results: Swift build clean (zero errors, zero warnings).
 ConversationBridgeController is a retained @StateObject in FaeNativeApp that bridges pipeline events to the conversation WebView JS API.
+
+## Phase 2.3: Orb State & Emotion Wiring (Swift) - COMPLETE
+
+- [x] Task 1: OrbStateBridgeController.swift (new) — @MainActor ObservableObject, weak ref to OrbStateController
+- [x] Task 2: Subscribe to .faeOrbStateChanged → map change_type to OrbPalette/OrbFeeling/OrbMode updates
+- [x] Task 3: Subscribe to .faePipelineState (pipeline.mic_status) → listening/idle mode
+- [x] Task 4: Subscribe to .faeAssistantGenerating → thinking/idle mode
+- [x] Task 5: pipeline.control events → Start/Resume → listening, Stop/Pause → idle
+- [x] Task 6: FaeNativeApp.swift — @StateObject orbBridge, wire orbBridge.orbState = orbState in onAppear
+- [x] Task 7: Build clean (zero errors, zero warnings)
+
+Results: OrbStateController now reflects live pipeline state automatically.
+
+## Phase 2.4: Canvas, Audio Levels & Diagnostics (Swift) - COMPLETE
+
+- [x] Task 1: PipelineAuxBridgeController.swift (new) — handles canvas visibility, audio level, pipeline status
+- [x] Task 2: pipeline.canvas_visibility → window.showCanvasPanel() / hideCanvasPanel()
+- [x] Task 3: .faeAudioLevel → window.setAudioLevel(rms) injection + @Published audioRMS
+- [x] Task 4: pipeline.control/model_selected/provider_fallback → @Published status string
+- [x] Task 5: SettingsView.swift — Pipeline section: status label + audioRMS ProgressView
+- [x] Task 6: FaeNativeApp.swift — @StateObject pipelineAux, environmentObject injections for ContentView + Settings
+- [x] Task 7: ContentView.swift — onWebViewReady also sets pipelineAux.webView
+- [x] Task 8: Swift build clean (zero errors, zero warnings)
+
+Results: Canvas panel visibility, audio level visualization, and pipeline diagnostics fully wired.
+
+### Milestone 2 Complete — 2026-02-19
+### Event Flow & UI Wiring DONE
+
+Summary of Milestone 2:
+- Phase 2.1: BackendEventRouter routes all 26+ RuntimeEvent types to 8 typed notifications
+- Phase 2.2: ConversationBridgeController wires transcription/assistant/tool events to WebView JS
+- Phase 2.3: OrbStateBridgeController wires pipeline state to OrbStateController (mode/palette/feeling)
+- Phase 2.4: PipelineAuxBridgeController handles canvas visibility, audio levels, and settings diagnostics

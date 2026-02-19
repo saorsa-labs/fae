@@ -12,8 +12,10 @@ final class OrbStateController: ObservableObject {
 struct FaeNativeApp: App {
     @StateObject private var handoff = DeviceHandoffController()
     @StateObject private var orbState = OrbStateController()
+    @StateObject private var orbBridge = OrbStateBridgeController()
     @StateObject private var conversation = ConversationController()
     @StateObject private var conversationBridge = ConversationBridgeController()
+    @StateObject private var pipelineAux = PipelineAuxBridgeController()
     @StateObject private var hostBridge = HostCommandBridge()
     @StateObject private var dockIcon = DockIconAnimator()
     @StateObject private var windowState = WindowStateController()
@@ -56,11 +58,16 @@ struct FaeNativeApp: App {
                 .environmentObject(orbState)
                 .environmentObject(conversation)
                 .environmentObject(conversationBridge)
+                .environmentObject(pipelineAux)
                 .environmentObject(windowState)
                 .environmentObject(onboarding)
                 .preferredColorScheme(.dark)
                 .onAppear {
                     dockIcon.start()
+                    // Wire the orb bridge to the shared OrbStateController so it
+                    // can update mode/palette/feeling from pipeline events.
+                    orbBridge.orbState = orbState
+                    // pipelineAux.webView is set via ContentView's onWebViewReady callback.
                     if let sender = commandSender {
                         hostBridge.sender = sender
                         restoreOnboardingState(sender: sender)
@@ -77,6 +84,7 @@ struct FaeNativeApp: App {
             SettingsView()
                 .environmentObject(orbState)
                 .environmentObject(handoff)
+                .environmentObject(pipelineAux)
         }
     }
 

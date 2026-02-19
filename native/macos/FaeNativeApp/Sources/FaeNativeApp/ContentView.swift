@@ -4,6 +4,7 @@ struct ContentView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var conversationBridge: ConversationBridgeController
+    @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     private let onboardingTTS = OnboardingTTSHelper()
@@ -80,6 +81,7 @@ struct ContentView: View {
                 onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
                 onWebViewReady: { webView in
                     conversationBridge.webView = webView
+                    pipelineAux.webView = webView
                 },
                 onUserMessage: { text in
                     conversation.handleUserSent(text)
