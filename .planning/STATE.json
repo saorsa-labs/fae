@@ -7,19 +7,19 @@
     "name": "Onboarding Redesign"
   },
   "phase": {
-    "number": "4.2",
-    "name": "Permission Cards with Help",
-    "plan": "PLAN-phase-4.2.md"
+    "number": "4.3",
+    "name": "Model Download & First-Run Experience",
+    "plan": "PLAN-phase-4.3.md"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 8,
-    "current_task": 8
+    "completed_tasks": 0,
+    "current_task": 0
   },
-  "status": "fixing",
+  "status": "continuation_spawned",
   "review": {
-    "status": "fixing",
+    "status": "passed",
     "iteration": 1
   },
-  "last_updated": "2026-02-19T17:45:00Z"
+  "last_updated": "2026-02-19T17:50:00Z"
 }
