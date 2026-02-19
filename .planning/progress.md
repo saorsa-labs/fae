@@ -225,3 +225,40 @@ Results: 58 new tests pass, zero warnings, all 8 Apple tool types registered in 
 
 Commit: b4f160c
 Results: 2107/2107 unit tests pass (+54 new), zero clippy warnings, zero fmt diff
+
+### Phase 3.3: Mail Tool & Tool Registration — 2026-02-19
+
+- [x] Task 1: MailStore trait + domain types (MailMessage, MailQuery, MailDraft)
+- [x] Task 2: SearchMailTool (search_mail) + GetMailTool (get_mail)
+- [x] Task 3: ComposeMailTool (compose_mail) with attachment support
+- [x] Task 4: UnregisteredMailStore in ffi_bridge.rs
+- [x] Task 5: MockMailStore in mock_stores.rs
+- [x] Task 6: Agent wiring (3 new mail tools in build_registry())
+- [x] Task 7: AvailabilityGatedTool permission-gating wrapper
+- [x] Task 8: Integration tests (tests/apple_tool_registration.rs — 16 tests)
+
+Commit: 917c29a
+Results: all tests pass, zero warnings
+
+### Phase 3.4: JIT Permission Flow — 2026-02-19
+
+- [x] Task 1: SharedPermissionStore type alias (Arc<Mutex<PermissionStore>>) + JitPermissionRequest struct in permissions.rs
+- [x] Task 2: AvailabilityGatedTool updated to use SharedPermissionStore (live lock) + optional JIT channel with 60s timeout
+- [x] Task 3: FaeDeviceTransferHandler owns SharedPermissionStore; grant/deny update live store + emit permissions.changed event
+- [x] Task 4: build_registry() + FaeAgentLlm::new_with_permissions() thread SharedPermissionStore through PipelineCoordinator
+- [x] Task 5: capability.requested event enriched with jit: bool, tool_name: Option, tool_action: Option
+- [x] Task 6: permissions.changed event emitted on every grant_capability/deny_capability
+- [x] Task 7: JIT blocking flow in AvailabilityGatedTool (spin-loop 25ms/60s)
+- [x] Task 8: 11 integration tests in tests/jit_permission_flow.rs (all pass)
+
+Commit: 33a7655
+Results: 2479/2479 tests pass, zero clippy warnings
+
+### Milestone 3 Complete — 2026-02-19
+### Apple Ecosystem Tools DONE
+
+Summary of Milestone 3:
+- Phase 3.1: Contacts & Calendar tools (8 tools: search/get/create contacts, list/create/update/delete events)
+- Phase 3.2: Reminders & Notes tools (8 tools: list/create/complete reminders, list/get/create/append notes)
+- Phase 3.3: Mail tools (3 tools: search/get/compose mail) + AvailabilityGatedTool permission gating
+- Phase 3.4: JIT permission flow (SharedPermissionStore, live gates, enriched events, integration tests)
