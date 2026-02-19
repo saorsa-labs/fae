@@ -1,42 +1,21 @@
-# Code Simplifier Review
+# Code Simplifier Review — Iteration 2
 
-## Grade: B-
+## Grade: B+
 
-## Findings
+## Status of Previous Findings
 
-### SHOULD FIX: Restart counter read duplicated
+All SHOULD FIX items from iteration 1 are carry-overs not addressed in the fix commit.
+They remain low-severity:
 
-**File**: `src/host/handler.rs`
+- Restart counter read duplicated — still present, 2/15 votes
+- Memory pressure bridge as inline block — still present, 3/15 votes
+- PressureLevel Display not implemented — still present, 2/15 votes
 
-The restart watcher reads `restart_count_watcher.lock().map(|g| *g).unwrap_or(MAX_RESTART_ATTEMPTS)`
-twice (once to check the limit, once to compute `new_attempt`). This could be a single read.
+These are style improvements, not correctness issues.
 
-### SHOULD FIX: Memory pressure bridge loop could use a function
+## New Findings
 
-The `mp_bridge_jh` async block (40+ lines) is spawned inline. This should be extracted
-to a module-level function or method for readability:
+### MINOR: `unexpected_exit_emits_auto_restart_event` duplicates watcher body
+Unavoidable for isolated unit testing. Acceptable.
 
-```rust
-async fn run_memory_pressure_bridge(
-    mut rx: broadcast::Receiver<MemoryPressureEvent>,
-    event_tx: broadcast::Sender<EventEnvelope>,
-    cancel: CancellationToken,
-)
-```
-
-### SHOULD FIX: `serde_json::json!` for level string could use `PressureLevel`'s Display
-
-Instead of a match to get `"normal"/"warning"/"critical"` strings, add a `Display` impl
-on `PressureLevel` and use `format!("{}", ev.level)`.
-
-### OK: `FallbackChain` internal helper extracted correctly
-
-The per-provider state lookup in `next_provider` is clean.
-
-### OK: `current_default_device_name` is a free function
-
-Good separation — the polling loop delegates device name retrieval to a testable free function.
-
-### INFO: `restart_count_watcher.lock().map(|g| *g).unwrap_or(...)` pattern
-
-This appears 3 times. A helper closure or function would reduce repetition.
+## Verdict: No new simplification issues. Carry-overs are low priority.

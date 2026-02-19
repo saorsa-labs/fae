@@ -1,33 +1,18 @@
-# Build Validator Review
+# Build Validator Review — Iteration 2
 
-## Status: FAIL
+## Status: PASS
 
-## Errors
+## Results
 
-### CRITICAL: Non-exhaustive pattern match (E0004)
+- `cargo check --all-features --all-targets`: PASS (zero errors, zero warnings)
+- `cargo clippy --all-features --all-targets -- -D warnings`: PASS (zero violations)
+- `cargo fmt --all -- --check`: PASS (clean)
+- `cargo nextest run --all-features`: PASS (2551/2551, 4 skipped)
 
-**File**: `src/bin/gui.rs:4943`
+## Previous Issue: RESOLVED
 
-```
-error[E0004]: non-exhaustive patterns: `&ControlEvent::AudioDeviceChanged { .. }` and
-`&ControlEvent::DegradedMode { .. }` not covered
-  --> src/bin/gui.rs:4943:99
-```
+The `E0004` non-exhaustive pattern error in `src/bin/gui.rs:4943` has been fixed.
+Both `ControlEvent::AudioDeviceChanged` and `ControlEvent::DegradedMode` now have
+match arms in the GUI event handler.
 
-Two new `ControlEvent` variants added in this task (`AudioDeviceChanged` and `DegradedMode`) are
-not handled in the `match ctrl` arm at `src/bin/gui.rs:4943`. The GUI binary fails to compile.
-
-**Fix**: Add match arms for the two new variants (or add a wildcard arm).
-
-### WARNINGS (treated as errors under -D warnings)
-
-20x "variable does not need to be mutable" in `src/bin/gui.rs` (pre-existing, unrelated to this task)
-
-Multiple "value captured by X is never read" in `src/bin/gui.rs` (pre-existing, unrelated to this task)
-
-`src/diagnostics/mod.rs`: multiple `E0753` "expected outer doc comment" errors (pre-existing)
-
-## Verdict
-
-**BUILD FAILS**. The new `ControlEvent` variants are not covered in the GUI event handler.
-This is a direct regression introduced by this task.
+## Verdict: PASS

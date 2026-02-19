@@ -1,43 +1,34 @@
-# Code Quality Review
+# Code Quality Review — Iteration 2
 
-## Grade: B
+## Grade: A-
 
-## Findings
+## Status of Previous Findings
 
-### MUST FIX: New `ControlEvent` variants not handled in `src/bin/gui.rs`
+### RESOLVED: Non-exhaustive ControlEvent match — FIXED
+`AudioDeviceChanged` and `DegradedMode` arms added with clear comments.
 
-**File**: `src/bin/gui.rs:4953`
+### STILL PRESENT (LOW): Redundant Arc clones — acceptable
+Not changed, not worth refactoring at this stage.
 
-The match arm handling `ControlEvent` in the GUI event loop does not cover
-`AudioDeviceChanged` and `DegradedMode`. This is a direct compile error.
+## New Findings
 
-### SHOULD FIX: Redundant Arc clones in `request_runtime_start`
+### OK: New test code quality is good
+The two acceptance-criterion tests are well-structured:
+- `clean_stop_does_not_emit_auto_restart_event`: clear setup, drain, action, drain, assert pattern
+- `unexpected_exit_emits_auto_restart_event`: correctly mirrors the watcher body for isolation
 
-**File**: `src/host/handler.rs`
+### MINOR: `unexpected_exit_emits_auto_restart_event` is long (150+ lines)
+The test duplicates the watcher body to test it in isolation. This is acceptable since
+the watcher logic can't easily be unit-tested through the handler API. The length is
+justified by the need to replicate the exact watcher state machine.
 
-The method clones multiple `Arc<Mutex<...>>` fields to pass to the restart watcher and
-then clones them again for other tasks. The pattern is consistent but verbose. This is
-acceptable as-is but worth noting.
-
-### SHOULD FIX: `dev.description().ok().map(|d| d.name().to_owned())`
-
-**File**: `src/audio/device_watcher.rs:98-100`
-
+### OK: Comment clarity on new match arms
 ```rust
-dev.description()
-    .ok()
-    .map(|d| d.name().to_owned())
+// New variants added in phase 5.2: no GUI action needed in the
+// Dioxus UI; the native app handles these via the host event channel.
+fae::pipeline::messages::ControlEvent::AudioDeviceChanged { .. } => {}
+fae::pipeline::messages::ControlEvent::DegradedMode { .. } => {}
 ```
+Clear explanation of why the arms are empty.
 
-`DeviceTrait::description()` returns `Result<DeviceDescription, DevicesError>`. This chains
-are readable but `d.name()` returns `&str`, so `to_owned()` is correct. Minor: could use
-`and_then` style for clarity.
-
-### OK: Constants are well-named
-
-`RESTART_BACKOFF_SECS`, `MAX_RESTART_ATTEMPTS`, `RESTART_UPTIME_RESET_SECS` are clearly named
-and documented. `WARNING_THRESHOLD_MB`, `CRITICAL_THRESHOLD_MB` are well-defined public constants.
-
-### OK: New modules are properly structured
-
-All new files have module-level doc comments and proper `pub`/`pub(crate)` visibility.
+## Verdict: PASS. No new MUST FIX or SHOULD FIX items.

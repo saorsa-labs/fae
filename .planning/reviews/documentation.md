@@ -1,39 +1,31 @@
-# Documentation Review
+# Documentation Review — Iteration 2
 
-## Grade: A-
+## Grade: A
 
-## Findings
+## Status of Previous Findings
 
-### SHOULD FIX: `pipeline_mode` field has no doc comment
+### RESOLVED: `pipeline_mode` doc comment — confirmed present
+Line 103 in handler.rs: `/// Current pipeline operating mode (updated on degraded mode transitions).`
 
-**File**: `src/host/handler.rs`
+### OK: All new test functions have doc comments
+Both new acceptance-criterion tests have `///` doc comments explaining their purpose
+and connecting them to the plan's acceptance criteria.
 
-The new `pipeline_mode: Mutex<crate::pipeline::coordinator::PipelineMode>` field has
-no doc comment in the struct. All other new fields have comments.
+## New Findings
 
-### OK: New modules have excellent module-level docs
+### OK: Test doc comments are informative
+```rust
+/// Verify that a clean `request_runtime_stop` does NOT emit an `auto_restart`
+/// event. This is an acceptance criterion for Phase 5.2 Task 1.
+```
 
-- `src/audio/device_watcher.rs`: Clear module doc with design notes, usage example
-- `src/memory_pressure.rs`: Clear module doc with threshold table and usage example
-- `src/model_integrity.rs`: Clear module doc with runnable example
-- `src/llm/fallback.rs`: Clear module doc with retry policy description and full example
+```rust
+/// Verify that the crash-recovery watcher emits an `auto_restart` event
+/// when the pipeline exits unexpectedly (i.e., without a clean cancel).
+/// ...
+/// This is an acceptance criterion for Phase 5.2 Task 1.
+```
 
-### OK: Public API has doc comments
+These clearly tie the tests back to the specification.
 
-All public types and functions in the new modules have doc comments:
-- `AudioDeviceWatcher::new`, `AudioDeviceWatcher::run`
-- `MemoryPressureMonitor::new`, `MemoryPressureMonitor::run`
-- `MemoryPressureEvent`, `PressureLevel`
-- `IntegrityResult`, `verify`
-- `FallbackChain::new`, `next_provider`, `report_failure`, `report_success`
-- `RESTART_BACKOFF_SECS`, `MAX_RESTART_ATTEMPTS`, `RESTART_UPTIME_RESET_SECS` have inline docs
-
-### OK: New struct fields in handler.rs are documented
-
-All newly added `Arc<Mutex<...>>` fields have doc comments explaining why they are Arc-wrapped.
-
-### INFO: Event action names not formally documented
-
-The string literals for `pipeline.control` action values (`"auto_restart"`,
-`"audio_device_changed"`, `"memory_pressure"`, etc.) are used inline in `serde_json::json!`
-but not documented in a central enum or const. This is a pattern issue but not a blocker.
+## Verdict: PASS. Documentation is complete and accurate.

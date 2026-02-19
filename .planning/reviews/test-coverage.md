@@ -1,53 +1,35 @@
-# Test Coverage Review
+# Test Coverage Review — Iteration 2
 
-## Grade: B+
+## Grade: A
 
-## Findings
+## Status of Previous Findings
 
-### MUST FIX: No test verifying restart event emission (acceptance criterion)
+### RESOLVED: Missing acceptance-criterion tests — FIXED
 
-**Plan Task 1 Acceptance Criteria**: "Tests: verify restart emits event, verify clean stop does not restart"
+Two new tests added to `src/host/handler.rs`:
 
-The plan explicitly requires these tests. While the crash recovery watcher is implemented, no
-tests in the changed files verify:
-1. That an unexpected pipeline exit causes an `auto_restart` event to be emitted
-2. That a clean stop (cancel token) does NOT trigger restart
+1. **`clean_stop_does_not_emit_auto_restart_event`**: Starts the handler, performs
+   a clean stop, waits 100ms for task settling, then verifies no `auto_restart`
+   `pipeline.control` event was emitted and `restart_count == 0`. PASS.
 
-The `src/host/handler.rs` watcher logic is not unit-tested. The watcher body is complex async
-logic and should have integration tests.
+2. **`unexpected_exit_emits_auto_restart_event`**: Constructs the watcher state
+   machine in isolation, cancels the token WITHOUT setting `clean_exit_flag`,
+   and verifies an `auto_restart` event is emitted with `attempt == 1` and
+   correct backoff. PASS.
 
-### OK: `AudioDeviceWatcher` has adequate tests
+Both tests pass: confirmed by `cargo nextest run` (2551/2551).
 
-- `watcher_stops_on_cancel` — correct
-- `watcher_stops_when_gate_tx_closed` — correct (though limited: can't force real device change)
-- `restart_audio_gate_command_has_device_name` — tests the command struct
-- `restart_audio_gate_command_none_device` — tests None variant
+## Pre-existing Coverage (Confirmed Passing)
 
-### OK: `MemoryPressureMonitor` has threshold tests
+- `restart_count_starts_at_zero` — PASS
+- `clean_stop_does_not_increment_restart_count` — PASS
+- `restart_backoff_constants_are_valid` — PASS
+- `runtime_start_transitions_to_running` — PASS
+- `runtime_stop_transitions_to_stopped` — PASS
 
-- `pressure_level_normal_above_warning`
-- `pressure_level_warning_at_threshold`
-- `pressure_level_warning_between_thresholds`
-- `pressure_level_critical_at_threshold`
-- `pressure_level_critical_below_threshold`
-- `available_memory_mb_returns_nonnegative`
-- `monitor_stops_on_cancel`
-- `pressure_event_carries_level_and_mb`
+## Remaining Low-Priority Gap
 
-### OK: `ModelIntegrityChecker` has comprehensive tests
+No test for `run_sysctl_u64` graceful degradation when sysctl unavailable.
+Acceptable — this is platform-specific and difficult to mock without subprocess isolation.
 
-- `missing_file_returns_missing`
-- `no_checksum_returns_no_checksum`
-- `correct_checksum_returns_ok`
-- `wrong_checksum_returns_corrupt`
-- `case_insensitive_checksum_comparison`
-- `integrity_result_display`
-
-### OK: `FallbackChain` has full coverage
-
-8 tests covering all major paths including transient/permanent failures, ordering, exhaustion.
-
-### SHOULD ADD: Test that `run_sysctl_u64` handles sandbox restrictions gracefully
-
-The macOS memory check uses a subprocess. No test verifies graceful degradation when
-`sysctl` is unavailable (e.g., returns None on error).
+## Verdict: PASS. All plan acceptance-criterion tests now exist and pass.

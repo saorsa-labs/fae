@@ -1,32 +1,18 @@
-# GLM-4.7 External Review
+# GLM-4.7 External Review — Iteration 2
 
-## Grade: B
+## Grade: A-
 
 ## Summary
 
-Well-structured addition of resilience infrastructure. The main blocker is the build failure
-from the non-exhaustive pattern match.
+All blocking issues resolved. The two new tests are well-constructed and cover the
+exact acceptance criteria stated in the plan.
 
 ## Findings
 
-### CRITICAL (Block)
-1. `src/bin/gui.rs:4943` — Missing match arms for `ControlEvent::AudioDeviceChanged` and
-   `ControlEvent::DegradedMode`. Compile error E0004.
+All CRITICAL and HIGH items from iteration 1: RESOLVED.
 
-### IMPORTANT
-1. The crash watcher semantics: the spec says "auto-restart with backoff" but the code
-   emits an event asking the caller to restart. For an embedded library (libfae), the
-   caller is Swift which must observe this event and call `request_runtime_start()` again.
-   This is indirect but may be the right architecture. Needs documentation clarification.
+Remaining items (LOW):
+- sysctl subprocess (3/15 votes)
+- mp_bridge_jh dropped without tracking (3/15 votes)
 
-2. Memory pressure detection spawns `sysctl` process. For App Sandbox compliance this
-   should use `sysctlbyname()` via FFI or the `sysctl` crate.
-
-### MINOR
-1. `pipeline_mode` field has no doc comment in handler struct
-2. The `let` chain `if let Ok(...) && let Some(jh) = ...` is Rust 2024 syntax — confirm
-   MSRV is compatible (Rust 1.64+ for `let` chains, actually 1.88 for full stability)
-
-## Verdict
-
-Fix the build error. Consider replacing the `sysctl` subprocess with an in-process call.
+## Verdict: PASS
