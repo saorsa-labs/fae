@@ -1,8 +1,11 @@
 [build]
 jobs = 12
 
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/zerobrew/prefix/bin/mold"]
+# Mold linker for fast local linking (set via environment or ~/.cargo/config.toml).
+# Removed from repo config because /opt/zerobrew/prefix/bin/mold doesn't exist on CI.
+# To enable locally, add to ~/.cargo/config.toml:
+#   [target.aarch64-apple-darwin]
+#   rustflags = ["-C", "link-arg=-fuse-ld=/opt/zerobrew/prefix/bin/mold"]
 
 [profile.dev]
 opt-level = 0
