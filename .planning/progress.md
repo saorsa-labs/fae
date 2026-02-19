@@ -126,3 +126,25 @@ Results: all tests pass, zero clippy warnings, zero compilation warnings
 Commit: 46d050c
 
 ### Phase 1.3 Complete — 2026-02-19
+
+## Phase 1.4: Runtime Events → FFI → Swift Callback - COMPLETE (via Phase 1.2)
+
+All 26 RuntimeEvent variants mapped to EventEnvelope in Phase 1.2's `map_runtime_event()`.
+No additional work needed.
+
+### Milestone 1 Complete — 2026-02-19
+### Core Pipeline & Linker Fix DONE
+
+## Phase 2.1: BackendEventRouter Expansion (Swift) - COMPLETE
+
+- [x] Task 1: Defined 8 typed notification names (faeTranscription, faeAssistantMessage, faeAssistantGenerating, faeToolExecution, faeOrbStateChanged, faeAudioLevel, faePipelineState, faeMemoryActivity)
+- [x] Task 2: Route pipeline.transcription → .faeTranscription
+- [x] Task 3: Route pipeline.assistant_sentence/generating → .faeAssistantMessage/.faeAssistantGenerating
+- [x] Task 4: Route pipeline.tool_executing/tool_call/tool_result → .faeToolExecution
+- [x] Task 5: Route orb.* events (state_changed/palette_set/cleared/feeling_set/urgency_set/flash_requested) → .faeOrbStateChanged
+- [x] Task 6: Route pipeline.audio_level → .faeAudioLevel
+- [x] Task 7: Route all remaining pipeline.* lifecycle events → .faePipelineState (set-based routing)
+- [x] Task 8: Route pipeline.memory_* events → .faeMemoryActivity + full Swift build validation
+
+Results: Swift build clean (zero errors, zero warnings). All 8 event categories now routed.
+Previously only capability.requested was handled; now BackendEventRouter covers all 26 RuntimeEvent variants plus host-command echo events.
