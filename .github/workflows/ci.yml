@@ -37,10 +37,15 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (no default features)
-        run: cargo clippy --no-default-features --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
 
       - name: Clippy (GUI feature)
-        run: cargo clippy --features gui --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+        run: cargo clippy --features gui --all-targets -- -D warnings
+
+      - name: Clippy strict (production code only — no panic/unwrap/expect)
+        run: |
+          cargo clippy --no-default-features --lib --bins -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+          cargo clippy --features gui --lib --bins -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
 
   test:
     name: Tests
