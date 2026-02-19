@@ -194,6 +194,20 @@ final class BackendEventRouter: Sendable {
                 userInfo: ["capability": capability, "reason": reason, "jit": true]
             )
 
+        // MARK: - Runtime Lifecycle
+
+        case "runtime.starting", "runtime.started", "runtime.stopped", "runtime.error":
+            NotificationCenter.default.post(
+                name: .faeRuntimeState, object: nil,
+                userInfo: ["event": event, "payload": payload]
+            )
+
+        case "runtime.progress":
+            NotificationCenter.default.post(
+                name: .faeRuntimeProgress, object: nil,
+                userInfo: payload
+            )
+
         // MARK: - Pipeline State (all remaining pipeline.* events)
 
         default:
@@ -320,4 +334,24 @@ extension Notification.Name {
     /// - `event: String` — the original backend event name
     /// - `payload: [String: Any]` — the raw event payload dictionary
     static let faeMemoryActivity = Notification.Name("faeMemoryActivity")
+
+    // MARK: Runtime Lifecycle
+
+    /// Posted for runtime lifecycle transitions (starting, started, stopped, error).
+    ///
+    /// userInfo keys:
+    /// - `event: String` — one of `"runtime.starting"`, `"runtime.started"`,
+    ///   `"runtime.stopped"`, `"runtime.error"`
+    /// - `payload: [String: Any]` — event payload (may contain `"error"` message)
+    static let faeRuntimeState = Notification.Name("faeRuntimeState")
+
+    /// Posted when model download/load progress is reported during startup.
+    ///
+    /// userInfo keys vary by progress stage:
+    /// - `stage: String` — `"download_started"`, `"aggregate_progress"`,
+    ///   `"load_started"`, `"load_complete"`, `"error"`
+    /// - `model_name: String?` — model being loaded
+    /// - `progress: Double?` — 0.0–1.0 for `"aggregate_progress"`
+    /// - `message: String?` — error description for `"error"`
+    static let faeRuntimeProgress = Notification.Name("faeRuntimeProgress")
 }

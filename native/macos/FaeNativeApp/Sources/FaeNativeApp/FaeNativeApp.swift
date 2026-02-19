@@ -66,6 +66,9 @@ struct FaeNativeApp: App {
     /// ``WindowGroup`` is hidden until onboarding completes.
     @StateObject private var onboardingWindow = OnboardingWindowController()
 
+    /// Help window controller for displaying HTML help pages.
+    private let helpWindow = HelpWindowController()
+
     /// Retained reference to the embedded Rust core sender.
     private let commandSender: EmbeddedCoreSender?
 
@@ -132,7 +135,8 @@ struct FaeNativeApp: App {
                 .onChange(of: onboarding.isStateRestored) {
                     guard onboarding.isStateRestored else { return }
                     if onboarding.isComplete {
-                        // Already onboarded — keep the main window visible.
+                        // Already onboarded — start pipeline immediately.
+                        startPipelineIfReady()
                         return
                     }
                     // First launch — show glassmorphic onboarding, hide main window.
@@ -143,6 +147,7 @@ struct FaeNativeApp: App {
                     // Onboarding just finished — close onboarding, show main window.
                     onboardingWindow.close()
                     showMainWindow()
+                    startPipelineIfReady()
                 }
                 .onContinueUserActivity("com.saorsalabs.fae.session.handoff") { activity in
                     handleIncomingHandoff(activity)
@@ -151,11 +156,33 @@ struct FaeNativeApp: App {
         .defaultSize(width: 340, height: 500)
 
         Settings {
-            SettingsView()
+            SettingsView(commandSender: commandSender)
                 .environmentObject(orbState)
                 .environmentObject(handoff)
                 .environmentObject(pipelineAux)
                 .environmentObject(auxiliaryWindows)
+                .environmentObject(onboarding)
+        }
+        .commands {
+            CommandGroup(replacing: .help) {
+                Button("Getting Started") {
+                    helpWindow.showPage("getting-started")
+                }
+                Button("Keyboard Shortcuts") {
+                    helpWindow.showPage("shortcuts")
+                }
+                Divider()
+                Button("Privacy & Security") {
+                    helpWindow.showPage("privacy")
+                }
+                Divider()
+                if let websiteURL = URL(string: "https://saorsalabs.com") {
+                    Link("Fae Website", destination: websiteURL)
+                }
+                if let issuesURL = URL(string: "https://github.com/saorsa-labs/fae/issues") {
+                    Link("Report an Issue", destination: issuesURL)
+                }
+            }
         }
     }
 
@@ -246,6 +273,15 @@ struct FaeNativeApp: App {
         if let mainWindow = windowState.window {
             mainWindow.makeKeyAndOrderFront(nil)
         }
+    }
+
+    /// Sends `runtime.start` to the Rust backend so the voice pipeline begins
+    /// downloading models and initialising. Called after onboarding is confirmed
+    /// complete (either restored from config or just finished).
+    private func startPipelineIfReady() {
+        guard onboarding.isComplete, let sender = commandSender else { return }
+        sender.sendCommand(name: "runtime.start", payload: [:])
+        orbState.mode = .thinking // visual feedback during model loading
     }
 
     // MARK: - Handoff Receiving

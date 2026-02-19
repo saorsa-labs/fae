@@ -1337,6 +1337,23 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
     fn request_config_patch(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         info!(key, ?value, "config.patch requested");
+        match key {
+            "onboarded" => {
+                if let Some(v) = value.as_bool() {
+                    let mut guard = self.lock_config()?;
+                    guard.onboarded = v;
+                    if !v {
+                        guard.onboarding_phase = OnboardingPhase::Welcome;
+                    }
+                    drop(guard);
+                    self.save_config()?;
+                    info!(onboarded = v, "config.patch applied: onboarded");
+                }
+            }
+            _ => {
+                warn!(key, "config.patch: unknown key, ignored");
+            }
+        }
         Ok(())
     }
 }

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy &amp; Security</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    padding: 40px;
+    line-height: 1.6;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  h1 { color: #fff; font-size: 24px; margin-bottom: 8px; }
+  h2 { color: #c4b5fd; font-size: 17px; margin-top: 28px; }
+  p { margin: 8px 0; }
+  .highlight {
+    background: rgba(124, 58, 237, 0.15);
+    border-left: 3px solid #7c3aed;
+    padding: 12px 16px;
+    margin: 12px 0;
+    border-radius: 0 8px 8px 0;
+  }
+</style>
+</head>
+<body>
+  <h1>Privacy &amp; Security</h1>
+
+  <div class="highlight">
+    <strong>Fae processes everything locally by default.</strong>
+    Your voice, conversations, and memory stay on your device.
+  </div>
+
+  <h2>Local Processing</h2>
+  <p>Speech recognition (STT), text-to-speech (TTS), and LLM inference all run on-device using optimised models. No audio or text is sent to external servers unless you explicitly configure an API provider.</p>
+
+  <h2>Permissions</h2>
+  <p><strong>Microphone:</strong> Required for voice input. Audio is processed locally and never stored permanently.</p>
+  <p><strong>Contacts:</strong> Optional. Used to personalise greetings by reading your name from the "Me" card. Contact data is never uploaded.</p>
+  <p><strong>Calendar:</strong> Optional. Enables proactive briefings about upcoming events. Data stays local.</p>
+
+  <h2>Memory</h2>
+  <p>Fae stores conversation memory in <code>~/.fae/memory/</code>. This data is encrypted at rest using macOS Keychain and never leaves your device.</p>
+
+  <h2>Network Access</h2>
+  <p>Fae only connects to the internet for:</p>
+  <p>&bull; Downloading voice models on first launch</p>
+  <p>&bull; Checking for app updates</p>
+  <p>&bull; API calls if you explicitly configure a cloud LLM provider</p>
+
+  <h2>Data Deletion</h2>
+  <p>To completely remove all Fae data, delete <code>~/.fae/</code>. Permissions can be revoked in System Settings &gt; Privacy &amp; Security.</p>
+</body>
+</html>

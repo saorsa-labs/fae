@@ -73,6 +73,20 @@ final class OrbStateBridgeController: ObservableObject {
             }
         )
 
+        // Runtime lifecycle → orb mode transitions
+        observations.append(
+            center.addObserver(
+                forName: .faeRuntimeState, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo,
+                      let event = userInfo["event"] as? String
+                else { return }
+                Task { @MainActor [weak self] in
+                    self?.handleRuntimeState(event: event)
+                }
+            }
+        )
+
         // Also observe generating directly for .thinking mode
         observations.append(
             center.addObserver(
@@ -139,6 +153,26 @@ final class OrbStateBridgeController: ObservableObject {
         default:
             // urgency_set and flash — no persistent OrbStateController change needed;
             // these are transient effects handled by the orb animation layer.
+            break
+        }
+    }
+
+    // MARK: - Runtime State Handler
+
+    private func handleRuntimeState(event: String) {
+        guard let orbState else { return }
+
+        switch event {
+        case "runtime.starting":
+            orbState.mode = .thinking
+        case "runtime.started":
+            orbState.mode = .idle
+        case "runtime.error":
+            orbState.mode = .idle
+            orbState.feeling = .concern
+        case "runtime.stopped":
+            orbState.mode = .idle
+        default:
             break
         }
     }

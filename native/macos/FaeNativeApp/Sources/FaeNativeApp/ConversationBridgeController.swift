@@ -92,6 +92,32 @@ final class ConversationBridgeController: ObservableObject {
             }
         )
 
+        // Runtime progress (model downloads, loading)
+        observations.append(
+            center.addObserver(
+                forName: .faeRuntimeProgress, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo else { return }
+                Task { @MainActor [weak self] in
+                    self?.handleRuntimeProgress(userInfo: userInfo)
+                }
+            }
+        )
+
+        // Runtime state (started → ready message)
+        observations.append(
+            center.addObserver(
+                forName: .faeRuntimeState, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo,
+                      let event = userInfo["event"] as? String
+                else { return }
+                Task { @MainActor [weak self] in
+                    self?.handleRuntimeState(event: event, userInfo: userInfo)
+                }
+            }
+        )
+
         // Tool execution
         observations.append(
             center.addObserver(
@@ -154,6 +180,52 @@ final class ConversationBridgeController: ObservableObject {
         default:
             break
         }
+    }
+
+    // MARK: - Runtime Progress
+
+    private func handleRuntimeProgress(userInfo: [AnyHashable: Any]) {
+        let stage = userInfo["stage"] as? String ?? ""
+
+        switch stage {
+        case "download_started":
+            let model = userInfo["model_name"] as? String ?? "models"
+            appendStatusMessage("Downloading \(model)...")
+        case "aggregate_progress":
+            // Progress updates are frequent — skip injecting into the conversation
+            // to avoid flooding the UI. The orb thinking animation provides feedback.
+            break
+        case "load_started":
+            let model = userInfo["model_name"] as? String ?? "model"
+            appendStatusMessage("Loading \(model)...")
+        case "load_complete":
+            appendStatusMessage("Models loaded.")
+        case "error":
+            let message = userInfo["message"] as? String ?? "unknown error"
+            appendStatusMessage("Model loading failed: \(message)")
+        default:
+            break
+        }
+    }
+
+    private func handleRuntimeState(event: String, userInfo: [AnyHashable: Any]) {
+        switch event {
+        case "runtime.started":
+            appendStatusMessage("Ready to talk!")
+        case "runtime.error":
+            let payload = userInfo["payload"] as? [String: Any] ?? [:]
+            let message = payload["error"] as? String ?? "unknown error"
+            appendStatusMessage("Pipeline error: \(message)")
+        default:
+            break
+        }
+    }
+
+    /// Append a system status message to both the WebView and the native message store.
+    private func appendStatusMessage(_ text: String) {
+        let escaped = escapeForJS(text)
+        evaluateJS("window.addMessage && window.addMessage('tool', '\(escaped)');")
+        conversationController?.appendMessage(role: .tool, content: text)
     }
 
     // MARK: - JS Evaluation
