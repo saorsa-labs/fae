@@ -16,8 +16,8 @@ final class OnboardingTTSHelper: NSObject {
     /// Calling this while speech is in progress cancels the current utterance
     /// and starts the new one immediately.
     ///
-    /// - Parameter permission: One of `"microphone"`, `"contacts"`, or
-    ///   `"privacy"` (fallback for unknown values).
+    /// - Parameter permission: One of `"microphone"`, `"contacts"`,
+    ///   `"calendar"`, `"mail"`, or `"privacy"` (fallback for unknown values).
     func speak(permission: String) {
         let text = helpText(for: permission)
         if synthesizer.isSpeaking {
@@ -45,6 +45,10 @@ final class OnboardingTTSHelper: NSObject {
             return microphoneHelpText
         case "contacts":
             return contactsHelpText
+        case "calendar":
+            return calendarHelpText
+        case "mail":
+            return mailHelpText
         default:
             return privacyHelpText
         }
@@ -60,6 +64,18 @@ final class OnboardingTTSHelper: NSObject {
         Your contact card helps me know your name so I can greet you properly. \
         I only read your personal card — not your full contacts list. \
         Everything stays right here on your Mac.
+        """
+
+    private let calendarHelpText = """
+        I can help manage your schedule — creating reminders, checking appointments, \
+        and keeping you organised. \
+        Everything stays on your Mac and I never share your calendar data anywhere.
+        """
+
+    private let mailHelpText = """
+        I can help you find emails and draft messages. \
+        I never send anything without you telling me to, \
+        and all data stays private on your Mac.
         """
 
     private let privacyHelpText = """

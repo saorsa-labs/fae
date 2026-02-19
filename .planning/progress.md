@@ -262,3 +262,31 @@ Summary of Milestone 3:
 - Phase 3.2: Reminders & Notes tools (8 tools: list/create/complete reminders, list/get/create/append notes)
 - Phase 3.3: Mail tools (3 tools: search/get/compose mail) + AvailabilityGatedTool permission gating
 - Phase 3.4: JIT permission flow (SharedPermissionStore, live gates, enriched events, integration tests)
+
+## Milestone 4: Onboarding Redesign
+
+### Phase 4.1: Glassmorphic Design & Separate Window — 2026-02-19
+
+- [x] Task 1: OnboardingWindowController.swift (separate NSWindow)
+- [x] Task 2: NSVisualEffectView glassmorphic blur backdrop
+- [x] Task 3: Warm color palette — soft gradients, rounded corners (onboarding.html)
+- [x] Task 4: Slide transitions between phases
+- [x] Task 5: Responsive layout (clamp-based sizing)
+- [x] Task 6: Dark/light mode adaptation
+- [x] Task 7: Animated orb greeting on Welcome screen
+- [x] Task 8: Close onboarding window → open main window on completion
+
+Results: Swift build clean (zero errors, zero warnings).
+
+### Phase 4.2: Permission Cards with Help — 2026-02-19
+
+- [x] Task 1: Calendar/Reminders permission card added to onboarding.html (📅 icon, data-permission="calendar")
+- [x] Task 2: Mail/Notes permission card added to onboarding.html (✉️ icon, data-permission="mail")
+- [x] Task 3: Privacy assurance banner (🔒 + help "?" button, glassmorphic warm-gold styling)
+- [x] Task 4: Enhanced animated state transitions — cardGrantedPulse, cardDeniedShake, iconFadeIn keyframes; PERMISSION_CARDS map; shared updatePermissionCard() for all 4 cards
+- [x] Task 5: TTS help text for "calendar" and "mail" in OnboardingTTSHelper.swift
+- [x] Task 6: OnboardingController — "calendar" + "mail" in permissionStates; requestCalendar() via EventKit; requestMail() opens System Settings
+- [x] Task 7: OnboardingWindowController wires "calendar" and "mail" permission cases
+- [x] Task 8: Swift build clean (zero source errors, zero warnings); HTML validates OK
+
+Results: Swift build clean (zero errors, zero warnings). All 4 permission cards functional end-to-end.

@@ -1,159 +1,130 @@
-# Phase 4.2: Full Integration Test Matrix
+# Phase 4.2: Permission Cards with Help
 
 ## Overview
-Comprehensive integration testing for the fae_llm module covering all providers, compatibility profiles, failure modes, and security boundaries. Builds on Phase 3.3's E2E tests by adding contract tests, profile verification, failure injection, and mode gating.
 
-## Context
-- Phase 3.3 created basic E2E tests for OpenAI and Anthropic providers
-- Phase 4.2 expands coverage with contract tests, profile tests, and edge cases
-- Focus: Provider compatibility, failure resilience, security boundaries
+Extends the glassmorphic onboarding (Phase 4.1) with a full set of permission
+cards for Calendar/Reminders, Mail/Notes, and a Privacy Assurance section.
+Microphone and Contacts cards are already implemented in Phase 4.1. This phase
+adds the remaining cards, enriches TTS help text, and adds animated state
+transitions for all permission states (pending → granted / denied).
+
+## Current State (from Phase 4.1)
+
+- `onboarding.html`: 3-screen flow (Welcome, Permissions, Ready)
+  - Microphone card ✓, Contacts card ✓, help "?" buttons ✓, granted/denied state ✓
+- `OnboardingTTSHelper.swift`: speaks help for "microphone", "contacts", "privacy"
+- `OnboardingController.swift`: tracks microphone + contacts states, reads Me card
+- `OnboardingWindowController.swift`: separate glassmorphic NSWindow (Phase 4.1)
+- `OnboardingWebView.swift`: WKWebView bridge with permission state push API
 
 ## Tasks
 
-### Task 1: OpenAI provider contract tests
-**Files:** `src/fae_llm/providers/openai/tests.rs` (new)
+### Task 1: Calendar/Reminders permission card in onboarding.html
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html`
 
-Create contract tests verifying OpenAI adapter behavior:
-- Request format validation (chat completions endpoint)
-- Response parsing (streaming SSE + non-streaming)
-- Tool call formatting (function calling schema)
-- Error response handling (400, 401, 429, 500 status codes)
-- Reasoning mode support (o1-preview extended_thinking parameter)
-- Max tokens field handling (different models use different field names)
+Add a Calendar/Reminders permission card to Screen 2 (Permissions), after the
+Contacts card:
+- Icon: 📅, title: "Calendar & Reminders", desc: "I can help manage your schedule"
+- data-permission="calendar" on the help and Allow buttons
+- Card state updates from `window.setPermissionState("calendar", state)`
 
-Use mock HTTP server (mockito or wiremock) for deterministic testing.
+**Acceptance:** Card renders correctly in the permissions screen, receives state pushes.
 
-**Acceptance:**
-- Contract tests cover all request/response patterns
-- Mock server validates exact API format
-- Tests pass with zero warnings
+### Task 2: Mail/Notes permission card in onboarding.html
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html`
 
-### Task 2: Anthropic provider contract tests
-**Files:** `src/fae_llm/providers/anthropic/tests.rs` (new)
+Add a Mail/Notes permission card, after the Calendar card:
+- Icon: ✉️, title: "Mail & Notes", desc: "I can help find and compose messages"
+- data-permission="mail" on the help and Allow buttons
+- Card state updates from `window.setPermissionState("mail", state)`
 
-Create contract tests verifying Anthropic adapter behavior:
-- Request format validation (messages endpoint)
-- Response parsing (streaming + non-streaming)
-- Tool use block handling (tool_use content blocks)
-- Thinking block extraction (extended_thinking parameter)
-- Error response handling (400, 401, 429, 500)
-- Stop reason mapping (end_turn, max_tokens, tool_use)
+**Acceptance:** Card renders correctly, receives state pushes.
 
-Use mock HTTP server for deterministic testing.
+### Task 3: Privacy assurance section in onboarding.html
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html`
 
-**Acceptance:**
-- Contract tests cover all request/response patterns
-- Mock server validates exact API format
-- Tests pass with zero warnings
+Add a privacy assurance banner below the permission cards (above the Continue
+button) on Screen 2:
+- A small lock icon 🔒 with text: "Everything stays on your Mac. I never send data anywhere."
+- Styled with the warm-gold accent, subtle glass card background
+- Includes a help "?" button that triggers TTS "privacy" speech
 
-### Task 3: Local endpoint probing tests
-**Files:** `src/fae_llm/providers/openai_compatible/probe_tests.rs` (new)
+**Acceptance:** Privacy assurance renders with correct styling.
 
-Test LocalProbeService with various backend scenarios:
-- Health check success (200 OK with expected response)
-- Health check failure (timeout, connection refused, 500 error)
-- Model list parsing (/v1/models endpoint)
-- Incompatible response detection (non-OpenAI format)
-- Backoff retry logic (verify exponential backoff + max attempts)
-- Concurrent probe safety (multiple probes don't interfere)
+### Task 4: Enhanced animated state transitions in onboarding.html
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html`
 
-Use mock HTTP server with configurable delays and responses.
+Improve the granted/denied card animations:
+- Add a smooth scale pulse (scale 1.02 → 1.0) on state change
+- Granted: green checkmark icon swaps in with a fade-in animation
+- Denied: subtle shake animation (translateX keyframes)
+- All 4 cards (microphone, contacts, calendar, mail) use the same animation system
 
-**Acceptance:**
-- All probe scenarios tested
-- Typed failure modes verified
-- Backoff logic validated
-- Tests pass with zero warnings
+Also extract `updatePermissionCard()` into a shared function that handles all
+card IDs by permission name.
 
-### Task 4: Compatibility profile tests (z.ai, MiniMax, DeepSeek)
-**Files:** `src/fae_llm/providers/openai_compatible/profile_tests.rs` (new)
+**Acceptance:** All 4 cards animate correctly on state change.
 
-Test profile flag resolution for OpenAI-compatible providers:
-- z.ai profile (verify request transformations)
-- MiniMax profile (verify field mappings)
-- DeepSeek profile (verify reasoning mode handling)
-- Profile flag application (max_tokens_field, reasoning_mode, etc.)
-- Request normalization based on profile
-- Response normalization based on profile
+### Task 5: TTS help text for calendar and mail in OnboardingTTSHelper.swift
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingTTSHelper.swift`
 
-Use CompatibilityProfile test fixtures with mock adapters.
+Add help text cases for "calendar" and "mail":
+- calendar: "I can help manage your schedule — creating reminders, checking
+  appointments, and keeping you organised. Everything stays on your Mac."
+- mail: "I can help you find emails and draft messages. I never send anything
+  without you telling me to, and all data stays private on your Mac."
 
-**Acceptance:**
-- Each provider profile has dedicated tests
-- Profile flags correctly transform requests
-- Tests pass with zero warnings
+**Acceptance:** `speak(permission: "calendar")` and `speak(permission: "mail")`
+produce appropriate TTS output. Zero warnings.
 
-### Task 5: E2E multi-turn tool workflow tests
-**Files:** `src/fae_llm/agent/e2e_workflow_tests.rs` (new)
+### Task 6: OnboardingController permission state tracking for calendar and mail
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingController.swift`
 
-End-to-end tests covering complete agent workflows:
-- Prompt → tool call → execute → continue → final answer
-- Multi-turn conversation (3+ turns with tool use)
-- Mixed tools (read + bash + write in single conversation)
-- Tool argument validation (reject invalid schemas)
-- Max turn limit enforcement (verify loop termination)
-- Max tools per turn limit (verify guard behavior)
+Add "calendar" and "mail" to the `permissionStates` dictionary initial values:
+```swift
+@Published var permissionStates: [String: String] = [
+    "microphone": "pending",
+    "contacts": "pending",
+    "calendar": "pending",
+    "mail": "pending",
+]
+```
 
-Use mock providers to control responses deterministically.
+Add `requestCalendar()` and `requestMail()` methods that use EventKit
+`EKEventStore.requestAccess(to:)` for calendar and reminder access. Note: for
+Mail/Notes, the permission is a macOS Full Disk Access or Automation permission;
+for Phase 4.2, just show the state as "pending" and allow the user to grant via
+System Settings (show an alert explaining this).
 
-**Acceptance:**
-- E2E workflows cover realistic scenarios
-- Guard limits tested and enforced
-- Tests pass with zero warnings
+**Acceptance:** Controller tracks all 4 permission states. Zero warnings. Swift
+build clean.
 
-### Task 6: Failure injection tests
-**Files:** `src/fae_llm/agent/failure_tests.rs` (new)
+### Task 7: Wire new permissions through OnboardingWindowController
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingWindowController.swift`,
+           `native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingWebView.swift`
 
-Test error recovery and resilience:
-- Provider timeout during streaming (partial results recovery)
-- Provider 5xx error (retry with backoff)
-- Provider 429 rate limit (retry with exponential backoff)
-- Tool execution timeout (abort and report)
-- Tool execution failure (non-zero exit, exception)
-- Network interruption mid-stream (reconnect or fail gracefully)
-- Circuit breaker activation (after N consecutive failures)
+Update `OnboardingContentView` to handle "calendar" and "mail" permission requests:
+```swift
+case "calendar":
+    onboarding.requestCalendar()
+case "mail":
+    onboarding.requestMail()
+```
 
-Use mock providers with controlled failure injection.
+All 4 permission types are now wired end-to-end: JS button → Swift handler →
+state update → webView.setPermissionState push.
 
-**Acceptance:**
-- All failure modes tested
-- Recovery behaviors verified
-- Circuit breaker integration tested
-- Tests pass with zero warnings
+**Acceptance:** Tapping each card's Allow button triggers the correct Swift path.
+Swift build clean.
 
-### Task 7: Mode gating security tests
-**Files:** `src/fae_llm/tools/mode_gating_tests.rs` (new)
+### Task 8: Swift build validation and progress log update
+**Files:** All modified Swift + HTML files
 
-Test tool mode enforcement (read_only vs full):
-- read_only mode allows: read, bash (read-only commands)
-- read_only mode rejects: write, edit, bash (write commands)
-- full mode allows: all tools
-- Mode switching during session (read_only → full → read_only)
-- Tool registry mode validation
-- Error messages for rejected tools (clear security boundary)
+Run the Swift build to confirm zero errors and zero warnings:
+```bash
+swift build --package-path native/macos/FaeNativeApp 2>&1 | tail -20
+```
 
-Use ToolRegistry with different modes and verify enforcement.
+Update `.planning/progress.md` with Phase 4.2 completion entry.
 
-**Acceptance:**
-- All mode gating rules tested
-- Security boundaries enforced
-- Clear error messages on rejection
-- Tests pass with zero warnings
-
-### Task 8: Integration test documentation and cleanup
-**Files:** `src/fae_llm/mod.rs`, `src/fae_llm/providers/*/tests.rs`, `src/fae_llm/agent/*_tests.rs`, `src/fae_llm/tools/*_tests.rs`
-
-Final review and documentation:
-- Add module-level doc comments explaining test structure
-- Document test helpers and mock utilities
-- Ensure consistent naming conventions (test_provider_scenario_expected_behavior)
-- Remove any TODO/FIXME comments from test code
-- Verify no test warnings (unused imports, dead code, etc.)
-- Run full test suite: `just test`
-- Update progress.md with task completion
-
-**Acceptance:**
-- All integration tests documented
-- Zero test warnings
-- Full test suite passes (1,500+ tests)
-- progress.md updated with Phase 4.2 completion
+**Acceptance:** Swift build passes clean. progress.md updated. State JSON updated.

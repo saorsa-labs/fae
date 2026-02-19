@@ -38,6 +38,10 @@ private struct OnboardingContentView: View {
                     onboarding.requestMicrophone()
                 case "contacts":
                     onboarding.requestContacts()
+                case "calendar":
+                    onboarding.requestCalendar()
+                case "mail":
+                    onboarding.requestMail()
                 default:
                     NSLog("OnboardingContentView: unknown permission: %@", permission)
                 }

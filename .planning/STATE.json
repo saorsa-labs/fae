@@ -7,9 +7,9 @@
     "name": "Onboarding Redesign"
   },
   "phase": {
-    "number": "4.2",
-    "name": "Permission Cards with Help",
-    "plan": "PLAN-phase-4.2.md"
+    "number": "4.3",
+    "name": "Model Download & First-Run Experience",
+    "plan": "PLAN-phase-4.3.md"
   },
   "progress": {
     "total_tasks": 8,
@@ -21,5 +21,5 @@
     "status": "pending",
     "iteration": 0
   },
-  "last_updated": "2026-02-19T16:30:00Z"
+  "last_updated": "2026-02-19T17:30:00Z"
 }

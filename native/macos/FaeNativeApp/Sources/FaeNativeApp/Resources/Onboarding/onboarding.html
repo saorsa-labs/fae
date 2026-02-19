@@ -325,6 +325,8 @@
     align-items: flex-start;
     max-width: 360px;
     margin: 0 auto;
+    overflow-y: auto;
+    padding-bottom: 48px; /* ensure Continue button is reachable above dot indicator */
   }
 
   .permissions-title {
@@ -450,6 +452,77 @@
     background: rgba(var(--warm-gold-rgb), 0.15);
     border-color: rgba(var(--warm-gold-rgb), 0.25);
     color: var(--text-secondary);
+  }
+
+  /* =========================================================
+     Permission Card State Animations
+     ========================================================= */
+
+  /* Granted pulse — brief scale pop then settle */
+  @keyframes cardGrantedPulse {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1.025); }
+    70%  { transform: scale(0.997); }
+    100% { transform: scale(1); }
+  }
+
+  /* Denied shake */
+  @keyframes cardDeniedShake {
+    0%   { transform: translateX(0); }
+    15%  { transform: translateX(-6px); }
+    40%  { transform: translateX(5px); }
+    65%  { transform: translateX(-3px); }
+    85%  { transform: translateX(2px); }
+    100% { transform: translateX(0); }
+  }
+
+  /* Icon swap fade */
+  @keyframes iconFadeIn {
+    from { opacity: 0; transform: scale(0.7); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  .permission-card.animate-granted {
+    animation: cardGrantedPulse 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  .permission-card.animate-denied {
+    animation: cardDeniedShake 0.4s ease-out forwards;
+  }
+
+  .permission-icon.icon-swap {
+    animation: iconFadeIn 0.3s ease-out forwards;
+  }
+
+  /* =========================================================
+     Privacy Assurance Banner
+     ========================================================= */
+  .privacy-assurance {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    margin-bottom: 4px;
+    background: rgba(var(--warm-gold-rgb), 0.06);
+    border: 1px solid rgba(var(--warm-gold-rgb), 0.14);
+    border-radius: 14px;
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+
+  .privacy-icon {
+    font-size: 0.95rem;
+    flex-shrink: 0;
+    opacity: 0.75;
+  }
+
+  .privacy-text {
+    flex: 1;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+    letter-spacing: 0.02em;
   }
 
   /* =========================================================
@@ -595,6 +668,11 @@
       border-color: rgba(var(--warm-gold-rgb), 0.22);
     }
 
+    .privacy-assurance {
+      background: rgba(var(--warm-gold-rgb), 0.05);
+      border-color: rgba(var(--warm-gold-rgb), 0.12);
+    }
+
     .orb-highlight {
       background: radial-gradient(ellipse, rgba(255,255,255,0.18) 0%, transparent 70%);
     }
@@ -709,7 +787,7 @@
 
     <!-- Microphone Permission Card -->
     <div class="permission-card" id="cardMic">
-      <div class="permission-icon">🎙️</div>
+      <div class="permission-icon" id="iconMic">🎙️</div>
       <div class="permission-info">
         <div class="permission-name">Microphone</div>
         <div class="permission-desc">Hear your voice for conversation</div>
@@ -722,7 +800,7 @@
 
     <!-- Contacts Permission Card -->
     <div class="permission-card" id="cardContacts">
-      <div class="permission-icon">👤</div>
+      <div class="permission-icon" id="iconContacts">👤</div>
       <div class="permission-info">
         <div class="permission-name">Contacts</div>
         <div class="permission-desc">Know your name for personalisation</div>
@@ -731,6 +809,39 @@
         <button class="btn-help" data-permission="contacts" aria-label="Learn about contacts permission">?</button>
         <button class="permission-status" id="statusContacts" data-permission="contacts">Allow</button>
       </div>
+    </div>
+
+    <!-- Calendar & Reminders Permission Card -->
+    <div class="permission-card" id="cardCalendar">
+      <div class="permission-icon" id="iconCalendar">📅</div>
+      <div class="permission-info">
+        <div class="permission-name">Calendar &amp; Reminders</div>
+        <div class="permission-desc">Help manage your schedule</div>
+      </div>
+      <div class="permission-actions">
+        <button class="btn-help" data-permission="calendar" aria-label="Learn about calendar permission">?</button>
+        <button class="permission-status" id="statusCalendar" data-permission="calendar">Allow</button>
+      </div>
+    </div>
+
+    <!-- Mail & Notes Permission Card -->
+    <div class="permission-card" id="cardMail">
+      <div class="permission-icon" id="iconMail">✉️</div>
+      <div class="permission-info">
+        <div class="permission-name">Mail &amp; Notes</div>
+        <div class="permission-desc">Help find and compose messages</div>
+      </div>
+      <div class="permission-actions">
+        <button class="btn-help" data-permission="mail" aria-label="Learn about mail permission">?</button>
+        <button class="permission-status" id="statusMail" data-permission="mail">Allow</button>
+      </div>
+    </div>
+
+    <!-- Privacy Assurance Banner -->
+    <div class="privacy-assurance" id="privacyAssurance">
+      <div class="privacy-icon">🔒</div>
+      <div class="privacy-text">Everything stays on your Mac. I never send data anywhere.</div>
+      <button class="btn-help" data-permission="privacy" aria-label="Learn about privacy">?</button>
     </div>
 
     <button class="btn-primary" id="btnPermissionsNext">Continue</button>
@@ -1168,7 +1279,7 @@ requestAnimationFrame(loop);
    ========================================================= */
 
 var currentPhase = "welcome";  // welcome | permissions | ready
-var permissionState = { microphone: "pending", contacts: "pending" };
+var permissionState = { microphone: "pending", contacts: "pending", calendar: "pending", mail: "pending" };
 
 var screens = {
   welcome: document.getElementById("screenWelcome"),
@@ -1226,26 +1337,70 @@ function transitionTo(phase) {
 /* ---------------------------------------------------------
    Permission Handling
    --------------------------------------------------------- */
+
+/* Maps permission name → { cardId, statusId, iconId, grantedIcon, pendingIcon } */
+var PERMISSION_CARDS = {
+  microphone: { cardId: "cardMic",      statusId: "statusMic",      iconId: "iconMic",      grantedIcon: "✅", pendingIcon: "🎙️" },
+  contacts:   { cardId: "cardContacts", statusId: "statusContacts", iconId: "iconContacts", grantedIcon: "✅", pendingIcon: "👤" },
+  calendar:   { cardId: "cardCalendar", statusId: "statusCalendar", iconId: "iconCalendar", grantedIcon: "✅", pendingIcon: "📅" },
+  mail:       { cardId: "cardMail",     statusId: "statusMail",     iconId: "iconMail",     grantedIcon: "✅", pendingIcon: "✉️" }
+};
+
 function updatePermissionCard(permission, state) {
   permissionState[permission] = state;
 
-  var statusEl = document.getElementById(
-    permission === "microphone" ? "statusMic" : "statusContacts"
-  );
-  var cardEl = document.getElementById(
-    permission === "microphone" ? "cardMic" : "cardContacts"
-  );
+  var meta = PERMISSION_CARDS[permission];
+  if (!meta) return;
 
-  statusEl.className = "permission-status " + state;
+  var cardEl   = document.getElementById(meta.cardId);
+  var statusEl = document.getElementById(meta.statusId);
+  var iconEl   = document.getElementById(meta.iconId);
+
+  if (!cardEl || !statusEl) return;
+
+  /* Remove previous animation classes before re-applying */
+  cardEl.classList.remove("animate-granted", "animate-denied");
+
+  /* Trigger reflow so animation restarts if same state re-applied */
+  void cardEl.offsetWidth; /* eslint-disable-line no-void */
+
   if (state === "granted") {
+    statusEl.className = "permission-status granted";
     statusEl.textContent = "Granted";
     cardEl.classList.add("granted");
+    cardEl.classList.add("animate-granted");
+
+    /* Swap icon to checkmark with fade animation */
+    if (iconEl) {
+      iconEl.textContent = meta.grantedIcon;
+      iconEl.classList.remove("icon-swap");
+      void iconEl.offsetWidth;
+      iconEl.classList.add("icon-swap");
+    }
+
   } else if (state === "denied") {
+    statusEl.className = "permission-status denied";
     statusEl.textContent = "Denied";
     cardEl.classList.remove("granted");
+    cardEl.classList.add("animate-denied");
+
+    /* Restore original icon */
+    if (iconEl) {
+      iconEl.textContent = meta.pendingIcon;
+      iconEl.classList.remove("icon-swap");
+      void iconEl.offsetWidth;
+      iconEl.classList.add("icon-swap");
+    }
+
   } else {
+    statusEl.className = "permission-status";
     statusEl.textContent = "Allow";
     cardEl.classList.remove("granted");
+
+    /* Restore original icon */
+    if (iconEl) {
+      iconEl.textContent = meta.pendingIcon;
+    }
   }
 }
 

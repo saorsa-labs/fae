@@ -1,5 +1,7 @@
+import AppKit
 import AVFoundation
 @preconcurrency import Contacts
+import EventKit
 import Foundation
 
 /// Manages onboarding state and native system permission requests.
@@ -22,10 +24,13 @@ final class OnboardingController: ObservableObject {
     @Published var userName: String? = nil
 
     /// Current permission states for web layer synchronisation.
-    /// Keys: "microphone", "contacts". Values: "pending" | "granted" | "denied".
+    /// Keys: "microphone", "contacts", "calendar", "mail".
+    /// Values: "pending" | "granted" | "denied".
     @Published var permissionStates: [String: String] = [
         "microphone": "pending",
-        "contacts": "pending"
+        "contacts": "pending",
+        "calendar": "pending",
+        "mail": "pending"
     ]
 
     // MARK: - Permission Request Callbacks
@@ -71,6 +76,52 @@ final class OnboardingController: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Request calendar and reminders access via EventKit and report the result.
+    ///
+    /// Uses `EKEventStore.requestFullAccessToEvents()` on macOS 14+ and the
+    /// legacy `requestAccess(to:completion:)` API on earlier systems. On grant,
+    /// updates the "calendar" permission state in the web layer.
+    func requestCalendar() {
+        let store = EKEventStore()
+        if #available(macOS 14.0, *) {
+            store.requestFullAccessToEvents { [weak self] granted, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let state = granted ? "granted" : "denied"
+                    self.permissionStates["calendar"] = state
+                    self.onPermissionResult?("calendar", state)
+                }
+            }
+        } else {
+            store.requestAccess(to: .event) { [weak self] granted, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let state = granted ? "granted" : "denied"
+                    self.permissionStates["calendar"] = state
+                    self.onPermissionResult?("calendar", state)
+                }
+            }
+        }
+    }
+
+    /// Request mail and notes access.
+    ///
+    /// Mail and Notes on macOS require Full Disk Access or Automation entitlements
+    /// that cannot be requested programmatically at runtime. This method opens
+    /// System Settings to the Privacy & Security panel so the user can grant
+    /// access manually, then records the state as "pending" until verified.
+    func requestMail() {
+        // Open System Settings to the Privacy & Security → Automation panel.
+        // The user must manually grant access there and re-launch if needed.
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+            NSWorkspace.shared.open(url)
+        }
+        // Mark as "pending" — the user must grant in System Settings.
+        // The web layer shows a visual indication that action is needed.
+        permissionStates["mail"] = "pending"
+        onPermissionResult?("mail", "pending")
     }
 
     /// Complete the onboarding flow and signal the backend.
