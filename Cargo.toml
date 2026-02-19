@@ -9,16 +9,11 @@ description = "Real-time speech-to-speech AI conversation system"
 license = "AGPL-3.0"
 repository = "https://github.com/saorsa-labs/fae"
 autobins = false
-default-run = "fae"
+default-run = "fae-host"
 
 [lib]
 name = "fae"
 crate-type = ["staticlib", "lib"]
-
-[[bin]]
-name = "fae"
-path = "src/bin/gui.rs"
-required-features = ["gui"]
 
 [[bin]]
 name = "fae-avatar-slicer"
@@ -38,9 +33,8 @@ name = "fae-host"
 path = "src/bin/host_bridge.rs"
 
 [features]
-default = ["gui"]
+default = []
 metal = ["mistralrs/metal"]
-gui = ["dioxus"]
 tools = []
 # TTS ONNX execution provider features.
 coreml = ["ort/coreml"]
@@ -104,7 +98,7 @@ async-stream = "0.3"
 tokio-stream = "0.1"
 
 # CLI
-# GUI-only app (no CLI/TUI binaries).
+# Headless host bridge binary (`fae-host`) for IPC / Mode B.
 
 # Logging
 tracing = "0.1"
@@ -129,11 +123,8 @@ similar = "2"
 # Progress indicators
 indicatif = "0.17"
 
-# Desktop GUI (optional, behind `gui` feature)
-dioxus = { version = "0.7", features = ["desktop"], optional = true }
-
-# TUI (saorsa-tui terminal UI framework, published on crates.io)
-# (removed)
+# GUI: Dioxus desktop frontend archived to `dioxus-gui` branch.
+# Native macOS UI is Swift (native/macos/FaeNativeApp).
 
 # Canvas visual output (saorsa-canvas scene graph)
 canvas-core = "0.2"

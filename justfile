@@ -10,9 +10,9 @@ export CFLAGS := if os() == "macos" { "-isysroot " + `xcrun --show-sdk-path 2>/d
 default:
     @just --list
 
-# Run the GUI app (Metal GPU auto-enabled on macOS)
+# Run the headless host bridge (IPC / Mode B)
 run:
-    cargo run --bin fae
+    cargo run --bin fae-host
 
 # Run the native macOS SwiftUI shell.
 run-native-swift:
@@ -43,37 +43,33 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-# Lint with clippy (zero warnings) — default features only (no gui)
+# Lint with clippy (zero warnings)
 lint:
-    cargo clippy --no-default-features --all-targets -- -D warnings
+    cargo clippy --all-targets -- -D warnings
 
-# Build debug (CLI only, no gui feature)
+# Build debug
 build:
-    cargo build --no-default-features
+    cargo build
 
 # Build release
 build-release:
-    cargo build --release --no-default-features
+    cargo build --release
 
 # Build with warnings as errors
 build-strict:
-    RUSTFLAGS="-D warnings" cargo build --no-default-features
-
-# Build GUI (requires dioxus)
-build-gui:
-    cargo build --features gui
+    RUSTFLAGS="-D warnings" cargo build
 
 # Run all tests
 test:
-    cargo test --all-features
+    cargo test
 
 # Run tests with output visible
 test-verbose:
-    cargo test --all-features -- --nocapture
+    cargo test -- --nocapture
 
 # Run comprehensive tool-calling judgment eval suite
 tool-judgment-eval:
-    cargo test --all-features tool_judgment_ -- --nocapture
+    cargo test tool_judgment_ -- --nocapture
 
 # Scan for forbidden patterns (.unwrap, .expect, panic!, etc.)
 panic-scan:

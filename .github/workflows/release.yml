@@ -307,24 +307,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux GUI build dependencies
+      - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             pkg-config \
             libasound2-dev \
-            libssl-dev \
-            libgtk-3-dev \
-            libxdo-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
-          if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
-            sudo apt-get install -y libwebkit2gtk-4.1-dev
-          else
-            sudo apt-get install -y libwebkit2gtk-4.0-dev
-          fi
+            libssl-dev
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -336,8 +326,8 @@ jobs:
           key: ${{ runner.os }}-x86_64-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-x86_64-release-
 
-      - name: Build release binary
-        run: cargo build --release --features gui
+      - name: Build release binary (headless host bridge)
+        run: cargo build --release --bin fae-host
 
       - name: Prepare release payloads
         run: |
@@ -350,13 +340,13 @@ jobs:
           rm -rf "$DIST_DIR" "$ARCHIVE_STAGING"
           mkdir -p "$DIST_DIR" "$ARCHIVE_STAGING"
 
-          cp target/release/fae "$UPDATE_ASSET"
+          cp target/release/fae-host "$UPDATE_ASSET"
           chmod +x "$UPDATE_ASSET"
 
-          cp target/release/fae "$ARCHIVE_STAGING/"
+          cp target/release/fae-host "$ARCHIVE_STAGING/fae-host"
           cp README.md "$ARCHIVE_STAGING/"
           cp LICENSE "$ARCHIVE_STAGING/" 2>/dev/null || true
-          chmod +x "$ARCHIVE_STAGING/fae"
+          chmod +x "$ARCHIVE_STAGING/fae-host"
           tar -czf "$ARCHIVE" -C "$ARCHIVE_STAGING" .
 
           echo "ARTIFACTS_DIR=$DIST_DIR" >> "$GITHUB_ENV"
@@ -388,8 +378,8 @@ jobs:
           key: ${{ runner.os }}-x86_64-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-x86_64-release-
 
-      - name: Build release binary
-        run: cargo build --release --features gui
+      - name: Build release binary (headless host bridge)
+        run: cargo build --release --bin fae-host
 
       - name: Prepare release payloads
         shell: pwsh
@@ -404,8 +394,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
           New-Item -ItemType Directory -Force -Path $ArchiveStaging | Out-Null
 
-          Copy-Item "target/release/fae.exe" $UpdateAsset
-          Copy-Item "target/release/fae.exe" (Join-Path $ArchiveStaging "fae.exe")
+          Copy-Item "target/release/fae-host.exe" $UpdateAsset
+          Copy-Item "target/release/fae-host.exe" (Join-Path $ArchiveStaging "fae-host.exe")
           Copy-Item "README.md" $ArchiveStaging
           if (Test-Path "LICENSE") {
             Copy-Item "LICENSE" $ArchiveStaging

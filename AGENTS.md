@@ -193,8 +193,8 @@ Before shipping memory/proactive/personalization changes:
 
 ```bash
 cargo fmt --all
-cargo clippy --all-features -- -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
-cargo test --all-features
+cargo clippy -- -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+cargo test
 ```
 
 For targeted iteration:

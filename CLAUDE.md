@@ -197,7 +197,7 @@ Full docs: `docs/linker-anchor.md`
 Bookmarks are persisted in `config.toml` under `[[bookmarks]]` (base64-encoded, labeled).
 On startup, `restore_all_bookmarks()` re-establishes access; stale bookmarks are refreshed, invalid ones pruned.
 
-File picker flows (`gui.rs`) call `bookmark_and_persist()` after user selection.
+File picker flows call `bookmark_and_persist()` after user selection.
 
 ## Delivery quality requirements
 

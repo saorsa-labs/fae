@@ -227,13 +227,14 @@ Runtime system prompt assembly:
 ## Developer Commands
 
 ```bash
-just run           # Run GUI app
-just build         # Build (CLI-only)
-just build-gui     # Build GUI binary
-just test          # Run tests (2076 tests)
-just lint          # Run clippy (zero warnings)
-just fmt           # Format code
-just check         # Full CI validation
+just run              # Run headless host bridge (IPC mode)
+just run-native-swift # Run native macOS SwiftUI app
+just build            # Build Rust core library + binaries
+just build-staticlib  # Build libfae.a for Swift embedding
+just test             # Run tests
+just lint             # Run clippy (zero warnings)
+just fmt              # Format code
+just check            # Full CI validation
 ```
 
 ## License
