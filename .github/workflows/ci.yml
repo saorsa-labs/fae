@@ -77,6 +77,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -88,10 +90,10 @@ jobs:
           key: ${{ runner.os }}-aarch64-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-aarch64-cargo-build-
 
-      - name: Build Rust backend (release)
-        run: cargo build --release --no-default-features
+      - name: Build Rust staticlib (release, aarch64)
+        run: cargo build --release --no-default-features --target aarch64-apple-darwin
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '14.0'
 
       - name: Build native Swift app (release)
-        run: |
-          cd native/macos/FaeNativeApp
-          swift build -c release
+        run: swift build -c release --package-path native/macos/FaeNativeApp
