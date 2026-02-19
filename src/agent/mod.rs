@@ -87,6 +87,13 @@ impl FaeAgentLlm {
         credential_manager: &dyn crate::credentials::CredentialManager,
         shared_permissions: Option<SharedPermissionStore>,
     ) -> Result<Self> {
+        // Snapshot permission state for system prompt injection, then drop
+        // the guard so `shared_permissions` can be moved into `build_registry`.
+        let system_prompt = {
+            let perm_guard = shared_permissions.as_ref().and_then(|sp| sp.lock().ok());
+            config.effective_system_prompt(perm_guard.as_deref())
+        };
+
         let provider = build_provider(config, preloaded_llm.as_ref(), credential_manager).await;
         let registry = build_registry(
             config,
@@ -95,7 +102,7 @@ impl FaeAgentLlm {
             shared_permissions,
         );
 
-        let history = vec![Message::system(config.effective_system_prompt())];
+        let history = vec![Message::system(system_prompt)];
 
         let parallel_tool_calls = matches!(config.tool_mode, AgentToolMode::ReadOnly);
 

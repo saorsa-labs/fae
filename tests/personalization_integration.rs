@@ -12,7 +12,7 @@ use fae::personality;
 
 #[test]
 fn personality_profile_assembles_with_fae_identity() {
-    let prompt = personality::assemble_prompt("fae", "");
+    let prompt = personality::assemble_prompt("fae", "", None);
     // Must contain the core prompt anchor.
     assert!(prompt.contains("Fae"));
     // Must contain AI assistant identity.
@@ -24,7 +24,7 @@ fn personality_profile_assembles_with_fae_identity() {
 #[test]
 fn personality_profile_with_addon_appends_cleanly() {
     let addon = "Always mention the weather.";
-    let prompt = personality::assemble_prompt("fae", addon);
+    let prompt = personality::assemble_prompt("fae", addon, None);
     assert!(prompt.contains(addon));
     // Addon should appear after the personality section.
     let personality_pos = prompt.find("Fae").or_else(|| prompt.find("assistant"));
@@ -88,7 +88,7 @@ fn personality_and_tts_config_are_independent() {
     config.tts.backend = TtsBackend::FishSpeech;
 
     // Personality assembly should work regardless of TTS backend.
-    let prompt = config.llm.effective_system_prompt();
+    let prompt = config.llm.effective_system_prompt(None);
     assert!(prompt.contains("Fae"));
 
     // TTS backend should be independent of personality choice.

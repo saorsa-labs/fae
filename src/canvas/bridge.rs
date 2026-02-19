@@ -219,7 +219,8 @@ impl CanvasBridge {
             | RuntimeEvent::ProactiveBriefingReady { .. }
             | RuntimeEvent::RelationshipUpdate { .. }
             | RuntimeEvent::SkillProposal { .. }
-            | RuntimeEvent::NoiseBudgetUpdate { .. } => {}
+            | RuntimeEvent::NoiseBudgetUpdate { .. }
+            | RuntimeEvent::OrbMoodUpdate { .. } => {}
         }
     }
 

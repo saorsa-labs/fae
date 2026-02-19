@@ -183,4 +183,14 @@ pub enum RuntimeEvent {
         /// Remaining deliveries allowed today.
         remaining: u32,
     },
+    /// Orb mood/feeling update from sentiment analysis.
+    ///
+    /// Emitted by the background sentiment classifier after each LLM turn.
+    /// The orb animation layer uses this to shift emotional colour/palette.
+    OrbMoodUpdate {
+        /// One of the 8 `OrbFeeling` values (e.g. `"warmth"`, `"delight"`).
+        feeling: String,
+        /// Optional palette override (e.g. `"autumn-bracken"`).
+        palette: Option<String>,
+    },
 }

@@ -25,6 +25,8 @@ pub const EXTERNAL_LLM_SKILL: &str = include_str!("../../Skills/external-llm.md"
 pub const UV_SCRIPTS_SKILL: &str = include_str!("../../Skills/uv-scripts.md");
 /// Built-in skill for desktop automation (screenshots, clicks, window management).
 pub const DESKTOP_SKILL: &str = include_str!("../../Skills/desktop.md");
+/// Built-in skill for Apple ecosystem integration (Contacts, Calendar, Reminders, Notes, Mail).
+pub const APPLE_ECOSYSTEM_SKILL: &str = include_str!("../../Skills/apple-ecosystem.md");
 
 /// Package manifest accepted by installer.
 #[derive(Debug, Clone, Deserialize)]
@@ -533,6 +535,7 @@ pub fn list_managed_skills_strict() -> crate::Result<Vec<ManagedSkillInfo>> {
 /// Includes built-in names and active custom/managed skills.
 pub fn list_skills() -> Vec<String> {
     let mut names = vec![
+        "apple-ecosystem".to_owned(),
         "canvas".to_owned(),
         "desktop".to_owned(),
         "external-llm".to_owned(),
@@ -572,7 +575,11 @@ fn list_custom_skill_names(paths: &SkillPaths) -> Vec<String> {
                 continue;
             };
 
-            if stem == "canvas" || stem == "desktop" || stem == "external-llm" {
+            if stem == "apple-ecosystem"
+                || stem == "canvas"
+                || stem == "desktop"
+                || stem == "external-llm"
+            {
                 continue;
             }
 
@@ -595,6 +602,7 @@ fn list_custom_skill_names(paths: &SkillPaths) -> Vec<String> {
 /// Returns built-ins followed by active custom/managed skill markdown files.
 pub fn load_all_skills() -> String {
     let mut parts: Vec<String> = vec![
+        APPLE_ECOSYSTEM_SKILL.to_owned(),
         CANVAS_SKILL.to_owned(),
         DESKTOP_SKILL.to_owned(),
         EXTERNAL_LLM_SKILL.to_owned(),
@@ -625,7 +633,8 @@ pub fn load_all_skills() -> String {
             let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
-            if stem == "canvas"
+            if stem == "apple-ecosystem"
+                || stem == "canvas"
                 || stem == "desktop"
                 || stem == "external-llm"
                 || stem == "uv-scripts"
@@ -674,10 +683,20 @@ mod tests {
 
     #[test]
     fn built_in_skills_nonempty() {
+        assert!(!APPLE_ECOSYSTEM_SKILL.is_empty());
         assert!(!CANVAS_SKILL.is_empty());
         assert!(!DESKTOP_SKILL.is_empty());
         assert!(!EXTERNAL_LLM_SKILL.is_empty());
         assert!(!UV_SCRIPTS_SKILL.is_empty());
+    }
+
+    #[test]
+    fn apple_ecosystem_skill_references_tool_names() {
+        assert!(APPLE_ECOSYSTEM_SKILL.contains("search_contacts"));
+        assert!(APPLE_ECOSYSTEM_SKILL.contains("list_calendar_events"));
+        assert!(APPLE_ECOSYSTEM_SKILL.contains("create_reminder"));
+        assert!(APPLE_ECOSYSTEM_SKILL.contains("list_notes"));
+        assert!(APPLE_ECOSYSTEM_SKILL.contains("compose_mail"));
     }
 
     #[test]
@@ -842,6 +861,7 @@ mod tests {
     #[test]
     fn list_skills_includes_builtins() {
         let names = list_skills();
+        assert!(names.contains(&"apple-ecosystem".to_owned()));
         assert!(names.contains(&"canvas".to_owned()));
         assert!(names.contains(&"desktop".to_owned()));
         assert!(names.contains(&"external-llm".to_owned()));

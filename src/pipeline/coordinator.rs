@@ -2247,6 +2247,20 @@ async fn run_llm_stage(
             &assistant_text,
         );
 
+        // Concurrent sentiment analysis → orb mood (non-blocking).
+        if let Some(rt) = runtime_tx.clone() {
+            let text_for_sentiment = assistant_text.clone();
+            tokio::spawn(async move {
+                let result = crate::sentiment::classify(&text_for_sentiment);
+                if result.confidence >= crate::sentiment::CONFIDENCE_THRESHOLD {
+                    let _ = rt.send(RuntimeEvent::OrbMoodUpdate {
+                        feeling: result.feeling,
+                        palette: result.palette,
+                    });
+                }
+            });
+        }
+
         // Background intelligence extraction (non-blocking).
         if config.intelligence.enabled {
             let resolved_key = config

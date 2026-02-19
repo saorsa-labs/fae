@@ -10,6 +10,7 @@
 //! onboarding is incomplete (see memory orchestrator).
 
 use crate::error::Result;
+use crate::permissions::PermissionStore;
 use std::path::{Path, PathBuf};
 
 /// Core system prompt (small, operational instructions).
@@ -70,12 +71,16 @@ pub fn load_onboarding_checklist() -> String {
 ///
 /// `personality_name` is ignored and retained only for backward compatibility.
 #[must_use]
-pub fn assemble_prompt(_personality_name: &str, user_add_on: &str) -> String {
+pub fn assemble_prompt(
+    _personality_name: &str,
+    user_add_on: &str,
+    permissions: Option<&PermissionStore>,
+) -> String {
     let soul = load_soul();
     let skills = crate::skills::load_all_skills();
     let add_on = user_add_on.trim();
 
-    let mut parts: Vec<String> = Vec::with_capacity(4);
+    let mut parts: Vec<String> = Vec::with_capacity(6);
     parts.push(CORE_PROMPT.trim().to_owned());
 
     let soul_trimmed = soul.trim();
@@ -86,6 +91,29 @@ pub fn assemble_prompt(_personality_name: &str, user_add_on: &str) -> String {
     let skills_trimmed = skills.trim();
     if !skills_trimmed.is_empty() {
         parts.push(skills_trimmed.to_owned());
+    }
+
+    if let Some(store) = permissions {
+        let builtin_skills = crate::skills::builtins::builtin_skills();
+        let active = builtin_skills.active_prompt_fragments(store);
+        if !active.trim().is_empty() {
+            parts.push(format!(
+                "# Active capabilities\n\n\
+                 The following capabilities are enabled:\n\n{active}"
+            ));
+        }
+        let unavailable = builtin_skills.unavailable(store);
+        if !unavailable.is_empty() {
+            let names: Vec<&str> = unavailable.iter().map(|s| s.name()).collect();
+            parts.push(format!(
+                "# Capabilities requiring permission\n\n\
+                 These capabilities are available but not yet granted: {}. \
+                 If the user asks about these, try using the tool \u{2014} the system will \
+                 prompt them to grant access. If declined, suggest they can enable \
+                 it later in settings.",
+                names.join(", ")
+            ));
+        }
     }
 
     if !add_on.is_empty() {
@@ -114,26 +142,26 @@ mod tests {
 
     #[test]
     fn assemble_includes_core_and_soul() {
-        let prompt = assemble_prompt("fae", "");
+        let prompt = assemble_prompt("fae", "", None);
         assert!(prompt.contains("You are Fae"));
         assert!(prompt.starts_with(CORE_PROMPT.trim()));
     }
 
     #[test]
     fn assemble_appends_user_add_on() {
-        let prompt = assemble_prompt("any", "Be extra concise.");
+        let prompt = assemble_prompt("any", "Be extra concise.", None);
         assert!(prompt.ends_with("Be extra concise."));
     }
 
     #[test]
     fn assemble_includes_built_in_skills() {
-        let prompt = assemble_prompt("any", "");
+        let prompt = assemble_prompt("any", "", None);
         assert!(prompt.contains("You have a canvas window."));
     }
 
     #[test]
     fn prompt_includes_companion_presence() {
-        let prompt = assemble_prompt("fae", "");
+        let prompt = assemble_prompt("fae", "", None);
         assert!(prompt.contains("Companion presence:"));
         assert!(prompt.contains("always present and listening"));
         assert!(prompt.contains("Direct address"));
@@ -147,5 +175,68 @@ mod tests {
         assert!(DEFAULT_SOUL.contains("Presence Principles"));
         assert!(DEFAULT_SOUL.contains("always-present companion"));
         assert!(DEFAULT_SOUL.contains("Silence is a form of respect"));
+    }
+
+    #[test]
+    fn assemble_includes_apple_ecosystem_skill() {
+        let prompt = assemble_prompt("fae", "", None);
+        // The apple-ecosystem skill references Apple tool names.
+        assert!(prompt.contains("search_contacts"));
+        assert!(prompt.contains("list_calendar_events"));
+        assert!(prompt.contains("compose_mail"));
+    }
+
+    #[test]
+    fn assemble_with_calendar_granted() {
+        use crate::permissions::{PermissionKind, PermissionStore};
+        let mut store = PermissionStore::default();
+        store.grant(PermissionKind::Calendar);
+
+        let prompt = assemble_prompt("fae", "", Some(&store));
+        // CalendarSkill's fragment mentions "schedule management".
+        assert!(
+            prompt.contains("schedule management") || prompt.contains("calendar"),
+            "prompt should mention calendar capability"
+        );
+        // Active capabilities section should be present.
+        assert!(prompt.contains("Active capabilities"));
+    }
+
+    #[test]
+    fn assemble_with_mail_denied() {
+        use crate::permissions::PermissionStore;
+        // Default store has nothing granted.
+        let store = PermissionStore::default();
+
+        let prompt = assemble_prompt("fae", "", Some(&store));
+        // Mail should appear in "requiring permission" section.
+        assert!(prompt.contains("Capabilities requiring permission"));
+        assert!(prompt.contains("mail"));
+    }
+
+    #[test]
+    fn assemble_no_permissions_shows_all_unavailable() {
+        use crate::permissions::PermissionStore;
+        let store = PermissionStore::default();
+
+        let prompt = assemble_prompt("fae", "", Some(&store));
+        assert!(prompt.contains("Capabilities requiring permission"));
+        // All 9 built-in skills should be listed as unavailable.
+        for name in [
+            "calendar",
+            "contacts",
+            "mail",
+            "reminders",
+            "files",
+            "notifications",
+            "location",
+            "camera",
+            "desktop_automation",
+        ] {
+            assert!(
+                prompt.contains(name),
+                "expected '{name}' in unavailable capabilities"
+            );
+        }
     }
 }

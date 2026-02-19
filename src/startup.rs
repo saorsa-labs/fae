@@ -945,7 +945,7 @@ async fn execute_scheduled_conversation(
     use tracing::{debug, info, warn};
 
     // Build system prompt with optional addon
-    let mut system_prompt = config.llm.effective_system_prompt();
+    let mut system_prompt = config.llm.effective_system_prompt(None);
     if let Some(addon) = &request.system_addon {
         system_prompt.push('\n');
         system_prompt.push_str(addon);

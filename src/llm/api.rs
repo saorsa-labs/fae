@@ -68,7 +68,7 @@ impl ApiLlm {
 
         let history = vec![ChatMessage {
             role: "system",
-            content: config.effective_system_prompt(),
+            content: config.effective_system_prompt(None),
         }];
 
         Ok(Self {

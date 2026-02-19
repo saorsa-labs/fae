@@ -155,7 +155,10 @@ impl LocalLlm {
     pub async fn new(config: &LlmConfig) -> Result<Self> {
         let model = Self::load_local_model(config).await?;
 
-        let history = vec![(TextMessageRole::System, config.effective_system_prompt())];
+        let history = vec![(
+            TextMessageRole::System,
+            config.effective_system_prompt(None),
+        )];
 
         Ok(Self {
             model,

@@ -445,6 +445,10 @@ fn map_runtime_event(event: &RuntimeEvent) -> (String, serde_json::Value) {
             "pipeline.noise_budget".to_owned(),
             serde_json::json!({"remaining": remaining}),
         ),
+        RuntimeEvent::OrbMoodUpdate { feeling, palette } => (
+            "orb.state_changed".to_owned(),
+            serde_json::json!({"feeling": feeling, "palette": palette}),
+        ),
     }
 }
 

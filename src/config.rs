@@ -589,7 +589,10 @@ Personal context:\n\
     ///
     /// Legacy prompts stored in `system_prompt` are detected and treated as
     /// empty add-ons.
-    pub fn effective_system_prompt(&self) -> String {
+    pub fn effective_system_prompt(
+        &self,
+        permissions: Option<&crate::permissions::PermissionStore>,
+    ) -> String {
         let add_on = self.system_prompt.trim();
         let is_legacy = Self::LEGACY_PROMPTS
             .iter()
@@ -599,7 +602,7 @@ Personal context:\n\
         } else {
             add_on
         };
-        crate::personality::assemble_prompt(&self.personality, clean_addon)
+        crate::personality::assemble_prompt(&self.personality, clean_addon, permissions)
     }
 }
 
