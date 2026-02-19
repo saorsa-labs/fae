@@ -96,6 +96,9 @@ struct FaeNativeApp: App {
                     onboardingWindow.close()
                     showMainWindow()
                 }
+                .onContinueUserActivity("com.saorsalabs.fae.session.handoff") { activity in
+                    handleIncomingHandoff(activity)
+                }
         }
         .defaultSize(width: 340, height: 500)
 
@@ -193,6 +196,59 @@ struct FaeNativeApp: App {
     private func showMainWindow() {
         if let mainWindow = windowState.window {
             mainWindow.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    // MARK: - Handoff Receiving
+
+    /// Handle an incoming NSUserActivity from another device via Handoff.
+    ///
+    /// Decodes the `ConversationSnapshot` from `userInfo` and pushes it into
+    /// `ConversationController` for display. Malformed or missing snapshots are
+    /// logged and ignored.
+    private func handleIncomingHandoff(_ activity: NSUserActivity) {
+        guard let info = activity.userInfo else {
+            NSLog("FaeNativeApp: received handoff with no userInfo")
+            return
+        }
+
+        let device = (info["target"] as? String) ?? "unknown device"
+
+        guard let jsonString = info["conversationSnapshot"] as? String,
+              let data = jsonString.data(using: .utf8) else {
+            NSLog("FaeNativeApp: handoff missing conversationSnapshot")
+            return
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        guard let snapshot = try? decoder.decode(ConversationSnapshot.self, from: data) else {
+            NSLog("FaeNativeApp: failed to decode handoff snapshot")
+            return
+        }
+
+        conversation.restore(from: snapshot, device: device)
+
+        // Restore orb state from snapshot.
+        if let mode = OrbMode.allCases.first(where: { $0.rawValue == snapshot.orbMode }) {
+            orbState.mode = mode
+        }
+        if let feeling = OrbFeeling.allCases.first(where: { $0.rawValue == snapshot.orbFeeling }) {
+            orbState.feeling = feeling
+        }
+
+        NSLog("FaeNativeApp: restored handoff from %@ (%d entries)",
+              device, snapshot.entries.count)
+    }
+
+    /// Check iCloud KV store on launch for a snapshot that may have been
+    /// written by another device while this app was not running.
+    private func checkKVStoreForHandoff() {
+        if let snapshot = HandoffKVStore.load() {
+            conversation.restore(from: snapshot, device: "iCloud")
+            HandoffKVStore.clear()
+            NSLog("FaeNativeApp: restored handoff from iCloud KV store")
         }
     }
 
