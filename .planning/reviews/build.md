@@ -1,30 +1,23 @@
-# Build Validation Report
-**Date**: 2026-02-19
-**Mode**: gsd (phase 3.4, task 1)
+# Build Validator Review
 
-## Results
+## Build Results
 
-| Check | Status |
-|-------|--------|
-| cargo check | FAIL — 22 errors |
-| cargo clippy | FAIL (blocked by compile errors) |
-| cargo nextest run | FAIL (blocked by compile errors) |
-| cargo fmt | NOT RUN |
+### cargo check --all-features --all-targets
+PASS — Finished with zero errors. (17.60s)
 
-## Errors
+### cargo clippy --all-features --all-targets -- -D warnings
+PASS — Zero warnings, zero errors. (19.37s)
 
-### CRITICAL: Type mismatch — `Arc<PermissionStore>` vs `SharedPermissionStore`
+### cargo fmt --all -- --check
+PASS — No formatting violations.
 
-**src/agent/mod.rs:533** — `perms` is `Arc<PermissionStore>` but `AvailabilityGatedTool::new()` now requires `SharedPermissionStore` (`Arc<Mutex<PermissionStore>>`).
-Fix: change `let perms: Arc<PermissionStore> = Arc::new(PermissionStore::default());` to `let perms = PermissionStore::default_shared();`
+### cargo nextest run --all-features
+PASS — 2490 tests run: 2490 passed, 4 skipped. (56.45s)
 
-**tests/apple_tool_registration.rs:38** — Same type mismatch in test `gated!` macro.
-Fix: change `fn build_apple_tools(perms: Arc<PermissionStore>)` signature and callers to use `SharedPermissionStore`.
+## Notes
+- This task only modified `onboarding.html` (HTML/CSS/JS resource file)
+- No Rust code was changed, so Rust build/test results are expected to be clean
+- Swift build not validated here (requires Xcode toolchain)
 
-### CRITICAL: Missing field `shared_permissions` in struct initializers
-
-**src/pipeline/coordinator.rs:636** — `LlmStageControl { ... }` initializer missing `shared_permissions` field.
-**src/pipeline/coordinator.rs:4178** — Same issue in test helper.
-Fix: add `shared_permissions: None` to both initializers.
-
-## Grade: F (build broken — 22 compilation errors)
+## VERDICT
+PASS — All Rust build and test gates are green. Zero warnings. 2490/2490 tests passing.

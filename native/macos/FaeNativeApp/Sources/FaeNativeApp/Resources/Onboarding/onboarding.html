@@ -1303,17 +1303,39 @@ window.setUserName = function(name) {
 
 /* ---------------------------------------------------------
    Orb Entrance → Float Transition
+   When orbEntrance finishes, swap to the orbFloat animation
+   by adding the "entered" class. A fallback timer ensures
+   the float always activates even if animationend is missed
+   (e.g. tab backgrounded during entrance).
    --------------------------------------------------------- */
 var orbWrapperEl = document.getElementById("orbWrapper");
-orbWrapperEl.addEventListener("animationend", function(e) {
-  if (e.animationName === "orbEntrance") {
+if (orbWrapperEl) {
+  if (reducedMotion) {
+    /* Skip entrance; mark as entered immediately */
     orbWrapperEl.classList.add("entered");
+  } else {
+    /* Transition entrance → float on animationend */
+    orbWrapperEl.addEventListener("animationend", function(e) {
+      if (e.animationName === "orbEntrance") {
+        orbWrapperEl.classList.add("entered");
+        /* Burst warm rings on entrance completion (if not reduced motion) */
+        var nowSec = performance.now() / 1000;
+        for (var ri = 0; ri < 3; ri++) {
+          (function(delay) {
+            setTimeout(function() {
+              if (!reducedMotion) addRing(performance.now() / 1000);
+            }, delay);
+          })(ri * 120);
+        }
+      }
+    });
+    /* Fallback: guarantee entered class after entrance duration + buffer */
+    setTimeout(function() {
+      if (orbWrapperEl && !orbWrapperEl.classList.contains("entered")) {
+        orbWrapperEl.classList.add("entered");
+      }
+    }, 1500);
   }
-});
-
-/* If reduced-motion, skip entrance and mark as entered immediately */
-if (reducedMotion) {
-  orbWrapperEl.classList.add("entered");
 }
 
 /* Signal ready */
