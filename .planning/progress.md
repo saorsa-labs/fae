@@ -196,3 +196,32 @@ Summary of Milestone 2:
 - Phase 2.2: ConversationBridgeController wires transcription/assistant/tool events to WebView JS
 - Phase 2.3: OrbStateBridgeController wires pipeline state to OrbStateController (mode/palette/feeling)
 - Phase 2.4: PipelineAuxBridgeController handles canvas visibility, audio levels, and settings diagnostics
+
+## Milestone 3: Apple Ecosystem Tools
+
+### Phase 3.1: Contacts & Calendar Tools — 2026-02-19
+
+- [x] Task 1: AppleEcosystemTool trait in src/fae_llm/tools/apple/trait_def.rs
+- [x] Task 2: ContactStore trait + SearchContactsTool (search_contacts)
+- [x] Task 3: GetContactTool (get_contact)
+- [x] Task 4: CreateContactTool (create_contact)
+- [x] Task 5: CalendarStore trait + ListCalendarsTool + ListEventsTool
+- [x] Task 6: CreateEventTool (create_calendar_event)
+- [x] Task 7: UpdateEventTool + DeleteEventTool (update/delete with confirm guard)
+- [x] Task 8: FFI bridge stubs, MockContactStore, MockCalendarStore, 58 tests, agent wiring
+
+Results: 58 new tests pass, zero warnings, all 8 Apple tool types registered in agent.
+
+### Phase 3.2: Reminders & Notes Tools — 2026-02-19
+
+- [x] Task 1: ReminderStore trait + domain types + ListReminderListsTool + ListRemindersTool
+- [x] Task 2: CreateReminderTool + SetReminderCompletedTool
+- [x] Task 3: NoteStore trait + domain types + ListNotesTool + GetNoteTool
+- [x] Task 4: CreateNoteTool + AppendToNoteTool
+- [x] Task 5: UnregisteredReminderStore + UnregisteredNoteStore in ffi_bridge.rs (10 tests)
+- [x] Task 6: MockReminderStore + MockNoteStore in mock_stores.rs
+- [x] Task 7: Permission guard tests (Reminders + DesktopAutomation) in tool unit tests
+- [x] Task 8: Agent wiring (8 new tools in build_registry()) + mod.rs exports + 54 unit tests
+
+Commit: b4f160c
+Results: 2107/2107 unit tests pass (+54 new), zero clippy warnings, zero fmt diff
