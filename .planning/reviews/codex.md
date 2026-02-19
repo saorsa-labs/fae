@@ -1,19 +1,36 @@
-# Codex External Review — Grade: B+
+# Codex External Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## Summary
-Task 8 delivers a polished orb entrance animation with spring easing, staggered welcome element reveals, floating idle animation, and hover feedback. The implementation is clean and idiomatic for a WKWebView HTML/CSS/JS resource. The reduced-motion accessibility path is comprehensive.
+## Analysis
 
-## Findings
+Reviewing Phase 4.2 changes: 4 Swift files + 1 HTML file.
 
-### Must Fix
-1. **Null dereference risk**: `orbWrapperEl` at line 1307 must be null-checked before `addEventListener`. Pattern: `var orbWrapperEl = document.getElementById("orbWrapper"); if (orbWrapperEl) { ... }`. Without this, a DOM parse failure would crash the entire script.
+### Swift Review
 
-### Should Fix
-2. **Missing canvas warm-ring burst**: The acceptance criteria specifies "emit a burst of warm-colored rings (pulse canvas) during growth." The existing `pulseCss` canvas mechanism appears to exist but is not triggered on entrance. The spec item is not implemented.
+**OnboardingController.swift:**
+- `requestCalendar()` implementation is idiomatic and correct for both macOS 14+ and earlier.
+- `requestMail()` approach (open System Settings, set pending) is the right solution for permissions that can't be requested programmatically. However the UX flow leaves the button in "Allow" state post-tap which may cause repeat taps.
+- Dead code: `micGranted`/`contactsGranted` private vars written but never read. Pre-existing but worth flagging.
 
-### Consider
-3. **`animationend` reliability**: On macOS, if a WKWebView tab goes to background during the 1.2s entrance, `animationend` may not fire. A `setTimeout(function() { if (!orbWrapperEl.classList.contains("entered")) orbWrapperEl.classList.add("entered"); }, 1400)` fallback would guarantee the float always activates.
-4. **Reduced-motion bubble fade**: Spec states "bubble fades in" under reduced motion. Currently the bubble snaps to `opacity:1` instantly due to `animation:none`. A CSS-transition-based (not animation-based) fade for the bubble under reduced-motion would honor both accessibility and the spec intent.
+**OnboardingTTSHelper.swift:**
+- Clean switch-case extension. Well-worded help texts with consistent tone.
+
+**OnboardingWindowController.swift:**
+- Clean extension of the switch statement. No issues.
+
+### HTML/JS Review
+
+- PERMISSION_CARDS map is a well-designed data-driven approach. Correctly handles all 4 permissions uniformly.
+- Animation restart via `void el.offsetWidth` is the correct browser pattern for CSS animation restart.
+- Missing `prefers-reduced-motion` coverage for the three new animation classes is an accessibility defect.
+- The `permission-status` class assignment uses `"permission-status granted"` (full string replace) which is correct.
+
+### Key Issues
+
+1. **IMPORTANT** [accessibility]: `animate-granted`, `animate-denied`, `icon-swap` CSS animation classes not covered in `@media (prefers-reduced-motion: reduce)`.
+2. **SHOULD FIX** [UX]: `requestMail()` sets state to "pending" but button still shows "Allow". User gets no visual feedback that action was taken.
+3. **MINOR**: Inconsistent `eslint-disable-line` comments on `void offsetWidth` calls.
 
 ## Grade: B+
-Clean implementation, good accessibility handling, minor spec gaps and one safety issue prevent an A.

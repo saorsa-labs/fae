@@ -1,0 +1,389 @@
+diff --git a/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingController.swift b/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingController.swift
+index 1852a98..6c0227c 100644
+--- a/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingController.swift
++++ b/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingController.swift
+@@ -1,5 +1,7 @@
++import AppKit
+ import AVFoundation
+ @preconcurrency import Contacts
++import EventKit
+ import Foundation
+ 
+ /// Manages onboarding state and native system permission requests.
+@@ -22,10 +24,13 @@ final class OnboardingController: ObservableObject {
+     @Published var userName: String? = nil
+ 
+     /// Current permission states for web layer synchronisation.
+-    /// Keys: "microphone", "contacts". Values: "pending" | "granted" | "denied".
++    /// Keys: "microphone", "contacts", "calendar", "mail".
++    /// Values: "pending" | "granted" | "denied".
+     @Published var permissionStates: [String: String] = [
+         "microphone": "pending",
+-        "contacts": "pending"
++        "contacts": "pending",
++        "calendar": "pending",
++        "mail": "pending"
+     ]
+ 
+     // MARK: - Permission Request Callbacks
+@@ -73,6 +78,52 @@ final class OnboardingController: ObservableObject {
+         }
+     }
+ 
++    /// Request calendar and reminders access via EventKit and report the result.
++    ///
++    /// Uses `EKEventStore.requestFullAccessToEvents()` on macOS 14+ and the
++    /// legacy `requestAccess(to:completion:)` API on earlier systems. On grant,
++    /// updates the "calendar" permission state in the web layer.
++    func requestCalendar() {
++        let store = EKEventStore()
++        if #available(macOS 14.0, *) {
++            store.requestFullAccessToEvents { [weak self] granted, _ in
++                Task { @MainActor [weak self] in
++                    guard let self else { return }
++                    let state = granted ? "granted" : "denied"
++                    self.permissionStates["calendar"] = state
++                    self.onPermissionResult?("calendar", state)
++                }
++            }
++        } else {
++            store.requestAccess(to: .event) { [weak self] granted, _ in
++                Task { @MainActor [weak self] in
++                    guard let self else { return }
++                    let state = granted ? "granted" : "denied"
++                    self.permissionStates["calendar"] = state
++                    self.onPermissionResult?("calendar", state)
++                }
++            }
++        }
++    }
++
++    /// Request mail and notes access.
++    ///
++    /// Mail and Notes on macOS require Full Disk Access or Automation entitlements
++    /// that cannot be requested programmatically at runtime. This method opens
++    /// System Settings to the Privacy & Security panel so the user can grant
++    /// access manually, then records the state as "pending" until verified.
++    func requestMail() {
++        // Open System Settings to the Privacy & Security → Automation panel.
++        // The user must manually grant access there and re-launch if needed.
++        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
++            NSWorkspace.shared.open(url)
++        }
++        // Mark as "pending" — the user must grant in System Settings.
++        // The web layer shows a visual indication that action is needed.
++        permissionStates["mail"] = "pending"
++        onPermissionResult?("mail", "pending")
++    }
++
+     /// Complete the onboarding flow and signal the backend.
+     func complete() {
+         isComplete = true
+diff --git a/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingTTSHelper.swift b/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingTTSHelper.swift
+index c8d6353..7232aa8 100644
+--- a/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingTTSHelper.swift
++++ b/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingTTSHelper.swift
+@@ -16,8 +16,8 @@ final class OnboardingTTSHelper: NSObject {
+     /// Calling this while speech is in progress cancels the current utterance
+     /// and starts the new one immediately.
+     ///
+-    /// - Parameter permission: One of `"microphone"`, `"contacts"`, or
+-    ///   `"privacy"` (fallback for unknown values).
++    /// - Parameter permission: One of `"microphone"`, `"contacts"`,
++    ///   `"calendar"`, `"mail"`, or `"privacy"` (fallback for unknown values).
+     func speak(permission: String) {
+         let text = helpText(for: permission)
+         if synthesizer.isSpeaking {
+@@ -45,6 +45,10 @@ final class OnboardingTTSHelper: NSObject {
+             return microphoneHelpText
+         case "contacts":
+             return contactsHelpText
++        case "calendar":
++            return calendarHelpText
++        case "mail":
++            return mailHelpText
+         default:
+             return privacyHelpText
+         }
+@@ -62,6 +66,18 @@ final class OnboardingTTSHelper: NSObject {
+         Everything stays right here on your Mac.
+         """
+ 
++    private let calendarHelpText = """
++        I can help manage your schedule — creating reminders, checking appointments, \
++        and keeping you organised. \
++        Everything stays on your Mac and I never share your calendar data anywhere.
++        """
++
++    private let mailHelpText = """
++        I can help you find emails and draft messages. \
++        I never send anything without you telling me to, \
++        and all data stays private on your Mac.
++        """
++
+     private let privacyHelpText = """
+         Everything I do happens locally on your Mac. \
+         Your conversations, memories, and personal details are never sent anywhere. \
+diff --git a/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingWindowController.swift b/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingWindowController.swift
+index 1570fc4..0f02247 100644
+--- a/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingWindowController.swift
++++ b/native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingWindowController.swift
+@@ -38,6 +38,10 @@ private struct OnboardingContentView: View {
+                     onboarding.requestMicrophone()
+                 case "contacts":
+                     onboarding.requestContacts()
++                case "calendar":
++                    onboarding.requestCalendar()
++                case "mail":
++                    onboarding.requestMail()
+                 default:
+                     NSLog("OnboardingContentView: unknown permission: %@", permission)
+                 }
+diff --git a/native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html b/native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html
+index 1a48b39..d3c91dd 100644
+--- a/native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html
++++ b/native/macos/FaeNativeApp/Sources/FaeNativeApp/Resources/Onboarding/onboarding.html
+@@ -325,6 +325,8 @@
+     align-items: flex-start;
+     max-width: 360px;
+     margin: 0 auto;
++    overflow-y: auto;
++    padding-bottom: 48px; /* ensure Continue button is reachable above dot indicator */
+   }
+ 
+   .permissions-title {
+@@ -452,6 +454,77 @@
+     color: var(--text-secondary);
+   }
+ 
++  /* =========================================================
++     Permission Card State Animations
++     ========================================================= */
++
++  /* Granted pulse — brief scale pop then settle */
++  @keyframes cardGrantedPulse {
++    0%   { transform: scale(1); }
++    30%  { transform: scale(1.025); }
++    70%  { transform: scale(0.997); }
++    100% { transform: scale(1); }
++  }
++
++  /* Denied shake */
++  @keyframes cardDeniedShake {
++    0%   { transform: translateX(0); }
++    15%  { transform: translateX(-6px); }
++    40%  { transform: translateX(5px); }
++    65%  { transform: translateX(-3px); }
++    85%  { transform: translateX(2px); }
++    100% { transform: translateX(0); }
++  }
++
++  /* Icon swap fade */
++  @keyframes iconFadeIn {
++    from { opacity: 0; transform: scale(0.7); }
++    to   { opacity: 1; transform: scale(1); }
++  }
++
++  .permission-card.animate-granted {
++    animation: cardGrantedPulse 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
++  }
++
++  .permission-card.animate-denied {
++    animation: cardDeniedShake 0.4s ease-out forwards;
++  }
++
++  .permission-icon.icon-swap {
++    animation: iconFadeIn 0.3s ease-out forwards;
++  }
++
++  /* =========================================================
++     Privacy Assurance Banner
++     ========================================================= */
++  .privacy-assurance {
++    width: 100%;
++    display: flex;
++    align-items: center;
++    gap: 10px;
++    padding: 12px 18px;
++    margin-bottom: 4px;
++    background: rgba(var(--warm-gold-rgb), 0.06);
++    border: 1px solid rgba(var(--warm-gold-rgb), 0.14);
++    border-radius: 14px;
++    -webkit-backdrop-filter: blur(16px);
++    backdrop-filter: blur(16px);
++  }
++
++  .privacy-icon {
++    font-size: 0.95rem;
++    flex-shrink: 0;
++    opacity: 0.75;
++  }
++
++  .privacy-text {
++    flex: 1;
++    font-size: 0.72rem;
++    color: var(--text-muted);
++    line-height: 1.45;
++    letter-spacing: 0.02em;
++  }
++
+   /* =========================================================
+      Screen 3: Ready
+      ========================================================= */
+@@ -595,6 +668,11 @@
+       border-color: rgba(var(--warm-gold-rgb), 0.22);
+     }
+ 
++    .privacy-assurance {
++      background: rgba(var(--warm-gold-rgb), 0.05);
++      border-color: rgba(var(--warm-gold-rgb), 0.12);
++    }
++
+     .orb-highlight {
+       background: radial-gradient(ellipse, rgba(255,255,255,0.18) 0%, transparent 70%);
+     }
+@@ -709,7 +787,7 @@
+ 
+     <!-- Microphone Permission Card -->
+     <div class="permission-card" id="cardMic">
+-      <div class="permission-icon">🎙️</div>
++      <div class="permission-icon" id="iconMic">🎙️</div>
+       <div class="permission-info">
+         <div class="permission-name">Microphone</div>
+         <div class="permission-desc">Hear your voice for conversation</div>
+@@ -722,7 +800,7 @@
+ 
+     <!-- Contacts Permission Card -->
+     <div class="permission-card" id="cardContacts">
+-      <div class="permission-icon">👤</div>
++      <div class="permission-icon" id="iconContacts">👤</div>
+       <div class="permission-info">
+         <div class="permission-name">Contacts</div>
+         <div class="permission-desc">Know your name for personalisation</div>
+@@ -733,6 +811,39 @@
+       </div>
+     </div>
+ 
++    <!-- Calendar & Reminders Permission Card -->
++    <div class="permission-card" id="cardCalendar">
++      <div class="permission-icon" id="iconCalendar">📅</div>
++      <div class="permission-info">
++        <div class="permission-name">Calendar &amp; Reminders</div>
++        <div class="permission-desc">Help manage your schedule</div>
++      </div>
++      <div class="permission-actions">
++        <button class="btn-help" data-permission="calendar" aria-label="Learn about calendar permission">?</button>
++        <button class="permission-status" id="statusCalendar" data-permission="calendar">Allow</button>
++      </div>
++    </div>
++
++    <!-- Mail & Notes Permission Card -->
++    <div class="permission-card" id="cardMail">
++      <div class="permission-icon" id="iconMail">✉️</div>
++      <div class="permission-info">
++        <div class="permission-name">Mail &amp; Notes</div>
++        <div class="permission-desc">Help find and compose messages</div>
++      </div>
++      <div class="permission-actions">
++        <button class="btn-help" data-permission="mail" aria-label="Learn about mail permission">?</button>
++        <button class="permission-status" id="statusMail" data-permission="mail">Allow</button>
++      </div>
++    </div>
++
++    <!-- Privacy Assurance Banner -->
++    <div class="privacy-assurance" id="privacyAssurance">
++      <div class="privacy-icon">🔒</div>
++      <div class="privacy-text">Everything stays on your Mac. I never send data anywhere.</div>
++      <button class="btn-help" data-permission="privacy" aria-label="Learn about privacy">?</button>
++    </div>
++
+     <button class="btn-primary" id="btnPermissionsNext">Continue</button>
+   </div>
+ 
+@@ -1168,7 +1279,7 @@ requestAnimationFrame(loop);
+    ========================================================= */
+ 
+ var currentPhase = "welcome";  // welcome | permissions | ready
+-var permissionState = { microphone: "pending", contacts: "pending" };
++var permissionState = { microphone: "pending", contacts: "pending", calendar: "pending", mail: "pending" };
+ 
+ var screens = {
+   welcome: document.getElementById("screenWelcome"),
+@@ -1226,26 +1337,70 @@ function transitionTo(phase) {
+ /* ---------------------------------------------------------
+    Permission Handling
+    --------------------------------------------------------- */
++
++/* Maps permission name → { cardId, statusId, iconId, grantedIcon, pendingIcon } */
++var PERMISSION_CARDS = {
++  microphone: { cardId: "cardMic",      statusId: "statusMic",      iconId: "iconMic",      grantedIcon: "✅", pendingIcon: "🎙️" },
++  contacts:   { cardId: "cardContacts", statusId: "statusContacts", iconId: "iconContacts", grantedIcon: "✅", pendingIcon: "👤" },
++  calendar:   { cardId: "cardCalendar", statusId: "statusCalendar", iconId: "iconCalendar", grantedIcon: "✅", pendingIcon: "📅" },
++  mail:       { cardId: "cardMail",     statusId: "statusMail",     iconId: "iconMail",     grantedIcon: "✅", pendingIcon: "✉️" }
++};
++
+ function updatePermissionCard(permission, state) {
+   permissionState[permission] = state;
+ 
+-  var statusEl = document.getElementById(
+-    permission === "microphone" ? "statusMic" : "statusContacts"
+-  );
+-  var cardEl = document.getElementById(
+-    permission === "microphone" ? "cardMic" : "cardContacts"
+-  );
++  var meta = PERMISSION_CARDS[permission];
++  if (!meta) return;
++
++  var cardEl   = document.getElementById(meta.cardId);
++  var statusEl = document.getElementById(meta.statusId);
++  var iconEl   = document.getElementById(meta.iconId);
++
++  if (!cardEl || !statusEl) return;
++
++  /* Remove previous animation classes before re-applying */
++  cardEl.classList.remove("animate-granted", "animate-denied");
++
++  /* Trigger reflow so animation restarts if same state re-applied */
++  void cardEl.offsetWidth; /* eslint-disable-line no-void */
+ 
+-  statusEl.className = "permission-status " + state;
+   if (state === "granted") {
++    statusEl.className = "permission-status granted";
+     statusEl.textContent = "Granted";
+     cardEl.classList.add("granted");
++    cardEl.classList.add("animate-granted");
++
++    /* Swap icon to checkmark with fade animation */
++    if (iconEl) {
++      iconEl.textContent = meta.grantedIcon;
++      iconEl.classList.remove("icon-swap");
++      void iconEl.offsetWidth;
++      iconEl.classList.add("icon-swap");
++    }
++
+   } else if (state === "denied") {
++    statusEl.className = "permission-status denied";
+     statusEl.textContent = "Denied";
+     cardEl.classList.remove("granted");
++    cardEl.classList.add("animate-denied");
++
++    /* Restore original icon */
++    if (iconEl) {
++      iconEl.textContent = meta.pendingIcon;
++      iconEl.classList.remove("icon-swap");
++      void iconEl.offsetWidth;
++      iconEl.classList.add("icon-swap");
++    }
++
+   } else {
++    statusEl.className = "permission-status";
+     statusEl.textContent = "Allow";
+     cardEl.classList.remove("granted");
++
++    /* Restore original icon */
++    if (iconEl) {
++      iconEl.textContent = meta.pendingIcon;
++    }
+   }
+ }
+ 

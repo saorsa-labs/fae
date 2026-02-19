@@ -1,19 +1,17 @@
 # Complexity Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## CRITICAL (must fix)
-none
+## Findings
 
-## HIGH (should fix)
-none
+- [OK] `updatePermissionCard()` refactored to use PERMISSION_CARDS lookup map — reduces complexity vs. chained if-else or switch by permission name
+- [OK] `requestCalendar()` has one branch for `#available` — acceptable complexity
+- [OK] CSS animations use simple keyframe declarations — no complex calculations
+- [OK] Privacy assurance banner is a flat HTML element — no nesting complexity
+- [MINOR] The `updatePermissionCard()` JS function now has more branches (granted/denied/else), but they are clearly delineated. Cyclomatic complexity ~4, well within limits.
+- [OK] No new recursive functions or complex state machines
+- [OK] `void cardEl.offsetWidth` pattern is idiomatic browser animation restart — expected complexity
+- [OK] `requestMail()` is deliberately simple — opens URL, sets pending state, done
 
-## MEDIUM (consider fixing)
-- The animation sequencing uses two separate mechanisms: CSS `animation-delay` for stagger and a JS `animationend` event for the entrance-to-float class swap. This is the simplest correct approach and not overly complex, but it does create two interdependent layers (CSS keyframes + JS class mutation) that a maintainer needs to understand together.
-- The `.orb-wrapper.entered` class toggle via `animationend` is slightly fragile: if the entrance animation is cancelled (e.g., tab goes background on macOS), `animationend` may not fire. Adding a fallback `setTimeout` of ~1.5s could ensure the float always starts.
-
-## LOW (minor)
-- The overall diff is modest: ~115 lines changed, all in one file. Cognitive overhead is low.
-- The split between entrance animation (CSS) and float animation (CSS + JS class) is a reasonable pattern and not unnecessarily complex.
-- CSS reduced-motion overrides are comprehensive and correctly cover all new animation properties.
-
-## VERDICT
-PASS — The implementation is appropriately simple for the task. The two-mechanism animation approach (CSS keyframes + JS class swap) is idiomatic and well-understood.
+## Grade: A

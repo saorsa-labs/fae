@@ -99,9 +99,11 @@ final class OnboardingWindowController: ObservableObject {
     // MARK: - Constants
 
     private enum Layout {
-        static let windowSize = NSSize(width: 520, height: 640)
-        static let minSize = NSSize(width: 440, height: 560)
-        static let maxSize = NSSize(width: 600, height: 720)
+        // Height increased from 640 → 680 to better accommodate 4 permission cards
+        // plus the privacy assurance banner without requiring scroll on first view.
+        static let windowSize = NSSize(width: 520, height: 680)
+        static let minSize = NSSize(width: 440, height: 580)
+        static let maxSize = NSSize(width: 600, height: 760)
     }
 
     // MARK: - Initialisation

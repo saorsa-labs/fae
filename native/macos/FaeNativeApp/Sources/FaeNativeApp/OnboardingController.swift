@@ -110,18 +110,20 @@ final class OnboardingController: ObservableObject {
     ///
     /// Mail and Notes on macOS require Full Disk Access or Automation entitlements
     /// that cannot be requested programmatically at runtime. This method opens
-    /// System Settings to the Privacy & Security panel so the user can grant
-    /// access manually, then records the state as "pending" until verified.
+    /// System Settings to the Privacy & Security → Automation panel so the user
+    /// can grant access manually. The permission state is set to `"settings"` to
+    /// signal to the web layer that the user was redirected to System Settings and
+    /// must take action there. The button label updates to "Open Settings".
     func requestMail() {
         // Open System Settings to the Privacy & Security → Automation panel.
         // The user must manually grant access there and re-launch if needed.
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
             NSWorkspace.shared.open(url)
         }
-        // Mark as "pending" — the user must grant in System Settings.
-        // The web layer shows a visual indication that action is needed.
-        permissionStates["mail"] = "pending"
-        onPermissionResult?("mail", "pending")
+        // Set state to "settings" — the web layer renders the button as "Open Settings"
+        // to provide clear feedback that the user was redirected to System Settings.
+        permissionStates["mail"] = "settings"
+        onPermissionResult?("mail", "settings")
     }
 
     /// Complete the onboarding flow and signal the backend.

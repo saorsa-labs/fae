@@ -1,24 +1,26 @@
-# Kimi K2 External Review — Grade: B
+# Kimi K2 External Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## Summary
-The orb entrance animation implementation is technically solid. CSS cubic-bezier spring easing is correctly chosen. The `animationend` → class swap pattern is appropriate. Reduced-motion handling is thorough. Two acceptance criteria gaps and one runtime safety issue need attention.
+## Analysis
 
-## Findings
+### Overall Assessment
 
-### Critical Path Risk
-- **orbWrapperEl null dereference** (HIGH): `var orbWrapperEl = document.getElementById("orbWrapper")` followed immediately by `orbWrapperEl.addEventListener(...)` — if element not found, entire script block fails. This is the most important fix.
+Phase 4.2 correctly implements the permission cards as specified. The code is clean and well-structured.
 
-### Spec Compliance
-- **Canvas warm-ring burst missing**: Task spec says orb should "emit a burst of warm-colored rings (pulse canvas)" during growth. The existing `pulseCss` variable and canvas setup exists, but there is no code that triggers it during the entrance animation. This is a visible spec omission.
-- **Bubble bounce vs. slide**: Spec says bubble fades in with "gentle bounce." The implementation uses `fadeSlideUp` (translateY slide). A bounce would use a spring cubic-bezier or `scale` keyframe. Minor semantic gap.
+### Issues Found
 
-### Performance Notes
-- `transform: scale()` and `translateY()` both composited — no layout thrashing. Good.
-- `filter: brightness()` on hover triggers GPU raster — acceptable for a single element.
-- The `orbFloat` animation at 4s infinite will run perpetually. Ensure it pauses when the screen navigates away (currently no cleanup).
+**Critical: None**
 
-### Accessibility
-- `prefers-reduced-motion` handling is comprehensive. CSS and JS both honor it. Well done.
+**Important:**
+1. Missing `prefers-reduced-motion` support for new card animations. Lines 470-510 in onboarding.html define `cardGrantedPulse`, `cardDeniedShake`, and `iconFadeIn` but the `@media (prefers-reduced-motion: reduce)` block (line 708) does not suppress them. Users with motion sensitivity get full animations without ability to opt out.
 
-## Grade: B
-Solid implementation. Fix the null guard, add the canvas warm-ring burst, and verify float animation pauses on screen transition for an A.
+2. `requestMail()` UX: After the user taps "Allow" on the Mail card, `System Settings` opens but the button remains labeled "Allow" with no state change. This creates confusion — did the tap register? Should show a visual state like "Open in Settings" text on the button, or transition to a "Setup..." state.
+
+**Minor:**
+3. `EKEventStore` local variable lifetime: The EventKit completion block implicitly retains `store`, keeping it alive until the callback fires. This is the documented pattern and is correct, but a comment would help future readers.
+
+4. Window default height (640px) may be tight for 4 cards + privacy banner. Content is scrollable via `overflow-y: auto`, but increasing default height to 680px would improve first impression.
+
+## Grade: B+

@@ -1,18 +1,19 @@
 # Documentation Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## CRITICAL (must fix)
-none
+## Findings
 
-## HIGH (should fix)
-none
+- [OK] `requestCalendar()` has full doc comment explaining API version difference and behavior
+- [OK] `requestMail()` has doc comment explaining why programmatic permission isn't possible and what the method does instead
+- [OK] `speak(permission:)` doc comment updated to include "calendar" and "mail" in the parameter list
+- [OK] `permissionStates` property doc comment updated with all 4 keys
+- [OK] HTML has block comments for each new section (Calendar card, Mail card, Privacy Assurance Banner)
+- [OK] CSS has section header comments (Permission Card State Animations, Privacy Assurance Banner)
+- [OK] JS PERMISSION_CARDS map has an inline comment explaining the structure
+- [OK] ESLint suppression comment on void pattern (first instance)
+- [MINOR] The two subsequent `void iconEl.offsetWidth` calls inside the if-blocks are missing the eslint-disable comment (minor inconsistency, low priority)
+- [OK] No public APIs added without documentation
 
-## MEDIUM (consider fixing)
-- The new JS block has a comment header `/* Orb Entrance → Float Transition */` which is good. However, there is no inline comment explaining WHY the `animationend` event is used to switch classes (vs. using a single `animation-delay` on the float). A one-line explanation would help future maintainers.
-- The `prefers-reduced-motion` handling is split: media query CSS at line 630 and JS check at line 1315. There is no cross-reference comment linking these two locations. A reader fixing one might miss the other.
-
-## LOW (minor)
-- The stagger animation delays for welcome screen elements are undocumented as a sequence. A comment like `/* stagger: orb(1.2s) → bubble(1.6s) → hint(2.0s) → button(2.2s) */` in the CSS block would aid readability.
-- CLAUDE.md references `docs/linker-anchor.md` and similar docs for architecture changes, but there is no doc requirement for pure HTML/CSS/JS changes. No documentation update needed for this task.
-
-## VERDICT
-PASS — Documentation is adequate for this scope of change. The file is a self-contained HTML/CSS/JS resource. Minor inline comment improvements would be nice but are not blocking.
+## Grade: A

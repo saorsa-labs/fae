@@ -1,44 +1,15 @@
 # Code Simplifier Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## Simplification Opportunities
+## Findings
 
-### High Value
-1. **Null guard reduces complexity**: The `orbWrapperEl` block should be wrapped in a null guard. This actually SIMPLIFIES error surface — a guard makes the code's intention explicit and eliminates the undefined behavior path.
+- [OK] PERMISSION_CARDS map is already a good simplification — no further refactoring needed
+- [MINOR] `requestCalendar()` duplicates the Task { @MainActor } + guard let self + state/notify pattern across both `#available` branches. Could extract a private helper `applyCalendarResult(granted: Bool)` but the duplication is minimal (3 lines x2) and clarity outweighs the abstraction.
+- [OK] `updatePermissionCard()` has a clear grant/deny/else structure — not over-complex
+- [OK] CSS animation keyframes are appropriately concise
+- [MINOR] The `permissionState` JS dictionary and `PERMISSION_CARDS` JS map both maintain permission key lists independently. A refactoring could derive `permissionState` from `PERMISSION_CARDS`, but the current approach is straightforward and readable.
+- [OK] Privacy banner HTML is minimal and flat — no unnecessary wrapper elements
 
-2. **Redundant `.entered` properties**: `.orb-wrapper.entered` defines `transform: scale(1); opacity: 1;` but these are already held by `animation-fill-mode: forwards` from `orbEntrance`. Remove them and rely solely on the `animation` property swap:
-```css
-.orb-wrapper.entered {
-  animation: orbFloat 4s ease-in-out infinite;
-}
-```
-This reduces confusion about which mechanism is "winning."
-
-### Medium Value
-3. **CSS custom properties for stagger delays**: 4 magic delay values (1.2s, 1.6s, 2.0s, 2.2s) could be expressed as CSS variables relative to a base:
-```css
-:root { --entrance-base: 1.2s; }
-/* Then use calc(var(--entrance-base) + 0.4s) etc. */
-```
-This allows easy re-timing by changing one value.
-
-4. **Consolidate the JS block**: The null check, event listener, and reducedMotion check are 3 separate concerns on `orbWrapperEl`. Group them:
-```javascript
-var orbWrapperEl = document.getElementById("orbWrapper");
-if (orbWrapperEl) {
-  if (reducedMotion) {
-    orbWrapperEl.classList.add("entered");
-  } else {
-    orbWrapperEl.addEventListener("animationend", function(e) {
-      if (e.animationName === "orbEntrance") {
-        orbWrapperEl.classList.add("entered");
-      }
-    });
-  }
-}
-```
-
-### Low Value
-5. The `@keyframes orbEntrance` and `@keyframes orbFloat` could be co-located with their usage in `.orb-wrapper` and `.orb-wrapper.entered` for better co-location. Not worth moving for a single change.
-
-## VERDICT
-PASS — The code is already reasonably clean. Two simplifications are worthwhile: remove redundant `.entered` properties, and consolidate the JS block with null guard.
+## Grade: A (minor simplification opportunities exist but changes would not meaningfully improve readability)

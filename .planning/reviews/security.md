@@ -1,18 +1,19 @@
 # Security Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## CRITICAL (must fix)
-none
+## Findings
 
-## HIGH (should fix)
-none
+- [OK] No hardcoded credentials, tokens, passwords, or secrets
+- [OK] No HTTP (insecure) URLs — only `x-apple.systempreferences://` scheme (local OS)
+- [OK] No `unsafe` Swift code introduced
+- [OK] No `innerHTML` assignments in JS (XSS-safe) — only `.textContent` used
+- [OK] No `eval()` or `document.write()` in JS changes
+- [OK] `postToSwift` always uses `message.body as? [String: Any]` with type-safe casts
+- [OK] EventKit access requested via official Apple API, not direct file access
+- [MEDIUM] `requestMail()` opens System Settings URL — correct approach but no validation that the URL scheme is available; however `if let url = URL(string:)` safely handles nil, and this URL scheme is guaranteed on macOS 12+
+- [OK] `NSWorkspace.shared.open()` is the correct, sandboxed API for opening URLs on macOS
+- [OK] No user-controlled data is concatenated into the System Settings URL
 
-## MEDIUM (consider fixing)
-- `window.setUserName` uses string concatenation (`"Hello, " + name.trim() + "..."`) and sets it via `bubble.textContent`. Using `textContent` (not `innerHTML`) correctly prevents XSS injection. No issue here, but worth confirming this pattern is consistent everywhere user-supplied text is injected into the DOM. Verified: `textContent` is used — safe.
-- The `postToSwift` bridge sends `"ready"` after the entrance animation JS block. If an attacker could inject into the HTML resource file, they could intercept this bridge. However, this is a local bundled resource loaded in WKWebView with no remote origin — attack surface is minimal.
-
-## LOW (minor)
-- No CSP (Content-Security-Policy) meta tag in the HTML. For a bundled local file in WKWebView this is low risk, but a CSP would add defense-in-depth against any future inline script injection.
-- The `filter: brightness(1.12)` hover effect is purely cosmetic and carries no security implications.
-
-## VERDICT
-PASS — No security issues introduced by Task 8 changes. XSS risk is correctly mitigated by `textContent` usage.
+## Grade: A

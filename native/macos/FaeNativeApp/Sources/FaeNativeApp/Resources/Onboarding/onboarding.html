@@ -431,6 +431,15 @@
     cursor: pointer;
   }
 
+  .permission-status.settings {
+    background: rgba(var(--warm-gold-rgb), 0.10);
+    border-color: rgba(var(--warm-gold-rgb), 0.22);
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 0.66rem;
+    letter-spacing: 0.03em;
+  }
+
   .btn-help {
     width: 22px; height: 22px;
     border-radius: 50%;
@@ -738,6 +747,10 @@
     .orb-speaking .dot { animation: none; opacity: 0.65; }
     .listening-dot { animation: none; }
     .fae-bubble { animation: none; opacity: 1; }
+    /* Permission card state animations */
+    .permission-card.animate-granted,
+    .permission-card.animate-denied { animation: none; }
+    .permission-icon.icon-swap { animation: none; opacity: 1; transform: none; }
   }
 
 </style>
@@ -1374,7 +1387,7 @@ function updatePermissionCard(permission, state) {
     if (iconEl) {
       iconEl.textContent = meta.grantedIcon;
       iconEl.classList.remove("icon-swap");
-      void iconEl.offsetWidth;
+      void iconEl.offsetWidth; /* eslint-disable-line no-void */
       iconEl.classList.add("icon-swap");
     }
 
@@ -1388,8 +1401,19 @@ function updatePermissionCard(permission, state) {
     if (iconEl) {
       iconEl.textContent = meta.pendingIcon;
       iconEl.classList.remove("icon-swap");
-      void iconEl.offsetWidth;
+      void iconEl.offsetWidth; /* eslint-disable-line no-void */
       iconEl.classList.add("icon-swap");
+    }
+
+  } else if (state === "settings") {
+    /* "settings" state: System Settings was opened, user must configure manually */
+    statusEl.className = "permission-status settings";
+    statusEl.textContent = "Open Settings";
+    cardEl.classList.remove("granted");
+
+    /* Restore original icon */
+    if (iconEl) {
+      iconEl.textContent = meta.pendingIcon;
     }
 
   } else {

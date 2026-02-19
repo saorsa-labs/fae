@@ -1,18 +1,19 @@
 # Quality Patterns Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## CRITICAL (must fix)
-none
+## Findings
 
-## HIGH (should fix)
-- **Missing null guard pattern**: The standard DOM querying pattern in this file should include a null check before adding event listeners. Existing code elsewhere in the file (e.g., `orbWrapper` at line 945) already has similar patterns. The new `orbWrapperEl` at line 1307 omits the guard, breaking the consistent defensive pattern.
+- [OK] PERMISSION_CARDS data-driven map pattern — excellent separation of data from logic, easy to extend with new permission types
+- [OK] Consistent MARK: sectioning in Swift files
+- [OK] CSS custom properties (--warm-gold-rgb) used consistently for theming
+- [OK] CSS follows existing naming conventions (kebab-case classes)
+- [OK] `@available` check pattern consistent with iOS/macOS best practices
+- [OK] Weak captures and @MainActor hops consistent with existing code patterns
+- [IMPORTANT] `requestMail()` sends "pending" state as the result — semantically incorrect since "pending" means "not yet decided" but here it means "user was redirected to Settings". A dedicated state like "system_settings" or keeping "pending" but with distinct UI label would be clearer. Functionally the card still shows "Allow" after tap which is confusing UX.
+- [OK] All new HTML elements have consistent structure (permission-icon with id, permission-info, permission-actions)
+- [OK] Dark/light mode CSS for new banner follows existing pattern
+- [OK] `prefers-reduced-motion` CSS is used for orb animations — but NEW card animations (animate-granted, animate-denied, icon-swap) are NOT included in the reduced motion block. This is an IMPORTANT accessibility gap.
 
-## MEDIUM (consider fixing)
-- **CSS naming consistency**: The new `.entered` class name is a past-tense adjective describing state, which is idiomatic. However, the existing codebase uses `.orb-speaking`, `.screen.active`, `.exit-left` etc. — all noun/verb patterns. `.entered` fits but consider `.orb-wrapper--floating` (BEM) or `.orb-floating` for clarity about what state it represents (not that entrance happened, but that float is active).
-- **Animation class swap pattern**: The pattern of adding a class on `animationend` to switch between animations is standard. However, the `forwards` fill mode on `orbEntrance` combined with the `entered` class setting `transform: scale(1); opacity: 1` creates a redundancy. The fill mode already holds the values — the explicit properties in `.entered` only matter if the fill mode fails. Document this intent.
-
-## LOW (minor)
-- Stagger delay values could use CSS custom properties for easier theming.
-- The `filter: brightness(1.12)` hover value is consistent with the existing brightness/contrast approach used elsewhere in the file.
-
-## VERDICT
-WARN — The missing null guard violates the defensive coding pattern established elsewhere in the file. Otherwise, the implementation follows existing conventions well.
+## Grade: B+ (two issues to fix: mail UX state + reduced-motion gap for card animations)

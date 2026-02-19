@@ -1,30 +1,57 @@
-# Task Assessor Review — Phase 4.1 Task 8
+# Task Spec Compliance Review
+**Date**: 2026-02-19
+**Mode**: gsd-task
+**Phase**: 4.2 — Permission Cards with Help
 
-## Task Spec Checklist
+## ROADMAP Task Compliance
 
-Task 8: Animated orb greeting on Welcome screen and polish
+### Task 1: Calendar/Reminders permission card
+**Status: COMPLETE**
+- cardCalendar, statusCalendar, iconCalendar IDs present in HTML
+- data-permission="calendar" on buttons
+- window.setPermissionState("calendar", state) handled via updatePermissionCard()
 
-### Acceptance Criteria Assessment
+### Task 2: Mail/Notes permission card
+**Status: COMPLETE**
+- cardMail, statusMail, iconMail IDs present in HTML
+- data-permission="mail" on buttons
+- window.setPermissionState("mail", state) handled via updatePermissionCard()
 
-| Criterion | Status | Notes |
-|-----------|--------|-------|
-| Orb starts small (scale 0.5) and grows to full size over 1.2s spring ease | PASS | `orbEntrance` keyframe: 0%{scale(0.5)} → 100%{scale(1)}, 1.2s cubic-bezier(0.34,1.56,0.64,1) |
-| Emit burst of warm-colored rings (pulse canvas) during growth | FAIL | Not present in diff. Canvas pulse exists but no evidence of warm-ring burst triggered on entrance |
-| Welcome bubble fades in with gentle bounce after orb settles | PARTIAL | `fadeSlideUp` animation applied to `.fae-bubble` at 1.6s delay. This is a translateY slide, not a bounce. Spec says "gentle bounce" |
-| "Get started" button fades in after bubble (stagger: orb→bubble→button) | PASS | Button at 2.2s, bubble at 1.6s, correct sequence |
-| tap-hint also staggered | PASS | tap-hint at 2.0s, between bubble and button |
-| Subtle floating animation (gentle up-down bob, 4s period) | PASS | `orbFloat` keyframe: translateY(-6px) at 50%, 4s ease-in-out infinite |
-| Touch/hover effect — gentle brightness increase | PASS | `.orb:hover { filter: brightness(1.12); }` |
-| `prefers-reduced-motion` disables growth/float animations | PASS | Media query removes all animations, sets opacity:1, transform:none. JS also adds `entered` class immediately |
-| First-time welcome feels warm and alive | SUBJECTIVE — likely PASS |
-| Stagger timing feels natural | SUBJECTIVE — likely PASS based on values |
-| Reduced motion: orb appears immediately, bubble fades in, no bouncing | PARTIAL — bubble animation is also disabled in reduced motion, so it just appears. Spec says "bubble fades in" under reduced motion. Currently it snaps to visible. |
-| Animation runs smoothly at 60fps | UNVERIFIABLE in review — no performance regression expected |
-| All existing functionality still works | PASS — no existing code removed |
+### Task 3: Privacy assurance banner
+**Status: COMPLETE**
+- privacyAssurance div with 🔒 icon, privacy-text, and help "?" button (data-permission="privacy")
+- Glassmorphic warm-gold styling with dark/light mode adaptation
 
-## VERDICT
-PARTIAL PASS — 2 acceptance criteria not fully met:
-1. Canvas warm-ring burst during entrance is missing (spec says "emit a burst of warm-colored rings")
-2. Bubble under reduced-motion should still fade in (but currently just snaps visible due to blanket `opacity:1; animation:none`)
+### Task 4: Animated state transitions
+**Status: COMPLETE**
+- cardGrantedPulse (scale pop), cardDeniedShake (shake), iconFadeIn (icon swap) keyframes
+- animate-granted, animate-denied, icon-swap CSS classes
+- All 4 cards participate via PERMISSION_CARDS map
+- Animation restart via void offsetWidth reflow trigger
 
-These are minor spec gaps. The core animation (orb entrance, float, hover, stagger, reduced-motion) is correctly implemented.
+### Task 5: TTS help for calendar and mail
+**Status: COMPLETE**
+- OnboardingTTSHelper.swift: calendarHelpText and mailHelpText added
+- speak(permission: "calendar") and speak(permission: "mail") covered
+- Doc comment updated
+
+### Task 6: OnboardingController permission tracking
+**Status: COMPLETE**
+- permissionStates dict has all 4 keys ("microphone", "contacts", "calendar", "mail")
+- requestCalendar() via EventKit with macOS 14+ API + legacy fallback
+- requestMail() opens System Settings + sets pending state
+
+### Task 7: Wire new permissions through OnboardingWindowController
+**Status: COMPLETE**
+- onRequestPermission switch handles "calendar" → requestCalendar() and "mail" → requestMail()
+
+### Task 8: Build validation and progress log
+**Status: COMPLETE**
+- Swift build: zero source errors, zero warnings
+- HTML validates
+- progress.md updated with Phase 4.2 completion entry
+- STATE.json updated
+
+## Overall: ALL 8 TASKS COMPLETE
+
+## Grade: A (full spec compliance)
