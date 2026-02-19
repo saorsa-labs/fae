@@ -55,6 +55,27 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    /* Entrance: start scaled down, animate to full */
+    transform: scale(0.5);
+    opacity: 0;
+    animation: orbEntrance 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s forwards;
+  }
+
+  .orb-wrapper.entered {
+    animation: orbFloat 4s ease-in-out infinite;
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  @keyframes orbEntrance {
+    0% { transform: scale(0.5); opacity: 0; }
+    60% { transform: scale(1.04); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes orbFloat {
+    0%, 100% { transform: scale(1) translateY(0); }
+    50% { transform: scale(1) translateY(-6px); }
   }
 
   .orb {
@@ -62,6 +83,11 @@
     overflow: hidden;
     position: relative;
     box-shadow: inset 0 0 40px rgba(255, 255, 255, 0.03);
+    transition: filter 0.3s ease;
+  }
+
+  .orb:hover {
+    filter: brightness(1.12);
   }
 
   #orbCanvas { border-radius: 50%; display: block; }
@@ -248,6 +274,32 @@
      ========================================================= */
   #screenWelcome {
     text-align: center;
+  }
+
+  /* Staggered entrance for welcome screen elements */
+  #screenWelcome .orb-speaking {
+    opacity: 0;
+    animation: fadeSlideUp 0.5s ease-out 1.2s forwards;
+  }
+
+  #screenWelcome .fae-bubble {
+    opacity: 0;
+    animation: fadeSlideUp 0.6s ease-out 1.6s forwards;
+  }
+
+  #screenWelcome .tap-hint {
+    opacity: 0;
+    animation: fadeSlideUp 0.4s ease-out 2.0s forwards;
+  }
+
+  #screenWelcome .btn-primary {
+    opacity: 0;
+    animation: fadeSlideUp 0.5s ease-out 2.2s forwards;
+  }
+
+  @keyframes fadeSlideUp {
+    0% { opacity: 0; transform: translateY(12px); }
+    100% { opacity: 1; transform: translateY(0); }
   }
 
   .welcome-title {
@@ -585,6 +637,23 @@
     }
     .screen.exit-left {
       transform: none !important;
+    }
+    .orb-wrapper {
+      animation: none;
+      transform: scale(1);
+      opacity: 1;
+    }
+    .orb-wrapper.entered {
+      animation: none;
+      transform: scale(1);
+    }
+    #screenWelcome .orb-speaking,
+    #screenWelcome .fae-bubble,
+    #screenWelcome .tap-hint,
+    #screenWelcome .btn-primary {
+      animation: none;
+      opacity: 1;
+      transform: none;
     }
     .aura { animation: none; }
     .orb-highlight { animation: none; }
@@ -1231,6 +1300,21 @@ window.setUserName = function(name) {
       "Everything stays right here on your Mac.";
   }
 };
+
+/* ---------------------------------------------------------
+   Orb Entrance → Float Transition
+   --------------------------------------------------------- */
+var orbWrapperEl = document.getElementById("orbWrapper");
+orbWrapperEl.addEventListener("animationend", function(e) {
+  if (e.animationName === "orbEntrance") {
+    orbWrapperEl.classList.add("entered");
+  }
+});
+
+/* If reduced-motion, skip entrance and mark as entered immediately */
+if (reducedMotion) {
+  orbWrapperEl.classList.add("entered");
+}
 
 /* Signal ready */
 postToSwift("ready", {});
