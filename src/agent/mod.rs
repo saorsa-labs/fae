@@ -504,6 +504,28 @@ fn build_registry(
         registry.register(Arc::new(SchedulerTriggerTool::new()));
     }
 
+    // Apple ecosystem tools — always registered in non-Off modes.
+    // Each tool's `allowed_in_mode` and the underlying store's permission check
+    // gate actual execution.  Read-only tools (search, get, list) are available
+    // in ReadOnly mode; mutation tools require Full mode.
+    if !matches!(config.tool_mode, AgentToolMode::Off) {
+        use crate::fae_llm::tools::apple::{
+            CreateContactTool, CreateEventTool, DeleteEventTool, GetContactTool, ListCalendarsTool,
+            ListEventsTool, SearchContactsTool, UpdateEventTool, global_calendar_store,
+            global_contact_store,
+        };
+        let contacts = global_contact_store();
+        let calendars = global_calendar_store();
+        registry.register(Arc::new(SearchContactsTool::new(Arc::clone(&contacts))));
+        registry.register(Arc::new(GetContactTool::new(Arc::clone(&contacts))));
+        registry.register(Arc::new(CreateContactTool::new(contacts)));
+        registry.register(Arc::new(ListCalendarsTool::new(Arc::clone(&calendars))));
+        registry.register(Arc::new(ListEventsTool::new(Arc::clone(&calendars))));
+        registry.register(Arc::new(CreateEventTool::new(Arc::clone(&calendars))));
+        registry.register(Arc::new(UpdateEventTool::new(Arc::clone(&calendars))));
+        registry.register(Arc::new(DeleteEventTool::new(calendars)));
+    }
+
     Arc::new(registry)
 }
 

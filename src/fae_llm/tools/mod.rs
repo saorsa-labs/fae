@@ -12,6 +12,7 @@
 //! - **web_search** — Search the web via embedded multi-engine scraper
 //! - **fetch_url** — Fetch and extract web page content
 //! - **desktop** — Desktop automation (screenshots, clicks, typing, windows)
+//! - **apple** — Apple ecosystem tools (Contacts, Calendar) — macOS only
 //!
 //! # Mode Gating
 //!
@@ -19,6 +20,7 @@
 //! - `ReadOnly` — Only read-only tools are available (read, web_search, fetch_url)
 //! - `Full` — All tools are available
 
+pub mod apple;
 pub mod bash;
 pub mod desktop;
 pub mod edit;
