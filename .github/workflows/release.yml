@@ -214,18 +214,32 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
+          # Sign inside-out: nested bundles first, then binary, then top-level .app.
+
+          # 1. Sign the SPM resource bundle embedded in Resources/.
+          RESOURCE_BUNDLE="$(find "$APP_BUNDLE/Contents/Resources" -maxdepth 1 -name '*.bundle' -type d | head -n 1)"
+          if [ -n "$RESOURCE_BUNDLE" ]; then
+            codesign --force --options runtime \
+              --sign "$MACOS_SIGNING_IDENTITY" \
+              --timestamp \
+              "$RESOURCE_BUNDLE"
+          fi
+
+          # 2. Sign the main executable inside the bundle.
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
             "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
 
+          # 3. Sign the standalone update binary (not in a bundle).
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
             "$UPDATE_ASSET"
 
+          # 4. Sign the top-level .app bundle (seals everything).
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
