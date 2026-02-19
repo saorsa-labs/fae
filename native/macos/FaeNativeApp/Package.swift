@@ -70,5 +70,15 @@ let package = Package(
                 .linkedLibrary("resolv"),
             ]
         ),
+
+        // Handoff unit tests — depends only on FaeHandoffKit (no libfae.a required).
+        // Tests pure logic: command parsing, snapshot encoding, payload scenarios.
+        .testTarget(
+            name: "HandoffTests",
+            dependencies: [
+                .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
+            ],
+            path: "Tests/HandoffTests"
+        ),
     ]
 )
