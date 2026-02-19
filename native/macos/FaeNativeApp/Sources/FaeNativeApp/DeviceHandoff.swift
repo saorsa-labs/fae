@@ -1,32 +1,6 @@
 import Foundation
 import Network
-
-// MARK: - Conversation Snapshot
-
-/// A single conversation turn for handoff serialisation.
-struct SnapshotEntry: Codable, Sendable {
-    let role: String
-    let content: String
-}
-
-/// Serialisable snapshot of conversation state carried via NSUserActivity handoff.
-///
-/// Only "user" and "assistant" roles are included — system prompts, tool results,
-/// and memory recall hits are excluded to keep the payload small and to avoid
-/// leaking internal data over the Handoff channel.
-///
-/// The `snapshotProvider` closure on `DeviceHandoffController` is contractually
-/// responsible for filtering entries before returning a snapshot.
-struct ConversationSnapshot: Codable, Sendable {
-    /// Maximum number of entries encoded into a handoff payload. Older entries
-    /// are dropped to stay within NSUserActivity userInfo size limits.
-    static let maxEntries = 20
-
-    let entries: [SnapshotEntry]
-    let orbMode: String
-    let orbFeeling: String
-    let timestamp: Date
-}
+import FaeHandoffKit
 
 // MARK: - Device Target
 

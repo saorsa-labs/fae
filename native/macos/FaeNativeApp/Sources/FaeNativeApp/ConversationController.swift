@@ -1,4 +1,5 @@
 import Foundation
+import FaeHandoffKit
 
 @MainActor
 final class ConversationController: ObservableObject {

@@ -9,6 +9,10 @@ let package = Package(
     products: [
         .executable(name: "FaeNativeApp", targets: ["FaeNativeApp"]),
     ],
+    dependencies: [
+        // Shared Handoff contract types: FaeHandoffContract, ConversationSnapshot, etc.
+        .package(path: "../../apple/FaeHandoffKit"),
+    ],
     targets: [
         // C module exposing the libfae FFI header to Swift.
         .target(
@@ -19,7 +23,10 @@ let package = Package(
 
         .executableTarget(
             name: "FaeNativeApp",
-            dependencies: ["CLibFae"],
+            dependencies: [
+                "CLibFae",
+                .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
+            ],
             path: "Sources/FaeNativeApp",
             resources: [
                 .process("Resources"),
