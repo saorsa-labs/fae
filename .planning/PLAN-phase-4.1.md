@@ -1,138 +1,169 @@
-# Phase 4.1: Tracing, Metrics & Redaction
+# Phase 4.1: Glassmorphic Design & Separate Window
 
 ## Overview
-Add production observability to the fae_llm module: structured tracing spans for request/turn/tool lifecycles, metrics collection hooks for performance and usage tracking, and secret redaction for API keys and sensitive data in logs.
+
+Redesign onboarding to use a dedicated NSWindow with Apple-style glassmorphic blur, warm color palette, slide transitions, and responsive layout. Currently, onboarding is embedded inside ContentView's ZStack in the same WindowGroup as the conversation. This phase extracts it into a separate window with vibrancy effects.
 
 ## Context
-- **Dependencies:** tracing = "0.1", tracing-subscriber = "0.3" already in Cargo.toml
-- **Existing modules:** provider.rs, providers/, agent/, session/, tools/, events.rs, usage.rs
-- **Current test count:** 1,438 passing tests
-- **Constraints:** No .unwrap()/.expect()/panic!(), zero clippy warnings
+
+- **Current architecture:** Single `WindowGroup("Fae")` in `FaeNativeApp.swift`. `ContentView` switches between `OnboardingWebView` and conversation via `onboarding.isComplete` flag.
+- **Current onboarding:** WKWebView loading `Resources/Onboarding/onboarding.html` — 3 screens (Welcome, Permissions, Ready) with CSS opacity/translateY transitions on a dark (#0a0b0d) background. Canvas-based orb animation already exists.
+- **Swift framework:** SwiftUI App protocol + AppKit NSWindow access via `NSWindowAccessor`. Minimum macOS 14.
+- **Onboarding controller:** `OnboardingController.swift` manages state, permission requests, and posts NotificationCenter events.
+- **Key files:**
+  - `FaeNativeApp.swift` — app entry point, WindowGroup scene
+  - `ContentView.swift` — view switching logic
+  - `OnboardingController.swift` — permission state, completion
+  - `OnboardingWebView.swift` — WKWebView hosting onboarding.html
+  - `OnboardingTTSHelper.swift` — TTS for permission help
+  - `WindowStateController.swift` — collapsed/compact/expanded modes
+  - `Resources/Onboarding/onboarding.html` — HTML/CSS/JS for screens
+- **Constraints:** No .unwrap()/.expect() in Swift production code, zero compiler warnings, accessible
+- **Test count:** 2490 passing Rust tests (not touching Rust this phase)
 
 ## Tasks
 
-### Task 1: Define tracing span constants and hierarchy
-**Files:** `src/fae_llm/observability/mod.rs` (new), `src/fae_llm/observability/spans.rs` (new)
+### Task 1: Create OnboardingWindowController with programmatic NSWindow
+**Files:** `native/macos/FaeNativeApp/Sources/FaeNativeApp/OnboardingWindowController.swift` (new)
 
-Create observability module with structured span constants for:
-- Provider requests (span: "fae_llm.provider.request", fields: provider, model, endpoint_type)
-- Agent turns (span: "fae_llm.agent.turn", fields: turn_number, max_turns)
-- Tool executions (span: "fae_llm.tool.execute", fields: tool_name, mode)
-- Session operations (span: "fae_llm.session.operation", fields: session_id, operation)
-
-Define span hierarchy constants and helper macros for consistent field naming.
-
-**Acceptance:**
-- Module compiles with zero warnings
-- Span constants are pub and well-documented
-- Helper macros follow tracing best practices (instrument attribute patterns)
-
-### Task 2: Define metrics trait and types
-**Files:** `src/fae_llm/observability/metrics.rs` (new)
-
-Create MetricsCollector trait and default no-op implementation:
-- Record latency (request, turn, tool execution)
-- Count events (retry, circuit_breaker_open, tool_success, tool_failure)
-- Track usage (input_tokens, output_tokens, reasoning_tokens, cost)
-
-Trait must be Send + Sync, methods take &self (interior mutability for implementors).
+Create a new `OnboardingWindowController` class that owns a programmatic `NSWindow` for the onboarding experience. The window should:
+- Be a centered, fixed-size (520x640) titled window with no minimize/maximize
+- Have `.fullSizeContentView` styleMask so content extends behind titlebar
+- Set `titlebarAppearsTransparent = true` and `titleVisibility = .hidden`
+- Use `NSVisualEffectView` as the window's `contentView` with `.behindWindow` blending mode and `.hudWindow` material for glassmorphic blur
+- Prevent closing via the close button during onboarding (override `windowShouldClose`)
+- Be `@MainActor` and `ObservableObject` so SwiftUI can observe it
 
 **Acceptance:**
-- Trait compiles and is well-documented
-- NoopMetrics default impl compiles
-- All methods are non-blocking (suitable for hot paths)
+- Window opens centered on screen with transparent titlebar
+- Background shows glassmorphic blur of desktop content
+- Window cannot be closed/minimized during onboarding
+- Compiles with zero warnings
 
-### Task 3: Define secret redaction types and patterns
-**Files:** `src/fae_llm/observability/redact.rs` (new)
+### Task 2: Host OnboardingWebView inside the glassmorphic window
+**Files:** `OnboardingWindowController.swift`, `OnboardingWebView.swift`
 
-Create redaction utilities:
-- RedactedString wrapper type with Display that shows "[REDACTED]"
-- Redaction patterns: API keys (sk-*, anthropic-key-*), auth headers (Authorization: Bearer *)
-- Helper functions: redact_api_key, redact_auth_header, redact_in_json
-
-Use regex crate (already in dependencies) for pattern matching.
-
-**Acceptance:**
-- RedactedString never leaks value in Display/Debug
-- Pattern matchers correctly identify secrets
-- Tests verify redaction in sample JSON payloads
-
-### Task 4: Integrate tracing spans into provider adapters
-**Files:** `src/fae_llm/providers/openai.rs`, `src/fae_llm/providers/anthropic.rs`
-
-Add tracing spans to provider request methods:
-- Instrument request() method with "fae_llm.provider.request" span
-- Record fields: provider name, model, endpoint_type, request_id
-- Use tracing::instrument attribute where possible
-- Emit events on stream start/end, errors
+Embed the existing `OnboardingWebView` (WKWebView) inside the new glassmorphic window:
+- Create an `NSHostingView` wrapping the `OnboardingWebView` SwiftUI view
+- Add it as a subview of the `NSVisualEffectView` content view, pinned with AutoLayout
+- Wire all existing callbacks (onRequestPermission, onPermissionHelp, onComplete, onAdvance) through
+- Make the WKWebView background transparent so the NSVisualEffectView blur shows through
+- Pass `userName` and `permissionStates` from `OnboardingController` via existing update mechanism
 
 **Acceptance:**
-- All provider request paths emit spans
-- Span fields match observability/spans.rs constants
-- Tests verify span emission (use tracing-test or similar)
-- Zero clippy warnings
+- Onboarding HTML renders inside the glassmorphic window
+- Desktop blur visible through the WKWebView background areas
+- All permission buttons trigger native dialogs correctly
+- Complete button fires onboardingComplete notification
 
-### Task 5: Integrate tracing spans into agent loop and tools
-**Files:** `src/fae_llm/agent/executor.rs`, `src/fae_llm/tools/registry.rs`
+### Task 3: Update FaeNativeApp to show onboarding window → main window lifecycle
+**Files:** `FaeNativeApp.swift`, `ContentView.swift`, `OnboardingWindowController.swift`
 
-Add tracing spans to agent loop and tool execution:
-- Agent turn span wraps each loop iteration (turn_number, max_turns)
-- Tool execution span wraps Tool::execute (tool_name, mode, duration)
-- Emit events on tool validation, timeout, success, failure
+Change the app startup flow:
+- On launch, if `!onboarding.isComplete`, show the onboarding window instead of the main WindowGroup
+- The main window should NOT be visible during onboarding
+- When onboarding completes, close the onboarding window and show the main window
+- If user has already completed onboarding (restored from backend), skip directly to main window
+- Handle edge case: backend timeout → show onboarding window (safe default)
 
-**Acceptance:**
-- Agent loop emits turn spans
-- Tool execution emits per-tool spans
-- Span nesting is correct (turn contains tool spans)
-- Tests verify span structure
-
-### Task 6: Add metrics collection hooks
-**Files:** `src/fae_llm/agent/mod.rs`, `src/fae_llm/provider.rs`, `src/fae_llm/tools/registry.rs`
-
-Add MetricsCollector parameter to key structs:
-- AgentLoop stores Arc<dyn MetricsCollector>
-- Call metrics.record_latency(), metrics.count_event() at appropriate points
-- Record: request latency, turn count, tool success/failure, retry count, token usage
-
-Use Arc<dyn MetricsCollector> for shared ownership across tasks.
+Implementation approach:
+- Add `@StateObject var onboardingWindow = OnboardingWindowController()` in FaeNativeApp
+- In `.onAppear`, after `restoreOnboardingState`, decide which window to show
+- `OnboardingWindowController.show()` opens the onboarding window
+- On `onboarding.isComplete` change → close onboarding, make main window key
 
 **Acceptance:**
-- Metrics hooks compile and are called in hot paths
-- Default NoopMetrics has zero runtime cost
-- Integration tests can inject mock metrics collector
-- Zero clippy warnings
+- Fresh launch: only onboarding window visible, main window hidden
+- After completing onboarding: smooth transition to main window
+- Subsequent launches: main window opens directly, no onboarding flash
+- Backend timeout: shows onboarding (safe fallback)
 
-### Task 7: Add secret redaction to event logging
-**Files:** `src/fae_llm/events.rs`, `src/fae_llm/providers/sse.rs`
+### Task 4: Redesign onboarding.html with warm glassmorphic palette and rounded panels
+**Files:** `Resources/Onboarding/onboarding.html`
 
-Apply redaction to event Debug/Display implementations:
-- Redact API keys in error messages
-- Redact auth headers in HTTP request logs
-- Redact secret values in config-related events
-
-Use RedactedString wrapper from observability/redact.rs.
-
-**Acceptance:**
-- Debug output never leaks API keys or tokens
-- Redaction preserves enough info for debugging (e.g., "sk-...{last 4 chars}")
-- Tests verify redaction in formatted output
-
-### Task 8: Integration tests and documentation
-**Files:** `src/fae_llm/observability/tests.rs` (new), `src/fae_llm/observability/README.md` (new)
-
-Write integration tests:
-- End-to-end span emission (mock provider → agent → tool)
-- Metrics collection across full request lifecycle
-- Secret redaction in real event streams
-
-Add module README documenting:
-- How to enable tracing (subscriber setup)
-- How to implement custom MetricsCollector
-- Span hierarchy and field conventions
-- Redaction guarantees
+Redesign the CSS for a warm, Apple-style glassmorphic aesthetic:
+- Replace dark `--bg: #0a0b0d` with `transparent` body background (blur comes from NSVisualEffectView)
+- New warm color variables: `--warm-amber: #F5E6D0`, `--warm-rose: #E8C4C4`, `--accent: #D4956A`, `--text-primary: rgba(0,0,0,0.85)` for light mode
+- Permission cards: white/translucent background with `backdrop-filter: blur(20px)`, larger border-radius (20px), subtle warm shadow
+- Buttons: warm gradient fills, larger touch targets (48px height), pill shape
+- Typography: larger sizes for better readability (title 1.8rem, body 1rem)
+- Reduce visual density — more whitespace, fewer elements on screen
+- Keep orb canvas animation but adjust colors to warm palette
 
 **Acceptance:**
-- Integration tests pass and cover key observability paths
-- README is clear and has code examples
-- Module is exported from src/fae_llm/mod.rs
-- `just check` passes (fmt, lint, test, doc)
+- Onboarding screens look warm and inviting against glassmorphic blur
+- Permission cards are clearly legible with warm tones
+- Buttons have obvious affordance with warm gradients
+- Body background is transparent (blur shows through)
+
+### Task 5: Implement horizontal slide transitions between screens
+**Files:** `Resources/Onboarding/onboarding.html`
+
+Replace the current opacity/translateY transitions with horizontal slides:
+- Welcome → Permissions: current screen slides left, new screen slides in from right
+- Permissions → Ready: same left-slide pattern
+- Add CSS classes: `.slide-enter-right`, `.slide-exit-left` with translateX transforms
+- Update `transitionTo()` JS function to apply directional classes
+- Animation duration: 400ms with ease-out timing for natural feel
+- Dot indicator animates smoothly (not just snap)
+- Ensure no layout thrashing during transitions (use transform, not left/right)
+
+**Acceptance:**
+- Screens slide left-to-right in sequence
+- Transitions are smooth (60fps) with no jank
+- Dot indicator position animates in sync
+- No visual glitches during transition (no overlap, no flash)
+
+### Task 6: Responsive layout for different screen sizes
+**Files:** `Resources/Onboarding/onboarding.html`, `OnboardingWindowController.swift`
+
+Make onboarding adapt gracefully:
+- Window min size: 440x560, max size: 600x720
+- Allow window resizing within these bounds
+- CSS uses relative units (%, vh/vw, clamp()) for spacing and font sizes
+- Orb size scales with window (use CSS custom property set from JS on resize)
+- Permission cards stack vertically with proper spacing at all sizes
+- Test at 1x and 2x Retina
+
+**Acceptance:**
+- Window is resizable between min/max bounds
+- Content scales proportionally — no text overflow, no cut-off elements
+- Orb maintains visual balance at all sizes
+- Works on both 1x and 2x displays
+
+### Task 7: Dark/light mode adaptation
+**Files:** `Resources/Onboarding/onboarding.html`, `OnboardingWindowController.swift`
+
+Support both system appearances:
+- CSS `@media (prefers-color-scheme: dark)` and `light` variants
+- Light mode: warm off-white text on translucent white cards, dark text for readability
+- Dark mode: keep current aesthetic but with warm undertones instead of cold gray
+- NSVisualEffectView automatically adapts material to appearance
+- Orb palette adjusts — warmer hues in light mode, deeper in dark
+- Remove the forced `.preferredColorScheme(.dark)` from the onboarding path
+- Dot indicator, buttons, and status badges adapt colors
+
+**Acceptance:**
+- Switching system appearance immediately updates onboarding look
+- Both modes are warm and inviting (not clinical)
+- Text is highly readable in both modes
+- NSVisualEffectView material looks correct in both modes
+
+### Task 8: Animated orb greeting on Welcome screen and polish
+**Files:** `Resources/Onboarding/onboarding.html`
+
+Enhance the Welcome screen orb animation:
+- Orb starts small (scale 0.5) and grows to full size with a spring-like ease over 1.2s
+- During growth, emit a burst of warm-colored rings (pulse canvas)
+- After orb settles, the welcome bubble fades in with a gentle bounce
+- "Get started" button fades in after bubble (sequential stagger: orb → bubble → button)
+- Add a subtle floating animation to the orb (gentle up-down bob, 4s period)
+- Add touch/hover effect on the orb — gentle brightness increase
+- Ensure `prefers-reduced-motion` disables growth/float animations (just fade in)
+
+**Acceptance:**
+- First-time welcome feels warm and alive — orb "arrives" with presence
+- Stagger timing feels natural (not too slow, not too fast)
+- Reduced motion: orb appears immediately, bubble fades in, no bouncing
+- Animation runs smoothly at 60fps
+- All existing functionality (screen transitions, permissions, TTS help) still works
