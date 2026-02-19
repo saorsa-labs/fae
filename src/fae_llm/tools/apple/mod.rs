@@ -36,6 +36,7 @@ pub mod ffi_bridge;
 pub mod mail;
 pub mod mock_stores;
 pub mod notes;
+pub mod rate_limiter;
 pub mod reminders;
 pub mod trait_def;
 
@@ -65,4 +66,5 @@ pub use reminders::{
     ReminderList, ReminderQuery, ReminderStore, ReminderStoreError, SetReminderCompletedTool,
 };
 pub use availability_gate::AvailabilityGatedTool;
+pub use rate_limiter::AppleRateLimiter;
 pub use trait_def::AppleEcosystemTool;
