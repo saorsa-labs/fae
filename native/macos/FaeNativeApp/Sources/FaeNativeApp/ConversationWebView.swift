@@ -7,7 +7,6 @@ struct ConversationWebView: NSViewRepresentable {
     var feeling: OrbFeeling
     var isListening: Bool
     var windowMode: String
-    var panelSide: String
     var onLoad: (() -> Void)?
     /// Called after the WebView finishes loading, providing the `WKWebView` instance
     /// so controllers (e.g. `ConversationBridgeController`) can inject JavaScript.
@@ -15,13 +14,10 @@ struct ConversationWebView: NSViewRepresentable {
     var onUserMessage: ((String) -> Void)?
     var onToggleListening: (() -> Void)?
     var onLinkDetected: ((String) -> Void)?
-    var onPanelOpened: ((String) -> Void)?
-    var onPanelClosed: ((String) -> Void)?
+    var onOpenConversationWindow: (() -> Void)?
+    var onOpenCanvasWindow: (() -> Void)?
     var onUserInteraction: (() -> Void)?
     var onOrbClicked: (() -> Void)?
-    /// Monotonic counter — when it changes, all `.slide-panel` elements have
-    /// their `.open` class removed so panels don't reappear after collapse.
-    var panelCloseGeneration: Int = 0
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var loaded = false
@@ -30,17 +26,15 @@ struct ConversationWebView: NSViewRepresentable {
         var lastFeeling: OrbFeeling?
         var lastListening: Bool?
         var lastWindowMode: String?
-        var lastPanelSide: String?
         var onLoad: (() -> Void)?
         var onWebViewReady: ((WKWebView) -> Void)?
         var onUserMessage: ((String) -> Void)?
         var onToggleListening: (() -> Void)?
         var onLinkDetected: ((String) -> Void)?
-        var onPanelOpened: ((String) -> Void)?
-        var onPanelClosed: ((String) -> Void)?
+        var onOpenConversationWindow: (() -> Void)?
+        var onOpenCanvasWindow: (() -> Void)?
         var onUserInteraction: (() -> Void)?
         var onOrbClicked: (() -> Void)?
-        var lastPanelCloseGeneration: Int = 0
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             _ = navigation
@@ -69,16 +63,10 @@ struct ConversationWebView: NSViewRepresentable {
                       let url = body["url"] as? String
                 else { return }
                 onLinkDetected?(url)
-            case "panelOpened":
-                guard let body = message.body as? [String: Any],
-                      let panel = body["panel"] as? String
-                else { return }
-                onPanelOpened?(panel)
-            case "panelClosed":
-                guard let body = message.body as? [String: Any],
-                      let panel = body["panel"] as? String
-                else { return }
-                onPanelClosed?(panel)
+            case "openConversationWindow":
+                onOpenConversationWindow?()
+            case "openCanvasWindow":
+                onOpenCanvasWindow?()
             case "userInteraction":
                 onUserInteraction?()
             case "orbClicked":
@@ -98,8 +86,8 @@ struct ConversationWebView: NSViewRepresentable {
         coordinator.onUserMessage = onUserMessage
         coordinator.onToggleListening = onToggleListening
         coordinator.onLinkDetected = onLinkDetected
-        coordinator.onPanelOpened = onPanelOpened
-        coordinator.onPanelClosed = onPanelClosed
+        coordinator.onOpenConversationWindow = onOpenConversationWindow
+        coordinator.onOpenCanvasWindow = onOpenCanvasWindow
         coordinator.onUserInteraction = onUserInteraction
         coordinator.onOrbClicked = onOrbClicked
         return coordinator
@@ -112,7 +100,7 @@ struct ConversationWebView: NSViewRepresentable {
         let contentController = config.userContentController
         let handlers = [
             "sendMessage", "toggleListening", "linkDetected", "ready",
-            "panelOpened", "panelClosed", "userInteraction", "orbClicked"
+            "openConversationWindow", "openCanvasWindow", "userInteraction", "orbClicked"
         ]
         for handler in handlers {
             contentController.add(context.coordinator, name: handler)
@@ -147,8 +135,8 @@ struct ConversationWebView: NSViewRepresentable {
         context.coordinator.onUserMessage = onUserMessage
         context.coordinator.onToggleListening = onToggleListening
         context.coordinator.onLinkDetected = onLinkDetected
-        context.coordinator.onPanelOpened = onPanelOpened
-        context.coordinator.onPanelClosed = onPanelClosed
+        context.coordinator.onOpenConversationWindow = onOpenConversationWindow
+        context.coordinator.onOpenCanvasWindow = onOpenCanvasWindow
         context.coordinator.onUserInteraction = onUserInteraction
         context.coordinator.onOrbClicked = onOrbClicked
 
@@ -179,16 +167,6 @@ struct ConversationWebView: NSViewRepresentable {
         if context.coordinator.lastWindowMode != windowMode {
             context.coordinator.lastWindowMode = windowMode
             jsStatements.append("window.setWindowMode && window.setWindowMode('\(windowMode)');")
-        }
-
-        if context.coordinator.lastPanelSide != panelSide {
-            context.coordinator.lastPanelSide = panelSide
-            jsStatements.append("window.setPanelSide && window.setPanelSide('\(panelSide)');")
-        }
-
-        if context.coordinator.lastPanelCloseGeneration != panelCloseGeneration {
-            context.coordinator.lastPanelCloseGeneration = panelCloseGeneration
-            jsStatements.append("document.querySelectorAll('.slide-panel').forEach(function(p){p.classList.remove('open')});")
         }
 
         guard !jsStatements.isEmpty else { return }

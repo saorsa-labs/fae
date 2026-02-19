@@ -25,6 +25,10 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Weak reference to the conversation WebView for JS injection.
     weak var webView: WKWebView?
 
+    /// Native canvas store for the SwiftUI canvas window.
+    /// Set by `FaeNativeApp` during wiring.
+    weak var canvasController: CanvasController?
+
     private var observations: [NSObjectProtocol] = []
 
     init() {
@@ -76,10 +80,15 @@ final class PipelineAuxBridgeController: ObservableObject {
         switch event {
         case "pipeline.canvas_visibility":
             let visible = payload["visible"] as? Bool ?? false
-            if visible {
-                evaluateJS("window.showCanvasPanel && window.showCanvasPanel();")
+            canvasController?.isVisible = visible
+
+        case "pipeline.canvas_content":
+            let html = payload["html"] as? String ?? ""
+            let append = payload["append"] as? Bool ?? false
+            if append {
+                canvasController?.appendContent(html)
             } else {
-                evaluateJS("window.hideCanvasPanel && window.hideCanvasPanel();")
+                canvasController?.setContent(html)
             }
 
         case "pipeline.control":

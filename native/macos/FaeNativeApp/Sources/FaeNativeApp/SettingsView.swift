@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
+    @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @StateObject private var audio = AudioDeviceController()
     @State private var commandText: String = ""
 
@@ -90,6 +91,15 @@ struct SettingsView: View {
                     }
                 }
                 } // if handoffEnabled
+            }
+
+            Section("Window Behavior") {
+                Toggle("Auto-hide conversation & canvas when orb collapses",
+                       isOn: $auxiliaryWindows.autoHideOnCollapse)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text("When enabled, the conversation and canvas windows will automatically hide when the orb collapses after inactivity.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Audio") {

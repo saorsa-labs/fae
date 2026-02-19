@@ -55,6 +55,8 @@ struct FaeNativeApp: App {
     @StateObject private var hostBridge = HostCommandBridge()
     @StateObject private var dockIcon = DockIconAnimator()
     @StateObject private var windowState = WindowStateController()
+    @StateObject private var canvasController = CanvasController()
+    @StateObject private var auxiliaryWindows = AuxiliaryWindowManager()
     @StateObject private var onboarding = OnboardingController()
     /// Retained for the app lifetime — observes JIT capability.requested events and
     /// triggers native macOS permission dialogs mid-conversation.
@@ -101,12 +103,22 @@ struct FaeNativeApp: App {
                 .environmentObject(pipelineAux)
                 .environmentObject(windowState)
                 .environmentObject(onboarding)
+                .environmentObject(auxiliaryWindows)
                 .preferredColorScheme(.dark)
                 .onAppear {
                     dockIcon.start()
                     // Wire the orb bridge to the shared OrbStateController so it
                     // can update mode/palette/feeling from pipeline events.
                     orbBridge.orbState = orbState
+                    // Wire conversation bridge to the native message store.
+                    conversationBridge.conversationController = conversation
+                    // Wire pipeline aux to the canvas controller.
+                    pipelineAux.canvasController = canvasController
+                    // Wire auxiliary window manager to its dependencies.
+                    auxiliaryWindows.windowState = windowState
+                    auxiliaryWindows.conversationController = conversation
+                    auxiliaryWindows.canvasController = canvasController
+                    auxiliaryWindows.observeWindowState()
                     // pipelineAux.webView is set via ContentView's onWebViewReady callback.
                     if let sender = commandSender {
                         hostBridge.sender = sender
@@ -143,6 +155,7 @@ struct FaeNativeApp: App {
                 .environmentObject(orbState)
                 .environmentObject(handoff)
                 .environmentObject(pipelineAux)
+                .environmentObject(auxiliaryWindows)
         }
     }
 

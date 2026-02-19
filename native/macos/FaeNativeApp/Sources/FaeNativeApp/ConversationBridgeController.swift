@@ -21,6 +21,10 @@ final class ConversationBridgeController: ObservableObject {
     /// Set by `ConversationWebView.Coordinator` once the page has loaded.
     weak var webView: WKWebView?
 
+    /// Native message store for the SwiftUI conversation window.
+    /// Set by `FaeNativeApp` during wiring.
+    weak var conversationController: ConversationController?
+
     private var observations: [NSObjectProtocol] = []
 
     /// Tracks the currently-streaming assistant message ID so we can
@@ -106,8 +110,8 @@ final class ConversationBridgeController: ObservableObject {
     private func handleUserTranscription(text: String) {
         let escaped = escapeForJS(text)
         evaluateJS("window.addMessage && window.addMessage('user', '\(escaped)');")
-        // When a new user message arrives, open the conversation panel so it's visible.
-        evaluateJS("window.showConversationPanel && window.showConversationPanel();")
+        // Dual-write: push to native message store.
+        conversationController?.appendMessage(role: .user, content: text)
     }
 
     private func handleAssistantSentence(text: String, isFinal: Bool) {
@@ -121,32 +125,33 @@ final class ConversationBridgeController: ObservableObject {
             streamingAssistantText = ""
             let escaped = escapeForJS(fullText)
             evaluateJS("window.addMessage && window.addMessage('assistant', '\(escaped)');")
+            // Dual-write: push completed message to native store.
+            conversationController?.appendMessage(role: .assistant, content: fullText)
         }
-        // Ensure the panel is visible when assistant is responding.
-        evaluateJS("window.showConversationPanel && window.showConversationPanel();")
     }
 
     private func handleGenerating(active: Bool) {
         let jsArg = active ? "true" : "false"
         evaluateJS("window.showTypingIndicator && window.showTypingIndicator(\(jsArg));")
-        if active {
-            evaluateJS("window.showConversationPanel && window.showConversationPanel();")
-        }
+        // Dual-write: update native generating state.
+        conversationController?.isGenerating = active
     }
 
     private func handleToolExecution(userInfo: [AnyHashable: Any]) {
         let type_ = userInfo["type"] as? String ?? "executing"
         let name = escapeForJS(userInfo["name"] as? String ?? "")
+        let rawName = userInfo["name"] as? String ?? ""
 
         switch type_ {
         case "executing":
             evaluateJS("window.addMessage && window.addMessage('tool', '⚙ Using \(name)…');")
+            conversationController?.appendMessage(role: .tool, content: "⚙ Using \(rawName)…")
         case "result":
             let success = userInfo["success"] as? Bool ?? false
             let icon = success ? "✓" : "✗"
             evaluateJS("window.addMessage && window.addMessage('tool', '\(icon) \(name)');")
+            conversationController?.appendMessage(role: .tool, content: "\(icon) \(rawName)")
         default:
-            // "call" — don't display, it's internal
             break
         }
     }

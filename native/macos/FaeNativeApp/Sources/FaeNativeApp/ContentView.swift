@@ -7,6 +7,7 @@ struct ContentView: View {
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
+    @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @State private var viewLoaded = false
 
     var body: some View {
@@ -45,7 +46,6 @@ struct ContentView: View {
                 feeling: orbState.feeling,
                 isListening: conversation.isListening,
                 windowMode: windowState.mode.rawValue,
-                panelSide: windowState.panelSide.rawValue,
                 onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
                 onWebViewReady: { webView in
                     conversationBridge.webView = webView
@@ -60,15 +60,14 @@ struct ContentView: View {
                     windowState.noteActivity()
                 },
                 onLinkDetected: { url in conversation.handleLinkDetected(url) },
-                onPanelOpened: { panel in windowState.panelOpened(panel) },
-                onPanelClosed: { panel in windowState.panelClosed(panel) },
+                onOpenConversationWindow: { auxiliaryWindows.showConversation() },
+                onOpenCanvasWindow: { auxiliaryWindows.showCanvas() },
                 onUserInteraction: { windowState.noteActivity() },
                 onOrbClicked: {
                     if windowState.mode == .collapsed {
                         windowState.transitionToCompact()
                     }
-                },
-                panelCloseGeneration: windowState.panelCloseGeneration
+                }
             )
             .opacity(viewLoaded ? 1 : 0)
 
