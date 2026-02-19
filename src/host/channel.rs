@@ -198,8 +198,22 @@ pub fn command_channel<H: DeviceTransferHandler>(
     event_capacity: usize,
     handler: H,
 ) -> (HostCommandClient, HostCommandServer<H>) {
-    let (request_tx, request_rx) = mpsc::channel(request_capacity.max(1));
     let (event_tx, _event_rx) = broadcast::channel(event_capacity.max(1));
+    command_channel_with_events(request_capacity, event_tx, handler)
+}
+
+/// Create a command channel using an existing event broadcast sender.
+///
+/// This allows the handler and the command server to share the same
+/// broadcast channel, so events emitted directly by the handler (e.g.
+/// pipeline lifecycle events) reach Swift through the same path.
+#[must_use]
+pub fn command_channel_with_events<H: DeviceTransferHandler>(
+    request_capacity: usize,
+    event_tx: broadcast::Sender<EventEnvelope>,
+    handler: H,
+) -> (HostCommandClient, HostCommandServer<H>) {
+    let (request_tx, request_rx) = mpsc::channel(request_capacity.max(1));
 
     (
         HostCommandClient {
@@ -594,11 +608,9 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
     }
 
     fn handle_runtime_start(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        // The handler emits lifecycle events (runtime.starting, runtime.started)
+        // directly — no additional event emission needed here.
         self.handler.request_runtime_start()?;
-        self.emit_event(
-            "runtime.started",
-            serde_json::json!({"request_id": envelope.request_id}),
-        );
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true}),
@@ -606,11 +618,8 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
     }
 
     fn handle_runtime_stop(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        // The handler emits runtime.stopped directly.
         self.handler.request_runtime_stop()?;
-        self.emit_event(
-            "runtime.stopped",
-            serde_json::json!({"request_id": envelope.request_id}),
-        );
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true}),

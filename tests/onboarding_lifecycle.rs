@@ -7,19 +7,27 @@
 
 use fae::config::SpeechConfig;
 use fae::host::channel::command_channel;
-use fae::host::contract::{CommandEnvelope, CommandName};
+use fae::host::contract::{CommandEnvelope, CommandName, EventEnvelope};
 use fae::host::handler::FaeDeviceTransferHandler;
 use fae::onboarding::OnboardingPhase;
+use tokio::sync::broadcast;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn temp_handler() -> (FaeDeviceTransferHandler, tempfile::TempDir) {
+fn temp_handler() -> (
+    FaeDeviceTransferHandler,
+    tempfile::TempDir,
+    tokio::runtime::Runtime,
+) {
     let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().join("config.toml");
     let config = SpeechConfig::default();
-    (FaeDeviceTransferHandler::new(config, path), dir)
+    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    let (event_tx, _) = broadcast::channel::<EventEnvelope>(16);
+    let handler = FaeDeviceTransferHandler::new(config, path, rt.handle().clone(), event_tx);
+    (handler, dir, rt)
 }
 
 fn route(
@@ -40,7 +48,7 @@ fn route(
 
 #[test]
 fn onboarding_state_includes_phase_field() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     let payload = route(
@@ -59,7 +67,7 @@ fn onboarding_state_includes_phase_field() {
 
 #[test]
 fn onboarding_advance_cycles_through_all_phases() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     // Welcome → Permissions
@@ -111,7 +119,7 @@ fn onboarding_advance_cycles_through_all_phases() {
 
 #[test]
 fn onboarding_advance_persists_phase_to_disk() {
-    let (handler, dir) = temp_handler();
+    let (handler, dir, _rt) = temp_handler();
     let config_path = dir.path().join("config.toml");
     let (_client, server) = command_channel(8, 8, handler);
 
@@ -142,7 +150,7 @@ fn onboarding_advance_persists_phase_to_disk() {
 
 #[test]
 fn onboarding_state_reflects_current_phase_after_advance() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     // Advance to permissions
@@ -166,7 +174,7 @@ fn onboarding_state_reflects_current_phase_after_advance() {
 
 #[test]
 fn onboarding_complete_after_full_advance_cycle() {
-    let (handler, dir) = temp_handler();
+    let (handler, dir, _rt) = temp_handler();
     let config_path = dir.path().join("config.toml");
     let (_client, server) = command_channel(8, 8, handler);
 
@@ -213,7 +221,7 @@ fn onboarding_complete_after_full_advance_cycle() {
 
 #[test]
 fn onboarding_advance_emits_phase_advanced_event() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (client, server) = command_channel(8, 8, handler);
     let mut events = client.subscribe_events();
 

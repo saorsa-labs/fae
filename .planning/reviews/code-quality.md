@@ -1,23 +1,18 @@
 # Code Quality Review
-**Date**: 2026-02-18
-**Mode**: gsd (phase 1.2)
-
-## Scope
-Phase 1.2: src/ffi.rs, src/host/channel.rs, Swift files.
+**Date**: 2026-02-19
+**Mode**: gsd-task
 
 ## Findings
 
-### New code
-
-- [OK] src/ffi.rs — Clean, idiomatic Rust. No #[allow()] suppressions. All public items documented.
-- [OK] src/host/channel.rs — .clone() calls on request_id strings are necessary (String doesn't implement Copy). No gratuitous cloning.
-- [LOW] src/host/channel.rs — request_id is cloned 14 times across route() dispatching. This is a `String` and short-lived. Could use Arc<str> to reduce allocations, but at this scale it's acceptable.
-- [OK] No TODO/FIXME/HACK in new phase 1.2 code.
-- [OK] Swift EmbeddedCoreSender.swift — guard let patterns used correctly, NSLog used appropriately for diagnostics.
-- [OK] FaeNativeApp.swift — Clean init/onAppear wiring. No dead code.
-- [OK] Package.swift — Clearly documented linker settings with inline comments explaining each framework dependency.
-
-### Pre-existing #[allow()] in scope
-- None of the new phase 1.2 files introduce new #[allow()] attributes.
+- [OK] PipelineState enum well-defined with proper derives
+- [OK] emit_event() clean helper avoiding repetition
+- [OK] map_runtime_event() pure function
+- [OK] lock_config() centralizes mutex error handling
+- [OK] command_channel_with_events() properly separates concerns
+- [OK] All clones in request_runtime_start() are intentional (async move captures)
+- [LOW] src/host/handler.rs:471: _approval_rx dropped — ToolApprovalRequest is a silent data sink. Clearly commented as deferred.
+- [LOW] Scheduler methods return stub JSON — appropriate for Phase 1.2 scope
+- [LOW] request_config_patch() is a no-op stub — appropriate for Phase 1.2 scope
+- [OK] #![allow(clippy::unwrap_used)] properly scoped to test module only
 
 ## Grade: A-

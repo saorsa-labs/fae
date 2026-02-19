@@ -1,20 +1,15 @@
 # Documentation Review
-**Date**: 2026-02-18
-**Mode**: gsd (phase 1.2)
+**Date**: 2026-02-19
+**Mode**: gsd-task
 
 ## Findings
 
-### cargo doc output
-cargo doc ran successfully with no doc warnings (Finished dev profile, no warnings emitted).
-
-### New code documentation
-
-- [OK] src/ffi.rs — Module-level doc comment explains the full lifecycle, thread safety, and memory ownership table. Every public extern "C" function has a # Safety doc section.
-- [OK] fae.h — C header has comprehensive Doxygen-style doc comments for every function including parameter descriptions, return value semantics, and the memory ownership table.
-- [OK] EmbeddedCoreSender.swift — Class and all methods have /// doc comments.
-- [OK] HostCommandBridge.swift — Protocol and class documented.
-- [OK] Package.swift — Inline comments explain the purpose of each linker setting.
-- [LOW] src/host/channel.rs — Some internal helper functions lack doc comments (e.g. route() implementation detail functions). These are non-public, so acceptable.
-- [OK] module.modulemap — Minimal file, no docs needed.
+- [OK] cargo doc --all-features --no-deps: Zero warnings, zero errors
+- [OK] FaeDeviceTransferHandler and all public methods have doc comments
+- [OK] PipelineState enum has doc comment
+- [OK] command_channel_with_events() has doc comment explaining purpose
+- [OK] map_runtime_event() has module-level comment
+- [OK] All unsafe functions in ffi.rs have Safety sections
+- [LOW] PipelineState variants (Stopped/Starting/Running/Stopping/Error) have no individual variant docs — acceptable for simple state enum
 
 ## Grade: A

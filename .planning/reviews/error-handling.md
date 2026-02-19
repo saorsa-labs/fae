@@ -1,26 +1,16 @@
 # Error Handling Review
-**Date**: 2026-02-18
-**Mode**: gsd (phase 1.2)
-
-## Scope
-Phase 1.2 changed files: src/ffi.rs (NEW), src/host/channel.rs (MODIFIED), tests/host_command_channel_v0.rs (NEW), tests/host_contract_v0.rs (NEW), Swift files.
+**Date**: 2026-02-19
+**Mode**: gsd-task
 
 ## Findings
 
-### New code (Phase 1.2 scope)
+- [OK] src/host/handler.rs: All .unwrap()/.expect() are inside `mod tests { #![allow(clippy::unwrap_used)] }` — acceptable
+- [MEDIUM] src/host/handler.rs:453-737: Multiple `if let Ok(mut guard) = self.<mutex>.lock()` silently ignore lock-poisoned branches. If a Mutex is poisoned, state transitions fail silently — possible partial state transitions.
+- [LOW] src/host/handler.rs:472: `_approval_rx` intentionally dropped — ToolApprovalRequests from coordinator are silently discarded. Documented deferred work.
+- [OK] All Result-returning methods properly propagate errors via `?`
+- [OK] Channel send errors are properly mapped to SpeechError
+- [OK] lock_config() properly maps poisoned locks to SpeechError::Config
+- [OK] src/host/channel.rs: All error paths correctly return SpeechError variants
+- [OK] src/ffi.rs: All unsafe functions handle null pointers correctly
 
-- [OK] src/ffi.rs — All match arms handle error cases explicitly with return/null; no .unwrap() anywhere in the FFI layer.
-- [OK] src/ffi.rs:80-97 — Mutex poisoning handled with explicit match, returns early on poison.
-- [OK] src/host/channel.rs — No .unwrap() or .expect() in new channel code.
-- [OK] Swift EmbeddedCoreSender.swift — All FFI calls checked for null; guard let patterns throughout.
-
-### Pre-existing code (outside phase scope, informational)
-
-- [WARN/PRE-EXISTING] src/ui/scheduler_panel.rs:760 — panic!() in test (#[cfg(test)] context, acceptable).
-- [WARN/PRE-EXISTING] src/ui/scheduler_panel.rs:778,798,988,1090,1334,1368 — .unwrap() in test functions.
-- [WARN/PRE-EXISTING] src/pipeline/coordinator.rs:3950+ — .expect() calls are inside mock/test helpers (cfg(test) equivalent blocks), acceptable.
-
-## Phase 1.2 Verdict
-All new FFI and channel code is clean. No .unwrap(), .expect(), panic!, todo!, or unimplemented! in any new production code path.
-
-## Grade: A
+## Grade: B+

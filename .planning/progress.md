@@ -83,3 +83,24 @@ Results: 2275/2275 Rust tests pass, zero warnings
 
 ### Milestone 3 Complete — 2026-02-18
 ### All milestones complete — project fae-onboarding-skill-system DONE
+
+---
+
+# Project: fae-native-production-readiness
+
+## Phase 1.1: Linker Anchor - COMPLETE
+
+Commit: 034ae6c
+
+## Phase 1.2: Wire runtime.start to PipelineCoordinator - COMPLETE
+
+- [x] Task 1: Add PipelineState enum + pipeline fields to FaeDeviceTransferHandler
+- [x] Task 2: Wire handler construction in ffi.rs (shared broadcast channel)
+- [x] Task 3: Model loading in request_runtime_start via initialize_models_with_progress
+- [x] Task 4: Create and spawn PipelineCoordinator with all channels
+- [x] Task 5: Event bridge — map 26 RuntimeEvent variants → EventEnvelope
+- [x] Task 6: Implement runtime.stop (cancel+abort+cleanup) and runtime.status (state/error/uptime)
+- [x] Task 7: Update tests for new constructor (handler, integration tests)
+- [x] Task 8: Lifecycle integration tests (events, channels, restart)
+
+Results: 2001 unit + 54 GUI + 44 doc + integration tests pass, zero warnings

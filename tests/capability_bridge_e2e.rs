@@ -2,20 +2,28 @@
 
 use fae::config::SpeechConfig;
 use fae::host::channel::command_channel;
-use fae::host::contract::{CommandEnvelope, CommandName};
+use fae::host::contract::{CommandEnvelope, CommandName, EventEnvelope};
 use fae::host::handler::FaeDeviceTransferHandler;
 use fae::permissions::PermissionKind;
+use tokio::sync::broadcast;
 
-fn temp_handler() -> (FaeDeviceTransferHandler, tempfile::TempDir) {
+fn temp_handler() -> (
+    FaeDeviceTransferHandler,
+    tempfile::TempDir,
+    tokio::runtime::Runtime,
+) {
     let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().join("config.toml");
     let config = SpeechConfig::default();
-    (FaeDeviceTransferHandler::new(config, path), dir)
+    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    let (event_tx, _) = broadcast::channel::<EventEnvelope>(16);
+    let handler = FaeDeviceTransferHandler::new(config, path, rt.handle().clone(), event_tx);
+    (handler, dir, rt)
 }
 
 #[test]
 fn capability_grant_via_channel_persists_to_disk() {
-    let (handler, dir) = temp_handler();
+    let (handler, dir, _rt) = temp_handler();
     let config_path = dir.path().join("config.toml");
 
     let (_client, server) = command_channel(8, 8, handler);
@@ -38,7 +46,7 @@ fn capability_grant_via_channel_persists_to_disk() {
 
 #[test]
 fn capability_deny_via_channel_revokes_and_persists() {
-    let (handler, dir) = temp_handler();
+    let (handler, dir, _rt) = temp_handler();
     let config_path = dir.path().join("config.toml");
 
     let (_client, server) = command_channel(8, 8, handler);
@@ -67,7 +75,7 @@ fn capability_deny_via_channel_revokes_and_persists() {
 
 #[test]
 fn onboarding_get_state_returns_default_false() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     let envelope = CommandEnvelope::new(
@@ -83,7 +91,7 @@ fn onboarding_get_state_returns_default_false() {
 
 #[test]
 fn onboarding_complete_sets_flag_and_persists() {
-    let (handler, dir) = temp_handler();
+    let (handler, dir, _rt) = temp_handler();
     let config_path = dir.path().join("config.toml");
 
     let (_client, server) = command_channel(8, 8, handler);
@@ -105,7 +113,7 @@ fn onboarding_complete_sets_flag_and_persists() {
 
 #[test]
 fn unknown_capability_returns_error() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     let envelope = CommandEnvelope::new(
@@ -120,7 +128,7 @@ fn unknown_capability_returns_error() {
 
 #[test]
 fn onboarding_state_reflects_granted_permissions() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     // Grant some permissions
@@ -151,7 +159,7 @@ fn onboarding_state_reflects_granted_permissions() {
 
 #[test]
 fn capability_request_validates_but_does_not_persist() {
-    let (handler, dir) = temp_handler();
+    let (handler, dir, _rt) = temp_handler();
     let config_path = dir.path().join("config.toml");
 
     let (_client, server) = command_channel(8, 8, handler);
@@ -177,7 +185,7 @@ fn capability_request_validates_but_does_not_persist() {
 
 #[test]
 fn capability_request_jit_true_validates_and_succeeds() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     let envelope = CommandEnvelope::new(
@@ -198,7 +206,7 @@ fn capability_request_jit_true_validates_and_succeeds() {
 
 #[test]
 fn capability_request_jit_false_also_validates_successfully() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     let envelope = CommandEnvelope::new(
@@ -218,7 +226,7 @@ fn capability_request_jit_false_also_validates_successfully() {
 
 #[test]
 fn capability_request_jit_omitted_defaults_to_non_jit() {
-    let (handler, _dir) = temp_handler();
+    let (handler, _dir, _rt) = temp_handler();
     let (_client, server) = command_channel(8, 8, handler);
 
     // No jit field at all — should succeed with default false behaviour
@@ -237,7 +245,7 @@ fn capability_request_jit_omitted_defaults_to_non_jit() {
 
 #[test]
 fn full_onboarding_lifecycle() {
-    let (handler, dir) = temp_handler();
+    let (handler, dir, _rt) = temp_handler();
     let config_path = dir.path().join("config.toml");
 
     let (_client, server) = command_channel(8, 8, handler);

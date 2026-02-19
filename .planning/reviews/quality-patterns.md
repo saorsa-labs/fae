@@ -1,20 +1,19 @@
 # Quality Patterns Review
-**Date**: 2026-02-18
-**Mode**: gsd (phase 1.2)
+**Date**: 2026-02-19
+**Mode**: gsd-task
 
 ## Good Patterns Found
 
-- [GOOD] src/ffi.rs — Uses Box::into_raw/Box::from_raw pattern correctly for opaque C handle. This is the canonical safe Rust-to-C ownership transfer.
-- [GOOD] src/ffi.rs — CString::new(s).into_raw() / CString::from_raw(s) pairing for string ownership is correct and symmetric.
-- [GOOD] src/host/channel.rs — Uses thiserror via ContractError (pre-existing), consistent with codebase patterns.
-- [GOOD] src/host/channel.rs — #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)] on CommandKind is appropriate and complete.
-- [GOOD] src/host/channel.rs — NoopDeviceTransferHandler uses default trait impls to avoid boilerplate.
-- [GOOD] EmbeddedCoreSender.swift — EmbeddedCoreError conforms to LocalizedError with meaningful descriptions.
-- [GOOD] HostCommandBridge.swift — weak var sender prevents retain cycle. @MainActor annotation ensures thread safety for UI dispatch.
-- [GOOD] src/ffi.rs — Mutex<Option<T>> pattern for started flag and server field correctly models one-time initialization.
+- [OK] thiserror for SpeechError — proper error type modeling
+- [OK] Builder pattern for PipelineCoordinator — clean API
+- [OK] CancellationToken (tokio_util) — idiomatic cooperative cancellation
+- [OK] broadcast channel for fan-out events
+- [OK] Child cancel token for bridge task — proper hierarchical cancellation
+- [OK] uuid::Uuid::new_v4() for event correlation IDs
 
 ## Anti-Patterns Found
 
-- [LOW] src/ffi.rs — FaeInitConfig._log_level uses a leading underscore to suppress "unused field" warnings while keeping the field parseable for forward compatibility. This is an acceptable pattern but slightly unusual; a comment explaining why (forward compat, not dead code) would clarify intent.
+- [LOW] src/host/handler.rs:472-473: approval_tx cloned to coordinator, _approval_rx dropped. Stored approval_tx has no receiver — sends silently go nowhere. Deferred implementation but creates a silent no-op.
+- [MEDIUM] Double event emission: HostCommandServer::handle_runtime_start emits "runtime.started" AND FaeDeviceTransferHandler::request_runtime_start emits "runtime.started". Via command channel path: consumer receives 3 events (starting, started, started). Via direct call: 2 events. Inconsistency.
 
-## Grade: A
+## Grade: B+

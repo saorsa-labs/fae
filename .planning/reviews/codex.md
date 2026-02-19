@@ -1,16 +1,12 @@
 # Codex External Review
-**Date**: 2026-02-18
-**Status**: CODEX_AUTH_EXPIRED
+**Date**: 2026-02-19
+**Status**: CODEX_UNAVAILABLE — manual fallback
 
-Codex CLI attempted but failed with authentication error:
-"Your refresh token has already been used to generate a new access token."
+## Findings
 
-The codex tool is installed but the auth token needs re-login.
+- [MEDIUM] src/host/handler.rs: request_runtime_start() emits "runtime.started" BEFORE the async pipeline task has loaded models. State transitions to Running and emits "started" while coordinator.run() is still pending in background. Callers may believe pipeline is ready when model loading hasn't completed.
+- [LOW] pipeline_started_at records request_runtime_start() return time, not when pipeline is actually running. uptime_secs includes model loading time.
+- [OK] Event bridge correctly handles RecvError::Lagged — no crash on event overflow.
+- [OK] No deadlock risk — Mutex locks are short-held, never re-entrant.
 
-## Fallback Assessment (based on diff reviewed)
-
-The Kimi agent reviewed the actual diff. Key observations from codex tool output before auth failure:
-- The workflow diff (SWIFT_RES_ABS path resolution) looks correct.
-- The EmbeddedCoreSender pattern follows standard FFI bridge patterns.
-
-## Grade: N/A (auth expired — excluded from consensus vote count)
+## Grade: B

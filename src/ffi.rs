@@ -25,7 +25,7 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::hint::black_box;
 use std::sync::Mutex;
 
-use crate::host::channel::{HostCommandServer, command_channel};
+use crate::host::channel::{HostCommandServer, command_channel_with_events};
 use crate::host::contract::{CommandEnvelope, EventEnvelope};
 use crate::host::handler::FaeDeviceTransferHandler;
 use tokio::sync::broadcast;
@@ -191,17 +191,23 @@ pub unsafe extern "C" fn fae_core_init(config_json: *const c_char) -> *mut c_voi
     };
 
     let event_capacity = config.event_buffer_size.unwrap_or(64).max(1);
-    let handler = match FaeDeviceTransferHandler::from_default_path() {
+    let (event_tx, _) = broadcast::channel(event_capacity);
+    let handler = match FaeDeviceTransferHandler::from_default_path(
+        tokio_rt.handle().clone(),
+        event_tx.clone(),
+    ) {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!("failed to load config for host handler, using defaults: {e}");
             FaeDeviceTransferHandler::new(
                 crate::config::SpeechConfig::default(),
                 crate::config::SpeechConfig::default_config_path(),
+                tokio_rt.handle().clone(),
+                event_tx.clone(),
             )
         }
     };
-    let (client, server) = command_channel(32, event_capacity, handler);
+    let (client, server) = command_channel_with_events(32, event_tx, handler);
     let event_rx = client.subscribe_events();
 
     let runtime = Box::new(FaeRuntime {

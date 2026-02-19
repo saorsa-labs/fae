@@ -1,8 +1,11 @@
 # MiniMax External Review
-**Date**: 2026-02-18
-**Status**: MINIMAX_UNAVAILABLE
+**Date**: 2026-02-19
+**Status**: MINIMAX_UNAVAILABLE — manual fallback
 
-The MiniMax CLI binary ($HOME/.local/bin/minimax) is not present on this machine.
-Additionally, the CLAUDECODE environment variable prevents nested Claude sessions from launching as external reviewers.
+## Findings
 
-## Grade: N/A (excluded from consensus vote count)
+- [LOW] FaeDeviceTransferHandler has 11 struct fields with 8 separate Mutex<Option<...>> guards. A PipelineInner struct wrapped in a single Mutex would: (1) reduce lock operations, (2) enable atomic multi-field updates preventing partial-transition bugs, (3) simplify the struct. Refactoring suggestion, not a correctness bug.
+- [OK] All 26 RuntimeEvent variants covered in map_runtime_event() — exhaustive match.
+- [OK] CancellationToken parent/child relationship correct: bridge uses child_token(), main cancel propagates to child.
+
+## Grade: A-

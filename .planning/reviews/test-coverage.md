@@ -1,22 +1,22 @@
 # Test Coverage Review
-**Date**: 2026-02-18
-**Mode**: gsd (phase 1.2)
+**Date**: 2026-02-19
+**Mode**: gsd-task
 
 ## Statistics
-- Total tests run: 2192 passed, 4 skipped, 1 leaky (pre-existing)
-- All tests pass: YES
-- Test time: 41.4s
-- New test files in phase 1.2: tests/host_command_channel_v0.rs, tests/host_contract_v0.rs, tests/ffi_abi.rs (existing)
-- Test functions in host tests: 88 (grep across tests/ and src/host/)
-- tests/host_contract_v0.rs: 10 #[test] functions
+- Total tests: 2099 run, 2099 passed, 4 skipped, 0 failed
+- Unit tests in handler.rs: 24
+- Integration test files: 24 (tests/*.rs)
 
 ## Findings
 
-- [OK] All 2192 tests pass. Zero failures.
-- [OK] tests/host_command_channel_v0.rs — New test file covering the channel layer.
-- [OK] tests/host_contract_v0.rs — New test file with 10 contract-level tests.
-- [MEDIUM] The FFI layer (src/ffi.rs) itself does not have unit tests for the C ABI functions (fae_core_init, fae_core_start, etc.). Testing FFI from Rust is non-trivial (unsafe call sites), but integration coverage via tests/ffi_abi.rs exists.
-- [LOW] EmbeddedCoreSender.swift — No Swift unit tests for the FFI wrapper. Acceptable for a native app integration layer at this phase.
-- [OK] Phase 1.2 task 5 was build verification, not new test authoring. Test gate (swift build clean) passed.
+- [OK] All 24 handler.rs tests cover: permissions, onboarding, lifecycle, events, channel setup/teardown
+- [OK] 5 lifecycle tests: start→running, start-when-running error, stop→stopped, stop-when-stopped error, full start/stop/start cycle
+- [OK] Event emission tests verify both "runtime.starting" and "runtime.started" events
+- [OK] Channel setup/teardown tests verify all 3 channels (text_injection, gate_cmd, cancel_token)
+- [OK] tests/capability_bridge_e2e.rs and tests/onboarding_lifecycle.rs updated with new constructor signature
+- [LOW] No test for request_conversation_inject_text() when pipeline not running (silent no-op behavior)
+- [LOW] No test for request_conversation_gate_set() when pipeline not running
+- [LOW] No test for map_runtime_event() covering all 26 variants
+- [LOW] No concurrent access test for TOCTOU scenario in request_runtime_start()
 
-## Grade: B+
+## Grade: A
