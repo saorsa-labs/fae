@@ -4950,6 +4950,10 @@ fn app() -> Element {
                                                                 sf.set_at = Some(std::time::Instant::now());
                                                             }
                                                             fae::pipeline::messages::ControlEvent::UserSpeechStart { .. } => {}
+                                                            // New variants added in phase 5.2: no GUI action needed in the
+                                                            // Dioxus UI; the native app handles these via the host event channel.
+                                                            fae::pipeline::messages::ControlEvent::AudioDeviceChanged { .. } => {}
+                                                            fae::pipeline::messages::ControlEvent::DegradedMode { .. } => {}
                                                         },
                                                         fae::RuntimeEvent::AssistantGenerating { active } => {
                                                             assistant_generating.set(*active);

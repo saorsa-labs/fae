@@ -1,26 +1,32 @@
 # Kimi K2 External Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
 
-## Analysis
+## Grade: B-
 
-### Overall Assessment
+## Summary
 
-Phase 4.2 correctly implements the permission cards as specified. The code is clean and well-structured.
+The implementation is mostly correct but the non-exhaustive match in `gui.rs` is a blocking
+compiler error that must be resolved. The restart watcher mechanism is sound but has subtle
+issues with how it interacts with the cancellation token hierarchy.
 
-### Issues Found
+## Key Findings
 
-**Critical: None**
+### Critical
+- `src/bin/gui.rs:4943`: Non-exhaustive `ControlEvent` match. `AudioDeviceChanged` and
+  `DegradedMode` variants missing. BLOCKS BUILD.
 
-**Important:**
-1. Missing `prefers-reduced-motion` support for new card animations. Lines 470-510 in onboarding.html define `cardGrantedPulse`, `cardDeniedShake`, and `iconFadeIn` but the `@media (prefers-reduced-motion: reduce)` block (line 708) does not suppress them. Users with motion sensitivity get full animations without ability to opt out.
+### Important
+- The restart watcher monitors a child cancellation token, not the pipeline JoinHandle.
+  This means it fires whenever the parent token is cancelled (including clean stops) and
+  relies on `clean_exit_flag` to distinguish. This is fragile — if the flag is set after
+  a delay, the watcher could race.
 
-2. `requestMail()` UX: After the user taps "Allow" on the Mail card, `System Settings` opens but the button remains labeled "Allow" with no state change. This creates confusion — did the tap register? Should show a visual state like "Open in Settings" text on the button, or transition to a "Setup..." state.
+- `run_sysctl_u64` spawns a subprocess. Under macOS App Sandbox the `com.apple.security.temporary-exception.sbpl`
+  entitlement is needed for subprocess execution. Fae likely has this but it's worth verifying.
 
-**Minor:**
-3. `EKEventStore` local variable lifetime: The EventKit completion block implicitly retains `store`, keeping it alive until the callback fires. This is the documented pattern and is correct, but a comment would help future readers.
+### Minor
+- `mp_bridge_jh` drop without tracking is a minor leak risk
+- Missing acceptance-criterion tests for restart event verification
 
-4. Window default height (640px) may be tight for 4 cards + privacy banner. Content is scrollable via `overflow-y: auto`, but increasing default height to 680px would improve first impression.
+## Verdict
 
-## Grade: B+
+Fix the build error first. Address test gaps before merging.

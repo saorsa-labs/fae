@@ -1,57 +1,35 @@
-# Task Spec Compliance Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
+# Task Assessor Review — Phase 5.2 Task 1
 
-## ROADMAP Task Compliance
+## Task: Pipeline Crash Recovery — Auto-Restart with Backoff
 
-### Task 1: Calendar/Reminders permission card
-**Status: COMPLETE**
-- cardCalendar, statusCalendar, iconCalendar IDs present in HTML
-- data-permission="calendar" on buttons
-- window.setPermissionState("calendar", state) handled via updatePermissionCard()
+## Acceptance Criteria Assessment
 
-### Task 2: Mail/Notes permission card
-**Status: COMPLETE**
-- cardMail, statusMail, iconMail IDs present in HTML
-- data-permission="mail" on buttons
-- window.setPermissionState("mail", state) handled via updatePermissionCard()
+| # | Criterion | Status | Notes |
+|---|-----------|--------|-------|
+| 1 | Add `restart_policy` to handler: max 5 attempts, delays [1,2,4,8,16]s | PASS | `MAX_RESTART_ATTEMPTS=5`, `RESTART_BACKOFF_SECS=[1,2,4,8,16]` |
+| 2 | Monitor pipeline JoinHandle in watcher task; detect unexpected exit | PARTIAL | Watcher waits for cancellation token, not JoinHandle. Relies on `clean_exit_flag`. Different mechanism than spec. |
+| 3 | On unexpected exit: update `PipelineState::Error`, wait backoff, restart | PARTIAL | Updates state to Error but does NOT wait backoff or restart — only emits event and signals Swift side to call `request_runtime_start` again. No actual auto-restart. |
+| 4 | On clean stop (cancel token): do NOT restart | PASS | `clean_exit_flag` check prevents restart on clean stop |
+| 5 | Emit `pipeline.control` event with `"action": "auto_restart"` + attempt count | PASS | Emitted correctly |
+| 6 | Reset backoff counter on successful run > 30s | PASS | `RESTART_UPTIME_RESET_SECS = 30` |
+| 7 | Add `restart_count: u32` and `last_restart_at: Option<Instant>` to handler state | PASS | Both fields present as `Arc<Mutex<...>>` |
+| 8 | Tests: verify restart emits event, verify clean stop does not restart | FAIL | These tests are NOT present |
 
-### Task 3: Privacy assurance banner
-**Status: COMPLETE**
-- privacyAssurance div with 🔒 icon, privacy-text, and help "?" button (data-permission="privacy")
-- Glassmorphic warm-gold styling with dark/light mode adaptation
+## Additional Tasks Partially Implemented in This Commit
 
-### Task 4: Animated state transitions
-**Status: COMPLETE**
-- cardGrantedPulse (scale pop), cardDeniedShake (shake), iconFadeIn (icon swap) keyframes
-- animate-granted, animate-denied, icon-swap CSS classes
-- All 4 cards participate via PERMISSION_CARDS map
-- Animation restart via void offsetWidth reflow trigger
+The commit includes work beyond task 1:
+- **Task 2 (Model Integrity)**: `src/model_integrity.rs` — COMPLETE
+- **Task 3 (Audio Device Hot-Swap)**: `src/audio/device_watcher.rs` — COMPLETE
+- **Task 4 (Network Resilience)**: `src/llm/fallback.rs`, `network_timeout_ms` in config — COMPLETE
 
-### Task 5: TTS help for calendar and mail
-**Status: COMPLETE**
-- OnboardingTTSHelper.swift: calendarHelpText and mailHelpText added
-- speak(permission: "calendar") and speak(permission: "mail") covered
-- Doc comment updated
+## Critical Gap
 
-### Task 6: OnboardingController permission tracking
-**Status: COMPLETE**
-- permissionStates dict has all 4 keys ("microphone", "contacts", "calendar", "mail")
-- requestCalendar() via EventKit with macOS 14+ API + legacy fallback
-- requestMail() opens System Settings + sets pending state
+Criterion 3 says "wait backoff, restart". The implementation only EMITS an event requesting
+Swift to restart. The actual restart logic is delegated to the Swift caller. This may be
+by design (since the handler is also the restart entry point), but it means the spec
+criterion "restart" is not fully self-contained in the Rust layer.
 
-### Task 7: Wire new permissions through OnboardingWindowController
-**Status: COMPLETE**
-- onRequestPermission switch handles "calendar" → requestCalendar() and "mail" → requestMail()
+## Verdict: PARTIAL PASS
 
-### Task 8: Build validation and progress log
-**Status: COMPLETE**
-- Swift build: zero source errors, zero warnings
-- HTML validates
-- progress.md updated with Phase 4.2 completion entry
-- STATE.json updated
-
-## Overall: ALL 8 TASKS COMPLETE
-
-## Grade: A (full spec compliance)
+Core mechanism is in place. Missing required unit tests for restart behavior. The "auto-restart"
+is actually "notify caller to restart" rather than self-healing.

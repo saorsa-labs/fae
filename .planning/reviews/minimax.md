@@ -1,23 +1,36 @@
 # MiniMax External Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
 
-## Analysis
+## Grade: B
 
-Phase 4.2 delivers a complete permission card system for 4 permission types with TTS help, glassmorphic styling, and animated state transitions. Implementation is solid.
+## Summary
 
-### Critical Issues: None
+Good architectural additions for production resilience. The code follows existing patterns
+in the codebase. The build failure and missing tests are the main gaps.
 
-### Important Issues
+## Findings
 
-1. **Accessibility — reduced-motion animations**: The three new CSS animation classes (`animate-granted`, `animate-denied`, `icon-swap`) need to be suppressed in the `@media (prefers-reduced-motion: reduce)` block. The existing block correctly handles `.screen`, `.orb-wrapper`, and orb animations but misses the permission card animations. This is a WCAG compliance gap.
+### MUST FIX
+1. **`src/bin/gui.rs`**: Non-exhaustive ControlEvent match. Two new variants uncovered.
+   This is a compile-time regression introduced by this task.
 
-2. **Mail permission UX flow**: `requestMail()` correctly opens System Settings (the only viable approach for Automation permissions on macOS). However, the state returned to the web layer is "pending", which maps to the same visual as the initial state (button shows "Allow"). The user has no feedback that System Settings was opened. A better UX: update button text to "Open Settings" before opening the URL, then revert after a timeout, or add a state like "redirected" that shows "Configure in Settings" text.
+2. **Missing required tests**: The plan explicitly requires tests for:
+   - restart emits `auto_restart` event
+   - clean stop does NOT trigger restart
+   These are missing.
 
-### Minor Issues
+### SHOULD FIX
+1. `run_sysctl_u64` uses subprocess. Should use `libc::sysctlbyname` for App Sandbox safety.
 
-3. Window height 640px with 4 cards is borderline — scrolling works but a 680px default would be better default UX.
-4. ESLint comments inconsistent on void offsetWidth pattern.
+2. The memory pressure bridge task (`mp_bridge_jh`) is detached with `drop()` without
+   being tracked. If the parent lock fails, it leaks.
 
-## Grade: B+
+### STYLE
+1. The inline async blocks in `request_runtime_start` (watcher, bridge) should be
+   extracted to helper functions for readability.
+
+2. Consider using `let else` syntax where possible for cleaner guard patterns.
+
+## Positive
+- `FallbackChain` is cleanly designed with clear separation of transient vs permanent errors
+- `ModelIntegrityChecker` handles all cases including case-insensitive comparison
+- All new public APIs are documented with examples

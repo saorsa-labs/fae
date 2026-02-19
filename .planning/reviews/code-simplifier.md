@@ -1,15 +1,42 @@
 # Code Simplifier Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
+
+## Grade: B-
 
 ## Findings
 
-- [OK] PERMISSION_CARDS map is already a good simplification — no further refactoring needed
-- [MINOR] `requestCalendar()` duplicates the Task { @MainActor } + guard let self + state/notify pattern across both `#available` branches. Could extract a private helper `applyCalendarResult(granted: Bool)` but the duplication is minimal (3 lines x2) and clarity outweighs the abstraction.
-- [OK] `updatePermissionCard()` has a clear grant/deny/else structure — not over-complex
-- [OK] CSS animation keyframes are appropriately concise
-- [MINOR] The `permissionState` JS dictionary and `PERMISSION_CARDS` JS map both maintain permission key lists independently. A refactoring could derive `permissionState` from `PERMISSION_CARDS`, but the current approach is straightforward and readable.
-- [OK] Privacy banner HTML is minimal and flat — no unnecessary wrapper elements
+### SHOULD FIX: Restart counter read duplicated
 
-## Grade: A (minor simplification opportunities exist but changes would not meaningfully improve readability)
+**File**: `src/host/handler.rs`
+
+The restart watcher reads `restart_count_watcher.lock().map(|g| *g).unwrap_or(MAX_RESTART_ATTEMPTS)`
+twice (once to check the limit, once to compute `new_attempt`). This could be a single read.
+
+### SHOULD FIX: Memory pressure bridge loop could use a function
+
+The `mp_bridge_jh` async block (40+ lines) is spawned inline. This should be extracted
+to a module-level function or method for readability:
+
+```rust
+async fn run_memory_pressure_bridge(
+    mut rx: broadcast::Receiver<MemoryPressureEvent>,
+    event_tx: broadcast::Sender<EventEnvelope>,
+    cancel: CancellationToken,
+)
+```
+
+### SHOULD FIX: `serde_json::json!` for level string could use `PressureLevel`'s Display
+
+Instead of a match to get `"normal"/"warning"/"critical"` strings, add a `Display` impl
+on `PressureLevel` and use `format!("{}", ev.level)`.
+
+### OK: `FallbackChain` internal helper extracted correctly
+
+The per-provider state lookup in `next_provider` is clean.
+
+### OK: `current_default_device_name` is a free function
+
+Good separation — the polling loop delegates device name retrieval to a testable free function.
+
+### INFO: `restart_count_watcher.lock().map(|g| *g).unwrap_or(...)` pattern
+
+This appears 3 times. A helper closure or function would reduce repetition.

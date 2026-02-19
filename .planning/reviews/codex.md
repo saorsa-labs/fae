@@ -1,36 +1,33 @@
 # Codex External Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
 
-## Analysis
+## Grade: B
 
-Reviewing Phase 4.2 changes: 4 Swift files + 1 HTML file.
+## Summary
 
-### Swift Review
+The phase 5.2 task 1 implementation adds substantial production-grade resilience infrastructure.
+The new modules (`device_watcher`, `memory_pressure`, `model_integrity`, `fallback`) are well
+structured with good documentation and test coverage.
 
-**OnboardingController.swift:**
-- `requestCalendar()` implementation is idiomatic and correct for both macOS 14+ and earlier.
-- `requestMail()` approach (open System Settings, set pending) is the right solution for permissions that can't be requested programmatically. However the UX flow leaves the button in "Allow" state post-tap which may cause repeat taps.
-- Dead code: `micGranted`/`contactsGranted` private vars written but never read. Pre-existing but worth flagging.
+## Critical Issue
 
-**OnboardingTTSHelper.swift:**
-- Clean switch-case extension. Well-worded help texts with consistent tone.
+The `ControlEvent` enum gained two new variants but the match arm in `src/bin/gui.rs` was not
+updated. This is a clear oversight that prevents the codebase from compiling. This MUST be fixed
+before any other work.
 
-**OnboardingWindowController.swift:**
-- Clean extension of the switch statement. No issues.
+## Positive
 
-### HTML/JS Review
+- Constants for restart policy are clearly named and documented
+- The `FallbackChain` design is clean and well-tested
+- `ModelIntegrityChecker` correctly handles the four cases (Ok, Missing, Corrupt, NoChecksum)
+- `MemoryPressureMonitor` only emits on state transitions, not repeatedly — correct design
+- All new code avoids `.unwrap()` in production paths
 
-- PERMISSION_CARDS map is a well-designed data-driven approach. Correctly handles all 4 permissions uniformly.
-- Animation restart via `void el.offsetWidth` is the correct browser pattern for CSS animation restart.
-- Missing `prefers-reduced-motion` coverage for the three new animation classes is an accessibility defect.
-- The `permission-status` class assignment uses `"permission-status granted"` (full string replace) which is correct.
+## Concerns
 
-### Key Issues
+1. The "crash recovery watcher" doesn't actually restart the pipeline — it notifies the caller.
+   The spec says "wait backoff, restart" but the implementation says "emit event, let Swift handle it".
+   This may be by design but should be clarified.
 
-1. **IMPORTANT** [accessibility]: `animate-granted`, `animate-denied`, `icon-swap` CSS animation classes not covered in `@media (prefers-reduced-motion: reduce)`.
-2. **SHOULD FIX** [UX]: `requestMail()` sets state to "pending" but button still shows "Allow". User gets no visual feedback that action was taken.
-3. **MINOR**: Inconsistent `eslint-disable-line` comments on `void offsetWidth` calls.
+2. `sysctl` subprocess in `memory_pressure.rs` is a reliability risk under App Sandbox.
 
-## Grade: B+
+3. Required tests for restart event emission are missing.

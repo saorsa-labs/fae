@@ -1,19 +1,39 @@
 # Documentation Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
+
+## Grade: A-
 
 ## Findings
 
-- [OK] `requestCalendar()` has full doc comment explaining API version difference and behavior
-- [OK] `requestMail()` has doc comment explaining why programmatic permission isn't possible and what the method does instead
-- [OK] `speak(permission:)` doc comment updated to include "calendar" and "mail" in the parameter list
-- [OK] `permissionStates` property doc comment updated with all 4 keys
-- [OK] HTML has block comments for each new section (Calendar card, Mail card, Privacy Assurance Banner)
-- [OK] CSS has section header comments (Permission Card State Animations, Privacy Assurance Banner)
-- [OK] JS PERMISSION_CARDS map has an inline comment explaining the structure
-- [OK] ESLint suppression comment on void pattern (first instance)
-- [MINOR] The two subsequent `void iconEl.offsetWidth` calls inside the if-blocks are missing the eslint-disable comment (minor inconsistency, low priority)
-- [OK] No public APIs added without documentation
+### SHOULD FIX: `pipeline_mode` field has no doc comment
 
-## Grade: A
+**File**: `src/host/handler.rs`
+
+The new `pipeline_mode: Mutex<crate::pipeline::coordinator::PipelineMode>` field has
+no doc comment in the struct. All other new fields have comments.
+
+### OK: New modules have excellent module-level docs
+
+- `src/audio/device_watcher.rs`: Clear module doc with design notes, usage example
+- `src/memory_pressure.rs`: Clear module doc with threshold table and usage example
+- `src/model_integrity.rs`: Clear module doc with runnable example
+- `src/llm/fallback.rs`: Clear module doc with retry policy description and full example
+
+### OK: Public API has doc comments
+
+All public types and functions in the new modules have doc comments:
+- `AudioDeviceWatcher::new`, `AudioDeviceWatcher::run`
+- `MemoryPressureMonitor::new`, `MemoryPressureMonitor::run`
+- `MemoryPressureEvent`, `PressureLevel`
+- `IntegrityResult`, `verify`
+- `FallbackChain::new`, `next_provider`, `report_failure`, `report_success`
+- `RESTART_BACKOFF_SECS`, `MAX_RESTART_ATTEMPTS`, `RESTART_UPTIME_RESET_SECS` have inline docs
+
+### OK: New struct fields in handler.rs are documented
+
+All newly added `Arc<Mutex<...>>` fields have doc comments explaining why they are Arc-wrapped.
+
+### INFO: Event action names not formally documented
+
+The string literals for `pipeline.control` action values (`"auto_restart"`,
+`"audio_device_changed"`, `"memory_pressure"`, etc.) are used inline in `serde_json::json!`
+but not documented in a central enum or const. This is a pattern issue but not a blocker.

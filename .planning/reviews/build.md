@@ -1,39 +1,33 @@
-# Build Validation Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
+# Build Validator Review
 
-## Build Results
+## Status: FAIL
 
-### Swift Build
-```
-swift build --package-path native/macos/FaeNativeApp
-Building for debugging...
-[compiles all Swift files]
-[0 source errors, 0 source warnings]
-[linker error: libfae.a not found — expected in dev environment]
-```
-**Result: PASS (zero source errors, zero source warnings)**
+## Errors
 
-### Rust Checks
-```
-cargo clippy --all-features --all-targets -- -D warnings
-Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.79s
-```
-**Result: PASS (zero clippy warnings)**
+### CRITICAL: Non-exhaustive pattern match (E0004)
+
+**File**: `src/bin/gui.rs:4943`
 
 ```
-cargo nextest run --all-features
-2490 tests run: 2490 passed, 4 skipped
+error[E0004]: non-exhaustive patterns: `&ControlEvent::AudioDeviceChanged { .. }` and
+`&ControlEvent::DegradedMode { .. }` not covered
+  --> src/bin/gui.rs:4943:99
 ```
-**Result: PASS (all tests pass, no regressions)**
 
-## Findings
+Two new `ControlEvent` variants added in this task (`AudioDeviceChanged` and `DegradedMode`) are
+not handled in the `match ctrl` arm at `src/bin/gui.rs:4943`. The GUI binary fails to compile.
 
-- [OK] Swift compilation: zero source errors, zero source warnings
-- [OK] Rust compilation: zero errors, zero clippy warnings
-- [OK] Rust tests: 2490/2490 pass
-- [OK] HTML validates (Python HTMLParser: no errors)
-- [NOTE] Linker error for libfae.a is expected in dev environment (Rust static lib not built)
+**Fix**: Add match arms for the two new variants (or add a wildcard arm).
 
-## Grade: A (PASS)
+### WARNINGS (treated as errors under -D warnings)
+
+20x "variable does not need to be mutable" in `src/bin/gui.rs` (pre-existing, unrelated to this task)
+
+Multiple "value captured by X is never read" in `src/bin/gui.rs` (pre-existing, unrelated to this task)
+
+`src/diagnostics/mod.rs`: multiple `E0753` "expected outer doc comment" errors (pre-existing)
+
+## Verdict
+
+**BUILD FAILS**. The new `ControlEvent` variants are not covered in the GUI event handler.
+This is a direct regression introduced by this task.

@@ -1,19 +1,58 @@
 # Quality Patterns Review
-**Date**: 2026-02-19
-**Mode**: gsd-task
-**Phase**: 4.2 — Permission Cards with Help
+
+## Grade: B
 
 ## Findings
 
-- [OK] PERMISSION_CARDS data-driven map pattern — excellent separation of data from logic, easy to extend with new permission types
-- [OK] Consistent MARK: sectioning in Swift files
-- [OK] CSS custom properties (--warm-gold-rgb) used consistently for theming
-- [OK] CSS follows existing naming conventions (kebab-case classes)
-- [OK] `@available` check pattern consistent with iOS/macOS best practices
-- [OK] Weak captures and @MainActor hops consistent with existing code patterns
-- [IMPORTANT] `requestMail()` sends "pending" state as the result — semantically incorrect since "pending" means "not yet decided" but here it means "user was redirected to Settings". A dedicated state like "system_settings" or keeping "pending" but with distinct UI label would be clearer. Functionally the card still shows "Allow" after tap which is confusing UX.
-- [OK] All new HTML elements have consistent structure (permission-icon with id, permission-info, permission-actions)
-- [OK] Dark/light mode CSS for new banner follows existing pattern
-- [OK] `prefers-reduced-motion` CSS is used for orb animations — but NEW card animations (animate-granted, animate-denied, icon-swap) are NOT included in the reduced motion block. This is an IMPORTANT accessibility gap.
+### MUST FIX: `mp_bridge_jh` is silently dropped
 
-## Grade: B+ (two issues to fix: mail UX state + reduced-motion gap for card animations)
+**File**: `src/host/handler.rs`
+
+```rust
+if let Ok(mut guard) = self.memory_pressure_handle.lock() {
+    drop(mp_bridge_jh);  // ← task is detached without being tracked
+    *guard = Some(mp_monitor_jh);
+}
+```
+
+The bridge task is detached. If the lock fails (poisoned mutex), the bridge task is leaked
+and never cleaned up. Both the monitor and bridge handles should be tracked.
+
+### SHOULD FIX: Cancellation token child scoping
+
+The restart watcher uses `token.child_token()` but the parent token (`token`) is the same
+one used for pipeline cancellation. When `request_runtime_stop` cancels the parent token,
+the restart watcher fires. This is intentional but fragile: if the token hierarchy changes,
+the watcher may fire at wrong times. The watcher should observe the pipeline JoinHandle
+directly rather than the cancellation token.
+
+### OK: Proper cleanup in `request_runtime_stop`
+
+The stop method now aborts the restart watcher, device watcher, and memory pressure handles
+(based on the diff showing the new abort calls). Cleanup is consistent.
+
+### OK: `AudioDeviceWatcher` uses owned `CancellationToken`
+
+The watcher owns its token (moved in via `new()`). Cancellation is unambiguous.
+
+### OK: `FallbackChain` is pure value type (no async)
+
+No shared state, no synchronization needed. Clean design.
+
+### OK: `broadcast::channel` buffer size is appropriate
+
+Buffer of 4 for memory pressure events is fine given the 30s poll interval.
+
+### SHOULD FIX: `if let Ok(...)` chains on mutex locks in stop handler can silently skip
+
+Several places in stop code use:
+```rust
+if let Ok(mut guard) = self.restart_watcher_handle.lock()
+    && let Some(jh) = guard.take()
+{
+    jh.abort();
+}
+```
+
+If the mutex is poisoned, the abort is silently skipped and the task runs forever.
+Use `unwrap_or_else` or log on poison.
