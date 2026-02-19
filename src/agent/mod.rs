@@ -505,42 +505,52 @@ fn build_registry(
     }
 
     // Apple ecosystem tools — always registered in non-Off modes.
-    // Each tool's `allowed_in_mode` and the underlying store's permission check
-    // gate actual execution.  Read-only tools (search, get, list) are available
-    // in ReadOnly mode; mutation tools require Full mode.
+    // Each tool is wrapped with AvailabilityGatedTool so execution is blocked
+    // at runtime when the required permission has not been granted.
     if !matches!(config.tool_mode, AgentToolMode::Off) {
         use crate::fae_llm::tools::apple::{
-            AppendToNoteTool, ComposeMailTool, CreateContactTool, CreateEventTool, CreateNoteTool,
-            CreateReminderTool, DeleteEventTool, GetContactTool, GetMailTool, GetNoteTool,
-            ListCalendarsTool, ListEventsTool, ListNotesTool, ListReminderListsTool,
-            ListRemindersTool, SearchContactsTool, SearchMailTool, SetReminderCompletedTool,
-            UpdateEventTool, global_calendar_store, global_contact_store, global_mail_store,
-            global_note_store, global_reminder_store,
+            AppendToNoteTool, AvailabilityGatedTool, ComposeMailTool, CreateContactTool,
+            CreateEventTool, CreateNoteTool, CreateReminderTool, DeleteEventTool, GetContactTool,
+            GetMailTool, GetNoteTool, ListCalendarsTool, ListEventsTool, ListNotesTool,
+            ListReminderListsTool, ListRemindersTool, SearchContactsTool, SearchMailTool,
+            SetReminderCompletedTool, UpdateEventTool, global_calendar_store,
+            global_contact_store, global_mail_store, global_note_store, global_reminder_store,
         };
+        use crate::permissions::PermissionStore;
+
+        let perms: Arc<PermissionStore> = Arc::new(PermissionStore::default());
         let contacts = global_contact_store();
         let calendars = global_calendar_store();
         let reminders = global_reminder_store();
         let notes = global_note_store();
         let mail = global_mail_store();
-        registry.register(Arc::new(SearchContactsTool::new(Arc::clone(&contacts))));
-        registry.register(Arc::new(GetContactTool::new(Arc::clone(&contacts))));
-        registry.register(Arc::new(CreateContactTool::new(contacts)));
-        registry.register(Arc::new(ListCalendarsTool::new(Arc::clone(&calendars))));
-        registry.register(Arc::new(ListEventsTool::new(Arc::clone(&calendars))));
-        registry.register(Arc::new(CreateEventTool::new(Arc::clone(&calendars))));
-        registry.register(Arc::new(UpdateEventTool::new(Arc::clone(&calendars))));
-        registry.register(Arc::new(DeleteEventTool::new(calendars)));
-        registry.register(Arc::new(ListReminderListsTool::new(Arc::clone(&reminders))));
-        registry.register(Arc::new(ListRemindersTool::new(Arc::clone(&reminders))));
-        registry.register(Arc::new(CreateReminderTool::new(Arc::clone(&reminders))));
-        registry.register(Arc::new(SetReminderCompletedTool::new(reminders)));
-        registry.register(Arc::new(ListNotesTool::new(Arc::clone(&notes))));
-        registry.register(Arc::new(GetNoteTool::new(Arc::clone(&notes))));
-        registry.register(Arc::new(CreateNoteTool::new(Arc::clone(&notes))));
-        registry.register(Arc::new(AppendToNoteTool::new(notes)));
-        registry.register(Arc::new(SearchMailTool::new(Arc::clone(&mail))));
-        registry.register(Arc::new(GetMailTool::new(Arc::clone(&mail))));
-        registry.register(Arc::new(ComposeMailTool::new(mail)));
+
+        // Helper to wrap an AppleEcosystemTool with permission gating.
+        macro_rules! gated {
+            ($tool:expr) => {
+                Arc::new(AvailabilityGatedTool::new(Arc::new($tool), Arc::clone(&perms)))
+            };
+        }
+
+        registry.register(gated!(SearchContactsTool::new(Arc::clone(&contacts))));
+        registry.register(gated!(GetContactTool::new(Arc::clone(&contacts))));
+        registry.register(gated!(CreateContactTool::new(contacts)));
+        registry.register(gated!(ListCalendarsTool::new(Arc::clone(&calendars))));
+        registry.register(gated!(ListEventsTool::new(Arc::clone(&calendars))));
+        registry.register(gated!(CreateEventTool::new(Arc::clone(&calendars))));
+        registry.register(gated!(UpdateEventTool::new(Arc::clone(&calendars))));
+        registry.register(gated!(DeleteEventTool::new(calendars)));
+        registry.register(gated!(ListReminderListsTool::new(Arc::clone(&reminders))));
+        registry.register(gated!(ListRemindersTool::new(Arc::clone(&reminders))));
+        registry.register(gated!(CreateReminderTool::new(Arc::clone(&reminders))));
+        registry.register(gated!(SetReminderCompletedTool::new(reminders)));
+        registry.register(gated!(ListNotesTool::new(Arc::clone(&notes))));
+        registry.register(gated!(GetNoteTool::new(Arc::clone(&notes))));
+        registry.register(gated!(CreateNoteTool::new(Arc::clone(&notes))));
+        registry.register(gated!(AppendToNoteTool::new(notes)));
+        registry.register(gated!(SearchMailTool::new(Arc::clone(&mail))));
+        registry.register(gated!(GetMailTool::new(Arc::clone(&mail))));
+        registry.register(gated!(ComposeMailTool::new(mail)));
     }
 
     Arc::new(registry)

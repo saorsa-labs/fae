@@ -29,6 +29,7 @@
 //! [`MailStore`]: mail::MailStore
 //! [`PermissionStore`]: crate::permissions::PermissionStore
 
+pub mod availability_gate;
 pub mod calendar;
 pub mod contacts;
 pub mod ffi_bridge;
@@ -63,4 +64,5 @@ pub use reminders::{
     CreateReminderTool, ListReminderListsTool, ListRemindersTool, NewReminder, Reminder,
     ReminderList, ReminderQuery, ReminderStore, ReminderStoreError, SetReminderCompletedTool,
 };
+pub use availability_gate::AvailabilityGatedTool;
 pub use trait_def::AppleEcosystemTool;
