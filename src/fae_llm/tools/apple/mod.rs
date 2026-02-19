@@ -6,14 +6,15 @@
 //! - **Calendar** — list, create, update, and delete calendar events via `EventKit`
 //! - **Reminders** — list, create, and complete reminders via `EventKit`
 //! - **Notes** — list, read, create, and append to notes via AppleScript
+//! - **Mail** — search inbox, read messages, and compose email via AppleScript
 //!
 //! # Architecture
 //!
 //! All tools depend on store traits ([`ContactStore`], [`CalendarStore`],
-//! [`ReminderStore`], [`NoteStore`]) that abstract over the actual Apple-framework
-//! implementation.  The store implementations live in [`ffi_bridge`] (production,
-//! bridged through the Swift/C ABI) and in [`mock_stores`] (in-process mocks used
-//! for unit tests).
+//! [`ReminderStore`], [`NoteStore`], [`MailStore`]) that abstract over the actual
+//! Apple-framework implementation.  The store implementations live in [`ffi_bridge`]
+//! (production, bridged through the Swift/C ABI) and in [`mock_stores`] (in-process
+//! mocks used for unit tests).
 //!
 //! # Permission gating
 //!
@@ -25,11 +26,13 @@
 //! [`CalendarStore`]: calendar::CalendarStore
 //! [`ReminderStore`]: reminders::ReminderStore
 //! [`NoteStore`]: notes::NoteStore
+//! [`MailStore`]: mail::MailStore
 //! [`PermissionStore`]: crate::permissions::PermissionStore
 
 pub mod calendar;
 pub mod contacts;
 pub mod ffi_bridge;
+pub mod mail;
 pub mod mock_stores;
 pub mod notes;
 pub mod reminders;
@@ -45,7 +48,12 @@ pub use contacts::{
     NewContact, SearchContactsTool,
 };
 pub use ffi_bridge::{
-    global_calendar_store, global_contact_store, global_note_store, global_reminder_store,
+    global_calendar_store, global_contact_store, global_mail_store, global_note_store,
+    global_reminder_store,
+};
+pub use mail::{
+    ComposeMailTool, GetMailTool, Mail, MailQuery, MailStore, MailStoreError, NewMail,
+    SearchMailTool,
 };
 pub use notes::{
     AppendToNoteTool, CreateNoteTool, GetNoteTool, ListNotesTool, NewNote, Note, NoteQuery,
