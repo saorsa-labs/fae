@@ -216,14 +216,9 @@ jobs:
         run: |
           # Sign inside-out: nested bundles first, then binary, then top-level .app.
 
-          # 1. Sign the SPM resource bundle embedded in Resources/.
-          RESOURCE_BUNDLE="$(find "$APP_BUNDLE/Contents/Resources" -maxdepth 1 -name '*.bundle' -type d | head -n 1)"
-          if [ -n "$RESOURCE_BUNDLE" ]; then
-            codesign --force --options runtime \
-              --sign "$MACOS_SIGNING_IDENTITY" \
-              --timestamp \
-              "$RESOURCE_BUNDLE"
-          fi
+          # 1. SPM resource bundles contain static assets (HTML, CSS, images)
+          # and lack the Info.plist structure codesign requires. They are sealed
+          # by the top-level .app signature in step 4, so skip individual signing.
 
           # 2. Sign the main executable inside the bundle.
           codesign --force --options runtime \
