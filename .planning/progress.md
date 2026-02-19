@@ -113,10 +113,16 @@ Commit: ff1458d
 - Phase 1.3 Tasks 1-3, 7 already done (text injection, gate commands, channel-not-ready handling, error propagation)
 - Phase 1.4 COMPLETE (all 26 RuntimeEvent variants mapped to EventEnvelope in map_runtime_event())
 
-## Phase 1.3: Wire Text Injection & Gate Commands - IN PROGRESS
+## Phase 1.3: Wire Text Injection & Gate Commands - COMPLETE
 
-Remaining tasks (Tasks 1-3,7 already covered by Phase 1.2):
-- [ ] Task 4: Wire approval.respond to tool_approval channel
-- [ ] Task 5: Wire orb.palette.set/feeling.set to emit OrbStateChanged events
-- [ ] Task 6: Wire scheduler CRUD to actual scheduler module
-- [ ] Task 8: Integration tests for all wired commands
+Tasks 1-3,7 were covered by Phase 1.2. Remaining tasks implemented:
+- [x] Task 4: Wire approval.respond to tool_approval channel (pending_approvals registry, approval bridge task, approval.requested events)
+- [x] Task 5: Wire orb.palette.set/feeling.set/clear/urgency/flash to emit orb.state_changed events
+- [x] Task 6: Wire scheduler CRUD to persisted scheduler module (upsert/remove/mark_due_now with corruption recovery)
+- [x] Task 8: Integration tests in tests/phase_1_3_wired_commands.rs (13 tests, all pass)
+
+Results: all tests pass, zero clippy warnings, zero compilation warnings
+
+Commit: 46d050c
+
+### Phase 1.3 Complete — 2026-02-19
