@@ -4,7 +4,7 @@ import Network
 // MARK: - Conversation Snapshot
 
 /// A single conversation turn for handoff serialisation.
-struct SnapshotEntry: Codable {
+struct SnapshotEntry: Codable, Sendable {
     let role: String
     let content: String
 }
@@ -14,7 +14,14 @@ struct SnapshotEntry: Codable {
 /// Only "user" and "assistant" roles are included — system prompts, tool results,
 /// and memory recall hits are excluded to keep the payload small and to avoid
 /// leaking internal data over the Handoff channel.
-struct ConversationSnapshot: Codable {
+///
+/// The `snapshotProvider` closure on `DeviceHandoffController` is contractually
+/// responsible for filtering entries before returning a snapshot.
+struct ConversationSnapshot: Codable, Sendable {
+    /// Maximum number of entries encoded into a handoff payload. Older entries
+    /// are dropped to stay within NSUserActivity userInfo size limits.
+    static let maxEntries = 20
+
     let entries: [SnapshotEntry]
     let orbMode: String
     let orbFeeling: String
@@ -128,6 +135,10 @@ final class DeviceHandoffController: ObservableObject {
     ///
     /// The closure is responsible for filtering entries to only "user" and
     /// "assistant" roles before returning the snapshot.
+    /// Optional reference to the orb controller for triggering flash effects
+    /// during handoff transfers. Set by the app layer.
+    weak var orbState: OrbStateController?
+
     var snapshotProvider: (() -> ConversationSnapshot)?
 
     private var activeActivity: NSUserActivity?
@@ -203,6 +214,9 @@ final class DeviceHandoffController: ObservableObject {
         currentTarget = target
         handoffStateText = target.handoffLabel
         lastCommandText = sourceCommand ?? "Move to \(target.label)"
+
+        // Flash the orb to indicate transfer starting.
+        orbState?.flash(mode: .thinking, palette: .dawnLight, duration: 1.5)
 
         if isNetworkAvailable {
             publishHandoffActivity(target: target, sourceCommand: sourceCommand)

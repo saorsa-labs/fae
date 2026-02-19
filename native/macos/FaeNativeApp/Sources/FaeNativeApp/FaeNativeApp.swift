@@ -6,6 +6,41 @@ final class OrbStateController: ObservableObject {
     @Published var mode: OrbMode = .idle
     @Published var palette: OrbPalette = .modeDefault
     @Published var feeling: OrbFeeling = .neutral
+
+    /// Tracks an active flash so we can cancel it if another flash starts.
+    private var flashTask: Task<Void, Never>?
+
+    /// Temporarily switch the orb to `flashMode` / `flashPalette` for `duration`
+    /// seconds, then restore the previous state.
+    ///
+    /// If `accessibilityReduceMotion` is enabled, the flash is skipped and only
+    /// a subtle palette change is applied (no mode change).
+    func flash(mode flashMode: OrbMode, palette flashPalette: OrbPalette, duration: TimeInterval = 1.5) {
+        // Cancel any existing flash.
+        flashTask?.cancel()
+
+        let previousMode = mode
+        let previousPalette = palette
+
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            // Reduced motion — only change palette briefly, skip mode change.
+            palette = flashPalette
+            flashTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                self?.palette = previousPalette
+            }
+        } else {
+            mode = flashMode
+            palette = flashPalette
+            flashTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                self?.mode = previousMode
+                self?.palette = previousPalette
+            }
+        }
+    }
 }
 
 @main
@@ -237,6 +272,9 @@ struct FaeNativeApp: App {
         if let feeling = OrbFeeling.allCases.first(where: { $0.rawValue == snapshot.orbFeeling }) {
             orbState.feeling = feeling
         }
+
+        // Pulse the orb to signal "conversation arrived".
+        orbState.flash(mode: .listening, palette: .rowanBerry, duration: 2.0)
 
         NSLog("FaeNativeApp: restored handoff from %@ (%d entries)",
               device, snapshot.entries.count)
