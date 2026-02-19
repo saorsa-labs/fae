@@ -2,7 +2,7 @@
 //!
 //! Provides two backends:
 //! - **Local** (default): GGUF models via `mistralrs`, with Metal GPU on Apple Silicon.
-//! - **API** (remote): Any OpenAI-compatible server (Ollama, MLX, vLLM, etc.).
+//! - **API** (remote): Any OpenAI-compatible server (MLX, vLLM, llama.cpp, etc.).
 
 pub mod api;
 

@@ -14,7 +14,7 @@ use crate::fae_llm::agent::{
 };
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
-use crate::fae_llm::provider::ProviderAdapter;
+use crate::fae_llm::provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
 use crate::fae_llm::providers::anthropic::{AnthropicAdapter, AnthropicConfig};
 use crate::fae_llm::providers::fallback::FallbackProvider;
 use crate::fae_llm::providers::local::{LocalMistralrsAdapter, LocalMistralrsConfig};
@@ -23,6 +23,7 @@ use crate::fae_llm::providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConf
 use crate::fae_llm::tools::{
     BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool,
 };
+use crate::fae_llm::types::RequestOptions;
 use crate::llm::LocalLlm;
 use crate::permissions::SharedPermissionStore;
 use crate::pipeline::messages::SentenceChunk;
@@ -300,6 +301,46 @@ fn has_remote_provider_configured(config: &LlmConfig) -> bool {
     config.has_remote_provider_configured()
 }
 
+fn has_explicit_remote_target(config: &LlmConfig) -> bool {
+    !config.api_url.trim().is_empty()
+        || config
+            .cloud_provider
+            .as_ref()
+            .is_some_and(|provider| !provider.trim().is_empty())
+        || config
+            .external_profile
+            .as_ref()
+            .is_some_and(|profile| !profile.trim().is_empty())
+}
+
+struct MissingProviderConfigAdapter {
+    reason: String,
+}
+
+impl MissingProviderConfigAdapter {
+    fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ProviderAdapter for MissingProviderConfigAdapter {
+    fn name(&self) -> &str {
+        "missing_provider_config"
+    }
+
+    async fn send(
+        &self,
+        _messages: &[Message],
+        _options: &RequestOptions,
+        _tools: &[ToolDefinition],
+    ) -> std::result::Result<LlmEventStream, FaeLlmError> {
+        Err(FaeLlmError::ConfigValidationError(self.reason.clone()))
+    }
+}
+
 async fn build_provider(
     config: &LlmConfig,
     preloaded_llm: Option<&LocalLlm>,
@@ -329,12 +370,13 @@ async fn build_provider(
                     .with_max_tokens(config.max_tokens);
             return Arc::new(LocalMistralrsAdapter::new(provider_cfg));
         }
-        tracing::warn!(
-            "no remote provider configured and no local model available — agent will not function"
-        );
+        let reason = "local backend selected but no preloaded local model is available. \
+Set `llm.backend = \"local\"` with a valid GGUF, or configure a remote provider explicitly.";
+        tracing::warn!("{reason}");
+        return Arc::new(MissingProviderConfigAdapter::new(reason));
     }
 
-    // Build the remote provider (only reached when a remote API is configured)
+    // Build the remote provider.
     let remote = build_remote_provider(config, manager).await;
 
     // Wrap with local fallback when enabled and a local model is available
@@ -366,14 +408,24 @@ async fn build_remote_provider(
     config: &LlmConfig,
     manager: &dyn crate::credentials::CredentialManager,
 ) -> Arc<dyn ProviderAdapter> {
-    if config.api_url.trim().is_empty() {
-        tracing::warn!("no API URL configured - agent will not function without an LLM provider");
+    if !has_explicit_remote_target(config) {
+        let reason = "remote backend selected but no endpoint is configured. \
+Set `llm.api_url`, `llm.cloud_provider`, or `llm.external_profile`.";
+        tracing::warn!("{reason}");
+        return Arc::new(MissingProviderConfigAdapter::new(reason));
     }
 
     let model_id = config
         .cloud_model
         .clone()
         .unwrap_or_else(|| config.api_model.clone());
+    if model_id.trim().is_empty() {
+        let reason = "remote backend selected but no model is configured. \
+Set `llm.api_model` or `llm.cloud_model`.";
+        tracing::warn!("{reason}");
+        return Arc::new(MissingProviderConfigAdapter::new(reason));
+    }
+
     let provider_hint = config
         .cloud_provider
         .clone()
@@ -768,5 +820,91 @@ impl Tool for ApprovalTool {
 
     fn allowed_in_mode(&self, mode: ToolMode) -> bool {
         self.inner.allowed_in_mode(mode)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::config::LlmBackend;
+    use crate::credentials::{CredentialError, CredentialManager, CredentialRef};
+
+    struct NoopCredentialManager;
+
+    impl CredentialManager for NoopCredentialManager {
+        fn store(
+            &self,
+            _account: &str,
+            _value: &str,
+        ) -> std::result::Result<CredentialRef, CredentialError> {
+            Ok(CredentialRef::None)
+        }
+
+        fn retrieve(
+            &self,
+            cred_ref: &CredentialRef,
+        ) -> std::result::Result<Option<String>, CredentialError> {
+            match cred_ref {
+                CredentialRef::Plaintext(value) => Ok(Some(value.clone())),
+                _ => Ok(None),
+            }
+        }
+
+        fn delete(&self, _cred_ref: &CredentialRef) -> std::result::Result<(), CredentialError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn local_backend_without_local_model_returns_config_error_provider() {
+        let config = LlmConfig::default();
+        let manager = NoopCredentialManager;
+
+        let provider = build_provider(&config, None, &manager).await;
+        assert_eq!(provider.name(), "missing_provider_config");
+
+        let result = provider
+            .send(&[Message::user("hello")], &RequestOptions::new(), &[])
+            .await;
+        assert!(matches!(result, Err(FaeLlmError::ConfigValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn api_backend_requires_explicit_remote_endpoint() {
+        let mut config = LlmConfig::default();
+        config.backend = LlmBackend::Api;
+        let manager = NoopCredentialManager;
+
+        let provider = build_provider(&config, None, &manager).await;
+        let result = provider
+            .send(&[Message::user("hello")], &RequestOptions::new(), &[])
+            .await;
+        match result {
+            Err(FaeLlmError::ConfigValidationError(message)) => {
+                assert!(message.contains("no endpoint is configured"));
+            }
+            _ => panic!("expected config validation error for missing endpoint"),
+        }
+    }
+
+    #[tokio::test]
+    async fn api_backend_requires_model_id() {
+        let mut config = LlmConfig::default();
+        config.backend = LlmBackend::Api;
+        config.api_url = "http://127.0.0.1:8080/v1".to_owned();
+        let manager = NoopCredentialManager;
+
+        let provider = build_provider(&config, None, &manager).await;
+        let result = provider
+            .send(&[Message::user("hello")], &RequestOptions::new(), &[])
+            .await;
+        match result {
+            Err(FaeLlmError::ConfigValidationError(message)) => {
+                assert!(message.contains("no model is configured"));
+            }
+            _ => panic!("expected config validation error for missing model"),
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! Local endpoint probe service.
 //!
 //! Provides [`LocalProbeService`] for health-checking and model discovery
-//! against local LLM endpoints (Ollama, llama.cpp, vLLM, etc.).
+//! against local OpenAI-compatible LLM endpoints.
 //!
 //! This is a **read-only diagnostic service** — it never starts, stops,
 //! or manages model processes. A future `RuntimeManager` may extend this.
@@ -191,7 +191,7 @@ fn default_retry_delay_ms() -> u64 {
 impl Default for ProbeConfig {
     fn default() -> Self {
         Self {
-            endpoint_url: "http://localhost:11434".to_string(),
+            endpoint_url: String::new(),
             timeout_secs: default_timeout_secs(),
             retry_count: default_retry_count(),
             retry_delay_ms: default_retry_delay_ms(),
@@ -266,7 +266,10 @@ impl LocalProbeService {
         Self { config, client }
     }
 
-    /// Create a probe service with default configuration (Ollama at localhost:11434).
+    /// Create a probe service with default configuration.
+    ///
+    /// Note: `ProbeConfig::default()` leaves `endpoint_url` empty. Callers
+    /// should set an explicit endpoint before probing.
     pub fn with_defaults() -> Self {
         Self::new(ProbeConfig::default())
     }
@@ -281,6 +284,9 @@ impl LocalProbeService {
     /// Sends a GET request to the root URL. Maps transport errors to
     /// `ProbeStatus::NotRunning` or `ProbeStatus::Timeout`.
     pub async fn check_health(&self) -> ProbeResult {
+        if self.config.endpoint_url.trim().is_empty() {
+            return Err(ProbeError::InvalidUrl("endpoint_url is empty".to_string()));
+        }
         let url = format!("{}/", self.config.endpoint_url.trim_end_matches('/'));
 
         let start = std::time::Instant::now();
@@ -314,8 +320,11 @@ impl LocalProbeService {
 
     /// Discover models by querying the `/v1/models` endpoint.
     ///
-    /// Falls back to `/api/tags` (Ollama format) if `/v1/models` fails.
+    /// Falls back to `/api/tags` (legacy local server format) if `/v1/models` fails.
     pub async fn discover_models(&self) -> ProbeResult {
+        if self.config.endpoint_url.trim().is_empty() {
+            return Err(ProbeError::InvalidUrl("endpoint_url is empty".to_string()));
+        }
         let base = self.config.endpoint_url.trim_end_matches('/');
 
         // Try OpenAI-compatible /v1/models first
@@ -334,23 +343,23 @@ impl LocalProbeService {
                         });
                     }
                     None => {
-                        // Fall through to try Ollama format
+                        // Fall through to try legacy tags format
                     }
                 }
             }
             Ok(_) | Err(_) => {
-                // Fall through to try Ollama format
+                // Fall through to try legacy tags format
             }
         }
 
-        // Try Ollama /api/tags
+        // Try legacy /api/tags
         let start = std::time::Instant::now();
         let tags_url = format!("{base}/api/tags");
         match self.client.get(&tags_url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 let latency_ms = start.elapsed().as_millis() as u64;
                 let body = resp.text().await.unwrap_or_default();
-                match parse_ollama_tags_response(&body) {
+                match parse_legacy_tags_models_response(&body) {
                     Some(models) => Ok(ProbeStatus::Available {
                         models,
                         endpoint_url: self.config.endpoint_url.clone(),
@@ -452,10 +461,10 @@ fn parse_openai_models_response(body: &str) -> Option<Vec<LocalModel>> {
     Some(models)
 }
 
-/// Parse an Ollama `/api/tags` response.
+/// Parse a legacy `/api/tags` response.
 ///
 /// Expected format: `{"models": [{"name": "llama3:8b", ...}, ...]}`
-fn parse_ollama_tags_response(body: &str) -> Option<Vec<LocalModel>> {
+fn parse_legacy_tags_models_response(body: &str) -> Option<Vec<LocalModel>> {
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
     let models_arr = json.get("models")?.as_array()?;
     let models: Vec<LocalModel> = models_arr
@@ -541,15 +550,12 @@ mod tests {
     fn probe_status_available() {
         let status = ProbeStatus::Available {
             models: vec![LocalModel::new("llama3")],
-            endpoint_url: "http://localhost:11434".to_string(),
+            endpoint_url: "http://127.0.0.1:8080".to_string(),
             latency_ms: 42,
         };
         assert!(status.is_available());
         assert_eq!(status.models().len(), 1);
-        assert_eq!(
-            status.endpoint_url(),
-            Some("http://localhost:11434" as &str)
-        );
+        assert_eq!(status.endpoint_url(), Some("http://127.0.0.1:8080" as &str));
     }
 
     #[test]
@@ -634,7 +640,7 @@ mod tests {
     fn probe_status_serde_available() {
         let status = ProbeStatus::Available {
             models: vec![LocalModel::new("llama3")],
-            endpoint_url: "http://localhost:11434".to_string(),
+            endpoint_url: "http://127.0.0.1:8080".to_string(),
             latency_ms: 25,
         };
         let json = serde_json::to_string(&status).unwrap_or_default();
@@ -718,7 +724,7 @@ mod tests {
     #[test]
     fn probe_config_defaults() {
         let config = ProbeConfig::default();
-        assert_eq!(config.endpoint_url, "http://localhost:11434");
+        assert!(config.endpoint_url.is_empty());
         assert_eq!(config.timeout_secs, 5);
         assert_eq!(config.retry_count, 2);
         assert_eq!(config.retry_delay_ms, 500);
@@ -761,7 +767,7 @@ mod tests {
     #[test]
     fn probe_service_with_defaults() {
         let service = LocalProbeService::with_defaults();
-        assert_eq!(service.config().endpoint_url, "http://localhost:11434");
+        assert!(service.config().endpoint_url.is_empty());
         assert_eq!(service.config().timeout_secs, 5);
     }
 
@@ -813,10 +819,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_ollama_tags_valid() {
+    fn parse_legacy_tags_valid() {
         let body =
             r#"{"models":[{"name":"llama3:8b","size":1234},{"name":"mistral:7b","size":5678}]}"#;
-        let models = parse_ollama_tags_response(body);
+        let models = parse_legacy_tags_models_response(body);
         assert!(models.is_some());
         let models = models.unwrap_or_default();
         assert_eq!(models.len(), 2);
@@ -825,21 +831,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_ollama_tags_empty() {
+    fn parse_legacy_tags_empty() {
         let body = r#"{"models":[]}"#;
-        let models = parse_ollama_tags_response(body);
+        let models = parse_legacy_tags_models_response(body);
         assert!(models.is_some());
         assert!(models.unwrap_or_default().is_empty());
     }
 
     #[test]
-    fn parse_ollama_tags_invalid_json() {
-        assert!(parse_ollama_tags_response("garbage").is_none());
+    fn parse_legacy_tags_invalid_json() {
+        assert!(parse_legacy_tags_models_response("garbage").is_none());
     }
 
     #[test]
-    fn parse_ollama_tags_missing_models() {
-        assert!(parse_ollama_tags_response(r#"{"data":[]}"#).is_none());
+    fn parse_legacy_tags_missing_models() {
+        assert!(parse_legacy_tags_models_response(r#"{"data":[]}"#).is_none());
     }
 
     // ── classify_reqwest_error (indirectly tested via integration) ─

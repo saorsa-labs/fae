@@ -5385,10 +5385,19 @@ fn app() -> Element {
     let llm_tooltip = {
         let cfg = config_state.read();
         match cfg.llm.backend {
-            fae::config::LlmBackend::Api => format!(
-                "Intelligence model (API)\nServer: {}\nModel: {}\n",
-                cfg.llm.api_url, cfg.llm.api_model
-            ),
+            fae::config::LlmBackend::Api => {
+                let server = if cfg.llm.api_url.trim().is_empty() {
+                    "<unset>"
+                } else {
+                    cfg.llm.api_url.as_str()
+                };
+                let model = if cfg.llm.api_model.trim().is_empty() {
+                    "<unset>"
+                } else {
+                    cfg.llm.api_model.as_str()
+                };
+                format!("Intelligence model (API)\nServer: {server}\nModel: {model}\n")
+            }
             fae::config::LlmBackend::Local | fae::config::LlmBackend::Agent => format!(
                 "Intelligence model (local)\nRepo: {}\nGGUF: {}\nTokenizer: {}\n",
                 cfg.llm.model_id,

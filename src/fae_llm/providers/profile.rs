@@ -90,7 +90,7 @@ pub enum StopSequenceField {
 /// requests and responses for providers with subtle API differences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompatibilityProfile {
-    /// Profile name (e.g. "openai", "deepseek", "ollama").
+    /// Profile name (e.g. "openai", "deepseek", "local_openai").
     name: String,
 
     /// How to name the max tokens field in requests.
@@ -234,9 +234,9 @@ impl CompatibilityProfile {
             .with_stream_options(false)
     }
 
-    /// Ollama local profile — basic OpenAI-compatible.
-    pub fn ollama() -> Self {
-        Self::new("ollama")
+    /// Generic local OpenAI-compatible profile.
+    pub fn local_openai() -> Self {
+        Self::new("local_openai")
             .with_max_tokens_field(MaxTokensField::MaxTokens)
             .with_reasoning_mode(ReasoningMode::None)
             .with_tool_call_format(ToolCallFormat::Standard)
@@ -287,7 +287,7 @@ pub fn resolve_profile(provider_name: &str) -> CompatibilityProfile {
         "zai" | "z.ai" => CompatibilityProfile::zai(),
         "deepseek" => CompatibilityProfile::deepseek(),
         "minimax" => CompatibilityProfile::minimax(),
-        "ollama" => CompatibilityProfile::ollama(),
+        "local_openai" | "local-openai" => CompatibilityProfile::local_openai(),
         "llamacpp" | "llama.cpp" | "llama-cpp" => CompatibilityProfile::llamacpp(),
         "vllm" => CompatibilityProfile::vllm(),
         _ => CompatibilityProfile::openai_default(),
@@ -497,9 +497,9 @@ mod tests {
     }
 
     #[test]
-    fn ollama_profile() {
-        let p = CompatibilityProfile::ollama();
-        assert_eq!(p.name(), "ollama");
+    fn local_openai_profile() {
+        let p = CompatibilityProfile::local_openai();
+        assert_eq!(p.name(), "local_openai");
         assert!(!p.supports_stream_usage);
         assert!(!p.needs_stream_options);
     }
@@ -527,7 +527,8 @@ mod tests {
         assert_eq!(resolve_profile("z.ai").name(), "zai");
         assert_eq!(resolve_profile("deepseek").name(), "deepseek");
         assert_eq!(resolve_profile("minimax").name(), "minimax");
-        assert_eq!(resolve_profile("ollama").name(), "ollama");
+        assert_eq!(resolve_profile("local_openai").name(), "local_openai");
+        assert_eq!(resolve_profile("local-openai").name(), "local_openai");
         assert_eq!(resolve_profile("llamacpp").name(), "llamacpp");
         assert_eq!(resolve_profile("llama.cpp").name(), "llamacpp");
         assert_eq!(resolve_profile("llama-cpp").name(), "llamacpp");
@@ -538,7 +539,7 @@ mod tests {
     fn resolve_case_insensitive() {
         assert_eq!(resolve_profile("OpenAI").name(), "openai");
         assert_eq!(resolve_profile("DEEPSEEK").name(), "deepseek");
-        assert_eq!(resolve_profile("Ollama").name(), "ollama");
+        assert_eq!(resolve_profile("LOCAL_OPENAI").name(), "local_openai");
     }
 
     #[test]
@@ -594,8 +595,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_keeps_max_tokens_for_ollama() {
-        let profile = CompatibilityProfile::ollama();
+    fn apply_keeps_max_tokens_for_local_openai() {
+        let profile = CompatibilityProfile::local_openai();
         let mut body = serde_json::json!({
             "model": "test",
             "max_tokens": 2048,

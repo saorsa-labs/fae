@@ -760,20 +760,20 @@ mod integration_tests {
         assert!(body["tools"].is_array());
     }
 
-    /// Build a request for Ollama (local) and verify defaults.
+    /// Build a request for a local OpenAI-compatible provider and verify defaults.
     #[test]
-    fn profile_integration_ollama_request() {
+    fn profile_integration_local_openai_request() {
         use providers::openai::build_completions_request;
         use providers::profile::apply_profile_to_request;
 
-        let profile = CompatibilityProfile::ollama();
+        let profile = CompatibilityProfile::vllm();
         let opts = RequestOptions::new().with_max_tokens(512).with_stream(true);
         let mut body = build_completions_request("llama3", &[Message::user("Hi")], &opts, &[]);
         apply_profile_to_request(&mut body, &profile);
 
-        // Ollama: keeps max_tokens
+        // Local profile: keeps max_tokens
         assert_eq!(body["max_tokens"], 512);
-        // Ollama: no stream_options
+        // Local profile: no stream_options
         assert!(body.get("stream_options").is_none());
     }
 
@@ -849,7 +849,7 @@ mod integration_tests {
     #[test]
     fn probe_integration_config_defaults() {
         let config = ProbeConfig::default();
-        assert_eq!(config.endpoint_url, "http://localhost:11434");
+        assert!(config.endpoint_url.is_empty());
         assert_eq!(config.timeout_secs, 5);
         assert_eq!(config.retry_count, 2);
         assert_eq!(config.retry_delay_ms, 500);
@@ -860,7 +860,7 @@ mod integration_tests {
     fn probe_integration_status_construction() {
         let available = ProbeStatus::Available {
             models: vec![LocalModel::new("llama3:8b")],
-            endpoint_url: "http://localhost:11434".to_string(),
+            endpoint_url: "http://127.0.0.1:8080".to_string(),
             latency_ms: 10,
         };
         assert!(available.is_available());
@@ -919,14 +919,14 @@ mod integration_tests {
     fn probe_integration_convenience_methods() {
         let available = ProbeStatus::Available {
             models: vec![LocalModel::new("llama3"), LocalModel::new("mistral")],
-            endpoint_url: "http://localhost:11434".to_string(),
+            endpoint_url: "http://127.0.0.1:8080".to_string(),
             latency_ms: 5,
         };
         assert!(available.is_available());
         assert_eq!(available.models().len(), 2);
         assert_eq!(
             available.endpoint_url(),
-            Some("http://localhost:11434" as &str)
+            Some("http://127.0.0.1:8080" as &str)
         );
 
         let not_running = ProbeStatus::NotRunning;
@@ -959,7 +959,7 @@ mod integration_tests {
         let statuses: Vec<ProbeStatus> = vec![
             ProbeStatus::Available {
                 models: vec![LocalModel::new("x")],
-                endpoint_url: "http://localhost:11434".to_string(),
+                endpoint_url: "http://127.0.0.1:8080".to_string(),
                 latency_ms: 10,
             },
             ProbeStatus::NotRunning,

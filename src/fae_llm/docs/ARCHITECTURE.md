@@ -232,7 +232,6 @@ struct AnthropicBlockTracker {
 - z.ai (reasoning mode: native)
 - DeepSeek (max_tokens field)
 - MiniMax (tokens_to_generate)
-- Ollama (no auth)
 - llama.cpp (custom endpoints)
 - vLLM (custom endpoints)
 

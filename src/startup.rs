@@ -274,6 +274,16 @@ pub async fn initialize_models_with_progress(
     println!("\nLoading models...");
 
     let stt = load_stt(config, callback)?;
+    let api_model_display = if config.llm.api_model.trim().is_empty() {
+        "<unset>"
+    } else {
+        config.llm.api_model.as_str()
+    };
+    let api_url_display = if config.llm.api_url.trim().is_empty() {
+        "<unset>"
+    } else {
+        config.llm.api_url.as_str()
+    };
     let llm = if use_local_llm {
         match config.llm.backend {
             LlmBackend::Local => {
@@ -282,7 +292,7 @@ pub async fn initialize_models_with_progress(
             LlmBackend::Api => {
                 println!(
                     "  LLM brain: API ({} @ {}) with local fallback (agent runtime)",
-                    config.llm.api_model, config.llm.api_url
+                    api_model_display, api_url_display
                 );
             }
             LlmBackend::Agent => {
@@ -299,7 +309,7 @@ pub async fn initialize_models_with_progress(
     } else {
         println!(
             "  LLM brain: API ({} @ {}) (agent runtime)",
-            config.llm.api_model, config.llm.api_url
+            api_model_display, api_url_display
         );
         None
     };

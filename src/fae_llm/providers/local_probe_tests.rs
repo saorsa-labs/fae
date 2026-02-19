@@ -152,7 +152,7 @@ async fn test_discover_models_openai_format() {
 }
 
 #[tokio::test]
-async fn test_discover_models_ollama_format() {
+async fn test_discover_models_legacy_tags_format() {
     let server = MockServer::start().await;
 
     // /v1/models returns 404, forcing fallback to /api/tags
@@ -429,7 +429,7 @@ async fn test_local_model_display_name() {
 async fn test_probe_status_is_available() {
     let available = ProbeStatus::Available {
         models: vec![LocalModel::new("test")],
-        endpoint_url: "http://localhost:11434".to_string(),
+        endpoint_url: "http://127.0.0.1:8080".to_string(),
         latency_ms: 50,
     };
     assert!(available.is_available());
@@ -457,7 +457,7 @@ async fn test_probe_status_models_accessor() {
     let models = vec![LocalModel::new("model1"), LocalModel::new("model2")];
     let available = ProbeStatus::Available {
         models: models.clone(),
-        endpoint_url: "http://localhost:11434".to_string(),
+        endpoint_url: "http://127.0.0.1:8080".to_string(),
         latency_ms: 50,
     };
     assert_eq!(available.models().len(), 2);
@@ -471,10 +471,10 @@ async fn test_probe_status_models_accessor() {
 async fn test_probe_status_endpoint_url_accessor() {
     let available = ProbeStatus::Available {
         models: vec![],
-        endpoint_url: "http://localhost:11434".to_string(),
+        endpoint_url: "http://127.0.0.1:8080".to_string(),
         latency_ms: 50,
     };
-    assert_eq!(available.endpoint_url(), Some("http://localhost:11434"));
+    assert_eq!(available.endpoint_url(), Some("http://127.0.0.1:8080"));
 
     let not_running = ProbeStatus::NotRunning;
     assert_eq!(not_running.endpoint_url(), None);

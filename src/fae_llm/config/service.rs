@@ -548,7 +548,7 @@ mod tests {
             ProviderConfig {
                 endpoint_type: EndpointType::Custom,
                 enabled: true,
-                base_url: "http://localhost".to_string(),
+                base_url: "https://example.com".to_string(),
                 api_key: super::super::types::SecretRef::None,
                 models: Vec::new(),
                 compat_profile: None,

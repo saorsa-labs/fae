@@ -134,7 +134,7 @@ Fae always runs through the internal agent loop (tool calling + sandboxing). The
 | Backend | Config | Inference | Notes |
 |---|---|---|---|
 | Local | `backend = "local"` | On-device (mistralrs, Metal on Mac) | Private, no network needed |
-| API | `backend = "api"` | Remote (OpenAI, Anthropic, Ollama, etc.) | More capable models |
+| API | `backend = "api"` | Remote (OpenAI, Anthropic, or any OpenAI-compatible endpoint) | More capable models |
 | Agent | `backend = "agent"` | Auto (local when no creds, API otherwise) | Backward compatibility |
 
 Local fallback: when `enable_local_fallback = true`, Fae falls back to the local model if the remote API is unreachable.

@@ -1,8 +1,7 @@
 //! OpenAI-compatible API backend for LLM inference.
 //!
 //! Supports any server implementing the OpenAI chat completions API:
-//! - Ollama (`http://localhost:11434`)
-//! - MLX server (`http://localhost:8080`)
+//! - MLX server
 //! - vLLM, llama.cpp server, etc.
 
 use crate::config::LlmConfig;

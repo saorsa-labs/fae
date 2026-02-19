@@ -70,10 +70,10 @@ fn test_minimax_profile() {
 }
 
 #[test]
-fn test_ollama_profile() {
-    let profile = CompatibilityProfile::ollama();
+fn test_local_openai_profile() {
+    let profile = CompatibilityProfile::local_openai();
 
-    assert_eq!(profile.name(), "ollama");
+    assert_eq!(profile.name(), "local_openai");
     assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);
     assert_eq!(profile.reasoning_mode, ReasoningMode::None);
     assert_eq!(profile.tool_call_format, ToolCallFormat::Standard);
@@ -125,9 +125,9 @@ fn test_resolve_profile_minimax() {
 }
 
 #[test]
-fn test_resolve_profile_ollama() {
-    let profile = resolve_profile("ollama");
-    assert_eq!(profile.name(), "ollama");
+fn test_resolve_profile_local_openai() {
+    let profile = resolve_profile("local_openai");
+    assert_eq!(profile.name(), "local_openai");
     assert!(!profile.supports_stream_usage);
 }
 
@@ -143,8 +143,8 @@ fn test_resolve_profile_case_insensitive() {
     let profile = resolve_profile("DeepSeek");
     assert_eq!(profile.name(), "deepseek");
 
-    let profile2 = resolve_profile("OLLAMA");
-    assert_eq!(profile2.name(), "ollama");
+    let profile2 = resolve_profile("LOCAL_OPENAI");
+    assert_eq!(profile2.name(), "local_openai");
 }
 
 // ── Profile Builder Tests ─────────────────────────────────────────
@@ -236,8 +236,8 @@ fn test_reasoning_mode_minimax_none() {
 }
 
 #[test]
-fn test_reasoning_mode_ollama_none() {
-    let profile = CompatibilityProfile::ollama();
+fn test_reasoning_mode_local_openai_none() {
+    let profile = CompatibilityProfile::local_openai();
     assert_eq!(profile.reasoning_mode, ReasoningMode::None);
 }
 
@@ -268,8 +268,8 @@ fn test_tool_call_format_minimax_no_streaming() {
 }
 
 #[test]
-fn test_tool_call_format_ollama_standard() {
-    let profile = CompatibilityProfile::ollama();
+fn test_tool_call_format_local_openai_standard() {
+    let profile = CompatibilityProfile::local_openai();
     assert_eq!(profile.tool_call_format, ToolCallFormat::Standard);
 }
 
@@ -304,8 +304,8 @@ fn test_stream_options_minimax_not_needed() {
 }
 
 #[test]
-fn test_stream_options_ollama_not_needed() {
-    let profile = CompatibilityProfile::ollama();
+fn test_stream_options_local_openai_not_needed() {
+    let profile = CompatibilityProfile::local_openai();
     assert!(!profile.needs_stream_options);
     assert!(!profile.supports_stream_usage);
 }
@@ -319,7 +319,7 @@ fn test_system_message_support_all_profiles() {
     assert!(CompatibilityProfile::zai().supports_system_message);
     assert!(CompatibilityProfile::deepseek().supports_system_message);
     assert!(CompatibilityProfile::minimax().supports_system_message);
-    assert!(CompatibilityProfile::ollama().supports_system_message);
+    assert!(CompatibilityProfile::local_openai().supports_system_message);
 }
 
 // ── Streaming Support Tests ───────────────────────────────────────
@@ -331,7 +331,7 @@ fn test_streaming_support_all_profiles() {
     assert!(CompatibilityProfile::zai().supports_streaming);
     assert!(CompatibilityProfile::deepseek().supports_streaming);
     assert!(CompatibilityProfile::minimax().supports_streaming);
-    assert!(CompatibilityProfile::ollama().supports_streaming);
+    assert!(CompatibilityProfile::local_openai().supports_streaming);
 }
 
 // ── Stop Sequence Field Tests ─────────────────────────────────────
@@ -356,7 +356,7 @@ fn test_stop_sequence_field_defaults() {
         StopSequenceField::Stop
     );
     assert_eq!(
-        CompatibilityProfile::ollama().stop_sequence_field,
+        CompatibilityProfile::local_openai().stop_sequence_field,
         StopSequenceField::Stop
     );
 }
@@ -373,7 +373,7 @@ fn test_api_path_override_defaults() {
     assert_eq!(CompatibilityProfile::zai().api_path_override, None);
     assert_eq!(CompatibilityProfile::deepseek().api_path_override, None);
     assert_eq!(CompatibilityProfile::minimax().api_path_override, None);
-    assert_eq!(CompatibilityProfile::ollama().api_path_override, None);
+    assert_eq!(CompatibilityProfile::local_openai().api_path_override, None);
 }
 
 #[test]
@@ -460,7 +460,7 @@ fn test_profile_name_uniqueness() {
         CompatibilityProfile::zai(),
         CompatibilityProfile::deepseek(),
         CompatibilityProfile::minimax(),
-        CompatibilityProfile::ollama(),
+        CompatibilityProfile::local_openai(),
     ];
 
     let names: Vec<&str> = profiles.iter().map(|p| p.name()).collect();
@@ -487,7 +487,7 @@ fn test_profile_feature_matrix() {
         ("zai", CompatibilityProfile::zai()),
         ("deepseek", CompatibilityProfile::deepseek()),
         ("minimax", CompatibilityProfile::minimax()),
-        ("ollama", CompatibilityProfile::ollama()),
+        ("local_openai", CompatibilityProfile::local_openai()),
     ];
 
     for (name, profile) in profiles {
@@ -520,7 +520,7 @@ fn test_profile_feature_matrix() {
                 assert!(!profile.needs_stream_options);
                 assert_eq!(profile.tool_call_format, ToolCallFormat::NoStreaming);
             }
-            "ollama" => {
+            "local_openai" => {
                 assert_eq!(profile.max_tokens_field, MaxTokensField::MaxTokens);
                 assert_eq!(profile.reasoning_mode, ReasoningMode::None);
                 assert!(!profile.needs_stream_options);

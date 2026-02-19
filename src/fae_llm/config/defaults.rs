@@ -16,7 +16,7 @@ use super::types::{
 /// Includes:
 /// - OpenAI provider (gpt-4o) with env-based API key
 /// - Anthropic provider (claude-sonnet-4.5) with env-based API key
-/// - Local provider (localhost:8080) with no API key
+/// - Local OpenAI-compatible provider template (disabled, explicit endpoint required)
 /// - All 4 tools enabled (read, bash, edit, write)
 /// - Tool mode: read_only (safe default)
 /// - Reasonable timeouts (30s, 3 retries)
@@ -63,8 +63,8 @@ pub fn default_config() -> FaeLlmConfig {
         "local".to_string(),
         ProviderConfig {
             endpoint_type: EndpointType::Local,
-            enabled: true,
-            base_url: "http://localhost:8080".to_string(),
+            enabled: false,
+            base_url: String::new(),
             api_key: SecretRef::None,
             models: Vec::new(),
             compat_profile: None,

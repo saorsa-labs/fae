@@ -279,8 +279,8 @@ pub struct LlmConfig {
     pub api_organization: Option<String>,
     /// API key for the remote provider (API/Agent backends only).
     ///
-    /// Stored as a credential reference for secure storage. For local servers
-    /// (Ollama/LM Studio/vLLM), this is typically `CredentialRef::None`.
+    /// Stored as a credential reference for secure storage. For local
+    /// OpenAI-compatible servers, this is typically `CredentialRef::None`.
     #[serde(default, alias = "api_key")]
     pub api_key: CredentialRef,
     /// Tool capability mode (Agent backend only).
@@ -365,9 +365,9 @@ impl Default for LlmConfig {
             gguf_file: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf".to_owned(),
             // GGUF repo doesn't include a tokenizer — pull from the original repo.
             tokenizer_id: "Qwen/Qwen3-4B-Instruct-2507".to_owned(),
-            // Ollama default endpoint.
-            api_url: "http://localhost:11434".to_owned(),
-            api_model: "smollm3:3b".to_owned(),
+            // Remote provider fields are intentionally unset by default.
+            api_url: String::new(),
+            api_model: String::new(),
             api_type: LlmApiType::default(),
             api_version: None,
             api_organization: None,
@@ -1287,6 +1287,8 @@ mod tests {
     fn llm_config_model_selection_timeout_default() {
         let config = LlmConfig::default();
         assert_eq!(config.model_selection_timeout_secs, 30);
+        assert!(config.api_url.is_empty());
+        assert!(config.api_model.is_empty());
         assert_eq!(config.message_queue_mode, LlmMessageQueueMode::Followup);
         assert_eq!(config.message_queue_max_pending, 8);
         assert_eq!(

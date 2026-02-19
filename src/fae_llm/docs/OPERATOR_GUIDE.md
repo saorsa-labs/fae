@@ -195,21 +195,21 @@ max_tokens = 16384
 
 ---
 
-### Local Endpoints (Ollama, llama.cpp, vLLM)
+### Local Endpoints (OpenAI-Compatible)
 
-**Endpoint**: `http://localhost:11434` (Ollama), `http://localhost:8080` (llama.cpp)
+**Endpoint**: your explicit local API endpoint (for example `http://127.0.0.1:8080`)
 **Endpoint Type**: `local`
 **Profile**: Auto-detected or explicit
 
 ```toml
 [providers.local]
 endpoint_type = "local"
-base_url = "http://localhost:11434"
+base_url = "http://127.0.0.1:8080"
 api_key = { type = "none" }  # No API key for local endpoints
 profile = { max_tokens_field = "max_tokens", tool_call_format = "native" }
 ```
 
-**Health Probing**: The `LocalProbeService` will automatically detect available models via `/v1/models` or `/api/tags` (Ollama fallback).
+**Health Probing**: The `LocalProbeService` will automatically detect available models via `/v1/models` and can fall back to `/api/tags` for legacy local APIs.
 
 ---
 
@@ -323,7 +323,7 @@ The `LocalProbeService` automatically discovers and validates local LLM endpoint
 use fae::fae_llm::{LocalProbeService, ProbeConfig};
 
 let probe = ProbeConfig::builder()
-    .endpoint_url("http://localhost:11434")
+    .endpoint_url("http://127.0.0.1:8080")
     .timeout_secs(5)
     .retry_count(3)
     .retry_delay_ms(500)
@@ -344,9 +344,9 @@ let result = LocalProbeService::probe(&probe).await?;
 
 ### Troubleshooting Probes
 
-1. **NotRunning**: Start your local LLM server (e.g., `ollama serve`)
+1. **NotRunning**: Start your local LLM server
 2. **Timeout**: Increase `timeout_secs` or check server load
-3. **IncompatibleResponse**: Verify endpoint URL and API compatibility (OpenAI vs Ollama format)
+3. **IncompatibleResponse**: Verify endpoint URL and API compatibility
 
 ---
 
@@ -504,10 +504,9 @@ API keys and auth headers are automatically redacted in logs:
 **Problem**: `ProbeStatus::NotRunning`
 
 **Solution**:
-1. Verify local server is running: `curl http://localhost:11434/v1/models`
+1. Verify local server is running: `curl http://127.0.0.1:8080/v1/models`
 2. Check port number matches config
-3. Ensure firewall allows localhost connections
-4. For Ollama: run `ollama serve`
+3. Ensure firewall allows loopback connections
 
 ### Session Resume Errors
 

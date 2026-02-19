@@ -44,7 +44,7 @@ MiniCPM-o 4.5 delivers GPT-4o-level multimodal capabilities including bilingual 
 | **Architecture** | Omni-modal LLM with streaming speech encoder/decoder |
 | **System Prompt Support** | **YES** - standard LLM prompting applies |
 | **Rust Support** | **NO** - PyTorch only |
-| **Platform Support** | CUDA primarily, Ollama available |
+| **Platform Support** | CUDA primarily, optional local wrappers available |
 | **Latency** | Real-time streaming |
 | **Voice Options** | Configurable voices (English, Chinese) |
 | **License** | MiniCPM Model License |

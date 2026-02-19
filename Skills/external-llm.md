@@ -23,7 +23,7 @@ Because `read/write/edit` tools are workspace-scoped, use `bash` for `~/.fae` an
 ## Profile Schema
 
 ```toml
-provider = "openai" # hint: openai, anthropic, deepseek, ollama, vllm, etc.
+provider = "openai" # hint: openai, anthropic, deepseek, local_openai, vllm, etc.
 api_type = "openai_completions" # openai_completions | openai_responses | anthropic_messages
 api_url = "https://api.openai.com"
 api_model = "gpt-4o-mini"
