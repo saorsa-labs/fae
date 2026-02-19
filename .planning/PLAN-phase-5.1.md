@@ -180,7 +180,7 @@ device unavailability.
 - All tests pass, zero warnings
 
 **Files**:
-- `native/macos/FaeNativeApp/Tests/FaeNativeAppTests/HandoffTests.swift` (new)
+- `native/macos/FaeNativeApp/Tests/HandoffTests/HandoffTests.swift` (new)
 
 ---
 

@@ -3,8 +3,15 @@ import XCTest
 
 // MARK: - DeviceCommandParser (copied for isolated testing)
 
-/// Mirrors the production `DeviceCommandParser` in DeviceHandoff.swift.
-/// Copied here so tests can run without linking libfae.a.
+/// Mirrors the production `DeviceCommandParser` in
+/// `Sources/FaeNativeApp/DeviceHandoff.swift`.
+///
+/// This is a verbatim copy of the parsing logic so tests can run without
+/// linking libfae.a. If you change the production parser, update this copy
+/// to match. The `DeviceCommandParserTests` below will catch regressions in
+/// the parsing rules.
+///
+/// **Canonical source**: `DeviceHandoff.swift` → `DeviceCommandParser.parse(_:)`
 private enum TestDeviceCommand: Equatable {
     case move(String)   // rawValue of target
     case goHome
@@ -162,12 +169,22 @@ final class HandoffScenarioTests: XCTestCase {
 
     // MARK: Snapshot Capping Behavior
 
+    /// Verifies the suffix-capping pattern used by `DeviceHandoffController.snapshotJSON()`.
+    /// The controller calls `Array(entries.suffix(ConversationSnapshot.maxEntries))` before
+    /// encoding; this test mirrors that exact pattern.
     func testSnapshotCappingToMaxEntries() throws {
         let entries = (0..<50).map { i in
             SnapshotEntry(role: i.isMultiple(of: 2) ? "user" : "assistant",
                           content: "message \(i)")
         }
+
+        // This mirrors DeviceHandoffController.snapshotJSON() capping logic
         let capped = Array(entries.suffix(ConversationSnapshot.maxEntries))
+        XCTAssertEqual(capped.count, ConversationSnapshot.maxEntries)
+        // Oldest entries dropped, newest preserved
+        XCTAssertEqual(capped.first?.content, "message 30")
+        XCTAssertEqual(capped.last?.content, "message 49")
+
         let snapshot = ConversationSnapshot(
             entries: capped,
             orbMode: "idle",
@@ -176,13 +193,32 @@ final class HandoffScenarioTests: XCTestCase {
         )
 
         XCTAssertEqual(snapshot.entries.count, ConversationSnapshot.maxEntries)
-        // Newest entries preserved (suffix)
-        XCTAssertEqual(snapshot.entries.last?.content, "message 49")
 
-        // Roundtrip
+        // Roundtrip preserves all capped entries
         let data = try encoder.encode(snapshot)
         let decoded = try decoder.decode(ConversationSnapshot.self, from: data)
         XCTAssertEqual(decoded.entries.count, ConversationSnapshot.maxEntries)
+        XCTAssertEqual(decoded.entries.first?.content, "message 30")
+        XCTAssertEqual(decoded.entries.last?.content, "message 49")
+    }
+
+    /// When entries are under the limit, no capping occurs.
+    func testSnapshotUnderMaxEntriesIsNotTruncated() throws {
+        let entries = (0..<5).map { i in
+            SnapshotEntry(role: "user", content: "msg \(i)")
+        }
+        let capped = Array(entries.suffix(ConversationSnapshot.maxEntries))
+        XCTAssertEqual(capped.count, 5)
+
+        let snapshot = ConversationSnapshot(
+            entries: capped,
+            orbMode: "idle",
+            orbFeeling: "neutral",
+            timestamp: Date()
+        )
+        let data = try encoder.encode(snapshot)
+        let decoded = try decoder.decode(ConversationSnapshot.self, from: data)
+        XCTAssertEqual(decoded.entries.count, 5)
     }
 
     // MARK: Malformed Snapshot Handling
@@ -237,24 +273,21 @@ final class HandoffScenarioTests: XCTestCase {
 
         // Simulate building userInfo as DeviceHandoffController does
         let snapshotData = try encoder.encode(snapshot)
-        let snapshotJSON = String(data: snapshotData, encoding: .utf8)
-        XCTAssertNotNil(snapshotJSON)
+        let snapshotJSON = try XCTUnwrap(String(data: snapshotData, encoding: .utf8))
 
         let userInfo: [String: Any] = [
             "target": "watch",
             "command": "move to my watch",
             "issuedAtEpochMs": Int(Date().timeIntervalSince1970 * 1000),
-            "conversationSnapshot": snapshotJSON!,
+            "conversationSnapshot": snapshotJSON,
         ]
 
         // Simulate receiving side: decode payload and snapshot
         let payload = try FaeHandoffContract.payload(from: userInfo)
         XCTAssertEqual(payload.target, .watch)
 
-        let receivedJSON = userInfo["conversationSnapshot"] as? String
-        XCTAssertNotNil(receivedJSON)
-
-        let receivedData = receivedJSON!.data(using: .utf8)!
+        let receivedJSON = try XCTUnwrap(userInfo["conversationSnapshot"] as? String)
+        let receivedData = try XCTUnwrap(receivedJSON.data(using: .utf8))
         let receivedSnapshot = try decoder.decode(ConversationSnapshot.self, from: receivedData)
         XCTAssertEqual(receivedSnapshot.entries.count, 2)
         XCTAssertEqual(receivedSnapshot.orbMode, "listening")
