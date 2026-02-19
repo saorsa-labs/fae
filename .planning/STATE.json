@@ -1,26 +1,26 @@
 {
-  "version": 1,
-  "project": "fae-onboarding-skill-system",
-  "active": false,
+  "version": 2,
+  "project": "fae-native-production-readiness",
+  "active": true,
   "milestone": {
-    "number": 3,
-    "name": "Deferred Permission Flow + Integration"
+    "number": 1,
+    "name": "Core Pipeline & Linker Fix"
   },
   "phase": {
-    "number": "3.2",
-    "name": "End-to-End Integration Tests",
-    "plan": "PLAN-phase-3.2.md"
+    "number": "1.1",
+    "name": "Linker Anchor & Anti-Dead-Strip",
+    "plan": "plans/PLAN-phase-1.1.md"
   },
   "progress": {
-    "total_tasks": 4,
-    "completed_tasks": 4,
-    "current_task": null
+    "total_tasks": 8,
+    "completed_tasks": 8,
+    "current_task": 8
   },
-  "status": "milestone_complete",
+  "status": "reviewing",
   "review": {
     "status": "passed",
-    "iteration": 0,
-    "last_verdict": "PASS"
+    "iteration": 1,
+    "last_verdict": "APPROVED"
   },
-  "last_updated": "2026-02-18T22:00:00Z"
+  "last_updated": "2026-02-19T01:00:00Z"
 }

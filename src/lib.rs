@@ -42,6 +42,7 @@ pub mod ffi;
 pub mod host;
 pub mod huggingface;
 pub mod intelligence;
+pub mod linker_anchor;
 pub mod llm;
 pub mod memory;
 pub mod model_picker;

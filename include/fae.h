@@ -133,6 +133,15 @@ void fae_core_destroy(FaeCoreHandle handle);
  */
 void fae_string_free(char *s);
 
+/**
+ * Linker dead-strip anchor — prevents the macOS linker from removing Rust
+ * subsystems (ML models, audio, VAD, AEC) that are not directly reachable
+ * from the 8 FFI entry points.
+ *
+ * Called internally by fae_core_init via black_box; no need to call directly.
+ */
+void fae_keep_alive(void);
+
 #ifdef __cplusplus
 }
 #endif

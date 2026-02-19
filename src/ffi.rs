@@ -22,6 +22,7 @@
 //! protected by `Mutex`.
 
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::hint::black_box;
 use std::sync::Mutex;
 
 use crate::host::channel::{HostCommandServer, command_channel};
@@ -169,6 +170,10 @@ unsafe fn borrow_runtime<'a>(handle: *mut c_void) -> Option<&'a FaeRuntime> {
 /// JSON. The returned handle must eventually be passed to `fae_core_destroy`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fae_core_init(config_json: *const c_char) -> *mut c_void {
+    // Anchor the keep-alive symbol so the linker retains all subsystem code.
+    // See `linker_anchor.rs` for details on why this is necessary.
+    black_box(crate::linker_anchor::fae_keep_alive as *const () as usize);
+
     // SAFETY: caller guarantees config_json is null or a valid C string.
     let json_str = match unsafe { cstr_to_str(config_json) } {
         Some(s) => s,

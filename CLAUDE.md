@@ -164,6 +164,26 @@ The native app uses a three-mode adaptive window:
 Auto-hide after 30s inactivity. Click orb to restore. Panels extend window sideways
 rather than overlaying. See `WindowStateController.swift`.
 
+## Linker anchor (anti-dead-strip)
+
+SPM's `-dead_strip` removes Rust subsystems not reachable from FFI entry points.
+`src/linker_anchor.rs` prevents this with a `black_box`-guarded anchor function.
+
+Key files:
+
+| File | Role |
+|------|------|
+| `src/linker_anchor.rs` | `fae_keep_alive` anchor + compile-time tests |
+| `src/ffi.rs` | `fae_core_init` references the anchor via `black_box` |
+| `include/fae.h` | C header declares `fae_keep_alive` |
+| `native/macos/.../include/fae.h` | Swift module map copy |
+
+When adding a new subsystem, add a `black_box` reference in the `if black_box(false)` block.
+
+Verification: `just check-binary-size` (asserts libfae.a > 50 MB).
+
+Full docs: `docs/linker-anchor.md`
+
 ## Platform module (App Sandbox)
 
 `src/platform/` provides cross-platform security-scoped bookmark support:

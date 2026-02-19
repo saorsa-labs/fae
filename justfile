@@ -104,6 +104,30 @@ build-staticlib-universal: build-staticlib build-staticlib-x86
         -output target/universal-apple-darwin/release/libfae.a
     @echo "Universal libfae.a: target/universal-apple-darwin/release/libfae.a"
 
+# Check that libfae.a is large enough (subsystems not dead-stripped).
+# Threshold: 50 MB. A stripped binary is typically ~9 MB.
+check-binary-size target="aarch64-apple-darwin":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    LIB="target/{{target}}/release/libfae.a"
+    if [ ! -f "$LIB" ]; then
+        echo "ERROR: $LIB not found. Run 'just build-staticlib' first."
+        exit 1
+    fi
+    SIZE=$(stat -f%z "$LIB" 2>/dev/null || stat -c%s "$LIB")
+    MIN=$((50 * 1024 * 1024))
+    echo "libfae.a size: $((SIZE / 1024 / 1024)) MB ($SIZE bytes)"
+    if [ "$SIZE" -lt "$MIN" ]; then
+        echo "FAIL: libfae.a is only $((SIZE / 1024 / 1024)) MB — subsystems likely dead-stripped."
+        echo "Expected at least 50 MB. Check linker_anchor.rs."
+        exit 1
+    fi
+    echo "PASS: libfae.a is large enough (subsystems retained)."
+
+# Build libfae.a and verify subsystems are retained, then build Swift app.
+build-native-and-check: build-staticlib check-binary-size build-native-swift
+    @echo "Native build pipeline complete."
+
 # Full validation (CI equivalent)
 check: fmt-check lint build-strict test doc panic-scan
 

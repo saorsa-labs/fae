@@ -28,9 +28,18 @@ let package = Package(
                 // Path to Rust-built libfae.a (arm64 release).
                 // In CI, the release workflow builds this before swift build.
                 // For local dev, run: just build-staticlib
+                //
+                // -force_load ensures ALL symbols from libfae.a are linked,
+                // not just those directly reachable from the FFI entry points.
+                // Without this, the linker strips the ML inference (mistralrs),
+                // TTS (kokoro), STT (parakeet), and audio pipeline code because
+                // the command handler dispatches to them via async runtime calls
+                // that the linker's dead-code analysis cannot trace.
                 .unsafeFlags([
                     "-L../../../target/aarch64-apple-darwin/release",
                     "-L../../../target/debug",
+                    "-Xlinker", "-force_load",
+                    "-Xlinker", "../../../target/aarch64-apple-darwin/release/libfae.a",
                 ]),
                 // System frameworks required by libfae's Rust dependencies.
                 .linkedFramework("Security"),
