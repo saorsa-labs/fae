@@ -24,6 +24,10 @@ struct FaeNativeApp: App {
     /// triggers native macOS permission dialogs mid-conversation.
     @StateObject private var jitPermissions = JitPermissionController()
 
+    /// Glassmorphic onboarding window shown on first launch. The main
+    /// ``WindowGroup`` is hidden until onboarding completes.
+    @StateObject private var onboardingWindow = OnboardingWindowController()
+
     /// Retained reference to the embedded Rust core sender.
     private let commandSender: EmbeddedCoreSender?
 
@@ -76,6 +80,21 @@ struct FaeNativeApp: App {
                         // isn't stuck on a permanent black screen.
                         onboarding.isStateRestored = true
                     }
+                }
+                .onChange(of: onboarding.isStateRestored) {
+                    guard onboarding.isStateRestored else { return }
+                    if onboarding.isComplete {
+                        // Already onboarded — keep the main window visible.
+                        return
+                    }
+                    // First launch — show glassmorphic onboarding, hide main window.
+                    showOnboardingWindow()
+                }
+                .onChange(of: onboarding.isComplete) {
+                    guard onboarding.isComplete, onboardingWindow.isVisible else { return }
+                    // Onboarding just finished — close onboarding, show main window.
+                    onboardingWindow.close()
+                    showMainWindow()
                 }
         }
         .defaultSize(width: 340, height: 500)
@@ -153,6 +172,28 @@ struct FaeNativeApp: App {
 
         image.unlockFocus()
         return image
+    }
+
+    // MARK: - Onboarding Window Lifecycle
+
+    /// Configures and presents the glassmorphic onboarding window, hiding the
+    /// main window so the user only sees the focused onboarding experience.
+    private func showOnboardingWindow() {
+        onboardingWindow.configure(onboarding: onboarding)
+        onboardingWindow.show()
+
+        // Hide the main window while onboarding is active.
+        if let mainWindow = windowState.window {
+            mainWindow.orderOut(nil)
+        }
+    }
+
+    /// Makes the main conversation window key and visible after onboarding
+    /// completes.
+    private func showMainWindow() {
+        if let mainWindow = windowState.window {
+            mainWindow.makeKeyAndOrderFront(nil)
+        }
     }
 
     /// Query the Rust backend for persisted onboarding state so users who

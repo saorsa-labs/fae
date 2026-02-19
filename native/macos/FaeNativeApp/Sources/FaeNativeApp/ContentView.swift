@@ -7,16 +7,15 @@ struct ContentView: View {
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
-    private let onboardingTTS = OnboardingTTSHelper()
     @State private var viewLoaded = false
 
     var body: some View {
         ZStack {
-            if !onboarding.isStateRestored {
+            if !onboarding.isStateRestored || !onboarding.isComplete {
+                // Show a blank black screen while onboarding state is being
+                // restored or while the separate onboarding window is active.
+                // The main window is hidden during onboarding anyway.
                 Color.black
-            } else if !onboarding.isComplete {
-                onboardingView
-                    .transition(.opacity)
             } else {
                 conversationView
                     .transition(.opacity)
@@ -34,37 +33,6 @@ struct ContentView: View {
         )
         .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
-    }
-
-    // MARK: - Onboarding View
-
-    private var onboardingView: some View {
-        OnboardingWebView(
-            onLoad: {
-                // Onboarding HTML loaded — nothing extra to push on initial load.
-            },
-            onRequestPermission: { permission in
-                switch permission {
-                case "microphone":
-                    onboarding.requestMicrophone()
-                case "contacts":
-                    onboarding.requestContacts()
-                default:
-                    NSLog("ContentView: unknown permission requested: %@", permission)
-                }
-            },
-            onPermissionHelp: { permission in
-                onboardingTTS.speak(permission: permission)
-            },
-            onComplete: {
-                withAnimation { onboarding.complete() }
-            },
-            onAdvance: {
-                onboarding.advance()
-            },
-            userName: onboarding.userName,
-            permissionStates: onboarding.permissionStates
-        )
     }
 
     // MARK: - Conversation View
