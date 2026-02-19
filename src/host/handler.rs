@@ -12,8 +12,9 @@ use crate::pipeline::messages::{GateCommand, TextInjection};
 use crate::progress::ProgressEvent;
 use crate::runtime::RuntimeEvent;
 use crate::startup::initialize_models_with_progress;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -47,6 +48,17 @@ pub struct FaeDeviceTransferHandler {
     text_injection_tx: Mutex<Option<mpsc::UnboundedSender<TextInjection>>>,
     gate_cmd_tx: Mutex<Option<mpsc::UnboundedSender<GateCommand>>>,
     tool_approval_tx: Mutex<Option<mpsc::UnboundedSender<ToolApprovalRequest>>>,
+    /// Pending tool approval requests keyed by numeric request ID.
+    ///
+    /// When the pipeline emits a `ToolApprovalRequest`, the approval bridge
+    /// task inserts it here. When `approval.respond` arrives via FFI, this
+    /// map is consulted to deliver the response.
+    ///
+    /// Uses `Arc` so the async approval-bridge task can hold a clone while
+    /// the handler owns the canonical reference.
+    pending_approvals: Arc<Mutex<HashMap<u64, ToolApprovalRequest>>>,
+    /// Handle for the task that drains `approval_rx` into `pending_approvals`.
+    approval_bridge_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pipeline_started_at: Mutex<Option<std::time::Instant>>,
 }
 
@@ -79,6 +91,8 @@ impl FaeDeviceTransferHandler {
             text_injection_tx: Mutex::new(None),
             gate_cmd_tx: Mutex::new(None),
             tool_approval_tx: Mutex::new(None),
+            pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            approval_bridge_handle: Mutex::new(None),
             pipeline_started_at: Mutex::new(None),
         }
     }
@@ -371,26 +385,46 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
     fn request_orb_palette_set(&self, palette: &str) -> Result<()> {
         info!(palette, "orb.palette.set requested");
+        self.emit_event(
+            "orb.state_changed",
+            serde_json::json!({"kind": "palette", "palette": palette}),
+        );
         Ok(())
     }
 
     fn request_orb_palette_clear(&self) -> Result<()> {
         info!("orb.palette.clear requested");
+        self.emit_event(
+            "orb.state_changed",
+            serde_json::json!({"kind": "palette_cleared"}),
+        );
         Ok(())
     }
 
     fn request_orb_feeling_set(&self, feeling: &str) -> Result<()> {
         info!(feeling, "orb.feeling.set requested");
+        self.emit_event(
+            "orb.state_changed",
+            serde_json::json!({"kind": "feeling", "feeling": feeling}),
+        );
         Ok(())
     }
 
     fn request_orb_urgency_set(&self, urgency: f32) -> Result<()> {
         info!(urgency, "orb.urgency.set requested");
+        self.emit_event(
+            "orb.state_changed",
+            serde_json::json!({"kind": "urgency", "urgency": urgency}),
+        );
         Ok(())
     }
 
     fn request_orb_flash(&self, flash_type: &str) -> Result<()> {
         info!(flash_type, "orb.flash requested");
+        self.emit_event(
+            "orb.state_changed",
+            serde_json::json!({"kind": "flash", "flash_type": flash_type}),
+        );
         Ok(())
     }
 
@@ -539,9 +573,10 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         // Create pipeline channels.
         let (text_tx, text_rx) = mpsc::unbounded_channel::<TextInjection>();
         let (gate_tx, gate_rx) = mpsc::unbounded_channel::<GateCommand>();
-        // Tool approvals: coordinator sends requests via this tx → UI receives
-        // via rx (not yet consumed; future phase will bridge to FFI).
-        let (approval_tx, _approval_rx) = mpsc::unbounded_channel::<ToolApprovalRequest>();
+        // Tool approvals: pipeline sends ToolApprovalRequest objects via this
+        // tx. The approval_rx is consumed by the approval bridge task which
+        // stores them in `pending_approvals` until `approval.respond` arrives.
+        let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ToolApprovalRequest>();
         let coordinator_approval_tx = approval_tx.clone();
         let (runtime_event_tx, mut runtime_event_rx) = broadcast::channel::<RuntimeEvent>(64);
 
@@ -562,6 +597,8 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let config = self.lock_config().map(|g| g.clone())?;
         let event_tx = self.event_tx.clone();
         let event_tx_bridge = self.event_tx.clone();
+        let event_tx_approval = self.event_tx.clone();
+        let pending_approvals_clone = Arc::clone(&self.pending_approvals);
         let cancel_token = token.clone();
 
         // Spawn the async startup + pipeline task.
@@ -655,6 +692,47 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             *guard = Some(bridge_jh);
         }
 
+        // ── Approval bridge ─────────────────────────────────────
+        // Drain ToolApprovalRequest messages from the pipeline into the
+        // pending_approvals map, and emit an event so Swift can show
+        // the approval dialog.
+        let approval_bridge_token = token.child_token();
+        let approval_bridge_jh = self.tokio_handle.spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = approval_bridge_token.cancelled() => break,
+                    req = approval_rx.recv() => {
+                        match req {
+                            Some(req) => {
+                                let id = req.id;
+                                let name = req.name.clone();
+                                let input_json = req.input_json.clone();
+                                // Emit event before storing so the UI sees
+                                // the request immediately.
+                                let envelope = EventEnvelope::new(
+                                    uuid::Uuid::new_v4().to_string(),
+                                    "approval.requested".to_owned(),
+                                    serde_json::json!({
+                                        "request_id": id.to_string(),
+                                        "name": name,
+                                        "input_json": input_json,
+                                    }),
+                                );
+                                let _ = event_tx_approval.send(envelope);
+                                if let Ok(mut map) = pending_approvals_clone.lock() {
+                                    map.insert(id, req);
+                                }
+                            }
+                            None => break, // sender dropped
+                        }
+                    }
+                }
+            }
+        });
+        if let Ok(mut guard) = self.approval_bridge_handle.lock() {
+            *guard = Some(approval_bridge_jh);
+        }
+
         if let Ok(mut guard) = self.pipeline_state.lock() {
             *guard = PipelineState::Running;
         }
@@ -699,6 +777,13 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             jh.abort();
         }
 
+        // Abort approval bridge task
+        if let Ok(mut guard) = self.approval_bridge_handle.lock()
+            && let Some(jh) = guard.take()
+        {
+            jh.abort();
+        }
+
         // Drop channel senders (closes channels)
         if let Ok(mut guard) = self.text_injection_tx.lock() {
             *guard = None;
@@ -714,6 +799,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         }
         if let Ok(mut guard) = self.pipeline_started_at.lock() {
             *guard = None;
+        }
+
+        // Clear any pending approval requests that will never be answered.
+        if let Ok(mut map) = self.pending_approvals.lock() {
+            map.clear();
         }
 
         if let Ok(mut guard) = self.pipeline_state.lock() {
@@ -758,31 +848,122 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         reason: Option<&str>,
     ) -> Result<()> {
         info!(request_id, approved, ?reason, "approval.respond received");
+
+        // Parse the numeric approval ID from the string request_id.
+        let numeric_id = request_id.parse::<u64>().map_err(|_| {
+            SpeechError::Pipeline(format!(
+                "approval.respond: request_id `{request_id}` is not a valid numeric ID"
+            ))
+        })?;
+
+        let req = self
+            .pending_approvals
+            .lock()
+            .map_err(|e| {
+                SpeechError::Pipeline(format!("pending_approvals lock poisoned: {e}"))
+            })?
+            .remove(&numeric_id)
+            .ok_or_else(|| {
+                SpeechError::Pipeline(format!(
+                    "approval.respond: no pending request with id `{request_id}`"
+                ))
+            })?;
+
+        let delivered = req.respond(approved);
+        if !delivered {
+            warn!(
+                request_id,
+                approved, "approval.respond: tool has already timed out or been cancelled"
+            );
+        }
+
         Ok(())
     }
 
     fn query_scheduler_list(&self) -> Result<serde_json::Value> {
         info!("scheduler.list queried");
-        Ok(serde_json::json!({"tasks": []}))
+        // If the state file is corrupt or missing, return an empty list so the
+        // UI degrades gracefully rather than blocking all scheduler operations.
+        let snapshot = match crate::scheduler::load_persisted_snapshot() {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("scheduler.list: failed to load state (returning empty): {e}");
+                crate::scheduler::SchedulerSnapshot::default()
+            }
+        };
+        let tasks_json: Vec<serde_json::Value> = snapshot
+            .tasks
+            .iter()
+            .filter_map(|t| serde_json::to_value(t).ok())
+            .collect();
+        Ok(serde_json::json!({"tasks": tasks_json}))
     }
 
     fn request_scheduler_create(&self, spec: &serde_json::Value) -> Result<serde_json::Value> {
         info!(?spec, "scheduler.create requested");
-        Ok(serde_json::json!({"id": null}))
+        let task: crate::scheduler::ScheduledTask =
+            serde_json::from_value(spec.clone()).map_err(|e| {
+                SpeechError::Scheduler(format!("scheduler.create: invalid task spec: {e}"))
+            })?;
+        let id = task.id.clone();
+        // If state is corrupt, recover by clearing it first then re-upsert.
+        if let Err(e) = crate::scheduler::upsert_persisted_user_task(task.clone()) {
+            warn!("scheduler.create: state corrupt ({e}), attempting recovery");
+            crate::scheduler::clear_persisted_state().ok();
+            crate::scheduler::upsert_persisted_user_task(task)?;
+        }
+        info!(id, "scheduler.create persisted");
+        Ok(serde_json::json!({"id": id}))
     }
 
     fn request_scheduler_update(&self, id: &str, spec: &serde_json::Value) -> Result<()> {
         info!(id, ?spec, "scheduler.update requested");
+        let task: crate::scheduler::ScheduledTask =
+            serde_json::from_value(spec.clone()).map_err(|e| {
+                SpeechError::Scheduler(format!("scheduler.update: invalid task spec: {e}"))
+            })?;
+        // If state is corrupt, recover by clearing first then re-upsert.
+        if let Err(e) = crate::scheduler::upsert_persisted_user_task(task.clone()) {
+            warn!("scheduler.update: state corrupt ({e}), attempting recovery");
+            crate::scheduler::clear_persisted_state().ok();
+            crate::scheduler::upsert_persisted_user_task(task)?;
+        }
+        info!(id, "scheduler.update persisted");
         Ok(())
     }
 
     fn request_scheduler_delete(&self, id: &str) -> Result<()> {
         info!(id, "scheduler.delete requested");
+        // If state is corrupt, treat delete as a no-op success (nothing to delete).
+        match crate::scheduler::remove_persisted_task(id) {
+            Ok(removed) => {
+                if !removed {
+                    warn!(id, "scheduler.delete: task not found");
+                }
+            }
+            Err(e) => {
+                warn!(id, "scheduler.delete: failed to load state ({e}), treating as not found");
+            }
+        }
         Ok(())
     }
 
     fn request_scheduler_trigger_now(&self, id: &str) -> Result<()> {
         info!(id, "scheduler.trigger_now requested");
+        // If state is corrupt, treat trigger as a no-op success.
+        match crate::scheduler::mark_persisted_task_due_now(id) {
+            Ok(found) => {
+                if !found {
+                    warn!(id, "scheduler.trigger_now: task not found");
+                }
+            }
+            Err(e) => {
+                warn!(
+                    id,
+                    "scheduler.trigger_now: failed to load state ({e}), treating as not found"
+                );
+            }
+        }
         Ok(())
     }
 

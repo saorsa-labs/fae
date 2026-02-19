@@ -104,3 +104,19 @@ Commit: 034ae6c
 - [x] Task 8: Lifecycle integration tests (events, channels, restart)
 
 Results: 2001 unit + 54 GUI + 44 doc + integration tests pass, zero warnings
+
+Commit: ff1458d
+
+### Phase 1.2 Complete — 2026-02-19
+
+**NOTE**: Phase 1.2 implementation also completed much of Phase 1.3 and all of Phase 1.4:
+- Phase 1.3 Tasks 1-3, 7 already done (text injection, gate commands, channel-not-ready handling, error propagation)
+- Phase 1.4 COMPLETE (all 26 RuntimeEvent variants mapped to EventEnvelope in map_runtime_event())
+
+## Phase 1.3: Wire Text Injection & Gate Commands - IN PROGRESS
+
+Remaining tasks (Tasks 1-3,7 already covered by Phase 1.2):
+- [ ] Task 4: Wire approval.respond to tool_approval channel
+- [ ] Task 5: Wire orb.palette.set/feeling.set to emit OrbStateChanged events
+- [ ] Task 6: Wire scheduler CRUD to actual scheduler module
+- [ ] Task 8: Integration tests for all wired commands
