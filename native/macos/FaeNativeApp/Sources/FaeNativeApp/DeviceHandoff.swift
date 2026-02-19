@@ -50,6 +50,17 @@ enum DeviceTarget: String, CaseIterable, Identifiable, Codable {
             return "handoff requested to Watch"
         }
     }
+
+    var systemImage: String {
+        switch self {
+        case .mac:
+            return "laptopcomputer"
+        case .iphone:
+            return "iphone"
+        case .watch:
+            return "applewatch"
+        }
+    }
 }
 
 enum DeviceCommand {

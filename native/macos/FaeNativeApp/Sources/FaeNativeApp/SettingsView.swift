@@ -47,9 +47,24 @@ struct SettingsView: View {
             }
 
             Section("Cross-Device Handoff") {
+                HStack {
+                    Image(systemName: handoff.currentTarget.systemImage)
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Current: \(handoff.currentTarget.label)")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        Text(handoff.handoffStateText)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .accessibilityLabel("Current device: \(handoff.currentTarget.label)")
+
                 HStack(spacing: 8) {
                     ForEach([DeviceTarget.watch, DeviceTarget.iphone, DeviceTarget.mac]) { target in
-                        Button("Move to \(target.label)") {
+                        Button {
                             if target == .mac {
                                 handoff.goHome(sourceCommand: "go home")
                                 orbState.mode = .idle
@@ -60,13 +75,13 @@ struct SettingsView: View {
                                 )
                                 orbState.mode = .listening
                             }
+                        } label: {
+                            Label(target.label, systemImage: target.systemImage)
                         }
                         .buttonStyle(.bordered)
+                        .accessibilityLabel("Transfer to \(target.label)")
                     }
                 }
-                Text(handoff.handoffStateText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
 
             Section("Audio") {
