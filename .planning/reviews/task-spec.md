@@ -1,26 +1,27 @@
 # Task Specification Review
 **Date**: 2026-02-19
-**Mode**: gsd (task 3, Phase 3.3)
-**Task**: Task 3 — UnregisteredMailStore + global_mail_store() in ffi_bridge.rs
-**Phase**: 3.3 Mail Tool & Tool Registration
+**Task**: Phase 3.4, Task 1 — SharedPermissionStore + AvailabilityGatedTool live-view update
 
 ## Spec Compliance
 
-### Task 3 Requirements (from PLAN-phase-3.3.md):
-- [x] Add `UnregisteredMailStore` struct implementing MailStore
-- [x] All methods return `MailStoreError::PermissionDenied("Apple Mail store not initialized...")`
-- [x] Add `global_mail_store() -> Arc<dyn MailStore>`
-- [x] Add 4 unit tests (list_messages, get_message, compose, global accessor)
-- [x] Follow exact pattern used for UnregisteredNoteStore
-- [x] Wire ComposeMailTool, SearchMailTool, GetMailTool into build_registry() in agent/mod.rs
-- [x] MockMailStore in mock_stores.rs (Task 4 also completed in this commit)
+Based on STATE.json (phase 3.4 "JIT Permission Flow", task 1 of 8):
 
-### Bonus: Tasks also covered in this diff:
-- [x] Formatting cleanup in src/host/handler.rs (cargo fmt compliance)
-- [x] Formatting cleanup in tests/phase_1_3_wired_commands.rs (cargo fmt compliance)
+The changes introduce `SharedPermissionStore` (`Arc<Mutex<PermissionStore>>`) as the 
+live-view permission type, and update `AvailabilityGatedTool` to use it. This is the 
+foundational plumbing for JIT permissions.
 
-## Scope Concerns
-- [OK] No scope creep detected — all changes are on the critical path for Task 3
-- [OK] handler.rs and wired_commands.rs changes are pure rustfmt reformatting, no logic changes
+### What was implemented:
+- [x] `SharedPermissionStore` type alias in `src/permissions.rs`
+- [x] `PermissionStore::into_shared()` method
+- [x] `PermissionStore::default_shared()` convenience method
+- [x] `AvailabilityGatedTool` updated to accept and lock `SharedPermissionStore`
+- [x] `LlmStageControl` has `shared_permissions: Option<SharedPermissionStore>` field
+- [x] Unit tests for `SharedPermissionStore` (4 tests in `permissions.rs`)
+- [x] Updated doc comments
 
-## Grade: A
+### What is BROKEN (call sites not updated):
+- [ ] `src/agent/mod.rs:521` — still uses `Arc::new(PermissionStore::default())` (old type) — BUILD BROKEN
+- [ ] `tests/apple_tool_registration.rs:27,38` — `build_apple_tools` still uses `Arc<PermissionStore>` — BUILD BROKEN
+- [ ] `src/pipeline/coordinator.rs:636,4178` — `LlmStageControl` initializers missing `shared_permissions` field — BUILD BROKEN
+
+## Grade: D (core logic correct, but call sites not updated — build broken)
