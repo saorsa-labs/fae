@@ -96,6 +96,8 @@ final class OnboardingWindowController: ObservableObject {
 
     private enum Layout {
         static let windowSize = NSSize(width: 520, height: 640)
+        static let minSize = NSSize(width: 440, height: 560)
+        static let maxSize = NSSize(width: 600, height: 720)
     }
 
     // MARK: - Initialisation
@@ -108,7 +110,7 @@ final class OnboardingWindowController: ObservableObject {
         // Build the window.
         let win = NSWindow(
             contentRect: NSRect(origin: .zero, size: Layout.windowSize),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -117,6 +119,8 @@ final class OnboardingWindowController: ObservableObject {
         win.titleVisibility = .hidden
         win.isReleasedWhenClosed = false
         win.backgroundColor = .clear
+        win.minSize = Layout.minSize
+        win.maxSize = Layout.maxSize
 
         // Glassmorphic blur background.
         // NSWindow automatically sizes its contentView to fill the content area,

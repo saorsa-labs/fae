@@ -443,6 +443,51 @@
     color: var(--text-muted);
   }
 
+  /* =========================================================
+     Responsive Layout
+     ========================================================= */
+  .screen {
+    padding: clamp(20px, 5vh, 40px) clamp(16px, 4vw, 32px);
+  }
+
+  .welcome-title {
+    font-size: clamp(1.4rem, 3.5vw, 1.8rem);
+  }
+
+  .permissions-title {
+    font-size: clamp(1rem, 2.5vw, 1.2rem);
+  }
+
+  .fae-bubble {
+    max-width: clamp(260px, 70vw, 340px);
+    font-size: clamp(0.88rem, 2vw, 1rem);
+  }
+
+  #screenPermissions {
+    max-width: clamp(300px, 80vw, 400px);
+  }
+
+  /* =========================================================
+     Reduced Motion
+     ========================================================= */
+  @media (prefers-reduced-motion: reduce) {
+    .screen {
+      transition: opacity 0.2s ease;
+      transform: none !important;
+    }
+    .screen.active {
+      transform: none !important;
+    }
+    .screen.exit-left {
+      transform: none !important;
+    }
+    .aura { animation: none; }
+    .orb-highlight { animation: none; }
+    .orb-speaking .dot { animation: none; opacity: 0.65; }
+    .listening-dot { animation: none; }
+    .fae-bubble { animation: none; opacity: 1; }
+  }
+
 </style>
 </head>
 <body>
