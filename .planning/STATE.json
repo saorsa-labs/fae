@@ -1,25 +1,25 @@
 {
   "version": 2,
   "project": "fae-native-production-readiness",
-  "active": false,
+  "active": true,
   "milestone": {
-    "number": 4,
-    "name": "Onboarding Redesign"
+    "number": 5,
+    "name": "Handoff & Production Polish"
   },
   "phase": {
-    "number": "4.3",
-    "name": "Model Download & First-Run Experience",
-    "plan": "PLAN-phase-4.3.md"
+    "number": "5.1",
+    "name": "Device Handoff",
+    "plan": "PLAN-phase-5.1.md"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 8,
-    "current_task": 8
+    "completed_tasks": 0,
+    "current_task": 0
   },
-  "status": "milestone_complete",
+  "status": "executing",
   "review": {
-    "status": "passed",
-    "iteration": 1
+    "status": "pending",
+    "iteration": 0
   },
-  "last_updated": "2026-02-19T19:30:00Z"
+  "last_updated": "2026-02-19T20:00:00Z"
 }
