@@ -4,13 +4,16 @@
 //!
 //! - **Contacts** — search, read, and create contacts via `CNContactStore`
 //! - **Calendar** — list, create, update, and delete calendar events via `EventKit`
+//! - **Reminders** — list, create, and complete reminders via `EventKit`
+//! - **Notes** — list, read, create, and append to notes via AppleScript
 //!
 //! # Architecture
 //!
-//! All tools depend on store traits ([`ContactStore`], [`CalendarStore`]) that abstract
-//! over the actual Apple-framework implementation.  The store implementations live in
-//! [`ffi_bridge`] (production, bridged through the Swift/C ABI) and in [`mock_stores`]
-//! (in-process mocks used for unit tests).
+//! All tools depend on store traits ([`ContactStore`], [`CalendarStore`],
+//! [`ReminderStore`], [`NoteStore`]) that abstract over the actual Apple-framework
+//! implementation.  The store implementations live in [`ffi_bridge`] (production,
+//! bridged through the Swift/C ABI) and in [`mock_stores`] (in-process mocks used
+//! for unit tests).
 //!
 //! # Permission gating
 //!
@@ -20,12 +23,16 @@
 //!
 //! [`ContactStore`]: contacts::ContactStore
 //! [`CalendarStore`]: calendar::CalendarStore
+//! [`ReminderStore`]: reminders::ReminderStore
+//! [`NoteStore`]: notes::NoteStore
 //! [`PermissionStore`]: crate::permissions::PermissionStore
 
 pub mod calendar;
 pub mod contacts;
 pub mod ffi_bridge;
 pub mod mock_stores;
+pub mod notes;
+pub mod reminders;
 pub mod trait_def;
 
 pub use calendar::{
@@ -37,5 +44,15 @@ pub use contacts::{
     Contact, ContactQuery, ContactStore, ContactStoreError, CreateContactTool, GetContactTool,
     NewContact, SearchContactsTool,
 };
-pub use ffi_bridge::{global_calendar_store, global_contact_store};
+pub use ffi_bridge::{
+    global_calendar_store, global_contact_store, global_note_store, global_reminder_store,
+};
+pub use notes::{
+    AppendToNoteTool, CreateNoteTool, GetNoteTool, ListNotesTool, NewNote, Note, NoteQuery,
+    NoteStore, NoteStoreError,
+};
+pub use reminders::{
+    CreateReminderTool, ListReminderListsTool, ListRemindersTool, NewReminder, Reminder,
+    ReminderList, ReminderQuery, ReminderStore, ReminderStoreError, SetReminderCompletedTool,
+};
 pub use trait_def::AppleEcosystemTool;

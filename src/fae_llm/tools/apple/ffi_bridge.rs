@@ -1,20 +1,18 @@
 //! FFI bridge stubs for Apple ecosystem stores.
 //!
-//! In production, the macOS Swift application registers real contact and
-//! calendar store implementations at startup via `fae_register_contact_store`
-//! and `fae_register_calendar_store`.  Before registration, all operations
-//! return a `PermissionDenied` error with a clear diagnostic message.
+//! In production, the macOS Swift application registers real store implementations
+//! at startup.  Before registration, all operations return a `PermissionDenied`
+//! error with a clear diagnostic message.
 //!
 //! # Design
 //!
-//! - `global_contact_store()` returns an `Arc<dyn ContactStore>` that is safe
-//!   to pass to tool constructors.
+//! - `global_contact_store()` returns an `Arc<dyn ContactStore>`.
 //! - `global_calendar_store()` returns an `Arc<dyn CalendarStore>`.
-//! - Both return `UnregisteredContactStore` / `UnregisteredCalendarStore`
-//!   until a real implementation is injected by the host platform.
+//! - `global_reminder_store()` returns an `Arc<dyn ReminderStore>`.
+//! - `global_note_store()` returns an `Arc<dyn NoteStore>`.
 //!
-//! The registration functions are intentionally not yet implemented: they
-//! will be added in Phase 3.4 when the JIT permission flow is wired.
+//! All return their respective `Unregistered*` stubs until a real implementation
+//! is injected by the host platform (Phase 3.4).
 //! For now the unregistered stores provide clear error messages that guide
 //! diagnostics without panicking.
 
@@ -25,6 +23,10 @@ use super::calendar::{
     NewCalendarEvent,
 };
 use super::contacts::{Contact, ContactQuery, ContactStore, ContactStoreError, NewContact};
+use super::notes::{NewNote, Note, NoteQuery, NoteStore, NoteStoreError};
+use super::reminders::{
+    NewReminder, Reminder, ReminderList, ReminderQuery, ReminderStore, ReminderStoreError,
+};
 
 // ─── Unregistered store implementations ──────────────────────────────────────
 
@@ -132,6 +134,122 @@ pub fn global_contact_store() -> Arc<dyn ContactStore> {
 /// replace this with a real store (Phase 3.4).
 pub fn global_calendar_store() -> Arc<dyn CalendarStore> {
     Arc::new(UnregisteredCalendarStore)
+}
+
+// ─── UnregisteredReminderStore ────────────────────────────────────────────────
+
+/// A no-op [`ReminderStore`] used before the Swift bridge registers a real
+/// implementation.
+///
+/// All operations return [`ReminderStoreError::PermissionDenied`] with a
+/// diagnostic message.
+pub struct UnregisteredReminderStore;
+
+impl ReminderStore for UnregisteredReminderStore {
+    fn list_reminder_lists(&self) -> Result<Vec<ReminderList>, ReminderStoreError> {
+        Err(ReminderStoreError::PermissionDenied(
+            "Apple Reminders store not initialized. \
+             The app must be running on macOS with Reminders permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn list_reminders(&self, _query: &ReminderQuery) -> Result<Vec<Reminder>, ReminderStoreError> {
+        Err(ReminderStoreError::PermissionDenied(
+            "Apple Reminders store not initialized. \
+             The app must be running on macOS with Reminders permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn get_reminder(&self, _identifier: &str) -> Result<Option<Reminder>, ReminderStoreError> {
+        Err(ReminderStoreError::PermissionDenied(
+            "Apple Reminders store not initialized. \
+             The app must be running on macOS with Reminders permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn create_reminder(&self, _reminder: &NewReminder) -> Result<Reminder, ReminderStoreError> {
+        Err(ReminderStoreError::PermissionDenied(
+            "Apple Reminders store not initialized. \
+             The app must be running on macOS with Reminders permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn set_completed(
+        &self,
+        _identifier: &str,
+        _completed: bool,
+    ) -> Result<Reminder, ReminderStoreError> {
+        Err(ReminderStoreError::PermissionDenied(
+            "Apple Reminders store not initialized. \
+             The app must be running on macOS with Reminders permission granted."
+                .to_owned(),
+        ))
+    }
+}
+
+/// Returns the global reminder store.
+///
+/// Currently always returns `UnregisteredReminderStore`.  When the Swift
+/// application starts and the user grants Reminders permission, the host will
+/// replace this with a real store (Phase 3.4).
+pub fn global_reminder_store() -> Arc<dyn ReminderStore> {
+    Arc::new(UnregisteredReminderStore)
+}
+
+// ─── UnregisteredNoteStore ────────────────────────────────────────────────────
+
+/// A no-op [`NoteStore`] used before the Swift bridge registers a real
+/// implementation.
+///
+/// All operations return [`NoteStoreError::PermissionDenied`] with a
+/// diagnostic message.
+pub struct UnregisteredNoteStore;
+
+impl NoteStore for UnregisteredNoteStore {
+    fn list_notes(&self, _query: &NoteQuery) -> Result<Vec<Note>, NoteStoreError> {
+        Err(NoteStoreError::PermissionDenied(
+            "Apple Notes store not initialized. \
+             The app must be running on macOS with Desktop Automation permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn get_note(&self, _identifier: &str) -> Result<Option<Note>, NoteStoreError> {
+        Err(NoteStoreError::PermissionDenied(
+            "Apple Notes store not initialized. \
+             The app must be running on macOS with Desktop Automation permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn create_note(&self, _note: &NewNote) -> Result<Note, NoteStoreError> {
+        Err(NoteStoreError::PermissionDenied(
+            "Apple Notes store not initialized. \
+             The app must be running on macOS with Desktop Automation permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn append_to_note(&self, _identifier: &str, _content: &str) -> Result<Note, NoteStoreError> {
+        Err(NoteStoreError::PermissionDenied(
+            "Apple Notes store not initialized. \
+             The app must be running on macOS with Desktop Automation permission granted."
+                .to_owned(),
+        ))
+    }
+}
+
+/// Returns the global note store.
+///
+/// Currently always returns `UnregisteredNoteStore`.  When the Swift
+/// application starts and the user grants Desktop Automation permission, the
+/// host will replace this with a real store (Phase 3.4).
+pub fn global_note_store() -> Arc<dyn NoteStore> {
+    Arc::new(UnregisteredNoteStore)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -265,6 +383,114 @@ mod tests {
     fn global_calendar_store_returns_unregistered() {
         let store = global_calendar_store();
         let result = store.list_calendars();
+        assert!(result.is_err());
+    }
+
+    // ── UnregisteredReminderStore ─────────────────────────────────────────────
+
+    #[test]
+    fn unregistered_reminder_store_list_lists_returns_permission_denied() {
+        let store = UnregisteredReminderStore;
+        let err = store.list_reminder_lists();
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_reminder_store_list_reminders_returns_permission_denied() {
+        let store = UnregisteredReminderStore;
+        let query = ReminderQuery {
+            list_id: None,
+            include_completed: false,
+            limit: 10,
+        };
+        let err = store.list_reminders(&query);
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_reminder_store_create_returns_permission_denied() {
+        let store = UnregisteredReminderStore;
+        let reminder = NewReminder {
+            title: "Test".to_owned(),
+            list_id: None,
+            notes: None,
+            due_date: None,
+            priority: None,
+        };
+        let err = store.create_reminder(&reminder);
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_reminder_store_set_completed_returns_permission_denied() {
+        let store = UnregisteredReminderStore;
+        let err = store.set_completed("rem-001", true);
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn global_reminder_store_returns_unregistered() {
+        let store = global_reminder_store();
+        let result = store.list_reminder_lists();
+        assert!(result.is_err());
+    }
+
+    // ── UnregisteredNoteStore ─────────────────────────────────────────────────
+
+    #[test]
+    fn unregistered_note_store_list_notes_returns_permission_denied() {
+        let store = UnregisteredNoteStore;
+        let query = NoteQuery {
+            folder: None,
+            search: None,
+            limit: 10,
+        };
+        let err = store.list_notes(&query);
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_note_store_get_returns_permission_denied() {
+        let store = UnregisteredNoteStore;
+        let err = store.get_note("note-001");
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_note_store_create_returns_permission_denied() {
+        let store = UnregisteredNoteStore;
+        let note = NewNote {
+            title: "Test".to_owned(),
+            body: "Content".to_owned(),
+            folder: None,
+        };
+        let err = store.create_note(&note);
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_note_store_append_returns_permission_denied() {
+        let store = UnregisteredNoteStore;
+        let err = store.append_to_note("note-001", "extra text");
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn global_note_store_returns_unregistered() {
+        let store = global_note_store();
+        let result = store.list_notes(&NoteQuery {
+            folder: None,
+            search: None,
+            limit: 5,
+        });
         assert!(result.is_err());
     }
 }

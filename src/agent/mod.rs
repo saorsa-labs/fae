@@ -510,12 +510,16 @@ fn build_registry(
     // in ReadOnly mode; mutation tools require Full mode.
     if !matches!(config.tool_mode, AgentToolMode::Off) {
         use crate::fae_llm::tools::apple::{
-            CreateContactTool, CreateEventTool, DeleteEventTool, GetContactTool, ListCalendarsTool,
-            ListEventsTool, SearchContactsTool, UpdateEventTool, global_calendar_store,
-            global_contact_store,
+            AppendToNoteTool, CreateContactTool, CreateEventTool, CreateNoteTool,
+            CreateReminderTool, DeleteEventTool, GetContactTool, GetNoteTool, ListCalendarsTool,
+            ListEventsTool, ListNotesTool, ListReminderListsTool, ListRemindersTool,
+            SearchContactsTool, SetReminderCompletedTool, UpdateEventTool, global_calendar_store,
+            global_contact_store, global_note_store, global_reminder_store,
         };
         let contacts = global_contact_store();
         let calendars = global_calendar_store();
+        let reminders = global_reminder_store();
+        let notes = global_note_store();
         registry.register(Arc::new(SearchContactsTool::new(Arc::clone(&contacts))));
         registry.register(Arc::new(GetContactTool::new(Arc::clone(&contacts))));
         registry.register(Arc::new(CreateContactTool::new(contacts)));
@@ -524,6 +528,14 @@ fn build_registry(
         registry.register(Arc::new(CreateEventTool::new(Arc::clone(&calendars))));
         registry.register(Arc::new(UpdateEventTool::new(Arc::clone(&calendars))));
         registry.register(Arc::new(DeleteEventTool::new(calendars)));
+        registry.register(Arc::new(ListReminderListsTool::new(Arc::clone(&reminders))));
+        registry.register(Arc::new(ListRemindersTool::new(Arc::clone(&reminders))));
+        registry.register(Arc::new(CreateReminderTool::new(Arc::clone(&reminders))));
+        registry.register(Arc::new(SetReminderCompletedTool::new(reminders)));
+        registry.register(Arc::new(ListNotesTool::new(Arc::clone(&notes))));
+        registry.register(Arc::new(GetNoteTool::new(Arc::clone(&notes))));
+        registry.register(Arc::new(CreateNoteTool::new(Arc::clone(&notes))));
+        registry.register(Arc::new(AppendToNoteTool::new(notes)));
     }
 
     Arc::new(registry)
