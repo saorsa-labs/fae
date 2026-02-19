@@ -248,6 +248,27 @@ pub enum PipelineMode {
     Conversation,
     /// Transcription only: capture → VAD → STT → print.
     TranscribeOnly,
+    /// Text-only degraded mode: no audio capture/STT stages.
+    ///
+    /// Activated when audio capture or STT is unavailable. Only
+    /// `TextInjection` inputs are accepted. LLM + TTS stages still run.
+    TextOnly,
+    /// LLM-only degraded mode: no TTS or audio playback.
+    ///
+    /// Activated when TTS or audio playback is unavailable. STT inputs are
+    /// accepted but responses are emitted as text events only (no audio).
+    LlmOnly,
+}
+
+impl std::fmt::Display for PipelineMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conversation => write!(f, "conversation"),
+            Self::TranscribeOnly => write!(f, "transcribe_only"),
+            Self::TextOnly => write!(f, "text_only"),
+            Self::LlmOnly => write!(f, "llm_only"),
+        }
+    }
 }
 
 /// Orchestrates the full speech-to-speech pipeline.
@@ -816,6 +837,65 @@ impl PipelineCoordinator {
 
                 cancel.cancelled().await;
                 info!("pipeline shutting down");
+
+                if let Some(aec) = aec_handle {
+                    let _ = aec.await;
+                }
+
+                let _ = tokio::join!(capture_handle, vad_handle, stt_handle, print_handle,);
+            }
+            PipelineMode::TextOnly => {
+                // Degraded mode: audio capture/STT unavailable.
+                // Abort audio stages and wait for cancellation.
+                drop(ref_handle_playback);
+                // Drop the channel receivers so audio stages drain and exit.
+                drop(transcription_rx);
+                drop(control_rx);
+                // Emit degraded_mode event.
+                if let Some(ref rt_tx) = runtime_tx {
+                    let _ = rt_tx.send(RuntimeEvent::Control(
+                        crate::pipeline::messages::ControlEvent::DegradedMode {
+                            mode: "text_only".to_owned(),
+                        },
+                    ));
+                }
+                info!("pipeline running in text-only degraded mode");
+
+                // Abort the audio stages — they have no work to do.
+                capture_handle.abort();
+                vad_handle.abort();
+                stt_handle.abort();
+                if let Some(aec) = aec_handle {
+                    aec.abort();
+                }
+
+                cancel.cancelled().await;
+                info!("pipeline (text-only) shutdown complete");
+            }
+            PipelineMode::LlmOnly => {
+                // Degraded mode: TTS/playback unavailable.
+                // Run capture → VAD → STT → print (skip TTS/playback stages).
+                drop(ref_handle_playback);
+                let _control_rx = control_rx;
+                // Emit degraded_mode event.
+                if let Some(ref rt_tx) = runtime_tx {
+                    let _ = rt_tx.send(RuntimeEvent::Control(
+                        crate::pipeline::messages::ControlEvent::DegradedMode {
+                            mode: "llm_only".to_owned(),
+                        },
+                    ));
+                }
+                info!("pipeline running in LLM-only degraded mode (no TTS/playback)");
+                let print_handle = {
+                    let cancel = cancel.clone();
+                    let runtime_tx = runtime_tx.clone();
+                    tokio::spawn(async move {
+                        run_print_stage(transcription_rx, runtime_tx, console_output, cancel).await;
+                    })
+                };
+
+                cancel.cancelled().await;
+                info!("pipeline (LLM-only) shutting down");
 
                 if let Some(aec) = aec_handle {
                     let _ = aec.await;
@@ -2811,6 +2891,15 @@ async fn run_conversation_gate(
                             println!("\n[{display_name}] Standing by.\n");
                         }
                         info!("gate sleep command received, returning to idle");
+                    }
+                    GateCommand::RestartAudio { ref device_name } => {
+                        let name = device_name.as_deref().unwrap_or("<default>");
+                        info!(device = name, "gate: audio device changed — cancelling pipeline for restart");
+                        // Cancel the pipeline so the handler can restart with the
+                        // new default audio device. The restart watcher detects the
+                        // unexpected exit and emits the auto_restart event.
+                        ctl.cancel.cancel();
+                        break;
                     }
                     _ => {} // Already in requested state, ignore.
                 }

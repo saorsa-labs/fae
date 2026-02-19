@@ -51,6 +51,20 @@ pub struct SpeechConfig {
     pub onboarding_phase: crate::onboarding::OnboardingPhase,
     /// Security-scoped bookmarks for persistent file access under App Sandbox.
     pub bookmarks: Vec<BookmarkEntry>,
+    /// Optional SHA-256 checksums for model files.
+    ///
+    /// Keys are model names (e.g. `"llm"`, `"stt"`, `"tts"`); values are
+    /// 64-character lowercase hex digests. When a key is present the
+    /// corresponding model file is verified before the pipeline starts.
+    /// Missing keys mean no verification for that model.
+    ///
+    /// Example `config.toml` entry:
+    /// ```toml
+    /// [model_checksums]
+    /// llm = "abc123..."
+    /// ```
+    #[serde(default)]
+    pub model_checksums: std::collections::HashMap<String, String>,
 }
 
 /// A persisted security-scoped bookmark for App Sandbox file access.
@@ -354,6 +368,13 @@ pub struct LlmConfig {
     /// candidate. Defaults to 30 seconds.
     #[serde(default = "default_model_selection_timeout_secs")]
     pub model_selection_timeout_secs: u32,
+    /// Network timeout in milliseconds for external LLM API calls.
+    ///
+    /// Applies when the backend is `Api` or `Agent` with a remote provider.
+    /// Transient failures (timeout, 5xx) trigger a retry with this timeout.
+    /// Defaults to 30 000 ms (30 seconds).
+    #[serde(default = "default_network_timeout_ms")]
+    pub network_timeout_ms: u64,
 }
 
 impl Default for LlmConfig {
@@ -391,6 +412,7 @@ impl Default for LlmConfig {
             external_profile: None,
             enable_local_fallback: default_enable_local_fallback(),
             model_selection_timeout_secs: default_model_selection_timeout_secs(),
+            network_timeout_ms: default_network_timeout_ms(),
         }
     }
 }
@@ -413,6 +435,10 @@ pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize
         Some(_) => 65_536,
         None => 32_768,
     }
+}
+
+fn default_network_timeout_ms() -> u64 {
+    30_000
 }
 
 fn default_enable_local_fallback() -> bool {

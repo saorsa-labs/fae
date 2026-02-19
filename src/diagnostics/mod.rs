@@ -1,4 +1,4 @@
-//! Diagnostic bundle creation for user-facing log gathering.
+//! Diagnostic bundle creation and log rotation.
 //!
 //! Creates a timestamped zip file in the diagnostics directory containing:
 //! - Log files
@@ -6,6 +6,8 @@
 //! - Basic system information
 //!
 //! Explicitly excludes: memory records, conversations, voice samples, API keys.
+
+pub mod log_rotation;
 
 use crate::error::{Result, SpeechError};
 use std::fs;

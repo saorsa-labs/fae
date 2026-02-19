@@ -5,6 +5,7 @@
 //! - **API** (remote): Any OpenAI-compatible server (MLX, vLLM, llama.cpp, etc.).
 
 pub mod api;
+pub mod fallback;
 
 pub use api::ApiLlm;
 

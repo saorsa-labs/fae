@@ -20,6 +20,23 @@ pub enum ControlEvent {
         /// Whether playback ended due to interruption.
         interrupted: bool,
     },
+    /// The default audio input device changed.
+    ///
+    /// Emitted by the gate stage when a [`GateCommand::RestartAudio`] is
+    /// received. The pipeline cancels itself after emitting this event so
+    /// the handler can restart with the new device.
+    AudioDeviceChanged {
+        /// Display name of the new input device, or `None` if unavailable.
+        device_name: Option<String>,
+    },
+    /// The pipeline has entered a degraded operating mode.
+    ///
+    /// Emitted by the coordinator when it detects that a required stage is
+    /// unavailable (e.g., no audio device for `text_only`, no TTS for `llm_only`).
+    DegradedMode {
+        /// The new operating mode name (`"text_only"`, `"llm_only"`, etc.).
+        mode: String,
+    },
 }
 
 /// A chunk of raw audio samples from the microphone.
@@ -97,6 +114,15 @@ pub enum GateCommand {
     Wake,
     /// Deactivate the gate (equivalent to stop phrase).
     Sleep,
+    /// Signal that the audio input device has changed.
+    ///
+    /// The pipeline should stop the current capture stage and re-initialize
+    /// audio capture from the new default input device.  The new device name
+    /// is provided for logging and event emission.
+    RestartAudio {
+        /// Display name of the new audio input device (for telemetry/events).
+        device_name: Option<String>,
+    },
 }
 
 /// Synthesized audio from TTS, ready for playback.
