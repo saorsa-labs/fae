@@ -129,6 +129,24 @@ final class DeviceHandoffController: ObservableObject {
     /// and shows an offline message when `false`.
     @Published private(set) var isNetworkAvailable: Bool = true
 
+    /// Whether device handoff is enabled. Backed by UserDefaults.
+    /// When disabled: no NSUserActivity published, no iCloud KV writes,
+    /// toolbar button hidden, NWPathMonitor stopped.
+    @Published var handoffEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(handoffEnabled, forKey: Self.handoffEnabledKey)
+            if !handoffEnabled {
+                activeActivity?.invalidate()
+                activeActivity = nil
+                pathMonitor.cancel()
+            } else {
+                startNetworkMonitor()
+            }
+        }
+    }
+
+    private static let handoffEnabledKey = "fae.handoff.enabled"
+
     /// Inject a closure that produces the current conversation snapshot on demand.
     /// The app layer wires this from ConversationController / OrbStateController
     /// without creating a tight coupling between the types.
@@ -157,14 +175,28 @@ final class DeviceHandoffController: ObservableObject {
     /// Pending handoff that failed due to network — retried once on restore.
     private var pendingRetry: (target: DeviceTarget, command: String?)?
 
+    /// Timer that fires 30 s after a handoff is published; shows a warning if
+    /// no completion signal has been received by then.
+    private var handoffTimeoutTask: Task<Void, Never>?
+
     // MARK: - Init / Deinit
 
     init() {
-        startNetworkMonitor()
+        // Default to true if the key has never been written.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: Self.handoffEnabledKey) == nil {
+            self.handoffEnabled = true
+        } else {
+            self.handoffEnabled = defaults.bool(forKey: Self.handoffEnabledKey)
+        }
+        if handoffEnabled {
+            startNetworkMonitor()
+        }
     }
 
     deinit {
         pathMonitor.cancel()
+        handoffTimeoutTask?.cancel()
         activeActivity?.invalidate()
     }
 
@@ -211,6 +243,11 @@ final class DeviceHandoffController: ObservableObject {
             return
         }
 
+        guard handoffEnabled else {
+            lastCommandText = "Handoff is disabled"
+            return
+        }
+
         currentTarget = target
         handoffStateText = target.handoffLabel
         lastCommandText = sourceCommand ?? "Move to \(target.label)"
@@ -236,6 +273,8 @@ final class DeviceHandoffController: ObservableObject {
         handoffStateText = DeviceTarget.mac.handoffLabel
         lastCommandText = sourceCommand ?? "Go home"
 
+        handoffTimeoutTask?.cancel()
+        handoffTimeoutTask = nil
         activeActivity?.invalidate()
         activeActivity = nil
     }
@@ -254,12 +293,11 @@ final class DeviceHandoffController: ObservableObject {
         ]
 
         // Serialise conversation snapshot when a provider is available.
-        // Encoding failures are silently ignored — the activity degrades
-        // gracefully to target/command only.
-        if let provider = snapshotProvider,
-           let data = try? snapshotEncoder.encode(provider()),
-           let jsonString = String(data: data, encoding: .utf8) {
-            info["conversationSnapshot"] = jsonString
+        // Entries are capped to maxEntries to stay within NSUserActivity
+        // userInfo platform size limits. Encoding failures are logged; the
+        // activity degrades gracefully to target/command only.
+        if let json = snapshotJSON() {
+            info["conversationSnapshot"] = json
         }
 
         activity.userInfo = info
@@ -273,5 +311,51 @@ final class DeviceHandoffController: ObservableObject {
         activeActivity?.invalidate()
         activity.becomeCurrent()
         activeActivity = activity
+
+        // Start a 30-second watchdog. If the handoff is still active when it
+        // fires, surface a soft warning that the transfer may not have completed.
+        startHandoffTimeout(target: target)
+    }
+
+    /// Builds a JSON string for the conversation snapshot, capping entries to
+    /// `ConversationSnapshot.maxEntries` and logging any encoding failure.
+    private func snapshotJSON() -> String? {
+        guard let provider = snapshotProvider else { return nil }
+        let raw = provider()
+        let cappedEntries = Array(raw.entries.suffix(ConversationSnapshot.maxEntries))
+        let trimmed = ConversationSnapshot(
+            entries: cappedEntries,
+            orbMode: raw.orbMode,
+            orbFeeling: raw.orbFeeling,
+            timestamp: raw.timestamp
+        )
+        do {
+            let data = try snapshotEncoder.encode(trimmed)
+            return String(data: data, encoding: .utf8)
+        } catch {
+            NSLog("DeviceHandoffController: snapshot encode failed — %@",
+                  error.localizedDescription)
+            return nil
+        }
+    }
+
+    // MARK: - Handoff Timeout
+
+    /// Starts a 30-second watchdog. If the handoff is still active after that
+    /// interval (i.e. `goHome` was not called), updates `handoffStateText` with
+    /// a soft warning so the user knows the transfer may not have completed.
+    private func startHandoffTimeout(target: DeviceTarget) {
+        handoffTimeoutTask?.cancel()
+        handoffTimeoutTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+            } catch {
+                return // cancelled — handoff completed normally or user went home
+            }
+            guard let self, self.currentTarget == target else { return }
+            self.handoffStateText = "Transfer may not have completed"
+            NSLog("DeviceHandoffController: handoff to %@ timed out after 30s",
+                  target.rawValue)
+        }
     }
 }

@@ -47,6 +47,13 @@ struct SettingsView: View {
             }
 
             Section("Cross-Device Handoff") {
+                Toggle("Enable Handoff", isOn: $handoff.handoffEnabled)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text("Transfer conversations between your Apple devices.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if handoff.handoffEnabled {
                 HStack {
                     Image(systemName: handoff.currentTarget.systemImage)
                         .font(.title3)
@@ -82,6 +89,7 @@ struct SettingsView: View {
                         .accessibilityLabel("Transfer to \(target.label)")
                     }
                 }
+                } // if handoffEnabled
             }
 
             Section("Audio") {
