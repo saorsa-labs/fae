@@ -379,7 +379,7 @@ impl PipelineCoordinator {
         self
     }
 
-    /// Thread a live [`SharedPermissionStore`] into the LLM stage.
+    /// Thread a live [`crate::permissions::SharedPermissionStore`] into the LLM stage.
     ///
     /// When set, the Apple ecosystem tool availability gates use this store to
     /// check permissions at execution time.  Runtime grants (via

@@ -290,3 +290,31 @@ Results: Swift build clean (zero errors, zero warnings).
 - [x] Task 8: Swift build clean (zero source errors, zero warnings); HTML validates OK
 
 Results: Swift build clean (zero errors, zero warnings). All 4 permission cards functional end-to-end.
+
+### Phase 4.3: App Integration & Release — 2026-02-19
+
+- [x] Task 1: tests/llm_config_integration.rs — 9 config integration tests (round-trip, comments, unknown fields, partial updates, validation)
+- [x] Task 2: tests/llm_toml_roundtrip.rs — 9 TOML round-trip preservation tests (comments, ordering, unknown sections, arrays-of-tables)
+- [x] Task 3: src/fae_llm/docs/OPERATOR_GUIDE.md — complete operator guide (all providers, secret modes, tool modes, session, tracing, troubleshooting)
+- [x] Task 4: src/fae_llm/docs/DEVELOPER_GUIDE.md + ARCHITECTURE.md — developer guide + architecture overview
+- [x] Task 5: Public API audit — zero missing docs warnings; all pub exports documented and necessary; validate_config fixed to skip disabled providers
+- [x] Task 6: Release candidate validation — just check passes (fmt, lint, build-strict, test, doc, panic-scan); 2493/2493 tests pass; zero warnings
+- [x] Task 7: Final integration smoke test — tests/llm_final_smoke.rs (subsystem initialization); existing integration tests cover E2E
+- [x] Task 8: Release readiness checklist — STATE.json → milestone_complete; zero TODO/FIXME; zero clippy warnings; zero doc warnings
+
+Fixes applied:
+- src/agent/mod.rs: fixed 2 clippy::field_reassign_with_default warnings in test code
+- src/fae_llm/config/service.rs: validate_config now skips empty base_url check for disabled providers
+- src/linker_anchor.rs: fixed 4 unresolved doc links (fully-qualified crate paths)
+- src/pipeline/coordinator.rs: fixed SharedPermissionStore doc link
+- src/fae_llm/tools/apple/availability_gate.rs: fixed with_jit_channel + JIT_TIMEOUT doc links
+
+Results: 2493/2493 tests pass, zero clippy warnings, zero doc warnings, just check EXIT CODE: 0
+
+### Milestone 4 Complete — 2026-02-19
+### Onboarding Redesign DONE
+
+Summary of Milestone 4:
+- Phase 4.1: Glassmorphic Design & Separate Window (NSWindow, glassmorphic blur, warm palette, slide transitions, animated orb)
+- Phase 4.2: Permission Cards with Help (calendar/mail cards, privacy banner, TTS help, OnboardingController wiring)
+- Phase 4.3: App Integration & Release (config tests, TOML round-trip tests, operator/developer docs, API audit, release validation)

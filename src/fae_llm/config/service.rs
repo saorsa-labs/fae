@@ -281,9 +281,9 @@ pub fn validate_config(config: &FaeLlmConfig) -> Result<(), FaeLlmError> {
         )));
     }
 
-    // Check provider base_urls are non-empty
+    // Check provider base_urls are non-empty (only for enabled providers)
     for (name, provider) in &config.providers {
-        if provider.base_url.is_empty() {
+        if provider.enabled && provider.base_url.is_empty() {
             return Err(FaeLlmError::ConfigValidationError(format!(
                 "provider '{name}' has empty base_url"
             )));

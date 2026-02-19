@@ -7,8 +7,10 @@
 //! removes code not reachable from exported symbols.  The only exported symbols
 //! are the 8 `extern "C"` FFI functions in [`crate::ffi`].  Those functions
 //! route through stub command handlers that never construct
-//! [`PipelineCoordinator`], [`ParakeetStt`], [`KokoroTts`], [`LocalLlm`], or
-//! audio subsystem types.  The linker strips all ML and audio code, shrinking
+//! [`crate::pipeline::coordinator::PipelineCoordinator`],
+//! [`crate::stt::ParakeetStt`], [`crate::tts::KokoroTts`],
+//! [`crate::llm::LocalLlm`], or audio subsystem types.  The linker strips all
+//! ML and audio code, shrinking
 //! the binary from ~100 MB to ~9 MB.
 //!
 //! # Solution

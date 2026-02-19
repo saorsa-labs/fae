@@ -15,7 +15,7 @@
 //!
 //! ## JIT permission requests
 //!
-//! When a `jit_request_tx` channel is configured via [`with_jit_channel`], the
+//! When a `jit_request_tx` channel is configured via [`AvailabilityGatedTool::with_jit_channel`], the
 //! tool can emit a [`JitPermissionRequest`] and block (up to 60 seconds) while
 //! the native dialog awaits user response.  On grant the tool execution proceeds
 //! immediately; on deny a graceful failure is returned to the LLM.
@@ -51,7 +51,7 @@ pub struct AvailabilityGatedTool {
     /// Optional JIT request channel.
     ///
     /// When `Some`, the gate emits a [`JitPermissionRequest`] and blocks up
-    /// to [`JIT_TIMEOUT`] for a response before falling back to the
+    /// to `JIT_TIMEOUT` (60 s) for a response before falling back to the
     /// standard "permission not granted" failure.
     jit_request_tx: Option<mpsc::UnboundedSender<JitPermissionRequest>>,
 }
@@ -110,7 +110,7 @@ impl Tool for AvailabilityGatedTool {
     ///
     /// If the permission is not granted and a JIT channel is configured, emits
     /// a [`JitPermissionRequest`] and blocks (spin-loop, 25 ms intervals) until
-    /// the user responds via the native dialog or [`JIT_TIMEOUT`] elapses.  On
+    /// the user responds via the native dialog or `JIT_TIMEOUT` (60 s) elapses.  On
     /// grant the permission store is expected to be updated externally (via
     /// `capability.grant`) so the re-check succeeds.
     ///

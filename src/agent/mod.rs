@@ -873,8 +873,10 @@ mod tests {
 
     #[tokio::test]
     async fn api_backend_requires_explicit_remote_endpoint() {
-        let mut config = LlmConfig::default();
-        config.backend = LlmBackend::Api;
+        let config = LlmConfig {
+            backend: LlmBackend::Api,
+            ..LlmConfig::default()
+        };
         let manager = NoopCredentialManager;
 
         let provider = build_provider(&config, None, &manager).await;
@@ -891,9 +893,11 @@ mod tests {
 
     #[tokio::test]
     async fn api_backend_requires_model_id() {
-        let mut config = LlmConfig::default();
-        config.backend = LlmBackend::Api;
-        config.api_url = "http://127.0.0.1:8080/v1".to_owned();
+        let config = LlmConfig {
+            backend: LlmBackend::Api,
+            api_url: "http://127.0.0.1:8080/v1".to_owned(),
+            ..LlmConfig::default()
+        };
         let manager = NoopCredentialManager;
 
         let provider = build_provider(&config, None, &manager).await;
