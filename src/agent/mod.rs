@@ -510,16 +510,18 @@ fn build_registry(
     // in ReadOnly mode; mutation tools require Full mode.
     if !matches!(config.tool_mode, AgentToolMode::Off) {
         use crate::fae_llm::tools::apple::{
-            AppendToNoteTool, CreateContactTool, CreateEventTool, CreateNoteTool,
-            CreateReminderTool, DeleteEventTool, GetContactTool, GetNoteTool, ListCalendarsTool,
-            ListEventsTool, ListNotesTool, ListReminderListsTool, ListRemindersTool,
-            SearchContactsTool, SetReminderCompletedTool, UpdateEventTool, global_calendar_store,
-            global_contact_store, global_note_store, global_reminder_store,
+            AppendToNoteTool, ComposeMailTool, CreateContactTool, CreateEventTool, CreateNoteTool,
+            CreateReminderTool, DeleteEventTool, GetContactTool, GetMailTool, GetNoteTool,
+            ListCalendarsTool, ListEventsTool, ListNotesTool, ListReminderListsTool,
+            ListRemindersTool, SearchContactsTool, SearchMailTool, SetReminderCompletedTool,
+            UpdateEventTool, global_calendar_store, global_contact_store, global_mail_store,
+            global_note_store, global_reminder_store,
         };
         let contacts = global_contact_store();
         let calendars = global_calendar_store();
         let reminders = global_reminder_store();
         let notes = global_note_store();
+        let mail = global_mail_store();
         registry.register(Arc::new(SearchContactsTool::new(Arc::clone(&contacts))));
         registry.register(Arc::new(GetContactTool::new(Arc::clone(&contacts))));
         registry.register(Arc::new(CreateContactTool::new(contacts)));
@@ -536,6 +538,9 @@ fn build_registry(
         registry.register(Arc::new(GetNoteTool::new(Arc::clone(&notes))));
         registry.register(Arc::new(CreateNoteTool::new(Arc::clone(&notes))));
         registry.register(Arc::new(AppendToNoteTool::new(notes)));
+        registry.register(Arc::new(SearchMailTool::new(Arc::clone(&mail))));
+        registry.register(Arc::new(GetMailTool::new(Arc::clone(&mail))));
+        registry.register(Arc::new(ComposeMailTool::new(mail)));
     }
 
     Arc::new(registry)

@@ -23,6 +23,7 @@ use super::calendar::{
     NewCalendarEvent,
 };
 use super::contacts::{Contact, ContactQuery, ContactStore, ContactStoreError, NewContact};
+use super::mail::{Mail, MailQuery, MailStore, MailStoreError, NewMail};
 use super::notes::{NewNote, Note, NoteQuery, NoteStore, NoteStoreError};
 use super::reminders::{
     NewReminder, Reminder, ReminderList, ReminderQuery, ReminderStore, ReminderStoreError,
@@ -250,6 +251,50 @@ impl NoteStore for UnregisteredNoteStore {
 /// host will replace this with a real store (Phase 3.4).
 pub fn global_note_store() -> Arc<dyn NoteStore> {
     Arc::new(UnregisteredNoteStore)
+}
+
+// ─── UnregisteredMailStore ────────────────────────────────────────────────────
+
+/// A no-op [`MailStore`] used before the Swift bridge registers a real
+/// implementation.
+///
+/// All operations return [`MailStoreError::PermissionDenied`] with a
+/// diagnostic message.
+pub struct UnregisteredMailStore;
+
+impl MailStore for UnregisteredMailStore {
+    fn list_messages(&self, _query: &MailQuery) -> Result<Vec<Mail>, MailStoreError> {
+        Err(MailStoreError::PermissionDenied(
+            "Apple Mail store not initialized. \
+             The app must be running on macOS with Mail permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn get_message(&self, _identifier: &str) -> Result<Option<Mail>, MailStoreError> {
+        Err(MailStoreError::PermissionDenied(
+            "Apple Mail store not initialized. \
+             The app must be running on macOS with Mail permission granted."
+                .to_owned(),
+        ))
+    }
+
+    fn compose(&self, _mail: &NewMail) -> Result<Mail, MailStoreError> {
+        Err(MailStoreError::PermissionDenied(
+            "Apple Mail store not initialized. \
+             The app must be running on macOS with Mail permission granted."
+                .to_owned(),
+        ))
+    }
+}
+
+/// Returns the global mail store.
+///
+/// Currently always returns `UnregisteredMailStore`.  When the Swift
+/// application starts and the user grants Mail permission, the host will
+/// replace this with a real store (Phase 3.4).
+pub fn global_mail_store() -> Arc<dyn MailStore> {
+    Arc::new(UnregisteredMailStore)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -491,6 +536,57 @@ mod tests {
             search: None,
             limit: 5,
         });
+        assert!(result.is_err());
+    }
+
+    // ── UnregisteredMailStore ─────────────────────────────────────────────────
+
+    #[test]
+    fn unregistered_mail_store_list_messages_returns_permission_denied() {
+        let store = UnregisteredMailStore;
+        let query = MailQuery {
+            search: None,
+            mailbox: None,
+            unread_only: false,
+            limit: 10,
+        };
+        let err = store.list_messages(&query);
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_mail_store_get_message_returns_permission_denied() {
+        let store = UnregisteredMailStore;
+        let err = store.get_message("mail-001");
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn unregistered_mail_store_compose_returns_permission_denied() {
+        let store = UnregisteredMailStore;
+        let new_mail = NewMail {
+            to: "alice@example.com".to_owned(),
+            subject: "Test".to_owned(),
+            body: "Hello.".to_owned(),
+            cc: None,
+        };
+        let err = store.compose(&new_mail);
+        assert!(err.is_err());
+        assert!(err.err().unwrap().to_string().contains("not initialized"));
+    }
+
+    #[test]
+    fn global_mail_store_returns_unregistered() {
+        let store = global_mail_store();
+        let query = MailQuery {
+            search: None,
+            mailbox: None,
+            unread_only: false,
+            limit: 5,
+        };
+        let result = store.list_messages(&query);
         assert!(result.is_err());
     }
 }

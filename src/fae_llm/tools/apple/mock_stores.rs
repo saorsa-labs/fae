@@ -1,5 +1,5 @@
 //! In-memory mock implementations of [`ContactStore`], [`CalendarStore`],
-//! [`ReminderStore`], and [`NoteStore`].
+//! [`ReminderStore`], [`NoteStore`], and [`MailStore`].
 //!
 //! These are used exclusively in tests to exercise the tool layer without
 //! requiring a macOS runtime or Apple framework access.
@@ -11,6 +11,7 @@ use super::calendar::{
     NewCalendarEvent,
 };
 use super::contacts::{Contact, ContactQuery, ContactStore, ContactStoreError, NewContact};
+use super::mail::{Mail, MailQuery, MailStore, MailStoreError, NewMail};
 use super::notes::{NewNote, Note, NoteQuery, NoteStore, NoteStoreError};
 use super::reminders::{
     NewReminder, Reminder, ReminderList, ReminderQuery, ReminderStore, ReminderStoreError,
@@ -509,5 +510,115 @@ impl NoteStore for MockNoteStore {
         note.modified_at = Some("2026-02-19T12:00:00".to_owned());
 
         Ok(note.clone())
+    }
+}
+
+// ─── MockMailStore ────────────────────────────────────────────────────────────
+
+/// An in-memory mail store for unit testing.
+///
+/// Supports filtering by search term (across subject, sender, body),
+/// mailbox, and unread status.  The `compose` operation appends a new
+/// message with a deterministic identifier.
+pub struct MockMailStore {
+    messages: Mutex<Vec<Mail>>,
+    next_id: Mutex<u64>,
+}
+
+impl MockMailStore {
+    /// Create a mock store seeded with `messages`.
+    pub fn new(messages: Vec<Mail>) -> Self {
+        Self {
+            messages: Mutex::new(messages),
+            next_id: Mutex::new(5000),
+        }
+    }
+}
+
+impl MailStore for MockMailStore {
+    fn list_messages(&self, query: &MailQuery) -> Result<Vec<Mail>, MailStoreError> {
+        let messages = self
+            .messages
+            .lock()
+            .map_err(|_| MailStoreError::Backend("mock lock poisoned".to_owned()))?;
+
+        let search_lower = query
+            .search
+            .as_deref()
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+
+        let results: Vec<Mail> = messages
+            .iter()
+            .filter(|m| {
+                // Mailbox filter
+                if let Some(ref mailbox) = query.mailbox
+                    && m.mailbox.as_deref() != Some(mailbox.as_str())
+                {
+                    return false;
+                }
+                // Unread filter
+                if query.unread_only && m.is_read {
+                    return false;
+                }
+                // Search term filter
+                if !search_lower.is_empty() {
+                    let subject_lower = m.subject.to_ascii_lowercase();
+                    let from_lower = m.from.to_ascii_lowercase();
+                    let body_lower = m.body.to_ascii_lowercase();
+                    if !subject_lower.contains(&search_lower)
+                        && !from_lower.contains(&search_lower)
+                        && !body_lower.contains(&search_lower)
+                    {
+                        return false;
+                    }
+                }
+                true
+            })
+            .take(query.limit)
+            .cloned()
+            .collect();
+
+        Ok(results)
+    }
+
+    fn get_message(&self, identifier: &str) -> Result<Option<Mail>, MailStoreError> {
+        let messages = self
+            .messages
+            .lock()
+            .map_err(|_| MailStoreError::Backend("mock lock poisoned".to_owned()))?;
+
+        Ok(messages
+            .iter()
+            .find(|m| m.identifier == identifier)
+            .cloned())
+    }
+
+    fn compose(&self, mail: &NewMail) -> Result<Mail, MailStoreError> {
+        let mut messages = self
+            .messages
+            .lock()
+            .map_err(|_| MailStoreError::Backend("mock lock poisoned".to_owned()))?;
+        let mut next_id = self
+            .next_id
+            .lock()
+            .map_err(|_| MailStoreError::Backend("mock lock poisoned".to_owned()))?;
+
+        let id = format!("mock-mail-{}", *next_id);
+        *next_id += 1;
+
+        let new_mail = Mail {
+            identifier: id,
+            from: "me@example.com".to_owned(),
+            to: mail.to.clone(),
+            subject: mail.subject.clone(),
+            body: mail.body.clone(),
+            mailbox: Some("Sent".to_owned()),
+            is_read: true,
+            date: Some("2026-02-19T12:00:00".to_owned()),
+        };
+
+        messages.push(new_mail.clone());
+        Ok(new_mail)
     }
 }
