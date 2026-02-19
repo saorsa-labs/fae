@@ -6,7 +6,7 @@ use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
 use crate::host::contract::EventEnvelope;
 use crate::onboarding::OnboardingPhase;
-use crate::permissions::PermissionKind;
+use crate::permissions::{PermissionKind, SharedPermissionStore};
 use crate::pipeline::coordinator::PipelineCoordinator;
 use crate::pipeline::messages::{GateCommand, TextInjection};
 use crate::progress::ProgressEvent;
@@ -38,6 +38,15 @@ pub(crate) enum PipelineState {
 pub struct FaeDeviceTransferHandler {
     config: Mutex<SpeechConfig>,
     config_path: PathBuf,
+    /// Live shared permission store.
+    ///
+    /// This is the canonical permission state at runtime.  It starts as a
+    /// copy of `config.permissions` and is updated in-place whenever
+    /// `grant_capability` or `deny_capability` is called.  All
+    /// `AvailabilityGatedTool` instances that hold a clone of this
+    /// `SharedPermissionStore` see changes immediately without re-building
+    /// the tool registry.
+    shared_permissions: SharedPermissionStore,
     // Pipeline lifecycle
     tokio_handle: tokio::runtime::Handle,
     event_tx: broadcast::Sender<EventEnvelope>,
@@ -79,9 +88,13 @@ impl FaeDeviceTransferHandler {
         tokio_handle: tokio::runtime::Handle,
         event_tx: broadcast::Sender<EventEnvelope>,
     ) -> Self {
+        // Initialise the shared permissions from the persisted config so that
+        // previously-granted permissions are visible to tools immediately.
+        let shared_permissions = config.permissions.clone().into_shared();
         Self {
             config: Mutex::new(config),
             config_path,
+            shared_permissions,
             tokio_handle,
             event_tx,
             pipeline_state: Mutex::new(PipelineState::Stopped),
@@ -95,6 +108,15 @@ impl FaeDeviceTransferHandler {
             approval_bridge_handle: Mutex::new(None),
             pipeline_started_at: Mutex::new(None),
         }
+    }
+
+    /// Return a clone of the live [`SharedPermissionStore`].
+    ///
+    /// The returned handle shares the same underlying store as the handler —
+    /// any grants or denials applied through the handler are immediately
+    /// visible through this clone.
+    pub fn shared_permissions(&self) -> SharedPermissionStore {
+        Arc::clone(&self.shared_permissions)
     }
 
     /// Create a handler using the default config path.
@@ -449,6 +471,27 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         drop(guard);
 
         self.save_config()?;
+
+        // Update the live shared store so tools see the grant immediately.
+        if let Ok(mut perms) = self.shared_permissions.lock() {
+            perms.grant(kind);
+        }
+
+        // Emit permissions.changed so the conversation UI can update in real-time.
+        let all_granted: Vec<String> = self
+            .shared_permissions
+            .lock()
+            .map(|g| g.all_granted().iter().map(|k| k.to_string()).collect())
+            .unwrap_or_default();
+        self.emit_event(
+            "permissions.changed",
+            serde_json::json!({
+                "kind": kind.to_string(),
+                "granted": true,
+                "all_granted": all_granted,
+            }),
+        );
+
         info!(%kind, "capability.grant persisted to config");
         Ok(())
     }
@@ -462,6 +505,27 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         drop(guard);
 
         self.save_config()?;
+
+        // Update the live shared store so tools see the revocation immediately.
+        if let Ok(mut perms) = self.shared_permissions.lock() {
+            perms.deny(kind);
+        }
+
+        // Emit permissions.changed so the conversation UI can update in real-time.
+        let all_granted: Vec<String> = self
+            .shared_permissions
+            .lock()
+            .map(|g| g.all_granted().iter().map(|k| k.to_string()).collect())
+            .unwrap_or_default();
+        self.emit_event(
+            "permissions.changed",
+            serde_json::json!({
+                "kind": kind.to_string(),
+                "granted": false,
+                "all_granted": all_granted,
+            }),
+        );
+
         info!(%kind, "capability.deny persisted to config");
         Ok(())
     }
@@ -600,6 +664,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let event_tx_approval = self.event_tx.clone();
         let pending_approvals_clone = Arc::clone(&self.pending_approvals);
         let cancel_token = token.clone();
+        // Pass the live shared permission store so that JIT grants applied
+        // while the pipeline runs are immediately visible to the tool gate.
+        let shared_perms_for_pipeline = Arc::clone(&self.shared_permissions);
 
         // Spawn the async startup + pipeline task.
         let pipeline_jh = self.tokio_handle.spawn(async move {
@@ -636,7 +703,8 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 .with_text_injection(text_rx)
                 .with_gate_commands(gate_rx)
                 .with_tool_approvals(coordinator_approval_tx)
-                .with_console_output(false);
+                .with_console_output(false)
+                .with_shared_permissions(shared_perms_for_pipeline);
 
             // Run until cancelled or pipeline exits.
             tokio::select! {

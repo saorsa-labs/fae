@@ -435,7 +435,9 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
                 "capability": request.capability,
                 "scope": request.scope,
                 "reason": request.reason,
-                "jit": request.jit
+                "jit": request.jit,
+                "tool_name": request.tool_name,
+                "tool_action": request.tool_action,
             }),
         );
 
@@ -865,6 +867,10 @@ struct CapabilityRequestPayload {
     scope: Option<String>,
     /// Whether this is a just-in-time request triggered mid-conversation.
     jit: bool,
+    /// The tool name that triggered this JIT request (e.g. `"search_contacts"`).
+    tool_name: Option<String>,
+    /// Human-readable description of the action the LLM was attempting.
+    tool_action: Option<String>,
 }
 
 #[derive(Debug)]
@@ -881,11 +887,25 @@ fn parse_capability_request(payload: &serde_json::Value) -> Result<CapabilityReq
         .get("jit")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let tool_name = payload
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let tool_action = payload
+        .get("tool_action")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
     Ok(CapabilityRequestPayload {
         capability,
         reason,
         scope,
         jit,
+        tool_name,
+        tool_action,
     })
 }
 

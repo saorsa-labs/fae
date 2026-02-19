@@ -18,13 +18,13 @@ use fae::fae_llm::tools::apple::{
     global_mail_store, global_note_store, global_reminder_store,
 };
 use fae::fae_llm::tools::types::Tool;
-use fae::permissions::{PermissionKind, PermissionStore};
+use fae::permissions::{PermissionKind, PermissionStore, SharedPermissionStore};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Build all 19 Apple tools using the global (unregistered) stores and
 /// wrap each with [`AvailabilityGatedTool`] — mirroring production wiring.
-fn build_apple_tools(perms: Arc<PermissionStore>) -> Vec<Arc<dyn Tool>> {
+fn build_apple_tools(perms: SharedPermissionStore) -> Vec<Arc<dyn Tool>> {
     let contacts = global_contact_store();
     let calendars = global_calendar_store();
     let reminders = global_reminder_store();
@@ -64,7 +64,7 @@ fn build_apple_tools(perms: Arc<PermissionStore>) -> Vec<Arc<dyn Tool>> {
 }
 
 /// Register all Apple tools into a [`ToolRegistry`].
-fn build_registry_with_apple_tools(perms: Arc<PermissionStore>) -> ToolRegistry {
+fn build_registry_with_apple_tools(perms: SharedPermissionStore) -> ToolRegistry {
     let mut registry = ToolRegistry::new(ToolMode::Full);
     for tool in build_apple_tools(perms) {
         registry.register(tool);
@@ -99,7 +99,7 @@ const EXPECTED_APPLE_TOOL_NAMES: [&str; 19] = [
 
 #[test]
 fn all_19_apple_tools_registered_in_full_mode() {
-    let perms = Arc::new(PermissionStore::default());
+    let perms = PermissionStore::default_shared();
     let registry = build_registry_with_apple_tools(perms);
     let available = registry.list_available();
 
@@ -121,7 +121,7 @@ fn all_19_apple_tools_registered_in_full_mode() {
 
 #[test]
 fn mail_tools_registered_and_retrievable() {
-    let perms = Arc::new(PermissionStore::default());
+    let perms = PermissionStore::default_shared();
     let registry = build_registry_with_apple_tools(perms);
 
     let mail_names = ["compose_mail", "search_mail", "get_mail"];
@@ -215,7 +215,7 @@ fn unregistered_mail_store_returns_permission_denied() {
 
 #[test]
 fn availability_gate_blocks_execution_without_permission() {
-    let perms = Arc::new(PermissionStore::default());
+    let perms = PermissionStore::default_shared();
     let store = global_contact_store();
     let gated =
         AvailabilityGatedTool::new(Arc::new(SearchContactsTool::new(store)), Arc::clone(&perms));
@@ -235,7 +235,7 @@ fn availability_gate_blocks_execution_without_permission() {
 
 #[test]
 fn availability_gate_blocks_mail_tool_without_permission() {
-    let perms = Arc::new(PermissionStore::default());
+    let perms = PermissionStore::default_shared();
     let store = global_mail_store();
     let gated =
         AvailabilityGatedTool::new(Arc::new(ComposeMailTool::new(store)), Arc::clone(&perms));
@@ -266,7 +266,7 @@ fn availability_gate_allows_execution_with_permission() {
     // should allow the call through — the store error is a separate concern.
     let mut store = PermissionStore::default();
     store.grant(PermissionKind::Contacts);
-    let perms = Arc::new(store);
+    let perms = store.into_shared();
 
     let contact_store = global_contact_store();
     let gated = AvailabilityGatedTool::new(
@@ -301,7 +301,7 @@ fn availability_gate_allows_execution_with_permission() {
 fn availability_gate_allows_mail_with_permission() {
     let mut store = PermissionStore::default();
     store.grant(PermissionKind::Mail);
-    let perms = Arc::new(store);
+    let perms = store.into_shared();
 
     let mail_store = global_mail_store();
     let gated = AvailabilityGatedTool::new(
@@ -352,7 +352,7 @@ fn rate_limiter_default_apple_has_capacity_10() {
 
 #[test]
 fn all_apple_tools_have_nonempty_names_and_descriptions() {
-    let perms = Arc::new(PermissionStore::default());
+    let perms = PermissionStore::default_shared();
     let tools = build_apple_tools(perms);
 
     for tool in &tools {
@@ -384,7 +384,7 @@ fn all_apple_tools_have_nonempty_names_and_descriptions() {
 
 #[test]
 fn all_apple_tools_have_valid_json_schemas() {
-    let perms = Arc::new(PermissionStore::default());
+    let perms = PermissionStore::default_shared();
     let tools = build_apple_tools(perms);
 
     for tool in &tools {
@@ -416,7 +416,7 @@ fn all_apple_tools_have_valid_json_schemas() {
 
 #[test]
 fn registry_schemas_for_api_include_all_apple_tools() {
-    let perms = Arc::new(PermissionStore::default());
+    let perms = PermissionStore::default_shared();
     let registry = build_registry_with_apple_tools(perms);
     let schemas = registry.schemas_for_api();
 

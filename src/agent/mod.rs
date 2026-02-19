@@ -24,6 +24,7 @@ use crate::fae_llm::tools::{
     BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool,
 };
 use crate::llm::LocalLlm;
+use crate::permissions::SharedPermissionStore;
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -56,8 +57,42 @@ impl FaeAgentLlm {
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
         credential_manager: &dyn crate::credentials::CredentialManager,
     ) -> Result<Self> {
+        Self::new_with_permissions(
+            config,
+            preloaded_llm,
+            runtime_tx,
+            tool_approval_tx,
+            canvas_registry,
+            credential_manager,
+            None,
+        )
+        .await
+    }
+
+    /// Create a new agent with an explicit live [`SharedPermissionStore`].
+    ///
+    /// When `shared_permissions` is `Some`, the Apple ecosystem tool gate
+    /// uses this store to check permissions at execution time, enabling JIT
+    /// permission grants to be reflected without rebuilding the tool registry.
+    ///
+    /// When `None` is passed, a fresh default store is created (backward
+    /// compatible with callers that do not thread a shared store).
+    pub async fn new_with_permissions(
+        config: &LlmConfig,
+        preloaded_llm: Option<LocalLlm>,
+        runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+        tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+        canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+        credential_manager: &dyn crate::credentials::CredentialManager,
+        shared_permissions: Option<SharedPermissionStore>,
+    ) -> Result<Self> {
         let provider = build_provider(config, preloaded_llm.as_ref(), credential_manager).await;
-        let registry = build_registry(config, tool_approval_tx, canvas_registry);
+        let registry = build_registry(
+            config,
+            tool_approval_tx,
+            canvas_registry,
+            shared_permissions,
+        );
 
         let history = vec![Message::system(config.effective_system_prompt())];
 
@@ -406,10 +441,20 @@ fn normalize_base_url(url: &str) -> String {
     }
 }
 
+/// Build a tool registry from the config.
+///
+/// `shared_permissions` is the live permission store to pass to all
+/// `AvailabilityGatedTool` instances.  When `None`, a default (empty) shared
+/// store is created — this is the fallback for callers that don't thread the
+/// handler's store (e.g. `brain.rs`, `gui.rs`).  Production callers
+/// (pipeline coordinator) should pass the handler's `shared_permissions()` so
+/// that runtime grants are immediately visible to tools without a registry
+/// rebuild.
 fn build_registry(
     config: &LlmConfig,
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+    shared_permissions: Option<SharedPermissionStore>,
 ) -> Arc<ToolRegistry> {
     let mode = match config.tool_mode {
         AgentToolMode::Off | AgentToolMode::ReadOnly => ToolMode::ReadOnly,
@@ -507,6 +552,10 @@ fn build_registry(
     // Apple ecosystem tools — always registered in non-Off modes.
     // Each tool is wrapped with AvailabilityGatedTool so execution is blocked
     // at runtime when the required permission has not been granted.
+    //
+    // The `shared_permissions` parameter threads the live permission store from
+    // the command handler so that JIT grants (capability.grant via FFI) are
+    // immediately visible to the gate without rebuilding the registry.
     if !matches!(config.tool_mode, AgentToolMode::Off) {
         use crate::fae_llm::tools::apple::{
             AppendToNoteTool, AvailabilityGatedTool, ComposeMailTool, CreateContactTool,
@@ -518,7 +567,8 @@ fn build_registry(
         };
         use crate::permissions::PermissionStore;
 
-        let perms: Arc<PermissionStore> = Arc::new(PermissionStore::default());
+        let perms: SharedPermissionStore =
+            shared_permissions.unwrap_or_else(PermissionStore::default_shared);
         let contacts = global_contact_store();
         let calendars = global_calendar_store();
         let reminders = global_reminder_store();

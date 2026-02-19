@@ -4,10 +4,20 @@
 //! by a [`PermissionKind`] variant. The [`PermissionStore`] tracks which
 //! permissions the user has granted or denied, persisting in `config.toml`
 //! under `[permissions]`.
+//!
+//! ## Live permission store
+//!
+//! [`SharedPermissionStore`] is an `Arc<Mutex<PermissionStore>>` intended for
+//! sharing across threads that need to observe runtime permission changes (e.g.
+//! the tool availability gate and the command handler that processes
+//! `capability.grant` commands).  Use [`PermissionStore::into_shared`] to
+//! convert a store into a shareable handle.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 
 /// A system capability that Fae can request access to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,6 +101,44 @@ impl FromStr for PermissionKind {
     }
 }
 
+/// A thread-safe, live-view permission store.
+///
+/// `SharedPermissionStore` is an `Arc<Mutex<PermissionStore>>` that allows
+/// multiple owners (e.g. the command handler and tool availability gates) to
+/// observe the *same* store at runtime.  When the handler grants or revokes a
+/// permission the change is immediately visible through every clone of this
+/// handle.
+pub type SharedPermissionStore = Arc<Mutex<PermissionStore>>;
+
+/// A just-in-time (JIT) permission request sent by an [`AvailabilityGatedTool`]
+/// when it needs a permission that has not yet been granted.
+///
+/// The requestor blocks on `respond_to` until the user grants or denies the
+/// permission through the native dialog.  A response of `true` means granted,
+/// `false` means denied.
+///
+/// [`AvailabilityGatedTool`]: crate::fae_llm::tools::apple::AvailabilityGatedTool
+pub struct JitPermissionRequest {
+    /// The permission kind being requested.
+    pub kind: PermissionKind,
+    /// The name of the tool that triggered the JIT request (e.g. `"search_contacts"`).
+    pub tool_name: String,
+    /// Human-readable description of what the LLM was trying to do.
+    pub reason: String,
+    /// Oneshot channel to deliver the user's response (`true` = granted, `false` = denied).
+    pub respond_to: oneshot::Sender<bool>,
+}
+
+impl std::fmt::Debug for JitPermissionRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JitPermissionRequest")
+            .field("kind", &self.kind)
+            .field("tool_name", &self.tool_name)
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Error returned when parsing an unknown permission kind string.
 #[derive(Debug, Clone)]
 pub struct PermissionParseError(pub String);
@@ -128,6 +176,24 @@ impl PermissionStore {
     /// Read-only access to the underlying grant records.
     pub fn grants(&self) -> &[PermissionGrant] {
         &self.grants
+    }
+
+    /// Convert this store into a [`SharedPermissionStore`].
+    ///
+    /// Wraps `self` in `Arc<Mutex<_>>` so multiple threads (e.g. the command
+    /// handler and all `AvailabilityGatedTool` instances) can observe the same
+    /// live permission state.
+    #[must_use]
+    pub fn into_shared(self) -> SharedPermissionStore {
+        Arc::new(Mutex::new(self))
+    }
+
+    /// Create a default, empty [`SharedPermissionStore`].
+    ///
+    /// Convenience shorthand for `PermissionStore::default().into_shared()`.
+    #[must_use]
+    pub fn default_shared() -> SharedPermissionStore {
+        Self::default().into_shared()
     }
 }
 
@@ -289,5 +355,55 @@ mod tests {
     #[test]
     fn test_fromstr_unknown_returns_error() {
         assert!("unknown_perm".parse::<PermissionKind>().is_err());
+    }
+
+    // ── SharedPermissionStore tests ──────────────────────────────────────
+
+    #[test]
+    fn shared_store_reflects_runtime_grant() {
+        let shared = PermissionStore::default_shared();
+        let clone = Arc::clone(&shared);
+
+        // Grant through one handle.
+        shared.lock().unwrap().grant(PermissionKind::Contacts);
+
+        // Observe through the other handle.
+        assert!(
+            clone.lock().unwrap().is_granted(PermissionKind::Contacts),
+            "cloned handle should see runtime grant"
+        );
+    }
+
+    #[test]
+    fn shared_store_reflects_runtime_deny() {
+        let shared = PermissionStore::default_shared();
+        let clone = Arc::clone(&shared);
+
+        shared.lock().unwrap().grant(PermissionKind::Mail);
+        clone.lock().unwrap().deny(PermissionKind::Mail);
+
+        assert!(
+            !shared.lock().unwrap().is_granted(PermissionKind::Mail),
+            "original handle should see deny applied through clone"
+        );
+    }
+
+    #[test]
+    fn default_shared_starts_empty() {
+        let shared = PermissionStore::default_shared();
+        assert!(shared.lock().unwrap().all_granted().is_empty());
+    }
+
+    #[test]
+    fn into_shared_preserves_existing_grants() {
+        let mut store = PermissionStore::default();
+        store.grant(PermissionKind::Calendar);
+        store.grant(PermissionKind::Reminders);
+
+        let shared = store.into_shared();
+        let guard = shared.lock().unwrap();
+        assert!(guard.is_granted(PermissionKind::Calendar));
+        assert!(guard.is_granted(PermissionKind::Reminders));
+        assert!(!guard.is_granted(PermissionKind::Mail));
     }
 }

@@ -263,6 +263,12 @@ pub struct PipelineCoordinator {
     gate_cmd_rx: Option<mpsc::UnboundedReceiver<GateCommand>>,
     gate_active: Arc<AtomicBool>,
     console_output: bool,
+    /// Live shared permission store from the command handler.
+    ///
+    /// When set via [`with_shared_permissions`], this is threaded into the
+    /// LLM stage so JIT grants from `capability.grant` commands are
+    /// immediately visible to Apple ecosystem tool gates.
+    shared_permissions: Option<crate::permissions::SharedPermissionStore>,
     /// Sender for voice commands detected by the pipeline filter.
     ///
     /// Created during `run()` and passed to the LLM stage (Phase 2.2)
@@ -284,6 +290,7 @@ impl PipelineCoordinator {
             gate_cmd_rx: None,
             gate_active: Arc::new(AtomicBool::new(false)),
             console_output: true,
+            shared_permissions: None,
             voice_command_tx: None,
         }
     }
@@ -304,6 +311,7 @@ impl PipelineCoordinator {
             gate_cmd_rx: None,
             gate_active: Arc::new(AtomicBool::new(false)),
             console_output: true,
+            shared_permissions: None,
             voice_command_tx: None,
         }
     }
@@ -368,6 +376,20 @@ impl PipelineCoordinator {
     /// UI frontends should set this to `false` to avoid corrupting rendering.
     pub fn with_console_output(mut self, enabled: bool) -> Self {
         self.console_output = enabled;
+        self
+    }
+
+    /// Thread a live [`SharedPermissionStore`] into the LLM stage.
+    ///
+    /// When set, the Apple ecosystem tool availability gates use this store to
+    /// check permissions at execution time.  Runtime grants (via
+    /// `capability.grant` commands from the command handler) are immediately
+    /// visible — no pipeline restart is needed.
+    pub fn with_shared_permissions(
+        mut self,
+        permissions: crate::permissions::SharedPermissionStore,
+    ) -> Self {
+        self.shared_permissions = Some(permissions);
         self
     }
 
@@ -612,6 +634,7 @@ impl PipelineCoordinator {
                     let runtime_tx = runtime_tx.clone();
                     let tool_approval_tx = tool_approval_tx.clone();
                     let canvas_registry = canvas_registry.clone();
+                    let shared_permissions = self.shared_permissions.clone();
                     tokio::task::spawn_blocking(move || {
                         let runtime = match tokio::runtime::Builder::new_current_thread()
                             .enable_all()
@@ -633,6 +656,7 @@ impl PipelineCoordinator {
                                 runtime_tx,
                                 tool_approval_tx,
                                 canvas_registry,
+                                shared_permissions,
                                 console_output,
                                 cancel,
                                 voice_command_rx: Some(voice_cmd_rx),
@@ -1545,6 +1569,12 @@ struct LlmStageControl {
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+    /// Live shared permission store from the command handler.
+    ///
+    /// When `Some`, this is passed to `FaeAgentLlm::new_with_permissions` so
+    /// that JIT grants from `capability.grant` commands are immediately
+    /// visible to Apple ecosystem tool gates without a registry rebuild.
+    shared_permissions: Option<crate::permissions::SharedPermissionStore>,
     console_output: bool,
     cancel: CancellationToken,
     voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
@@ -1598,13 +1628,14 @@ async fn run_llm_stage(
     }
 
     let credential_manager = crate::credentials::create_manager();
-    let mut engine = match FaeAgentLlm::new(
+    let mut engine = match FaeAgentLlm::new_with_permissions(
         &config.llm,
         preloaded,
         ctl.runtime_tx.clone(),
         ctl.tool_approval_tx.clone(),
         ctl.canvas_registry.clone(),
         credential_manager.as_ref(),
+        ctl.shared_permissions.clone(),
     )
     .await
     {
@@ -1666,6 +1697,7 @@ async fn run_llm_stage(
         runtime_tx,
         tool_approval_tx: _,
         canvas_registry: _,
+        shared_permissions: _,
         console_output,
         cancel,
         voice_command_rx,
@@ -4154,6 +4186,7 @@ mod tests {
             runtime_tx,
             tool_approval_tx: None,
             canvas_registry: None,
+            shared_permissions: None,
             console_output: false,
             cancel: CancellationToken::new(),
             voice_command_rx: None,
