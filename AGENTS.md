@@ -143,7 +143,6 @@ Fae's macOS app embeds the Rust core directly via C ABI. The app is the brain.
 ### Non-negotiables for native app work
 
 - Never introduce a subprocess/sidecar dependency for the primary Swift→Rust path.
-  The current `ProcessCommandSender` (stdin/stdout subprocess) is interim scaffolding.
 - The FFI surface (`src/ffi.rs`) must remain thin — only control-plane operations.
 - Data-plane operations (mic capture, STT, LLM, TTS, playback) stay in-process.
 - No PCM audio or high-frequency token deltas across process boundaries.
@@ -151,12 +150,12 @@ Fae's macOS app embeds the Rust core directly via C ABI. The app is the brain.
 - Memory writes and audit logs always go through the Rust core, never Swift-side.
 - The embedded core inherits macOS sandbox/entitlements naturally.
 
-### Current state (interim)
+### Current state
 
-`ProcessCommandSender.swift` spawns `fae-host` as a subprocess with stdin/stdout pipes.
-This will be replaced by direct C ABI calls when `libfae` is ready. The host command
-protocol (`src/host/contract.rs`) remains unchanged — it just moves from pipe transport
-to direct function calls.
+`EmbeddedCoreSender.swift` calls `extern "C"` functions in `src/ffi.rs` directly
+via C ABI. The Rust core runs in-process — no subprocess, no IPC for the primary path.
+`ProcessCommandSender.swift` is retained only as a fallback reference and is not used
+in production.
 
 ### File map
 
@@ -164,19 +163,23 @@ Swift-side:
 
 | File | Role |
 |------|------|
+| `native/macos/.../FaeNativeApp.swift` | App entry, environment wiring, embedded core init |
+| `native/macos/.../EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
 | `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
-| `native/macos/.../ProcessCommandSender.swift` | Interim subprocess bridge (to be replaced by FFI sender) |
-| `native/macos/.../WindowStateController.swift` | Adaptive window modes (collapsed/compact/expanded) |
-| `native/macos/.../ConversationWebView.swift` | WKWebView bridge for orb + conversation UI |
+| `native/macos/.../WindowStateController.swift` | Adaptive window modes (collapsed/compact) |
+| `native/macos/.../AuxiliaryWindowManager.swift` | Independent conversation & canvas NSPanels |
+| `native/macos/.../ConversationWebView.swift` | WKWebView bridge for orb animation + input bar |
 
 Rust-side:
 
 | File | Role |
 |------|------|
+| `src/ffi.rs` | C ABI entry points (`extern "C"` functions) |
 | `src/host/contract.rs` | Command/event envelope schemas (shared by both modes) |
 | `src/host/channel.rs` | Command router and `DeviceTransferHandler` trait |
-| `src/host/stdio.rs` | Stdin/stdout bridge (interim, becomes IPC-only) |
-| `src/bin/host_bridge.rs` | Headless bridge binary (interim, becomes `faed` for Mode B) |
+| `src/host/handler.rs` | Runtime lifecycle, pipeline management |
+| `src/host/stdio.rs` | Stdin/stdout bridge (Mode B / IPC only) |
+| `src/bin/host_bridge.rs` | Headless bridge binary (Mode B / `faed` daemon) |
 
 Architecture docs:
 

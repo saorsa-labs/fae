@@ -37,10 +37,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (no default features)
-        run: cargo clippy --no-default-features --all-targets -- -D warnings
+        run: cargo clippy --no-default-features --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
 
       - name: Clippy (GUI feature)
-        run: cargo clippy --features gui --all-targets -- -D warnings
+        run: cargo clippy --features gui --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
 
   test:
     name: Tests

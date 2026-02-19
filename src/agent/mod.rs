@@ -761,8 +761,17 @@ impl Tool for ApprovalTool {
 
     fn execute(&self, args: serde_json::Value) -> std::result::Result<ToolResult, FaeLlmError> {
         let Some(approval_tx) = &self.approval_tx else {
-            tracing::info!("no approval channel, executing tool directly");
-            return self.inner.execute(args);
+            // Fail-closed: refuse to execute mutating tools when no approval
+            // channel is wired.  This prevents channel-originated requests
+            // (Discord, etc.) from silently bypassing interactive approval.
+            tracing::warn!(
+                "tool '{}' denied: no approval channel available (fail-closed)",
+                self.inner.name()
+            );
+            return Err(FaeLlmError::ToolExecutionError(format!(
+                "tool '{}' requires approval but no approval channel is available",
+                self.inner.name()
+            )));
         };
 
         let (respond_to, mut response_rx) = oneshot::channel::<ToolApprovalResponse>();

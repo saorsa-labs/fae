@@ -123,46 +123,48 @@ The Fae.app always uses Mode A. Mode B is for third-party UIs, CLI tools, or com
 - Scheduler authority, memory, pipeline, and safety policy all live in the Rust core.
 - macOS sandbox and entitlements apply naturally to the in-process Rust code.
 
-### Current state (interim)
+### Current state
 
-The current implementation uses a subprocess sidecar (`fae-host` binary via stdin/stdout
-pipes in `ProcessCommandSender.swift`). This is a development stepping stone. The migration
-to embedded `libfae` is tracked in `docs/architecture/embedded-core.md`.
+`EmbeddedCoreSender.swift` calls `extern "C"` functions in `src/ffi.rs` directly.
+The Rust core runs in-process — no subprocess for the primary path.
 
 ### Swift-side files
 
 | File | Role |
 |------|------|
-| `native/macos/.../FaeNativeApp.swift` | App entry, environment wiring |
+| `native/macos/.../FaeNativeApp.swift` | App entry, environment wiring, embedded core init |
+| `native/macos/.../EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
 | `native/macos/.../ContentView.swift` | Main view, window state |
-| `native/macos/.../ConversationWebView.swift` | WKWebView bridge (orb + conversation) |
-| `native/macos/.../ConversationController.swift` | Conversation state (listening, panels) |
-| `native/macos/.../WindowStateController.swift` | Adaptive window (collapsed/compact/expanded) |
+| `native/macos/.../ConversationWebView.swift` | WKWebView bridge (orb animation + input bar) |
+| `native/macos/.../ConversationController.swift` | Conversation state (messages, listening) |
+| `native/macos/.../AuxiliaryWindowManager.swift` | Independent conversation & canvas NSPanels |
+| `native/macos/.../WindowStateController.swift` | Adaptive window (collapsed/compact) |
 | `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
-| `native/macos/.../ProcessCommandSender.swift` | Interim subprocess bridge (to be replaced) |
 
 ### Rust-side host layer
 
 | File | Role |
 |------|------|
+| `src/ffi.rs` | C ABI entry points (`extern "C"` functions) |
 | `src/host/mod.rs` | Host module root |
 | `src/host/contract.rs` | Command/event envelope schemas |
+| `src/host/handler.rs` | Runtime lifecycle, pipeline management |
 | `src/host/channel.rs` | Command channel, router, handler trait |
-| `src/host/stdio.rs` | Stdin/stdout JSON bridge (for IPC mode / interim) |
-| `src/bin/host_bridge.rs` | Headless host bridge binary (interim sidecar) |
+| `src/host/stdio.rs` | Stdin/stdout JSON bridge (Mode B / IPC only) |
+| `src/bin/host_bridge.rs` | Headless bridge binary (Mode B / `faed` daemon) |
 
 ### Adaptive window system
 
-The native app uses a three-mode adaptive window:
+The native app uses a two-mode adaptive window:
 
 | Mode | Size | Style |
 |------|------|-------|
 | Collapsed | 80x80 | Borderless floating orb, always-on-top |
 | Compact | 340x500 | Normal titled window |
-| Expanded | 340+420/panel | Extends sideways toward more screen space |
 
-Auto-hide after 30s inactivity. Click orb to restore. Panels extend window sideways
-rather than overlaying. See `WindowStateController.swift`.
+Conversation and canvas are independent native `NSPanel` windows managed by
+`AuxiliaryWindowManager`, positioned adjacent to the orb. Auto-hide after 30s
+inactivity. Click orb to restore. See `WindowStateController.swift`.
 
 ## Linker anchor (anti-dead-strip)
 
