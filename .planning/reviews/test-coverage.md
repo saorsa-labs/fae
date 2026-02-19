@@ -1,22 +1,21 @@
 # Test Coverage Review
 **Date**: 2026-02-19
-**Mode**: gsd-task
+**Mode**: gsd (task 3, Phase 3.3)
 
 ## Statistics
-- Total tests: 2099 run, 2099 passed, 4 skipped, 0 failed
-- Unit tests in handler.rs: 24
-- Integration test files: 24 (tests/*.rs)
+- Total test functions (apple/ + tests/): 262
+- Tests in mail.rs: 19 test functions covering SearchMailTool, GetMailTool, ComposeMailTool
+- Tests in ffi_bridge.rs for UnregisteredMailStore: 4 new tests (list_messages, get_message, compose, global accessor)
+- Integration tests referencing mail: permission_skill_gate.rs (Mail permission gating), capability_bridge_e2e.rs (mail capability)
+- All 2445 tests pass (confirmed by nextest run)
+- 4 skipped (pre-existing, not related to this task)
 
 ## Findings
 
-- [OK] All 24 handler.rs tests cover: permissions, onboarding, lifecycle, events, channel setup/teardown
-- [OK] 5 lifecycle tests: start→running, start-when-running error, stop→stopped, stop-when-stopped error, full start/stop/start cycle
-- [OK] Event emission tests verify both "runtime.starting" and "runtime.started" events
-- [OK] Channel setup/teardown tests verify all 3 channels (text_injection, gate_cmd, cancel_token)
-- [OK] tests/capability_bridge_e2e.rs and tests/onboarding_lifecycle.rs updated with new constructor signature
-- [LOW] No test for request_conversation_inject_text() when pipeline not running (silent no-op behavior)
-- [LOW] No test for request_conversation_gate_set() when pipeline not running
-- [LOW] No test for map_runtime_event() covering all 26 variants
-- [LOW] No concurrent access test for TOCTOU scenario in request_runtime_start()
+- [OK] ffi_bridge.rs tests cover all 3 UnregisteredMailStore methods + global accessor
+- [OK] mail.rs tests: search with results, search with no results, search by mailbox, unread_only filter, limit respected, get_message found/not found, compose creates message, permission gating
+- [OK] Mock store tests confirm list_messages filters work correctly
+- [MEDIUM] No test verifying that SearchMailTool/GetMailTool are registered in build_registry() with non-Off mode — this is deferred to Task 8 (integration tests apple_tool_registration.rs), acceptable
+- [OK] Existing integration tests confirm Mail permission gating works (permission_skill_gate.rs:18-22)
 
-## Grade: A
+## Grade: A-

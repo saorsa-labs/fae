@@ -4,8 +4,29 @@
 //! (Contacts, Calendar, Reminders, Mail, Notes) by enforcing a configurable
 //! calls-per-second limit using a token-bucket algorithm.
 
+use std::fmt;
 use std::sync::Mutex;
 use std::time::Instant;
+
+/// Error returned when the rate limiter cannot fulfil a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitError {
+    /// The token bucket is exhausted — caller should back off.
+    Exceeded,
+    /// Internal lock is poisoned (should not happen in practice).
+    LockPoisoned,
+}
+
+impl fmt::Display for RateLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RateLimitError::Exceeded => f.write_str("rate limit exceeded"),
+            RateLimitError::LockPoisoned => f.write_str("rate limiter lock poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for RateLimitError {}
 
 /// Internal mutable state for the token-bucket algorithm.
 struct RateLimiterState {
@@ -57,11 +78,13 @@ impl AppleRateLimiter {
 
     /// Try to acquire one token.
     ///
-    /// Returns `Ok(())` if a token was available, or `Err(())` if the rate
-    /// limit has been exceeded.  Callers should back off or return a
-    /// rate-limited error to the user.
-    pub fn try_acquire(&self) -> Result<(), ()> {
-        let mut state = self.inner.lock().map_err(|_| ())?;
+    /// Returns `Ok(())` if a token was available, or
+    /// [`RateLimitError::Exceeded`] if the bucket is empty.
+    pub fn try_acquire(&self) -> Result<(), RateLimitError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| RateLimitError::LockPoisoned)?;
         let now = Instant::now();
         let elapsed = now.duration_since(state.last_check).as_secs_f64();
         state.last_check = now;
@@ -74,24 +97,18 @@ impl AppleRateLimiter {
             state.available -= 1.0;
             Ok(())
         } else {
-            Err(())
+            Err(RateLimitError::Exceeded)
         }
     }
 
     /// Returns the burst capacity.
     pub fn capacity(&self) -> u32 {
-        self.inner
-            .lock()
-            .map(|s| s.capacity)
-            .unwrap_or(0)
+        self.inner.lock().map(|s| s.capacity).unwrap_or(0)
     }
 
     /// Returns the refill rate (tokens per second).
     pub fn refill_rate(&self) -> f64 {
-        self.inner
-            .lock()
-            .map(|s| s.refill_rate)
-            .unwrap_or(0.0)
+        self.inner.lock().map(|s| s.refill_rate).unwrap_or(0.0)
     }
 }
 

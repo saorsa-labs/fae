@@ -1,17 +1,24 @@
 # Complexity Review
 **Date**: 2026-02-19
-**Mode**: gsd-task
+**Mode**: gsd (task 3, Phase 3.3)
 
-## File Sizes
-- src/host/handler.rs: 1187 lines
-- src/host/channel.rs: 1181 lines
+## Statistics
+| File | LOC |
+|------|-----|
+| src/fae_llm/tools/apple/mail.rs | 788 |
+| src/host/handler.rs | 1355 |
+| src/agent/mod.rs | 709 |
+| src/fae_llm/tools/apple/ffi_bridge.rs | 592 |
+| src/fae_llm/tools/apple/mock_stores.rs | 624 |
 
 ## Findings
 
-- [MEDIUM] src/host/handler.rs: request_runtime_start() spans ~238 lines (441-679). The inline ProgressEvent match inside the async closure (~90 lines, 499-592) is the primary complexity contributor. Should be extracted to progress_event_to_json().
-- [LOW] src/host/handler.rs: map_runtime_event() is ~140 lines but is a flat match with 26 arms — acceptable and necessary.
-- [MEDIUM] FaeDeviceTransferHandler has 11 fields, 8 Mutex-wrapped Options. A PipelineInner inner struct would reduce complexity and enable atomic multi-field updates.
-- [OK] src/host/channel.rs: All handler functions are 10-20 lines each — good.
-- [MEDIUM] request_runtime_start() has 6 levels of nesting at deepest point (function → async closure → match → variant arm → json! → value)
+- [OK] MockMailStore.list_messages() uses a clear filter chain — complexity is justified by multi-field search
+- [OK] 33 if/match in mail.rs, 23 in mock_stores.rs — reasonable for the feature scope
+- [LOW] MockMailStore.list_messages() filter closure is ~20 lines with nested if-let + let-chain — could be extracted to a helper but readable as-is
+- [OK] handler.rs changes are purely formatting (no logic changes) — just rustfmt reformatting of existing code
+- [OK] agent/mod.rs changes are minimal: 3 new tool registrations following existing pattern
+- [OK] ffi_bridge.rs addition is ~50 lines for the UnregisteredMailStore — consistent with other unregistered stores
+- [OK] No functions exceed 100 lines in changed code
 
-## Grade: B
+## Grade: A

@@ -295,7 +295,10 @@ fn scheduler_update_with_invalid_spec_returns_error() {
         CommandName::SchedulerUpdate,
         bad_spec,
     ));
-    assert!(result.is_err(), "invalid update spec should return an error");
+    assert!(
+        result.is_err(),
+        "invalid update spec should return an error"
+    );
 }
 
 // ─── Task 4: approval.respond wires into pending_approvals ───────────────────

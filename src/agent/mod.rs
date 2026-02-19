@@ -513,8 +513,8 @@ fn build_registry(
             CreateEventTool, CreateNoteTool, CreateReminderTool, DeleteEventTool, GetContactTool,
             GetMailTool, GetNoteTool, ListCalendarsTool, ListEventsTool, ListNotesTool,
             ListReminderListsTool, ListRemindersTool, SearchContactsTool, SearchMailTool,
-            SetReminderCompletedTool, UpdateEventTool, global_calendar_store,
-            global_contact_store, global_mail_store, global_note_store, global_reminder_store,
+            SetReminderCompletedTool, UpdateEventTool, global_calendar_store, global_contact_store,
+            global_mail_store, global_note_store, global_reminder_store,
         };
         use crate::permissions::PermissionStore;
 
@@ -528,7 +528,10 @@ fn build_registry(
         // Helper to wrap an AppleEcosystemTool with permission gating.
         macro_rules! gated {
             ($tool:expr) => {
-                Arc::new(AvailabilityGatedTool::new(Arc::new($tool), Arc::clone(&perms)))
+                Arc::new(AvailabilityGatedTool::new(
+                    Arc::new($tool),
+                    Arc::clone(&perms),
+                ))
             };
         }
 

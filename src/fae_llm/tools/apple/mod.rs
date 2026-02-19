@@ -40,6 +40,7 @@ pub mod rate_limiter;
 pub mod reminders;
 pub mod trait_def;
 
+pub use availability_gate::AvailabilityGatedTool;
 pub use calendar::{
     CalendarEvent, CalendarInfo, CalendarStore, CalendarStoreError, CreateEventTool,
     DeleteEventTool, EventPatch, EventQuery, ListCalendarsTool, ListEventsTool, NewCalendarEvent,
@@ -61,10 +62,9 @@ pub use notes::{
     AppendToNoteTool, CreateNoteTool, GetNoteTool, ListNotesTool, NewNote, Note, NoteQuery,
     NoteStore, NoteStoreError,
 };
+pub use rate_limiter::AppleRateLimiter;
 pub use reminders::{
     CreateReminderTool, ListReminderListsTool, ListRemindersTool, NewReminder, Reminder,
     ReminderList, ReminderQuery, ReminderStore, ReminderStoreError, SetReminderCompletedTool,
 };
-pub use availability_gate::AvailabilityGatedTool;
-pub use rate_limiter::AppleRateLimiter;
 pub use trait_def::AppleEcosystemTool;

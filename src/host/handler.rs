@@ -859,9 +859,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let req = self
             .pending_approvals
             .lock()
-            .map_err(|e| {
-                SpeechError::Pipeline(format!("pending_approvals lock poisoned: {e}"))
-            })?
+            .map_err(|e| SpeechError::Pipeline(format!("pending_approvals lock poisoned: {e}")))?
             .remove(&numeric_id)
             .ok_or_else(|| {
                 SpeechError::Pipeline(format!(
@@ -942,7 +940,10 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 }
             }
             Err(e) => {
-                warn!(id, "scheduler.delete: failed to load state ({e}), treating as not found");
+                warn!(
+                    id,
+                    "scheduler.delete: failed to load state ({e}), treating as not found"
+                );
             }
         }
         Ok(())

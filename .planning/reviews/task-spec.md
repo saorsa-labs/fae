@@ -1,32 +1,26 @@
 # Task Specification Review
 **Date**: 2026-02-19
-**Mode**: gsd-task
-**Task**: Phase 1.2 — Wire runtime.start to PipelineCoordinator (ALL 8 TASKS COMPLETE)
+**Mode**: gsd (task 3, Phase 3.3)
+**Task**: Task 3 — UnregisteredMailStore + global_mail_store() in ffi_bridge.rs
+**Phase**: 3.3 Mail Tool & Tool Registration
 
 ## Spec Compliance
 
-- [x] PipelineState enum (Stopped/Starting/Running/Stopping/Error) — IMPLEMENTED
-- [x] New fields: tokio_handle, event_tx, pipeline channels — IMPLEMENTED
-- [x] cancel_token, pipeline/event_bridge handles, pipeline_started_at — IMPLEMENTED
-- [x] Updated constructors new()/from_default_path() — IMPLEMENTED
-- [x] emit_event() helper — IMPLEMENTED
-- [x] pipeline_state() getter — IMPLEMENTED
-- [x] request_runtime_start(): model loading + coordinator spawn + event bridge — IMPLEMENTED
-- [x] request_runtime_stop(): cancel + abort + cleanup + state transition — IMPLEMENTED
-- [x] query_runtime_status(): real state/error/uptime — IMPLEMENTED
-- [x] request_conversation_inject_text/gate_set: channel forwarding — IMPLEMENTED
-- [x] map_runtime_event(): all 26 RuntimeEvent variants — IMPLEMENTED
-- [x] 24 unit tests including 5 lifecycle tests — IMPLEMENTED
-- [x] command_channel_with_events() in channel.rs — IMPLEMENTED
-- [x] broadcast channel shared between handler and server in ffi.rs — IMPLEMENTED
-- [x] Integration test constructors updated — IMPLEMENTED
-- [x] Zero compilation errors — VERIFIED
-- [x] Zero clippy warnings — VERIFIED
-- [x] 2099 tests pass — VERIFIED
+### Task 3 Requirements (from PLAN-phase-3.3.md):
+- [x] Add `UnregisteredMailStore` struct implementing MailStore
+- [x] All methods return `MailStoreError::PermissionDenied("Apple Mail store not initialized...")`
+- [x] Add `global_mail_store() -> Arc<dyn MailStore>`
+- [x] Add 4 unit tests (list_messages, get_message, compose, global accessor)
+- [x] Follow exact pattern used for UnregisteredNoteStore
+- [x] Wire ComposeMailTool, SearchMailTool, GetMailTool into build_registry() in agent/mod.rs
+- [x] MockMailStore in mock_stores.rs (Task 4 also completed in this commit)
 
-## Observations (not blocking)
-- tool_approval_rx intentionally discarded — future phase work, commented in code
-- Scheduler/config_patch stubs — appropriate Phase 1.2 scope
-- Double event emission for runtime lifecycle (handler + server) — may emit duplicate events through command channel path
+### Bonus: Tasks also covered in this diff:
+- [x] Formatting cleanup in src/host/handler.rs (cargo fmt compliance)
+- [x] Formatting cleanup in tests/phase_1_3_wired_commands.rs (cargo fmt compliance)
+
+## Scope Concerns
+- [OK] No scope creep detected — all changes are on the critical path for Task 3
+- [OK] handler.rs and wired_commands.rs changes are pure rustfmt reformatting, no logic changes
 
 ## Grade: A
