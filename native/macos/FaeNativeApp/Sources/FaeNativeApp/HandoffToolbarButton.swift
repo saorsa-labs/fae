@@ -24,6 +24,12 @@ struct HandoffToolbarButton: View {
                     .font(.headline)
                     .padding(.bottom, 2)
 
+                if !handoff.isNetworkAvailable {
+                    Label("Offline — handoff unavailable", systemImage: "wifi.slash")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 ForEach([DeviceTarget.iphone, DeviceTarget.watch]) { target in
                     Button {
                         handoff.move(
@@ -37,11 +43,12 @@ struct HandoffToolbarButton: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.bordered)
+                    .disabled(!handoff.isNetworkAvailable)
                     .accessibilityLabel("Transfer to \(target.label)")
                 }
             }
             .padding()
-            .frame(width: 180)
+            .frame(width: 200)
         }
     }
 }

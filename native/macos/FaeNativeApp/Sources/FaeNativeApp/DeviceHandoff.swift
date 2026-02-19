@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 // MARK: - Conversation Snapshot
 
@@ -117,6 +118,10 @@ final class DeviceHandoffController: ObservableObject {
     @Published private(set) var handoffStateText: String = DeviceTarget.mac.handoffLabel
     @Published private(set) var lastCommandText: String = "Ready"
 
+    /// Whether the network is currently reachable. UI disables transfer buttons
+    /// and shows an offline message when `false`.
+    @Published private(set) var isNetworkAvailable: Bool = true
+
     /// Inject a closure that produces the current conversation snapshot on demand.
     /// The app layer wires this from ConversationController / OrbStateController
     /// without creating a tight coupling between the types.
@@ -134,8 +139,42 @@ final class DeviceHandoffController: ObservableObject {
         return e
     }()
 
+    /// NWPathMonitor for tracking network connectivity.
+    private let pathMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "com.saorsalabs.fae.network-monitor")
+
+    /// Pending handoff that failed due to network — retried once on restore.
+    private var pendingRetry: (target: DeviceTarget, command: String?)?
+
+    // MARK: - Init / Deinit
+
+    init() {
+        startNetworkMonitor()
+    }
+
     deinit {
+        pathMonitor.cancel()
         activeActivity?.invalidate()
+    }
+
+    // MARK: - Network Monitoring
+
+    private func startNetworkMonitor() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let available = path.status == .satisfied
+                self.isNetworkAvailable = available
+
+                // Auto-retry pending handoff when network returns.
+                if available, let retry = self.pendingRetry {
+                    self.pendingRetry = nil
+                    self.publishHandoffActivity(target: retry.target, sourceCommand: retry.command)
+                    NSLog("DeviceHandoffController: retried pending handoff to %@", retry.target.rawValue)
+                }
+            }
+        }
+        pathMonitor.start(queue: monitorQueue)
     }
 
     func execute(commandText: String) -> DeviceCommand {
@@ -165,7 +204,17 @@ final class DeviceHandoffController: ObservableObject {
         handoffStateText = target.handoffLabel
         lastCommandText = sourceCommand ?? "Move to \(target.label)"
 
-        publishHandoffActivity(target: target, sourceCommand: sourceCommand)
+        if isNetworkAvailable {
+            publishHandoffActivity(target: target, sourceCommand: sourceCommand)
+        } else {
+            // Save snapshot to iCloud KV as fallback when offline.
+            if let provider = snapshotProvider {
+                HandoffKVStore.save(provider())
+            }
+            pendingRetry = (target: target, command: sourceCommand)
+            handoffStateText = "Offline — saved for later"
+            NSLog("DeviceHandoffController: offline, saved snapshot to KV store")
+        }
     }
 
     func goHome(sourceCommand: String? = nil) {
@@ -200,6 +249,12 @@ final class DeviceHandoffController: ObservableObject {
         }
 
         activity.userInfo = info
+
+        // Also persist to iCloud KV store as a fallback in case
+        // real-time Handoff does not reach the target device.
+        if let provider = snapshotProvider {
+            HandoffKVStore.save(provider())
+        }
 
         activeActivity?.invalidate()
         activity.becomeCurrent()
