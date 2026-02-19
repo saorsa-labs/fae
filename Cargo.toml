@@ -3,7 +3,7 @@ members = ["fae-search"]
 
 [package]
 name = "fae"
-version = "0.5.10"
+version = "0.6.0"
 edition = "2024"
 description = "Real-time speech-to-speech AI conversation system"
 license = "AGPL-3.0"
