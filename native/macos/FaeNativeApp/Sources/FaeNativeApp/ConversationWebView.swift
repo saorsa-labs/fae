@@ -9,6 +9,9 @@ struct ConversationWebView: NSViewRepresentable {
     var windowMode: String
     var panelSide: String
     var onLoad: (() -> Void)?
+    /// Called after the WebView finishes loading, providing the `WKWebView` instance
+    /// so controllers (e.g. `ConversationBridgeController`) can inject JavaScript.
+    var onWebViewReady: ((WKWebView) -> Void)?
     var onUserMessage: ((String) -> Void)?
     var onToggleListening: (() -> Void)?
     var onLinkDetected: ((String) -> Void)?
@@ -29,6 +32,7 @@ struct ConversationWebView: NSViewRepresentable {
         var lastWindowMode: String?
         var lastPanelSide: String?
         var onLoad: (() -> Void)?
+        var onWebViewReady: ((WKWebView) -> Void)?
         var onUserMessage: ((String) -> Void)?
         var onToggleListening: (() -> Void)?
         var onLinkDetected: ((String) -> Void)?
@@ -39,10 +43,10 @@ struct ConversationWebView: NSViewRepresentable {
         var lastPanelCloseGeneration: Int = 0
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            _ = webView
             _ = navigation
             loaded = true
             onLoad?()
+            onWebViewReady?(webView)
         }
 
         func userContentController(
@@ -90,6 +94,7 @@ struct ConversationWebView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator()
         coordinator.onLoad = onLoad
+        coordinator.onWebViewReady = onWebViewReady
         coordinator.onUserMessage = onUserMessage
         coordinator.onToggleListening = onToggleListening
         coordinator.onLinkDetected = onLinkDetected
@@ -138,6 +143,7 @@ struct ConversationWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onLoad = onLoad
+        context.coordinator.onWebViewReady = onWebViewReady
         context.coordinator.onUserMessage = onUserMessage
         context.coordinator.onToggleListening = onToggleListening
         context.coordinator.onLinkDetected = onLinkDetected

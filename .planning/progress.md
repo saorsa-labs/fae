@@ -148,3 +148,17 @@ No additional work needed.
 
 Results: Swift build clean (zero errors, zero warnings). All 8 event categories now routed.
 Previously only capability.requested was handled; now BackendEventRouter covers all 26 RuntimeEvent variants plus host-command echo events.
+
+## Phase 2.2: Conversation Display Wiring (Swift) - COMPLETE
+
+- [x] Task 1: ConversationBridgeController.swift (new) — @MainActor ObservableObject, observes faeTranscription/faeAssistantMessage/faeAssistantGenerating/faeToolExecution
+- [x] Task 2: ConversationWebView.swift — added onWebViewReady callback, Coordinator stores it, fires after didFinish
+- [x] Task 3: FaeTranscription → window.addMessage('user', text) + showConversationPanel (final segments only)
+- [x] Task 4: faeAssistantMessage → stream accumulation + window.addMessage('assistant', text) on final
+- [x] Task 5: faeAssistantGenerating → window.showTypingIndicator(active)
+- [x] Task 6: faeToolExecution → window.addMessage('tool', ...) for executing/result
+- [x] Task 7: FaeNativeApp.swift — @StateObject conversationBridge, environmentObject injection
+- [x] Task 8: ContentView.swift — onWebViewReady: { conversationBridge.webView = webView }, Swift build clean
+
+Results: Swift build clean (zero errors, zero warnings).
+ConversationBridgeController is a retained @StateObject in FaeNativeApp that bridges pipeline events to the conversation WebView JS API.

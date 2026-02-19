@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var conversation: ConversationController
+    @EnvironmentObject private var conversationBridge: ConversationBridgeController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     private let onboardingTTS = OnboardingTTSHelper()
@@ -77,6 +78,9 @@ struct ContentView: View {
                 windowMode: windowState.mode.rawValue,
                 panelSide: windowState.panelSide.rawValue,
                 onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
+                onWebViewReady: { webView in
+                    conversationBridge.webView = webView
+                },
                 onUserMessage: { text in
                     conversation.handleUserSent(text)
                     windowState.noteActivity()
