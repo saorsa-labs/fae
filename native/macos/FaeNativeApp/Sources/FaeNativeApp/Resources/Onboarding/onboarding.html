@@ -444,6 +444,111 @@
   }
 
   /* =========================================================
+     Tap Hint
+     ========================================================= */
+  .tap-hint {
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-top: 4px;
+    opacity: 0.7;
+  }
+
+  /* =========================================================
+     Light Mode Adaptation
+     ========================================================= */
+  @media (prefers-color-scheme: light) {
+    :root {
+      --warm-gold: #B8864A;
+      --warm-gold-rgb: 184, 134, 74;
+      --warm-rose: #A0705E;
+      --warm-rose-rgb: 160, 112, 94;
+      --accent: #C8944A;
+      --accent-rgb: 200, 148, 74;
+      --text-primary: rgba(0, 0, 0, 0.85);
+      --text-secondary: rgba(0, 0, 0, 0.60);
+      --text-muted: rgba(0, 0, 0, 0.38);
+      --card-bg: rgba(255, 255, 255, 0.45);
+      --card-border: rgba(0, 0, 0, 0.08);
+      --green: #34A853;
+      --green-glow: rgba(52, 168, 83, 0.30);
+    }
+
+    .orb {
+      box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.04);
+    }
+
+    .aura {
+      border-color: rgba(var(--warm-gold-rgb), 0.12);
+    }
+
+    .dot-indicator span {
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .fae-bubble {
+      background: rgba(var(--warm-gold-rgb), 0.10);
+      border-color: rgba(var(--warm-gold-rgb), 0.18);
+    }
+
+    .orb-speaking .dot {
+      background: rgba(var(--warm-gold-rgb), 0.55);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.22), rgba(var(--warm-rose-rgb), 0.18));
+      border-color: rgba(var(--accent-rgb), 0.28);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.32), rgba(var(--warm-rose-rgb), 0.26));
+      box-shadow: 0 4px 24px rgba(var(--accent-rgb), 0.16);
+    }
+
+    .permission-card.granted {
+      background: rgba(52, 168, 83, 0.08);
+      border-color: rgba(52, 168, 83, 0.20);
+    }
+
+    .permission-icon {
+      background: rgba(var(--warm-gold-rgb), 0.12);
+      border-color: rgba(var(--warm-gold-rgb), 0.16);
+    }
+
+    .permission-status {
+      border-color: rgba(0, 0, 0, 0.10);
+      background: rgba(0, 0, 0, 0.04);
+    }
+
+    .permission-status.granted {
+      background: rgba(52, 168, 83, 0.10);
+      border-color: rgba(52, 168, 83, 0.22);
+      color: var(--green);
+    }
+
+    .permission-status.denied {
+      background: rgba(220, 53, 53, 0.06);
+      border-color: rgba(220, 53, 53, 0.16);
+      color: rgba(220, 53, 53, 0.75);
+    }
+
+    .btn-help {
+      border-color: rgba(0, 0, 0, 0.10);
+      background: rgba(0, 0, 0, 0.04);
+    }
+
+    .btn-help:hover {
+      background: rgba(var(--warm-gold-rgb), 0.12);
+      border-color: rgba(var(--warm-gold-rgb), 0.22);
+    }
+
+    .orb-highlight {
+      background: radial-gradient(ellipse, rgba(255,255,255,0.18) 0%, transparent 70%);
+    }
+  }
+
+  /* =========================================================
      Responsive Layout
      ========================================================= */
   .screen {
@@ -522,9 +627,7 @@
       Hello. I'm Fae — your private, always-available AI companion.
       I live right here on your Mac, and I'm ready to get to know you.
     </div>
-    <p style="font-size:0.78rem;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.28);margin-top:4px;">
-      tap anywhere to continue
-    </p>
+    <p class="tap-hint">tap anywhere to continue</p>
     <button class="btn-primary" id="btnWelcomeNext">Get started</button>
   </div>
 
@@ -722,7 +825,7 @@ var noise = new SimplexNoise(42);
 /* ---------------------------------------------------------
    3. Orb State
    --------------------------------------------------------- */
-var PALETTE = {
+var PALETTE_DARK = {
   warmGold: "#D4A574",
   warmRose: "#C4917A",
   softAmber: "#E8B88A",
@@ -730,11 +833,38 @@ var PALETTE = {
   dawnLight: "#E8DED2"
 };
 
+var PALETTE_LIGHT = {
+  warmGold: "#B8864A",
+  warmRose: "#A0705E",
+  softAmber: "#C8944A",
+  warmCream: "#D4B896",
+  dawnLight: "#C8B8A4"
+};
+
+var isDarkMode = window.matchMedia("(prefers-color-scheme: dark)").matches;
+var PALETTE = isDarkMode ? PALETTE_DARK : PALETTE_LIGHT;
+
 var orbMode = "speaking";
 var orbColors = [PALETTE.warmGold, PALETTE.warmRose, PALETTE.warmCream];
 var rings = [];
 var lastRingAt = 0;
 var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Listen for color scheme changes and update orb palette live */
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(e) {
+  isDarkMode = e.matches;
+  PALETTE = isDarkMode ? PALETTE_DARK : PALETTE_LIGHT;
+  /* Refresh orbColors based on current phase */
+  if (typeof currentPhase !== "undefined") {
+    if (currentPhase === "welcome") {
+      orbColors = [PALETTE.warmGold, PALETTE.warmRose, PALETTE.warmCream];
+    } else if (currentPhase === "permissions") {
+      orbColors = [PALETTE.softAmber, PALETTE.warmGold, PALETTE.warmCream];
+    } else if (currentPhase === "ready") {
+      orbColors = [PALETTE.warmRose, PALETTE.softAmber, PALETTE.dawnLight];
+    }
+  }
+});
 
 /* ---------------------------------------------------------
    4. Canvas Setup
