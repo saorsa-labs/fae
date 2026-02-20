@@ -47,7 +47,7 @@ pub use types::{
     ActionResult, ExtractionResult, IntelligenceAction, IntelligenceItem, IntelligenceKind,
 };
 
-use crate::memory::MemoryRepository;
+use crate::memory::SqliteMemoryRepository;
 use crate::runtime::RuntimeEvent;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -116,7 +116,13 @@ fn apply_extraction_result(
         actions_count, "intelligence extraction completed"
     );
 
-    let repo = MemoryRepository::new(memory_path);
+    let repo = match SqliteMemoryRepository::new(memory_path) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("failed to open SQLite memory for intelligence: {e}");
+            return;
+        }
+    };
     let store = IntelligenceStore::new(repo);
 
     for item in &result.items {

@@ -101,7 +101,7 @@ fn create_memory_record(
 
     match store
         .repo()
-        .insert_record(kind, text, confidence, None, tags.to_vec())
+        .insert_record(kind, text, confidence, None, tags)
     {
         Ok(record) => ActionResult::MemoryRecordCreated {
             record_id: record.id,
@@ -157,16 +157,13 @@ fn sanitize_task_id(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::intelligence::store::IntelligenceStore;
-    use crate::memory::MemoryRepository;
+    use crate::memory::SqliteMemoryRepository;
     use tempfile::TempDir;
 
     fn temp_store() -> (TempDir, IntelligenceStore) {
         let tmp = TempDir::new().expect("tempdir");
-        let repo = MemoryRepository::new(tmp.path());
-        match repo.ensure_layout() {
-            Ok(()) => {}
-            Err(e) => panic!("ensure_layout failed: {e}"),
-        }
+        let repo = SqliteMemoryRepository::new(tmp.path()).expect("sqlite repo");
+        repo.ensure_layout().expect("ensure_layout");
         let store = IntelligenceStore::new(repo);
         (tmp, store)
     }

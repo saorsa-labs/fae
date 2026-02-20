@@ -1451,44 +1451,36 @@ checklist:\n\
 // ---------------------------------------------------------------------------
 
 pub fn run_memory_reflection(root_dir: &Path) -> Result<String> {
-    let repo = MemoryRepository::new(root_dir);
-    repo.ensure_layout()?;
+    let repo = super::sqlite::SqliteMemoryRepository::new(root_dir)?;
 
-    let changed = repo.with_write_lock(|| {
-        // Collapse exact-duplicate active profile/fact records by soft-forgetting older ones.
-        let mut records = repo.list_records()?;
-        let mut seen = HashSet::new();
-        let mut changed = 0usize;
-        let now = now_epoch_secs();
+    // Collapse exact-duplicate active profile/fact records by soft-forgetting older ones.
+    let mut records = repo.list_records_filtered(true)?;
+    let mut seen = HashSet::new();
+    let mut changed = 0usize;
 
-        records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        for record in &mut records {
-            if record.status != MemoryStatus::Active {
-                continue;
-            }
-            if !(record.kind == MemoryKind::Profile || record.kind == MemoryKind::Fact) {
-                continue;
-            }
-            let key = format!(
-                "{}::{}",
-                display_kind(record.kind),
-                record.text.trim().to_ascii_lowercase()
-            );
-            if seen.contains(&key) {
-                record.status = MemoryStatus::Forgotten;
-                record.updated_at = now;
-                changed = changed.saturating_add(1);
+    records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    for record in &records {
+        if record.status != MemoryStatus::Active {
+            continue;
+        }
+        if !(record.kind == MemoryKind::Profile || record.kind == MemoryKind::Fact) {
+            continue;
+        }
+        let key = format!(
+            "{}::{}",
+            display_kind(record.kind),
+            record.text.trim().to_ascii_lowercase()
+        );
+        if seen.contains(&key) {
+            if let Err(e) = repo.forget_soft_record(&record.id, "reflection dedup") {
+                tracing::warn!(id = %record.id, "reflection dedup soft-forget failed: {e}");
             } else {
-                let _ = seen.insert(key);
+                changed = changed.saturating_add(1);
             }
+        } else {
+            let _ = seen.insert(key);
         }
-
-        if changed > 0 {
-            repo.rewrite_records(&records)?;
-        }
-
-        Ok(changed)
-    })?;
+    }
 
     Ok(format!(
         "memory reflection completed; deduplicated {changed} records"
@@ -1496,8 +1488,7 @@ pub fn run_memory_reflection(root_dir: &Path) -> Result<String> {
 }
 
 pub fn run_memory_reindex(root_dir: &Path) -> Result<String> {
-    let repo = MemoryRepository::new(root_dir);
-    repo.ensure_layout()?;
+    let repo = super::sqlite::SqliteMemoryRepository::new(root_dir)?;
     let records = repo.list_records()?;
     Ok(format!(
         "memory reindex completed; {} records scanned",
@@ -1506,24 +1497,21 @@ pub fn run_memory_reindex(root_dir: &Path) -> Result<String> {
 }
 
 pub fn run_memory_gc(root_dir: &Path, retention_days: u32) -> Result<String> {
-    let repo = MemoryRepository::new(root_dir);
-    repo.ensure_layout()?;
-    let changed = repo.apply_retention_policy(retention_days)?;
+    if retention_days == 0 {
+        return Ok("memory retention skipped; retention_days=0 (disabled)".to_owned());
+    }
+    let repo = super::sqlite::SqliteMemoryRepository::new(root_dir)?;
+    let changed = repo.apply_retention_policy(u64::from(retention_days))?;
     Ok(format!(
-        "memory retention completed; soft-forgot {} episodic records",
-        changed
+        "memory retention completed; soft-forgot {changed} episodic records"
     ))
 }
 
 pub fn run_memory_migration(root_dir: &Path) -> Result<String> {
-    let repo = MemoryRepository::new(root_dir);
-    repo.ensure_layout()?;
-    let migrated = repo.migrate_if_needed(CURRENT_SCHEMA_VERSION)?;
-    let msg = match migrated {
-        Some((from, to)) => format!("memory migration completed ({from} -> {to})"),
-        None => "memory migration not needed".to_owned(),
-    };
-    Ok(msg)
+    let repo = super::sqlite::SqliteMemoryRepository::new(root_dir)?;
+    let target = CURRENT_SCHEMA_VERSION;
+    repo.migrate_if_needed(target)?;
+    Ok("memory schema up to date".to_owned())
 }
 
 // ---------------------------------------------------------------------------

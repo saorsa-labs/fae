@@ -1,21 +1,21 @@
 //! Intelligence persistence layer.
 //!
-//! Wraps [`MemoryRepository`] for intelligence-specific storage and queries.
+//! Wraps [`SqliteMemoryRepository`] for intelligence-specific storage and queries.
 //! Intelligence items are stored as enriched [`MemoryRecord`]s with appropriate
 //! kinds, tags, and metadata.
 
 use crate::error::{Result, SpeechError};
 use crate::intelligence::types::{IntelligenceItem, IntelligenceKind};
-use crate::memory::{MemoryKind, MemoryRecord, MemoryRepository};
+use crate::memory::{MemoryKind, MemoryRecord, SqliteMemoryRepository};
 
 /// Intelligence-focused query and storage layer.
 ///
-/// Wraps a [`MemoryRepository`] and provides convenience methods for
+/// Wraps a [`SqliteMemoryRepository`] and provides convenience methods for
 /// intelligence-specific operations (store items, query by kind, detect
 /// duplicates, track relationships).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct IntelligenceStore {
-    repo: MemoryRepository,
+    repo: SqliteMemoryRepository,
 }
 
 /// A relationship metadata record parsed from memory.
@@ -35,13 +35,13 @@ pub struct RelationshipMeta {
 
 impl IntelligenceStore {
     /// Create a new intelligence store wrapping the given repository.
-    pub fn new(repo: MemoryRepository) -> Self {
+    pub fn new(repo: SqliteMemoryRepository) -> Self {
         Self { repo }
     }
 
     /// Returns a reference to the underlying repository.
     #[must_use]
-    pub fn repo(&self) -> &MemoryRepository {
+    pub fn repo(&self) -> &SqliteMemoryRepository {
         &self.repo
     }
 
@@ -77,8 +77,9 @@ impl IntelligenceStore {
             tags.push(format!("meta:{json_str}"));
         }
 
-        self.repo
-            .insert_record(kind, &item.text, item.confidence, source_turn_id, tags)
+        Ok(self
+            .repo
+            .insert_record(kind, &item.text, item.confidence, source_turn_id, &tags)?)
     }
 
     /// Query upcoming events within the given number of days.
@@ -280,8 +281,9 @@ impl IntelligenceStore {
             if let Some(rel) = relationship {
                 tags.push(format!("relationship:{rel}"));
             }
-            self.repo
-                .insert_record(MemoryKind::Person, &text, 0.80, None, tags)
+            Ok(self
+                .repo
+                .insert_record(MemoryKind::Person, &text, 0.80, None, &tags)?)
         }
     }
 
@@ -388,11 +390,8 @@ mod tests {
 
     fn temp_store() -> (TempDir, IntelligenceStore) {
         let tmp = TempDir::new().expect("tempdir");
-        let repo = MemoryRepository::new(tmp.path());
-        match repo.ensure_layout() {
-            Ok(()) => {}
-            Err(e) => panic!("ensure_layout failed: {e}"),
-        }
+        let repo = SqliteMemoryRepository::new(tmp.path()).expect("sqlite repo");
+        repo.ensure_layout().expect("ensure_layout");
         let store = IntelligenceStore::new(repo);
         (tmp, store)
     }

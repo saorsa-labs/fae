@@ -316,16 +316,13 @@ mod tests {
     use super::*;
     use crate::intelligence::store::IntelligenceStore;
     use crate::intelligence::types::{IntelligenceItem, IntelligenceKind};
-    use crate::memory::MemoryRepository;
+    use crate::memory::SqliteMemoryRepository;
     use tempfile::TempDir;
 
     fn temp_store() -> (TempDir, IntelligenceStore) {
         let tmp = TempDir::new().expect("tempdir");
-        let repo = MemoryRepository::new(tmp.path());
-        match repo.ensure_layout() {
-            Ok(()) => {}
-            Err(e) => panic!("ensure_layout failed: {e}"),
-        }
+        let repo = SqliteMemoryRepository::new(tmp.path()).expect("sqlite repo");
+        repo.ensure_layout().expect("ensure_layout");
         let store = IntelligenceStore::new(repo);
         (tmp, store)
     }

@@ -652,7 +652,10 @@ fn run_noise_budget_reset() -> TaskResult {
 
 /// Check for stale relationships that haven't been mentioned recently.
 fn run_stale_relationship_check(memory_root: &Path) -> TaskResult {
-    let repo = crate::memory::MemoryRepository::new(memory_root);
+    let repo = match crate::memory::SqliteMemoryRepository::new(memory_root) {
+        Ok(r) => r,
+        Err(e) => return TaskResult::Error(format!("failed to open memory: {e}")),
+    };
     let store = crate::intelligence::IntelligenceStore::new(repo);
     match store.query_stale_relationships(30) {
         Ok(stale) => {
@@ -679,7 +682,10 @@ fn run_stale_relationship_check(memory_root: &Path) -> TaskResult {
 
 /// Build a morning briefing summary for logging/telemetry.
 fn run_morning_briefing_check(memory_root: &Path) -> TaskResult {
-    let repo = crate::memory::MemoryRepository::new(memory_root);
+    let repo = match crate::memory::SqliteMemoryRepository::new(memory_root) {
+        Ok(r) => r,
+        Err(e) => return TaskResult::Error(format!("failed to open memory: {e}")),
+    };
     let store = crate::intelligence::IntelligenceStore::new(repo);
     let briefing = crate::intelligence::build_briefing(&store);
     if briefing.is_empty() {
@@ -811,21 +817,16 @@ fn run_memory_gc_for_root(root: &Path, retention_days: u32) -> TaskResult {
 }
 
 fn run_memory_migrate_for_root(root: &Path) -> TaskResult {
-    let repo = crate::memory::MemoryRepository::new(root);
+    let repo = match crate::memory::SqliteMemoryRepository::new(root) {
+        Ok(r) => r,
+        Err(e) => return TaskResult::Error(format!("failed to open memory: {e}")),
+    };
     let target = crate::memory::current_memory_schema_version();
     match repo.migrate_if_needed(target) {
-        Ok(Some((from, to))) => TaskResult::Telemetry(TaskTelemetry {
-            message: format!("memory migration completed ({from} -> {to})"),
-            event: crate::runtime::RuntimeEvent::MemoryMigration {
-                from,
-                to,
-                success: true,
-            },
-        }),
-        Ok(None) => {
+        Ok(()) => {
             let from = repo.schema_version().unwrap_or(target);
             TaskResult::Telemetry(TaskTelemetry {
-                message: "memory migration not needed".to_owned(),
+                message: "memory schema up to date".to_owned(),
                 event: crate::runtime::RuntimeEvent::MemoryMigration {
                     from,
                     to: target,
@@ -853,7 +854,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::RuntimeEvent;
-    use crate::test_utils::{seed_manifest_v0, temp_test_root};
+    use crate::test_utils::temp_test_root;
 
     fn temp_root(name: &str) -> std::path::PathBuf {
         temp_test_root("scheduler-task", name)
@@ -862,9 +863,8 @@ mod tests {
     fn seed_old_episode_record(root: &std::path::Path, id: &str) {
         use crate::memory::{MemoryKind, MemoryRecord, MemoryStatus};
 
-        let memory_dir = root.join("memory");
-        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
-        let repo = crate::memory::MemoryRepository::new(root);
+        let repo =
+            crate::memory::SqliteMemoryRepository::new(root).expect("sqlite repo for seeding");
         repo.ensure_layout().expect("ensure memory layout");
 
         let old = super::now_epoch_secs().saturating_sub(400 * 24 * 3600);
@@ -883,9 +883,7 @@ mod tests {
             stale_after_secs: None,
             metadata: None,
         };
-        let line = serde_json::to_string(&record).expect("serialize old record");
-        std::fs::write(memory_dir.join("records.jsonl"), format!("{line}\n"))
-            .expect("write record");
+        repo.insert_record_raw(&record).expect("insert old record");
     }
 
     #[test]
@@ -1060,7 +1058,7 @@ mod tests {
             execute_builtin_with_memory_root(TASK_MEMORY_GC, &root, /* retention_days */ 0);
         assert!(matches!(result, TaskResult::Telemetry(_)));
 
-        let repo = crate::memory::MemoryRepository::new(&root);
+        let repo = crate::memory::SqliteMemoryRepository::new(&root).expect("sqlite repo");
         let records = repo.list_records().expect("list records");
         let kept = records
             .iter()
@@ -1086,16 +1084,17 @@ mod tests {
     #[test]
     fn run_memory_migrate_for_root_emits_migration_telemetry_success() {
         let root = temp_root("migration-success");
-        seed_manifest_v0(&root);
 
         let result = run_memory_migrate_for_root(&root);
+        let target = crate::memory::current_memory_schema_version();
         match result {
             TaskResult::Telemetry(TaskTelemetry {
                 event: RuntimeEvent::MemoryMigration { from, to, success },
                 ..
             }) => {
-                assert_eq!(from, 0);
-                assert_eq!(to, crate::memory::current_memory_schema_version());
+                // Fresh SQLite DB is created at current schema version.
+                assert_eq!(from, target);
+                assert_eq!(to, target);
                 assert!(success);
             }
             other => panic!("expected migration telemetry, got: {other:?}"),
@@ -1107,20 +1106,12 @@ mod tests {
     #[test]
     fn run_memory_migrate_for_root_emits_migration_telemetry_failure() {
         let root = temp_root("migration-failure");
-        seed_manifest_v0(&root);
-        std::fs::write(root.join("memory").join(".fail_migration"), "1").expect("write failpoint");
+        // Place a directory where fae.db should be, so SQLite cannot open it.
+        std::fs::create_dir_all(root.join("fae.db")).expect("create dir as db path");
 
         let result = run_memory_migrate_for_root(&root);
-        match result {
-            TaskResult::Telemetry(TaskTelemetry {
-                event: RuntimeEvent::MemoryMigration { to, success, .. },
-                ..
-            }) => {
-                assert_eq!(to, crate::memory::current_memory_schema_version());
-                assert!(!success);
-            }
-            other => panic!("expected migration telemetry, got: {other:?}"),
-        }
+        // SqliteMemoryRepository::new fails → TaskResult::Error
+        assert!(matches!(result, TaskResult::Error(_)));
 
         let _ = std::fs::remove_dir_all(root);
     }

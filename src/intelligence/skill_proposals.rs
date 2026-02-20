@@ -182,7 +182,10 @@ impl SkillProposalStore {
 /// - Repeated email mentions → "Email Integration"
 /// - Frequent same-topic research → topic-specific skill
 pub fn detect_skill_opportunities(memory_path: &Path) -> Vec<(String, String, String)> {
-    let repo = crate::memory::MemoryRepository::new(memory_path);
+    let repo = match crate::memory::SqliteMemoryRepository::new(memory_path) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
     let records = match repo.list_records() {
         Ok(r) => r,
         Err(_) => return Vec::new(),
@@ -377,11 +380,8 @@ mod tests {
     #[test]
     fn detect_skill_opportunities_empty() {
         let tmp = TempDir::new().expect("tempdir");
-        let repo = crate::memory::MemoryRepository::new(tmp.path());
-        match repo.ensure_layout() {
-            Ok(()) => {}
-            Err(e) => panic!("ensure_layout failed: {e}"),
-        }
+        let repo = crate::memory::SqliteMemoryRepository::new(tmp.path()).expect("sqlite repo");
+        repo.ensure_layout().expect("ensure_layout");
 
         let opportunities = detect_skill_opportunities(tmp.path());
         assert!(opportunities.is_empty());
