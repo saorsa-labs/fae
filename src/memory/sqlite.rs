@@ -65,14 +65,17 @@ impl SqliteMemoryRepository {
     }
 
     /// Read the current schema version from the database.
-    pub fn schema_version(&self) -> Result<Option<u32>, SqliteMemoryError> {
+    ///
+    /// Returns `0` if the `schema_meta` table has no version entry.
+    pub fn schema_version(&self) -> Result<u32, SqliteMemoryError> {
         let conn = self.lock()?;
-        read_schema_version(&conn).map_err(SqliteMemoryError::Sqlite)
+        let version = read_schema_version(&conn).map_err(SqliteMemoryError::Sqlite)?;
+        Ok(version.unwrap_or(0))
     }
 
     /// No-op if already at `target` version. Future migrations go here.
     pub fn migrate_if_needed(&self, target: u32) -> Result<(), SqliteMemoryError> {
-        let current = self.schema_version()?.unwrap_or(0);
+        let current = self.schema_version()?;
         if current >= target {
             return Ok(());
         }
@@ -87,8 +90,13 @@ impl SqliteMemoryRepository {
         Ok(())
     }
 
-    /// List all records, optionally filtering by status.
-    pub fn list_records(
+    /// List all active records (matches JSONL `MemoryRepository::list_records()` behaviour).
+    pub fn list_records(&self) -> Result<Vec<MemoryRecord>, SqliteMemoryError> {
+        self.list_records_filtered(false)
+    }
+
+    /// List records, optionally including inactive (superseded, invalidated, forgotten).
+    pub fn list_records_filtered(
         &self,
         include_inactive: bool,
     ) -> Result<Vec<MemoryRecord>, SqliteMemoryError> {
@@ -131,7 +139,7 @@ impl SqliteMemoryRepository {
         Ok(entries)
     }
 
-    /// Insert a new memory record.
+    /// Insert a new memory record, returning the full record.
     pub fn insert_record(
         &self,
         kind: MemoryKind,
@@ -139,7 +147,7 @@ impl SqliteMemoryRepository {
         confidence: f32,
         source_turn_id: Option<&str>,
         tags: &[String],
-    ) -> Result<String, SqliteMemoryError> {
+    ) -> Result<MemoryRecord, SqliteMemoryError> {
         let conn = self.lock()?;
         let now = now_epoch_secs();
         let id = new_id(display_kind(kind));
@@ -171,7 +179,91 @@ impl SqliteMemoryRepository {
         )
         .map_err(SqliteMemoryError::Sqlite)?;
 
-        Ok(id)
+        Ok(MemoryRecord {
+            id,
+            kind,
+            status: MemoryStatus::Active,
+            text,
+            confidence: confidence.clamp(0.0, 1.0),
+            source_turn_id: source_turn_id.map(ToOwned::to_owned),
+            tags: tags.to_vec(),
+            supersedes: None,
+            created_at: now,
+            updated_at: now,
+            importance_score: None,
+            stale_after_secs: None,
+            metadata: None,
+        })
+    }
+
+    /// Insert a pre-existing record verbatim (for JSONL→SQLite migration).
+    ///
+    /// Preserves the original `id`, `created_at`, `updated_at`, `status`,
+    /// `supersedes`, `tags`, and all other fields. Also creates an audit
+    /// entry with `op = Migrate`.
+    pub fn insert_record_raw(&self, record: &MemoryRecord) -> Result<(), SqliteMemoryError> {
+        let conn = self.lock()?;
+        let kind_str = kind_to_str(record.kind);
+        let status_str = status_to_str(record.status);
+        let tags_json = serde_json::to_string(&record.tags).unwrap_or_else(|_| "[]".to_owned());
+        let metadata_json = record
+            .metadata
+            .as_ref()
+            .and_then(|m| serde_json::to_string(m).ok());
+
+        conn.execute(
+            "INSERT OR IGNORE INTO memory_records \
+             (id, kind, status, text, confidence, source_turn_id, tags, supersedes, \
+              created_at, updated_at, importance_score, stale_after_secs, metadata) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                record.id,
+                kind_str,
+                status_str,
+                record.text,
+                record.confidence,
+                record.source_turn_id,
+                tags_json,
+                record.supersedes,
+                record.created_at,
+                record.updated_at,
+                record.importance_score,
+                record.stale_after_secs,
+                metadata_json,
+            ],
+        )
+        .map_err(SqliteMemoryError::Sqlite)?;
+
+        let audit_id = new_id("audit");
+        let now = now_epoch_secs();
+        conn.execute(
+            "INSERT INTO memory_audit (id, op, target_id, note, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                audit_id,
+                "migrate",
+                record.id,
+                format!("migrated {kind_str} from JSONL"),
+                now,
+            ],
+        )
+        .map_err(SqliteMemoryError::Sqlite)?;
+
+        Ok(())
+    }
+
+    /// Insert a pre-existing audit entry verbatim (for JSONL→SQLite migration).
+    pub fn insert_audit_raw(&self, entry: &MemoryAuditEntry) -> Result<(), SqliteMemoryError> {
+        let conn = self.lock()?;
+        let op_str = audit_op_to_str(entry.op);
+
+        conn.execute(
+            "INSERT OR IGNORE INTO memory_audit (id, op, target_id, note, at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![entry.id, op_str, entry.target_id, entry.note, entry.at],
+        )
+        .map_err(SqliteMemoryError::Sqlite)?;
+
+        Ok(())
     }
 
     /// Patch record text and update timestamp.
@@ -339,7 +431,7 @@ impl SqliteMemoryRepository {
         limit: usize,
         include_inactive: bool,
     ) -> Result<Vec<MemorySearchHit>, SqliteMemoryError> {
-        let records = self.list_records(include_inactive)?;
+        let records = self.list_records_filtered(include_inactive)?;
         let query_tokens = tokenize(query);
 
         let mut hits: Vec<MemorySearchHit> = records
@@ -456,6 +548,12 @@ pub enum SqliteMemoryError {
 
     #[error("lock poisoned: {0}")]
     Lock(String),
+}
+
+impl From<SqliteMemoryError> for crate::SpeechError {
+    fn from(e: SqliteMemoryError) -> Self {
+        crate::SpeechError::Memory(e.to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -587,17 +685,37 @@ mod tests {
     #[test]
     fn sqlite_creates_schema_and_layout() {
         let (_dir, repo) = test_repo();
-        // ensure_layout is idempotent
         repo.ensure_layout().expect("ensure_layout");
         let version = repo.schema_version().expect("schema_version");
-        assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn sqlite_insert_returns_full_record() {
+        let (_dir, repo) = test_repo();
+
+        let record = repo
+            .insert_record(
+                MemoryKind::Fact,
+                "The sky is blue",
+                0.9,
+                Some("turn-1"),
+                &["color".to_owned()],
+            )
+            .expect("insert");
+
+        assert_eq!(record.kind, MemoryKind::Fact);
+        assert_eq!(record.text, "The sky is blue");
+        assert_eq!(record.status, MemoryStatus::Active);
+        assert!(!record.id.is_empty());
+        assert_eq!(record.tags, vec!["color".to_owned()]);
     }
 
     #[test]
     fn sqlite_insert_search_and_soft_forget() {
         let (_dir, repo) = test_repo();
 
-        let id = repo
+        let record = repo
             .insert_record(
                 MemoryKind::Fact,
                 "The sky is blue",
@@ -610,10 +728,10 @@ mod tests {
         // Search should find it.
         let hits = repo.search("sky blue", 10, false).expect("search");
         assert!(!hits.is_empty());
-        assert_eq!(hits[0].record.id, id);
+        assert_eq!(hits[0].record.id, record.id);
 
         // Soft forget.
-        repo.forget_soft_record(&id, "test forget")
+        repo.forget_soft_record(&record.id, "test forget")
             .expect("forget_soft");
 
         // Active search should NOT find it.
@@ -630,13 +748,13 @@ mod tests {
     fn sqlite_supersede_marks_old_record() {
         let (_dir, repo) = test_repo();
 
-        let old_id = repo
+        let old = repo
             .insert_record(MemoryKind::Profile, "Name: Dave", 0.95, None, &[])
             .expect("insert old");
 
         let new_id = repo
             .supersede_record(&SupersedeParams {
-                old_id: &old_id,
+                old_id: &old.id,
                 kind: MemoryKind::Profile,
                 new_text: "Name: David",
                 confidence: 0.98,
@@ -646,67 +764,69 @@ mod tests {
             })
             .expect("supersede");
 
-        let records = repo.list_records(true).expect("list");
-        let old = records.iter().find(|r| r.id == old_id).expect("old record");
-        let new = records.iter().find(|r| r.id == new_id).expect("new record");
+        let records = repo.list_records_filtered(true).expect("list");
+        let old_rec = records.iter().find(|r| r.id == old.id).expect("old record");
+        let new_rec = records.iter().find(|r| r.id == new_id).expect("new record");
 
-        assert_eq!(old.status, MemoryStatus::Superseded);
-        assert_eq!(new.status, MemoryStatus::Active);
-        assert_eq!(new.supersedes.as_deref(), Some(old_id.as_str()));
+        assert_eq!(old_rec.status, MemoryStatus::Superseded);
+        assert_eq!(new_rec.status, MemoryStatus::Active);
+        assert_eq!(new_rec.supersedes.as_deref(), Some(old.id.as_str()));
     }
 
     #[test]
     fn sqlite_patch_updates_text() {
         let (_dir, repo) = test_repo();
 
-        let id = repo
+        let record = repo
             .insert_record(MemoryKind::Fact, "original text", 0.8, None, &[])
             .expect("insert");
 
-        repo.patch_record(&id, "updated text", "correction")
+        repo.patch_record(&record.id, "updated text", "correction")
             .expect("patch");
 
-        let records = repo.list_records(false).expect("list");
-        let record = records.iter().find(|r| r.id == id).expect("record");
-        assert_eq!(record.text, "updated text");
+        let records = repo.list_records().expect("list");
+        let found = records.iter().find(|r| r.id == record.id).expect("record");
+        assert_eq!(found.text, "updated text");
     }
 
     #[test]
     fn sqlite_invalidate_record() {
         let (_dir, repo) = test_repo();
 
-        let id = repo
+        let record = repo
             .insert_record(MemoryKind::Fact, "wrong fact", 0.7, None, &[])
             .expect("insert");
 
-        repo.invalidate_record(&id, "was incorrect")
+        repo.invalidate_record(&record.id, "was incorrect")
             .expect("invalidate");
 
-        let records = repo.list_records(true).expect("list");
-        let record = records.iter().find(|r| r.id == id).expect("record");
-        assert_eq!(record.status, MemoryStatus::Invalidated);
+        let records = repo.list_records_filtered(true).expect("list");
+        let found = records.iter().find(|r| r.id == record.id).expect("record");
+        assert_eq!(found.status, MemoryStatus::Invalidated);
     }
 
     #[test]
     fn sqlite_forget_hard_removes_row() {
         let (_dir, repo) = test_repo();
 
-        let id = repo
+        let record = repo
             .insert_record(MemoryKind::Episode, "ephemeral", 0.5, None, &[])
             .expect("insert");
 
-        repo.forget_hard_record(&id, "hard forget")
+        repo.forget_hard_record(&record.id, "hard forget")
             .expect("forget_hard");
 
         // Should not appear even in inactive listing.
-        let records = repo.list_records(true).expect("list");
-        assert!(records.iter().all(|r| r.id != id));
+        let records = repo.list_records_filtered(true).expect("list");
+        assert!(records.iter().all(|r| r.id != record.id));
 
         // Audit trail should record the operation.
         let audit = repo.audit_entries().expect("audit");
         assert!(
-            audit.iter().any(|a| a.target_id.as_deref() == Some(&*id)
-                && matches!(a.op, MemoryAuditOp::ForgetHard))
+            audit
+                .iter()
+                .any(|a| a.target_id.as_deref() == Some(&*record.id)
+                    && matches!(a.op, MemoryAuditOp::ForgetHard))
         );
     }
 
@@ -735,8 +855,7 @@ mod tests {
     fn sqlite_retention_policy_soft_forgets_old() {
         let (_dir, repo) = test_repo();
 
-        // Insert an episode with artificially old timestamp.
-        let id = repo
+        let record = repo
             .insert_record(MemoryKind::Episode, "old episode", 0.5, None, &[])
             .expect("insert");
 
@@ -746,7 +865,7 @@ mod tests {
             let old_ts = now_epoch_secs().saturating_sub(100 * 86_400);
             conn.execute(
                 "UPDATE memory_records SET updated_at = ?1 WHERE id = ?2",
-                params![old_ts, id],
+                params![old_ts, record.id],
             )
             .expect("backdate");
         }
@@ -754,26 +873,25 @@ mod tests {
         let forgotten = repo.apply_retention_policy(30).expect("retention");
         assert_eq!(forgotten, 1);
 
-        let records = repo.list_records(true).expect("list");
-        let record = records.iter().find(|r| r.id == id).expect("record");
-        assert_eq!(record.status, MemoryStatus::Forgotten);
+        let records = repo.list_records_filtered(true).expect("list");
+        let found = records.iter().find(|r| r.id == record.id).expect("record");
+        assert_eq!(found.status, MemoryStatus::Forgotten);
     }
 
     #[test]
     fn sqlite_schema_version_starts_at_current() {
         let (_dir, repo) = test_repo();
         let version = repo.schema_version().expect("version");
-        assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
     fn sqlite_migrate_if_needed_noop_when_current() {
         let (_dir, repo) = test_repo();
-        // Should be a no-op since we're already at CURRENT_SCHEMA_VERSION.
         repo.migrate_if_needed(CURRENT_SCHEMA_VERSION)
             .expect("migrate noop");
         let version = repo.schema_version().expect("version");
-        assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
@@ -801,7 +919,145 @@ mod tests {
             h.join().expect("thread join");
         }
 
-        let records = repo.list_records(false).expect("list");
+        let records = repo.list_records().expect("list");
         assert_eq!(records.len(), 10);
+    }
+
+    #[test]
+    fn sqlite_list_records_returns_active_only() {
+        let (_dir, repo) = test_repo();
+
+        let active = repo
+            .insert_record(MemoryKind::Fact, "active fact", 0.9, None, &[])
+            .expect("insert");
+
+        let forgotten = repo
+            .insert_record(MemoryKind::Fact, "to forget", 0.5, None, &[])
+            .expect("insert");
+
+        repo.forget_soft_record(&forgotten.id, "test")
+            .expect("forget");
+
+        // list_records() (no args) returns only active.
+        let active_list = repo.list_records().expect("list");
+        assert_eq!(active_list.len(), 1);
+        assert_eq!(active_list[0].id, active.id);
+
+        // list_records_filtered(true) returns both.
+        let all_list = repo.list_records_filtered(true).expect("list all");
+        assert_eq!(all_list.len(), 2);
+    }
+
+    #[test]
+    fn sqlite_insert_record_raw_preserves_fields() {
+        let (_dir, repo) = test_repo();
+
+        let record = MemoryRecord {
+            id: "custom-id-123".to_owned(),
+            kind: MemoryKind::Profile,
+            status: MemoryStatus::Superseded,
+            text: "migrated profile".to_owned(),
+            confidence: 0.85,
+            source_turn_id: Some("turn-99".to_owned()),
+            tags: vec!["onboarding:name".to_owned()],
+            supersedes: Some("old-id-000".to_owned()),
+            created_at: 1000,
+            updated_at: 2000,
+            importance_score: Some(0.7),
+            stale_after_secs: Some(86400),
+            metadata: None,
+        };
+
+        repo.insert_record_raw(&record).expect("insert_record_raw");
+
+        let records = repo.list_records_filtered(true).expect("list");
+        let found = records
+            .iter()
+            .find(|r| r.id == "custom-id-123")
+            .expect("find migrated");
+
+        assert_eq!(found.kind, MemoryKind::Profile);
+        assert_eq!(found.status, MemoryStatus::Superseded);
+        assert_eq!(found.text, "migrated profile");
+        assert_eq!(found.confidence, 0.85);
+        assert_eq!(found.source_turn_id.as_deref(), Some("turn-99"));
+        assert_eq!(found.tags, vec!["onboarding:name".to_owned()]);
+        assert_eq!(found.supersedes.as_deref(), Some("old-id-000"));
+        assert_eq!(found.created_at, 1000);
+        assert_eq!(found.updated_at, 2000);
+        assert_eq!(found.importance_score, Some(0.7));
+        assert_eq!(found.stale_after_secs, Some(86400));
+
+        // Audit trail should have a migrate entry.
+        let audit = repo.audit_entries().expect("audit");
+        assert!(
+            audit
+                .iter()
+                .any(|a| a.target_id.as_deref() == Some("custom-id-123")
+                    && matches!(a.op, MemoryAuditOp::Migrate))
+        );
+    }
+
+    #[test]
+    fn sqlite_insert_record_raw_is_idempotent() {
+        let (_dir, repo) = test_repo();
+
+        let record = MemoryRecord {
+            id: "dup-id".to_owned(),
+            kind: MemoryKind::Fact,
+            status: MemoryStatus::Active,
+            text: "duplicate test".to_owned(),
+            confidence: 0.5,
+            source_turn_id: None,
+            tags: vec![],
+            supersedes: None,
+            created_at: 100,
+            updated_at: 200,
+            importance_score: None,
+            stale_after_secs: None,
+            metadata: None,
+        };
+
+        repo.insert_record_raw(&record).expect("first insert");
+        repo.insert_record_raw(&record)
+            .expect("second insert (idempotent)");
+
+        let records = repo.list_records().expect("list");
+        let matches: Vec<_> = records.iter().filter(|r| r.id == "dup-id").collect();
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn sqlite_insert_audit_raw_preserves_fields() {
+        let (_dir, repo) = test_repo();
+
+        let entry = MemoryAuditEntry {
+            id: "audit-raw-1".to_owned(),
+            op: MemoryAuditOp::Patch,
+            target_id: Some("some-record".to_owned()),
+            note: "migrated audit entry".to_owned(),
+            at: 5000,
+        };
+
+        repo.insert_audit_raw(&entry).expect("insert_audit_raw");
+
+        let audit = repo.audit_entries().expect("audit");
+        let found = audit
+            .iter()
+            .find(|a| a.id == "audit-raw-1")
+            .expect("find migrated audit");
+
+        assert!(matches!(found.op, MemoryAuditOp::Patch));
+        assert_eq!(found.target_id.as_deref(), Some("some-record"));
+        assert_eq!(found.note, "migrated audit entry");
+        assert_eq!(found.at, 5000);
+    }
+
+    #[test]
+    fn sqlite_error_converts_to_speech_error() {
+        let err = SqliteMemoryError::NotFound("test-id".to_owned());
+        let speech_err: crate::SpeechError = err.into();
+        let msg = speech_err.to_string();
+        assert!(msg.contains("test-id"));
     }
 }
