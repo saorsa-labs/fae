@@ -47,8 +47,6 @@ pub mod llm;
 pub mod memory;
 pub mod memory_pressure;
 pub mod model_integrity;
-pub mod model_picker;
-pub mod model_selection;
 pub mod model_tier;
 pub mod models;
 pub mod onboarding;

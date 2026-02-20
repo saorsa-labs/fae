@@ -1698,6 +1698,12 @@ async fn run_llm_stage(
     }
 
     let mut config = config;
+
+    // Apply RAM-based model selection so config.llm.model_id matches the
+    // actually-loaded model (startup may have selected a different model
+    // than what was persisted in config.toml).
+    crate::config::apply_ram_model_selection(&mut config.llm);
+
     match crate::external_llm::apply_external_profile(&mut config.llm) {
         Ok(Some(applied)) => info!(
             "LLM stage applied external profile '{}' (provider={}, model={})",

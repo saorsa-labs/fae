@@ -253,6 +253,22 @@ fn parse_model_target(text: &str) -> ModelTarget {
 /// The provider key used for the local on-device model.
 const LOCAL_PROVIDER: &str = "fae-local";
 
+/// A lightweight model candidate reference for voice command resolution.
+#[derive(Debug, Clone)]
+pub struct ModelCandidate {
+    /// Provider name (e.g., "anthropic", "fae-local").
+    pub provider: String,
+    /// Model name (e.g., "claude-opus-4", "fae-qwen3-vl").
+    pub model: String,
+}
+
+impl ModelCandidate {
+    /// Create a new model candidate.
+    pub fn new(provider: String, model: String) -> Self {
+        Self { provider, model }
+    }
+}
+
 /// Resolve a [`ModelTarget`] to a candidate index.
 ///
 /// Given a parsed voice-command target and the list of available model
@@ -262,20 +278,16 @@ const LOCAL_PROVIDER: &str = "fae-local";
 /// # Examples
 ///
 /// ```
-/// use fae::voice_command::{resolve_model_target, ModelTarget};
-/// use fae::model_selection::ProviderModelRef;
+/// use fae::voice_command::{resolve_model_target, ModelTarget, ModelCandidate};
 ///
 /// let candidates = vec![
-///     ProviderModelRef::new("anthropic".into(), "claude-opus-4".into(), 0),
-///     ProviderModelRef::new("fae-local".into(), "fae-qwen3".into(), 0),
+///     ModelCandidate::new("anthropic".into(), "claude-opus-4".into()),
+///     ModelCandidate::new("fae-local".into(), "fae-qwen3".into()),
 /// ];
 /// assert_eq!(resolve_model_target(&ModelTarget::Local, &candidates), Some(1));
 /// assert_eq!(resolve_model_target(&ModelTarget::Best, &candidates), Some(0));
 /// ```
-pub fn resolve_model_target(
-    target: &ModelTarget,
-    candidates: &[crate::model_selection::ProviderModelRef],
-) -> Option<usize> {
+pub fn resolve_model_target(target: &ModelTarget, candidates: &[ModelCandidate]) -> Option<usize> {
     if candidates.is_empty() {
         return None;
     }
@@ -552,24 +564,12 @@ mod tests {
     // resolve_model_target
     // -----------------------------------------------------------------------
 
-    fn test_candidates() -> Vec<crate::model_selection::ProviderModelRef> {
+    fn test_candidates() -> Vec<ModelCandidate> {
         vec![
-            crate::model_selection::ProviderModelRef::new(
-                "anthropic".into(),
-                "claude-opus-4".into(),
-                10,
-            ),
-            crate::model_selection::ProviderModelRef::new("openai".into(), "gpt-4o".into(), 5),
-            crate::model_selection::ProviderModelRef::new(
-                "google".into(),
-                "gemini-2.5-flash".into(),
-                0,
-            ),
-            crate::model_selection::ProviderModelRef::new(
-                "fae-local".into(),
-                "fae-qwen3".into(),
-                0,
-            ),
+            ModelCandidate::new("anthropic".into(), "claude-opus-4".into()),
+            ModelCandidate::new("openai".into(), "gpt-4o".into()),
+            ModelCandidate::new("google".into(), "gemini-2.5-flash".into()),
+            ModelCandidate::new("fae-local".into(), "fae-qwen3".into()),
         ]
     }
 

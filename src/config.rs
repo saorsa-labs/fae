@@ -279,6 +279,13 @@ pub struct LlmConfig {
     /// HuggingFace repo ID for the tokenizer (local backend only).
     /// Leave empty to use the tokenizer bundled with the GGUF repo.
     pub tokenizer_id: String,
+    /// Whether to use a vision-capable model (VisionModelBuilder + ISQ).
+    ///
+    /// When `true` and `gguf_file` is empty, the model is loaded via
+    /// `VisionModelBuilder` with in-situ quantisation instead of `GgufModelBuilder`.
+    /// This enables image understanding through the camera skill.
+    #[serde(default)]
+    pub enable_vision: bool,
     /// Base URL for the API server (API backend only).
     pub api_url: String,
     /// Model name to request from the API (API backend only).
@@ -379,13 +386,16 @@ pub struct LlmConfig {
 
 impl Default for LlmConfig {
     fn default() -> Self {
+        // Select the best embedded vision model based on available RAM.
+        let ram = crate::system_profile::detect_total_memory_bytes();
+        let (model_id, gguf_file, tokenizer_id, enable_vision) = recommended_local_model(ram);
+
         Self {
             backend: LlmBackend::default(),
-            // Qwen3-4B-Instruct-2507: instruction-tuned, no thinking mode, ungated.
-            model_id: "unsloth/Qwen3-4B-Instruct-2507-GGUF".to_owned(),
-            gguf_file: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf".to_owned(),
-            // GGUF repo doesn't include a tokenizer — pull from the original repo.
-            tokenizer_id: "Qwen/Qwen3-4B-Instruct-2507".to_owned(),
+            model_id: model_id.to_owned(),
+            gguf_file: gguf_file.to_owned(),
+            tokenizer_id: tokenizer_id.to_owned(),
+            enable_vision,
             // Remote provider fields are intentionally unset by default.
             api_url: String::new(),
             api_model: String::new(),
@@ -435,6 +445,57 @@ pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize
         Some(_) => 65_536,
         None => 32_768,
     }
+}
+
+/// Recommended local model selection based on total system RAM.
+///
+/// Returns a tuple of `(model_id, gguf_file, tokenizer_id, enable_vision)`.
+/// Both VL models use `VisionModelBuilder` (empty `gguf_file`, empty `tokenizer_id`).
+pub fn recommended_local_model(
+    total_memory_bytes: Option<u64>,
+) -> (&'static str, &'static str, &'static str, bool) {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    match total_memory_bytes {
+        Some(bytes) if bytes >= 24 * GIB => ("Qwen/Qwen3-VL-8B-Instruct", "", "", true),
+        _ => ("Qwen/Qwen3-VL-4B-Instruct", "", "", true),
+    }
+}
+
+/// Apply RAM-based model selection to an `LlmConfig` **in place**.
+///
+/// If the current `model_id` is a managed default (old GGUF or new VL), this
+/// overwrites the LLM fields with the RAM-appropriate model. User-customised
+/// configs are left untouched.
+pub fn apply_ram_model_selection(llm: &mut LlmConfig) {
+    if is_managed_default_model_id(&llm.model_id) {
+        let ram = crate::system_profile::detect_total_memory_bytes();
+        let (model_id, gguf_file, tokenizer_id, enable_vision) = recommended_local_model(ram);
+        tracing::debug!(
+            "RAM-based model selection: {} (vision={}), RAM={:?}",
+            model_id,
+            enable_vision,
+            ram
+        );
+        llm.model_id = model_id.to_owned();
+        llm.gguf_file = gguf_file.to_owned();
+        llm.tokenizer_id = tokenizer_id.to_owned();
+        llm.enable_vision = enable_vision;
+    }
+}
+
+/// Returns `true` if the given model ID is one of the managed defaults
+/// (old GGUF text-only or new VL vision models).
+///
+/// This guards RAM-based model selection so that user-customized configs
+/// are never silently overwritten.
+pub fn is_managed_default_model_id(model_id: &str) -> bool {
+    matches!(
+        model_id,
+        "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+            | "MaziyarPanahi/Qwen3-4B-Instruct-GGUF"
+            | "Qwen/Qwen3-VL-4B-Instruct"
+            | "Qwen/Qwen3-VL-8B-Instruct"
+    )
 }
 
 fn default_network_timeout_ms() -> u64 {
@@ -589,9 +650,24 @@ Personal context:\n\
     ///
     /// Legacy prompts stored in `system_prompt` are detected and treated as
     /// empty add-ons.
+    /// Build the effective system prompt including core, SOUL, skills, and
+    /// optionally a vision-understanding section.
+    ///
+    /// `permissions` gates built-in skill prompt fragments. When `None`, all
+    /// skills are omitted.
     pub fn effective_system_prompt(
         &self,
         permissions: Option<&crate::permissions::PermissionStore>,
+    ) -> String {
+        self.effective_system_prompt_with_vision(permissions, self.enable_vision)
+    }
+
+    /// Like [`effective_system_prompt`](Self::effective_system_prompt) but with
+    /// an explicit `vision_capable` override.
+    pub fn effective_system_prompt_with_vision(
+        &self,
+        permissions: Option<&crate::permissions::PermissionStore>,
+        vision_capable: bool,
     ) -> String {
         let add_on = self.system_prompt.trim();
         let is_legacy = Self::LEGACY_PROMPTS
@@ -602,7 +678,12 @@ Personal context:\n\
         } else {
             add_on
         };
-        crate::personality::assemble_prompt(&self.personality, clean_addon, permissions)
+        crate::personality::assemble_prompt(
+            &self.personality,
+            clean_addon,
+            permissions,
+            vision_capable,
+        )
     }
 }
 
@@ -1701,5 +1782,73 @@ wake_word = "hey fae"
         assert!(!config.wakeword.enabled);
         assert!((config.wakeword.threshold - 0.5).abs() < f32::EPSILON);
         assert_eq!(config.audio.input_sample_rate, 16000);
+    }
+
+    // ── Vision / RAM model selection ────────────────────────────
+
+    #[test]
+    fn llm_config_default_enables_vision() {
+        let config = LlmConfig::default();
+        assert!(config.enable_vision);
+        assert!(config.gguf_file.is_empty());
+        assert!(config.tokenizer_id.is_empty());
+        assert!(config.model_id.contains("VL"));
+    }
+
+    #[test]
+    fn recommended_local_model_selects_8b_for_high_ram() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let (model_id, _, _, vision) = recommended_local_model(Some(32 * GIB));
+        assert_eq!(model_id, "Qwen/Qwen3-VL-8B-Instruct");
+        assert!(vision);
+    }
+
+    #[test]
+    fn recommended_local_model_selects_4b_for_low_ram() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let (model_id, _, _, vision) = recommended_local_model(Some(16 * GIB));
+        assert_eq!(model_id, "Qwen/Qwen3-VL-4B-Instruct");
+        assert!(vision);
+    }
+
+    #[test]
+    fn recommended_local_model_selects_4b_for_unknown_ram() {
+        let (model_id, _, _, vision) = recommended_local_model(None);
+        assert_eq!(model_id, "Qwen/Qwen3-VL-4B-Instruct");
+        assert!(vision);
+    }
+
+    #[test]
+    fn is_managed_default_model_id_recognizes_old_and_new() {
+        assert!(is_managed_default_model_id(
+            "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+        ));
+        assert!(is_managed_default_model_id("Qwen/Qwen3-VL-4B-Instruct"));
+        assert!(is_managed_default_model_id("Qwen/Qwen3-VL-8B-Instruct"));
+        assert!(!is_managed_default_model_id("custom/my-model"));
+        assert!(!is_managed_default_model_id(""));
+    }
+
+    #[test]
+    fn enable_vision_deserializes_from_toml() {
+        let toml_str = r#"
+[llm]
+enable_vision = true
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.llm.enable_vision);
+    }
+
+    #[test]
+    fn enable_vision_missing_defaults_false_in_legacy_config() {
+        // Simulates an old config that does not have `enable_vision`.
+        let toml_str = r#"
+[llm]
+model_id = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+gguf_file = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        // serde(default) on bool defaults to false.
+        assert!(!config.llm.enable_vision);
     }
 }

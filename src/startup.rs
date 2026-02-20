@@ -74,8 +74,31 @@ pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
         });
     }
 
-    // LLM GGUF (needed for local backend or local fallback)
-    if needs_local_model {
+    // LLM: either GGUF pre-download or vision model size estimate.
+    let vision_mode = config.llm.enable_vision && config.llm.gguf_file.is_empty();
+    if needs_local_model && vision_mode {
+        // Vision models are downloaded by VisionModelBuilder at load time.
+        // Include an estimated download size so disk space checks and progress
+        // UI account for the multi-GB full-precision weights from HuggingFace.
+        let estimated_bytes: u64 = if config.llm.model_id.contains("8B") {
+            16_000_000_000 // ~16 GB bf16 weights for VL-8B
+        } else {
+            8_000_000_000 // ~8 GB bf16 weights for VL-4B
+        };
+        // Check if the HF cache already has the model repo.
+        // If any file (like config.json) is cached, the model was likely downloaded.
+        let hf_cached = hf_hub::Cache::default()
+            .repo(hf_hub::Repo::model(config.llm.model_id.clone()))
+            .get("config.json")
+            .is_some();
+
+        files.push(DownloadFile {
+            repo_id: config.llm.model_id.clone(),
+            filename: "(vision model weights — downloaded at load time)".to_owned(),
+            size_bytes: Some(estimated_bytes),
+            cached: hf_cached,
+        });
+    } else if needs_local_model {
         let llm_sizes =
             ModelManager::query_file_sizes(&config.llm.model_id, &[config.llm.gguf_file.as_str()]);
         for (filename, size_bytes) in llm_sizes {
@@ -172,6 +195,11 @@ pub async fn initialize_models_with_progress(
             warn!("failed to apply external LLM profile: {e}");
         }
     }
+    // Apply RAM-based model selection for managed default models.
+    // This upgrades default Qwen3-4B to Qwen3-VL based on available memory,
+    // but never overwrites user-customised model_id values.
+    crate::config::apply_ram_model_selection(&mut resolved_config.llm);
+
     let config = &resolved_config;
 
     let model_manager = ModelManager::new(&config.models)?;
@@ -227,7 +255,11 @@ pub async fn initialize_models_with_progress(
     // LLM: Pre-download GGUF and tokenizer so mistralrs finds them in the
     // shared hf-hub cache. This gives us progress visibility instead of a
     // frozen "Loading..." screen.
-    if use_local_llm {
+    //
+    // Vision models skip this — VisionModelBuilder downloads HF weights
+    // internally at load time.
+    let vision_download_mode = config.llm.enable_vision && config.llm.gguf_file.is_empty();
+    if use_local_llm && !vision_download_mode {
         let was_cached = ModelManager::is_file_cached(&config.llm.model_id, &config.llm.gguf_file);
         model_manager.download_with_progress(
             &config.llm.model_id,
@@ -254,6 +286,11 @@ pub async fn initialize_models_with_progress(
                 }
             }
         }
+    } else if use_local_llm && vision_download_mode {
+        info!(
+            "vision model {} — weights will be downloaded by VisionModelBuilder at load time",
+            config.llm.model_id
+        );
     }
 
     // TTS: Pre-download Kokoro assets with progress callbacks.
@@ -393,7 +430,11 @@ fn load_stt(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Resul
 
 /// Load LLM with a status message and optional progress callback.
 async fn load_llm(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<LocalLlm> {
-    let model_name = format!("LLM ({} / {})", config.llm.model_id, config.llm.gguf_file);
+    let model_name = if config.llm.enable_vision && config.llm.gguf_file.is_empty() {
+        format!("LLM ({} / vision+ISQ)", config.llm.model_id)
+    } else {
+        format!("LLM ({} / {})", config.llm.model_id, config.llm.gguf_file)
+    };
     print!("  Loading {model_name}...");
     if let Some(cb) = callback {
         cb(ProgressEvent::LoadStarted {

@@ -12,9 +12,10 @@ pub use api::ApiLlm;
 use crate::config::LlmConfig;
 use crate::error::{Result, SpeechError};
 use crate::pipeline::messages::SentenceChunk;
+use image::DynamicImage;
 use mistralrs::{
-    GgufModelBuilder, MemoryGpuConfig, Model, PagedAttentionMetaBuilder, RequestBuilder, Response,
-    TextMessageRole, TextMessages,
+    GgufModelBuilder, IsqType, MemoryGpuConfig, Model, PagedAttentionMetaBuilder, RequestBuilder,
+    Response, TextMessageRole, VisionMessages, VisionModelBuilder,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +31,28 @@ const MIN_CONTEXT_SIZE_TOKENS: usize = 1024;
 /// controls and never surface visible content.
 const REASONING_ONLY_EVENT_LIMIT: usize = 96;
 const REASONING_ONLY_DURATION_LIMIT: Duration = Duration::from_secs(12);
+
+/// A single entry in the local LLM conversation history.
+///
+/// Supports both text-only messages and image-carrying messages (camera captures).
+/// When building `VisionMessages`, image entries are rendered with
+/// `add_image_message` so the vision encoder can process them.
+pub enum HistoryEntry {
+    /// A plain text message (system, user, or assistant).
+    Text {
+        /// The chat role (system, user, assistant).
+        role: TextMessageRole,
+        /// The message content.
+        content: String,
+    },
+    /// A user message with an attached camera image.
+    ImageCapture {
+        /// The user's text accompanying the image.
+        text: String,
+        /// The captured image (decoded, ready for the vision encoder).
+        image: DynamicImage,
+    },
+}
 
 /// Incrementally strips `<think>...</think>` blocks across streaming chunks.
 #[derive(Debug, Default)]
@@ -98,13 +121,19 @@ impl ThinkTagStripper {
 
 /// Language model for generating conversational responses.
 ///
-/// Uses `mistralrs` for high-level GGUF inference with streaming token
+/// Uses `mistralrs` for high-level inference with streaming token
 /// generation and sentence-level buffering for TTS consumption.
+///
+/// Supports two loading paths:
+/// - **Vision** (`VisionModelBuilder` + ISQ): Qwen3-VL models with image understanding.
+/// - **GGUF** (`GgufModelBuilder`): Traditional text-only quantized models.
 pub struct LocalLlm {
     model: Arc<Model>,
     config: LlmConfig,
-    /// Conversation history: (role, content) pairs.
-    history: Vec<(TextMessageRole, String)>,
+    /// Conversation history supporting both text and image entries.
+    history: Vec<HistoryEntry>,
+    /// Whether the loaded model supports vision (image inputs).
+    pub vision_capable: bool,
 }
 
 impl LocalLlm {
@@ -113,9 +142,37 @@ impl LocalLlm {
         Arc::clone(&self.model)
     }
 
-    pub(crate) async fn load_local_model(config: &LlmConfig) -> Result<Arc<Model>> {
+    /// Load a vision-capable model via `VisionModelBuilder` with in-situ quantisation.
+    ///
+    /// Downloads full-precision HF weights on first run, then applies ISQ (Q4K)
+    /// in memory. Subsequent starts use the HF cache.
+    async fn load_vision_model(config: &LlmConfig) -> Result<Arc<Model>> {
+        info!("loading vision LLM: {} (ISQ Q4K)", config.model_id);
+
+        let context_size = effective_context_size_tokens(config);
+        info!("local LLM context_size_tokens={context_size}");
+
+        let model = VisionModelBuilder::new(&config.model_id)
+            .with_isq(IsqType::Q4K)
+            .with_logging()
+            .with_paged_attn(|| {
+                PagedAttentionMetaBuilder::default()
+                    .with_gpu_memory(MemoryGpuConfig::ContextSize(context_size))
+                    .build()
+            })
+            .map_err(|e| SpeechError::Llm(format!("paged attention config failed: {e}")))?
+            .build()
+            .await
+            .map_err(|e| SpeechError::Llm(format!("vision model build failed: {e}")))?;
+
+        info!("vision LLM loaded successfully");
+        Ok(Arc::new(model))
+    }
+
+    /// Load a text-only GGUF model via `GgufModelBuilder`.
+    async fn load_gguf_model(config: &LlmConfig) -> Result<Arc<Model>> {
         info!(
-            "loading local LLM: {} / {}",
+            "loading GGUF LLM: {} / {}",
             config.model_id, config.gguf_file
         );
 
@@ -138,32 +195,62 @@ impl LocalLlm {
             .map_err(|e| SpeechError::Llm(format!("paged attention config failed: {e}")))?
             .build()
             .await
-            .map_err(|e| SpeechError::Llm(format!("model build failed: {e}")))?;
+            .map_err(|e| SpeechError::Llm(format!("GGUF model build failed: {e}")))?;
 
-        info!("local LLM loaded successfully");
+        info!("GGUF LLM loaded successfully");
         Ok(Arc::new(model))
+    }
+
+    /// Load the local model, dispatching to vision or GGUF path based on config.
+    pub(crate) async fn load_local_model(config: &LlmConfig) -> Result<(Arc<Model>, bool)> {
+        let use_vision = config.enable_vision && config.gguf_file.is_empty();
+
+        if use_vision {
+            match Self::load_vision_model(config).await {
+                Ok(model) => return Ok((model, true)),
+                Err(e) => {
+                    warn!("vision model load failed ({e}), falling back to GGUF text-only");
+                    // Fall back to Qwen3-4B GGUF text-only.
+                    let fallback = LlmConfig {
+                        model_id: "unsloth/Qwen3-4B-Instruct-2507-GGUF".to_owned(),
+                        gguf_file: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf".to_owned(),
+                        tokenizer_id: "Qwen/Qwen3-4B-Instruct-2507".to_owned(),
+                        enable_vision: false,
+                        ..config.clone()
+                    };
+                    let model = Self::load_gguf_model(&fallback).await?;
+                    return Ok((model, false));
+                }
+            }
+        }
+
+        let model = Self::load_gguf_model(config).await?;
+        Ok((model, false))
     }
 
     /// Build a new local LLM from the given configuration.
     ///
-    /// This downloads the GGUF model (if not cached) and loads it onto
-    /// the best available device (Metal GPU on Apple Silicon, CPU otherwise).
+    /// When vision is enabled, loads a `VisionModelBuilder` model with ISQ.
+    /// If vision loading fails, falls back to Qwen3-4B GGUF text-only.
     ///
     /// # Errors
     ///
-    /// Returns an error if model loading fails.
+    /// Returns an error if all model loading paths fail.
     pub async fn new(config: &LlmConfig) -> Result<Self> {
-        let model = Self::load_local_model(config).await?;
+        let (model, vision_capable) = Self::load_local_model(config).await?;
 
-        let history = vec![(
-            TextMessageRole::System,
-            config.effective_system_prompt(None),
-        )];
+        // Use the actual loaded vision capability (not config default) so the
+        // system prompt accurately reflects what the model can do.
+        let history = vec![HistoryEntry::Text {
+            role: TextMessageRole::System,
+            content: config.effective_system_prompt_with_vision(None, vision_capable),
+        }];
 
         Ok(Self {
             model,
             config: config.clone(),
             history,
+            vision_capable,
         })
     }
 
@@ -172,6 +259,9 @@ impl LocalLlm {
     /// Tokens are accumulated into sentences (split on `.`, `!`, `?`, `\n`).
     /// Each complete sentence is sent to the TTS stage immediately for
     /// low-latency speech output.
+    ///
+    /// When `image` is `Some`, the user message is treated as an image-carrying
+    /// turn and the image is sent to the vision encoder alongside the text.
     ///
     /// The `interrupt` flag is checked every chunk. If set, generation stops
     /// early and the partial response is saved. Returns `true` if interrupted.
@@ -182,12 +272,22 @@ impl LocalLlm {
     pub async fn generate_response(
         &mut self,
         user_input: String,
+        image: Option<DynamicImage>,
         tx: mpsc::Sender<SentenceChunk>,
         interrupt: Arc<AtomicBool>,
     ) -> Result<bool> {
-        // Add user message to history
-        self.history
-            .push((TextMessageRole::User, user_input.clone()));
+        // Add user message to history (with optional image).
+        if let Some(img) = image {
+            self.history.push(HistoryEntry::ImageCapture {
+                text: user_input.clone(),
+                image: img,
+            });
+        } else {
+            self.history.push(HistoryEntry::Text {
+                role: TextMessageRole::User,
+                content: user_input.clone(),
+            });
+        }
         self.trim_history();
 
         // Clear interrupt flag at the start of each generation
@@ -196,10 +296,27 @@ impl LocalLlm {
         info!("generating response to: {user_input}");
         let gen_start = Instant::now();
 
-        // Build messages from history, disabling thinking blocks natively
-        let mut messages = TextMessages::new().enable_thinking(false);
-        for (role, content) in &self.history {
-            messages = messages.add_message(role.clone(), content);
+        // Build VisionMessages from history (works for both text-only and
+        // image-carrying turns — VisionMessages is a superset of TextMessages).
+        let mut messages = VisionMessages::new().enable_thinking(false);
+        for entry in &self.history {
+            match entry {
+                HistoryEntry::Text { role, content } => {
+                    messages = messages.add_message(role.clone(), content);
+                }
+                HistoryEntry::ImageCapture { text, image } => {
+                    messages = messages
+                        .add_image_message(
+                            TextMessageRole::User,
+                            text,
+                            vec![image.clone()],
+                            &self.model,
+                        )
+                        .map_err(|e| {
+                            SpeechError::Llm(format!("failed to add image message: {e}"))
+                        })?;
+                }
+            }
         }
 
         // Configure sampling parameters
@@ -380,7 +497,10 @@ impl LocalLlm {
         // Add assistant response to history (even partial, if non-empty)
         let final_text = generated_text.trim().to_owned();
         if !final_text.is_empty() {
-            self.history.push((TextMessageRole::Assistant, final_text));
+            self.history.push(HistoryEntry::Text {
+                role: TextMessageRole::Assistant,
+                content: final_text,
+            });
         } else if reasoning_only_events > 0 {
             warn!(
                 "local model produced {reasoning_only_events} reasoning-only events \
@@ -621,5 +741,37 @@ mod tests {
             false,
             REASONING_ONLY_DURATION_LIMIT.saturating_sub(Duration::from_secs(1))
         ));
+    }
+
+    #[test]
+    fn history_entry_text_variant() {
+        let entry = HistoryEntry::Text {
+            role: TextMessageRole::User,
+            content: "hello".to_owned(),
+        };
+        match entry {
+            HistoryEntry::Text { role, content } => {
+                assert!(matches!(role, TextMessageRole::User));
+                assert_eq!(content, "hello");
+            }
+            HistoryEntry::ImageCapture { .. } => panic!("expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn history_entry_image_variant() {
+        let img = image::DynamicImage::new_rgb8(1, 1);
+        let entry = HistoryEntry::ImageCapture {
+            text: "what is this".to_owned(),
+            image: img,
+        };
+        match entry {
+            HistoryEntry::ImageCapture { text, image } => {
+                assert_eq!(text, "what is this");
+                assert_eq!(image.width(), 1);
+                assert_eq!(image.height(), 1);
+            }
+            HistoryEntry::Text { .. } => panic!("expected ImageCapture variant"),
+        }
     }
 }

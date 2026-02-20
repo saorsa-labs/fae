@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.0] - 2026-02-20
+
+### Added
+
+- **Vision Model Support (Qwen3-VL)** — Fae now uses Qwen3-VL vision-language models instead of text-only Qwen3-4B. Models are selected automatically based on system RAM:
+  - 24 GiB+ RAM: Qwen3-VL-8B-Instruct (stronger tool calling, coding, GUI understanding)
+  - < 24 GiB RAM: Qwen3-VL-4B-Instruct (same vision capabilities, lighter footprint)
+- **VisionModelBuilder integration** — uses `mistralrs` VisionModelBuilder with ISQ Q4K quantization for efficient inference. Falls back to Qwen3-4B GGUF text-only if vision model fails to load.
+- **HistoryEntry enum** — conversation history now supports both text and image captures, enabling future camera-to-LLM pipelines.
+- **Conditional vision prompt** — vision understanding instructions are injected into the system prompt only when the loaded model is vision-capable, preventing false claims about image understanding.
+- **Vision-aware download accounting** — preflight disk space checks now estimate vision model download sizes (8-16 GB) with HF cache detection.
+
+### Changed
+
+- **RAM-based model selection** — `LlmConfig::default()` detects system memory and selects the appropriate model automatically. User-customized model IDs are never overwritten.
+- **CameraSkill prompt** — updated to reflect genuine vision capabilities when available.
+- **VisionMessages replaces TextMessages** — LLM inference uses `VisionMessages` which handles both text-only and image-carrying turns.
+
+### Removed
+
+- `src/model_picker.rs` — dead code, never called from any code path.
+- `src/model_selection.rs` — dead code, replaced by embedded-only model policy.
+
 ## [v0.5.0] - 2026-02-17
 
 ### Changed

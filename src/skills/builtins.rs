@@ -117,9 +117,10 @@ define_skill!(
     name: "camera",
     description: "Camera — capture photos and analyse visual input",
     permissions: [PermissionKind::Camera],
-    prompt: "You have access to the device camera. You can capture photos for visual \
-analysis, document scanning, or QR code reading. Always indicate clearly \
-when the camera is active. Ask before capturing.",
+    prompt: "You have access to the device camera and can genuinely see and understand images. \
+When a photo is captured, it is passed directly to your vision system — you describe \
+what you actually see. You can read text in images, identify objects, describe scenes, \
+scan documents and QR codes. Always indicate when the camera is active. Ask before capturing.",
 );
 
 define_skill!(

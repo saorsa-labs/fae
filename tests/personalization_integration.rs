@@ -12,7 +12,7 @@ use fae::personality;
 
 #[test]
 fn personality_profile_assembles_with_fae_identity() {
-    let prompt = personality::assemble_prompt("fae", "", None);
+    let prompt = personality::assemble_prompt("fae", "", None, false);
     // Must contain the core prompt anchor.
     assert!(prompt.contains("Fae"));
     // Must contain AI assistant identity.
@@ -24,7 +24,7 @@ fn personality_profile_assembles_with_fae_identity() {
 #[test]
 fn personality_profile_with_addon_appends_cleanly() {
     let addon = "Always mention the weather.";
-    let prompt = personality::assemble_prompt("fae", addon, None);
+    let prompt = personality::assemble_prompt("fae", addon, None, false);
     assert!(prompt.contains(addon));
     // Addon should appear after the personality section.
     let personality_pos = prompt.find("Fae").or_else(|| prompt.find("assistant"));

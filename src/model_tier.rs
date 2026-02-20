@@ -301,7 +301,16 @@ static TIER_TABLE: &[TierEntry] = &[
         pattern: "mistral-medium*",
         tier: ModelTier::Mid,
     },
+    // ── Mid (Vision) ──────────────────────────────────────────
+    TierEntry {
+        pattern: "qwen3-vl-8b*",
+        tier: ModelTier::Mid,
+    },
     // ── Small ─────────────────────────────────────────────────
+    TierEntry {
+        pattern: "qwen3-vl-4b*",
+        tier: ModelTier::Small,
+    },
     TierEntry {
         pattern: "llama-3*-8b*",
         tier: ModelTier::Small,
@@ -611,10 +620,17 @@ mod tests {
     fn test_small_models() {
         assert_eq!(tier_for_model("llama-3.2-8b"), ModelTier::Small);
         assert_eq!(tier_for_model("qwen3-4b-instruct"), ModelTier::Small);
+        assert_eq!(tier_for_model("qwen3-vl-4b-instruct"), ModelTier::Small);
         assert_eq!(tier_for_model("phi-3-mini-4k"), ModelTier::Small);
         assert_eq!(tier_for_model("gemma-2b"), ModelTier::Small);
         assert_eq!(tier_for_model("fae-qwen3"), ModelTier::Small);
         assert_eq!(tier_for_model("mistral-7b-instruct"), ModelTier::Small);
+    }
+
+    #[test]
+    fn test_vision_model_tiers() {
+        assert_eq!(tier_for_model("qwen3-vl-8b-instruct"), ModelTier::Mid);
+        assert_eq!(tier_for_model("qwen3-vl-4b-instruct"), ModelTier::Small);
     }
 
     #[test]
