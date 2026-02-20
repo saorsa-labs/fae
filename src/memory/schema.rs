@@ -54,12 +54,6 @@ CREATE TABLE IF NOT EXISTS memory_audit (
 
 CREATE INDEX IF NOT EXISTS idx_audit_at ON memory_audit(at);
 
--- Placeholder for Phase 7.3: vector embeddings via sqlite-vec.
--- The virtual table will be created when the embedding engine is available.
--- CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
---     record_id TEXT PRIMARY KEY,
---     embedding FLOAT[384]
--- );
 "#;
 
 /// Apply the full schema to an open connection.
@@ -78,6 +72,25 @@ pub(crate) fn apply_schema(conn: &Connection) -> rusqlite::Result<()> {
     )?;
 
     Ok(())
+}
+
+/// Embedding vector dimensions (all-MiniLM-L6-v2).
+pub(crate) const EMBEDDING_DIM: usize = 384;
+
+/// DDL for the `vec_embeddings` virtual table (requires sqlite-vec loaded).
+const VEC_EMBEDDINGS_SQL: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
+    record_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+"#;
+
+/// Create the `vec_embeddings` virtual table.
+///
+/// Must be called **after** `sqlite_vec::load()` has been called on the
+/// connection.  Safe to call multiple times (`IF NOT EXISTS`).
+pub(crate) fn apply_vec_schema(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(VEC_EMBEDDINGS_SQL)
 }
 
 /// Read the current schema version from the database.

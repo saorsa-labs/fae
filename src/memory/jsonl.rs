@@ -293,6 +293,8 @@ impl MemoryRepository {
                     match version {
                         0 => self.migrate_0_to_1()?,
                         1 => self.migrate_1_to_2()?,
+                        // 2→3 adds vec_embeddings (SQLite-only); no-op for JSONL.
+                        2 => {}
                         other => {
                             return Err(SpeechError::Memory(format!(
                                 "unsupported memory migration from schema version {other}"

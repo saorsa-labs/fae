@@ -8,7 +8,36 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
 
-use super::schema::{apply_schema, read_schema_version};
+use super::schema::{EMBEDDING_DIM, apply_schema, apply_vec_schema, read_schema_version};
+
+/// Register the sqlite-vec extension globally (once).
+///
+/// Must be called before any `Connection::open()` that needs vec0 support.
+fn ensure_sqlite_vec_loaded() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // SAFETY: `sqlite3_vec_init` is a valid SQLite extension entry point
+        // provided by the sqlite-vec crate (statically linked). Registering it
+        // as an auto-extension is the documented way to enable vec0 for all
+        // connections.  The transmute is the same pattern used in sqlite-vec's
+        // own test suite.
+        unsafe {
+            type ExtEntryPoint = unsafe extern "C" fn(
+                *mut rusqlite::ffi::sqlite3,
+                *mut *const i8,
+                *const rusqlite::ffi::sqlite3_api_routines,
+            ) -> i32;
+
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                ExtEntryPoint,
+            >(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+    });
+}
 use super::types::{
     MemoryAuditEntry, MemoryAuditOp, MemoryKind, MemoryRecord, MemorySearchHit, MemoryStatus,
     display_kind, new_id, now_epoch_secs, score_record, tokenize, truncate_record_text,
@@ -49,12 +78,18 @@ impl std::fmt::Debug for SqliteMemoryRepository {
 impl SqliteMemoryRepository {
     /// Open (or create) the SQLite database at `{root_dir}/fae.db`.
     ///
-    /// Applies the schema if the database is new.
+    /// Registers the sqlite-vec extension (once, globally), then applies the
+    /// full schema including the `vec_embeddings` virtual table.
     pub fn new(root_dir: &Path) -> Result<Self, SqliteMemoryError> {
+        ensure_sqlite_vec_loaded();
+
         std::fs::create_dir_all(root_dir).map_err(|e| SqliteMemoryError::Io(e.to_string()))?;
         let db_path = root_dir.join(DB_FILENAME);
         let conn = Connection::open(&db_path).map_err(SqliteMemoryError::Sqlite)?;
+
         apply_schema(&conn).map_err(SqliteMemoryError::Sqlite)?;
+        apply_vec_schema(&conn).map_err(SqliteMemoryError::Sqlite)?;
+
         Ok(Self {
             root: root_dir.to_path_buf(),
             conn: Mutex::new(conn),
@@ -81,15 +116,23 @@ impl SqliteMemoryRepository {
         Ok(version.unwrap_or(0))
     }
 
-    /// No-op if already at `target` version. Future migrations go here.
+    /// Apply incremental migrations up to `target` version.
+    ///
+    /// No-op if already at or above `target`.
     pub fn migrate_if_needed(&self, target: u32) -> Result<(), SqliteMemoryError> {
         let current = self.schema_version()?;
         if current >= target {
             return Ok(());
         }
-        // Future: apply incremental migrations here.
-        // For now, just update the version stamp.
+
         let conn = self.lock()?;
+
+        // Migration 2 → 3: create vec_embeddings virtual table.
+        if current < 3 {
+            apply_vec_schema(&conn).map_err(SqliteMemoryError::Sqlite)?;
+        }
+
+        // Stamp the new version.
         conn.execute(
             "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_version'",
             params![target.to_string()],
@@ -550,6 +593,132 @@ impl SqliteMemoryRepository {
         }
 
         Ok(rows)
+    }
+
+    // -----------------------------------------------------------------------
+    // Vector embedding operations
+    // -----------------------------------------------------------------------
+
+    /// Store a 384-dim embedding for a memory record.
+    ///
+    /// Replaces any existing embedding for the same record.
+    pub fn store_embedding(
+        &self,
+        record_id: &str,
+        embedding: &[f32],
+    ) -> Result<(), SqliteMemoryError> {
+        if embedding.len() != EMBEDDING_DIM {
+            return Err(SqliteMemoryError::Io(format!(
+                "embedding dimension mismatch: expected {EMBEDDING_DIM}, got {}",
+                embedding.len()
+            )));
+        }
+        let conn = self.lock()?;
+        // Convert f32 slice to byte blob (little-endian).
+        let blob: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+        // Delete existing embedding first (UPSERT not supported on vec0).
+        conn.execute(
+            "DELETE FROM vec_embeddings WHERE record_id = ?1",
+            params![record_id],
+        )
+        .map_err(SqliteMemoryError::Sqlite)?;
+        conn.execute(
+            "INSERT INTO vec_embeddings (record_id, embedding) VALUES (?1, ?2)",
+            params![record_id, blob],
+        )
+        .map_err(SqliteMemoryError::Sqlite)?;
+        Ok(())
+    }
+
+    /// Retrieve the stored embedding for a record.
+    pub fn get_embedding(&self, record_id: &str) -> Result<Option<Vec<f32>>, SqliteMemoryError> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT embedding FROM vec_embeddings WHERE record_id = ?1")
+            .map_err(SqliteMemoryError::Sqlite)?;
+        let mut rows = stmt
+            .query(params![record_id])
+            .map_err(SqliteMemoryError::Sqlite)?;
+        match rows.next().map_err(SqliteMemoryError::Sqlite)? {
+            Some(row) => {
+                let blob: Vec<u8> = row.get(0).map_err(SqliteMemoryError::Sqlite)?;
+                if blob.len() != EMBEDDING_DIM * std::mem::size_of::<f32>() {
+                    return Err(SqliteMemoryError::Io(format!(
+                        "stored embedding size mismatch: expected {} bytes, got {}",
+                        EMBEDDING_DIM * std::mem::size_of::<f32>(),
+                        blob.len()
+                    )));
+                }
+                // SAFETY: blob is the correct length for EMBEDDING_DIM f32 values.
+                let floats: Vec<f32> = blob
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                Ok(Some(floats))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Find the nearest record embeddings to a query vector.
+    ///
+    /// Returns `(record_id, distance)` pairs ordered by ascending distance.
+    pub fn search_by_vector(
+        &self,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(String, f64)>, SqliteMemoryError> {
+        if query_vec.len() != EMBEDDING_DIM {
+            return Err(SqliteMemoryError::Io(format!(
+                "query vector dimension mismatch: expected {EMBEDDING_DIM}, got {}",
+                query_vec.len()
+            )));
+        }
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT record_id, distance FROM vec_embeddings \
+                 WHERE embedding MATCH ?1 \
+                 ORDER BY distance \
+                 LIMIT ?2",
+            )
+            .map_err(SqliteMemoryError::Sqlite)?;
+
+        let blob: Vec<u8> = query_vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        let results = stmt
+            .query_map(params![blob, limit as i64], |row| {
+                let record_id: String = row.get(0)?;
+                let distance: f64 = row.get(1)?;
+                Ok((record_id, distance))
+            })
+            .map_err(SqliteMemoryError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(SqliteMemoryError::Sqlite)?;
+
+        Ok(results)
+    }
+
+    /// Check whether an embedding exists for the given record.
+    pub fn has_embedding(&self, record_id: &str) -> Result<bool, SqliteMemoryError> {
+        let conn = self.lock()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM vec_embeddings WHERE record_id = ?1",
+                params![record_id],
+                |row| row.get(0),
+            )
+            .map_err(SqliteMemoryError::Sqlite)?;
+        Ok(count > 0)
+    }
+
+    /// Count total stored embeddings.
+    pub fn count_embeddings(&self) -> Result<usize, SqliteMemoryError> {
+        let conn = self.lock()?;
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM vec_embeddings", [], |row| row.get(0))
+            .map_err(SqliteMemoryError::Sqlite)?;
+        Ok(count as usize)
     }
 
     // -----------------------------------------------------------------------
@@ -1126,5 +1295,161 @@ mod tests {
         let speech_err: crate::SpeechError = err.into();
         let msg = speech_err.to_string();
         assert!(msg.contains("test-id"));
+    }
+
+    // -------------------------------------------------------------------
+    // Vector embedding tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn vec_extension_loads() {
+        let (_dir, repo) = test_repo();
+        let conn = repo.lock().expect("lock");
+        let version: String = conn
+            .query_row("SELECT vec_version()", [], |r| r.get(0))
+            .expect("vec_version");
+        assert!(version.starts_with('v'));
+    }
+
+    #[test]
+    fn store_and_retrieve_embedding() {
+        let (_dir, repo) = test_repo();
+        let record = repo
+            .insert_record(MemoryKind::Fact, "test fact", 0.9, None, &[])
+            .expect("insert");
+
+        let mut embedding = vec![0.0_f32; super::EMBEDDING_DIM];
+        embedding[0] = 1.0;
+        embedding[1] = 0.5;
+
+        repo.store_embedding(&record.id, &embedding)
+            .expect("store embedding");
+
+        let retrieved = repo
+            .get_embedding(&record.id)
+            .expect("get embedding")
+            .expect("embedding should exist");
+
+        assert_eq!(retrieved.len(), super::EMBEDDING_DIM);
+        assert!((retrieved[0] - 1.0).abs() < 1e-6);
+        assert!((retrieved[1] - 0.5).abs() < 1e-6);
+        assert!((retrieved[2] - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn search_by_vector_returns_nearest() {
+        let (_dir, repo) = test_repo();
+
+        // Insert 3 records with known embeddings.
+        let r1 = repo
+            .insert_record(MemoryKind::Fact, "apples", 0.9, None, &[])
+            .expect("insert");
+        let r2 = repo
+            .insert_record(MemoryKind::Fact, "oranges", 0.9, None, &[])
+            .expect("insert");
+        let r3 = repo
+            .insert_record(MemoryKind::Fact, "bananas", 0.9, None, &[])
+            .expect("insert");
+
+        // e1 = [1, 0, 0, ...], e2 = [0, 1, 0, ...], e3 = [0.9, 0.1, 0, ...]
+        let mut e1 = vec![0.0_f32; super::EMBEDDING_DIM];
+        e1[0] = 1.0;
+        let mut e2 = vec![0.0_f32; super::EMBEDDING_DIM];
+        e2[1] = 1.0;
+        let mut e3 = vec![0.0_f32; super::EMBEDDING_DIM];
+        e3[0] = 0.9;
+        e3[1] = 0.1;
+
+        repo.store_embedding(&r1.id, &e1).expect("store e1");
+        repo.store_embedding(&r2.id, &e2).expect("store e2");
+        repo.store_embedding(&r3.id, &e3).expect("store e3");
+
+        // Query close to e1 — should find r1 first, then r3 (similar), then r2.
+        let mut query = vec![0.0_f32; super::EMBEDDING_DIM];
+        query[0] = 1.0;
+        let results = repo.search_by_vector(&query, 3).expect("search");
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0, r1.id); // Exact match
+        assert_eq!(results[1].0, r3.id); // Close
+        assert_eq!(results[2].0, r2.id); // Furthest
+    }
+
+    #[test]
+    fn has_embedding_true_false() {
+        let (_dir, repo) = test_repo();
+        let record = repo
+            .insert_record(MemoryKind::Fact, "test", 0.5, None, &[])
+            .expect("insert");
+
+        assert!(!repo.has_embedding(&record.id).expect("has before"));
+
+        let embedding = vec![0.1_f32; super::EMBEDDING_DIM];
+        repo.store_embedding(&record.id, &embedding).expect("store");
+
+        assert!(repo.has_embedding(&record.id).expect("has after"));
+        assert!(!repo.has_embedding("nonexistent").expect("has nonexistent"));
+    }
+
+    #[test]
+    fn count_embeddings_matches() {
+        let (_dir, repo) = test_repo();
+
+        assert_eq!(repo.count_embeddings().expect("count"), 0);
+
+        let r1 = repo
+            .insert_record(MemoryKind::Fact, "a", 0.5, None, &[])
+            .expect("insert");
+        let r2 = repo
+            .insert_record(MemoryKind::Fact, "b", 0.5, None, &[])
+            .expect("insert");
+
+        let emb = vec![0.0_f32; super::EMBEDDING_DIM];
+        repo.store_embedding(&r1.id, &emb).expect("store 1");
+        repo.store_embedding(&r2.id, &emb).expect("store 2");
+
+        assert_eq!(repo.count_embeddings().expect("count"), 2);
+    }
+
+    #[test]
+    fn store_embedding_replaces_existing() {
+        let (_dir, repo) = test_repo();
+        let record = repo
+            .insert_record(MemoryKind::Fact, "test", 0.5, None, &[])
+            .expect("insert");
+
+        let mut e1 = vec![0.0_f32; super::EMBEDDING_DIM];
+        e1[0] = 1.0;
+        repo.store_embedding(&record.id, &e1).expect("store first");
+
+        let mut e2 = vec![0.0_f32; super::EMBEDDING_DIM];
+        e2[0] = 0.5;
+        repo.store_embedding(&record.id, &e2)
+            .expect("store replacement");
+
+        // Should have only 1 embedding, and it should be the replacement.
+        assert_eq!(repo.count_embeddings().expect("count"), 1);
+        let retrieved = repo
+            .get_embedding(&record.id)
+            .expect("get")
+            .expect("exists");
+        assert!((retrieved[0] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn store_embedding_rejects_wrong_dimension() {
+        let (_dir, repo) = test_repo();
+        let record = repo
+            .insert_record(MemoryKind::Fact, "test", 0.5, None, &[])
+            .expect("insert");
+
+        let wrong_dim = vec![0.0_f32; 128]; // Not 384
+        let result = repo.store_embedding(&record.id, &wrong_dim);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn schema_version_is_3_with_vec() {
+        let (_dir, repo) = test_repo();
+        assert_eq!(repo.schema_version().expect("version"), 3);
     }
 }

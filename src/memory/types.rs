@@ -17,7 +17,7 @@ pub(crate) static RECORD_COUNTER: AtomicU64 = AtomicU64::new(1);
 // Schema / limits
 // ---------------------------------------------------------------------------
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 /// Maximum length (in bytes) of record text. Prevents unbounded growth from
 /// excessively long LLM outputs or user input.
