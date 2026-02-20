@@ -81,18 +81,21 @@ Vision understanding:\n\
 /// `personality_name` is ignored and retained only for backward compatibility.
 /// When `vision_capable` is `true`, a vision-understanding section is injected
 /// so the model knows it can process image inputs.
+/// When `user_name` is `Some`, a user-context section is added so the LLM can
+/// address the user by name.
 #[must_use]
 pub fn assemble_prompt(
     _personality_name: &str,
     user_add_on: &str,
     permissions: Option<&PermissionStore>,
     vision_capable: bool,
+    user_name: Option<&str>,
 ) -> String {
     let soul = load_soul();
     let skills = crate::skills::load_all_skills();
     let add_on = user_add_on.trim();
 
-    let mut parts: Vec<String> = Vec::with_capacity(7);
+    let mut parts: Vec<String> = Vec::with_capacity(8);
     parts.push(CORE_PROMPT.trim().to_owned());
 
     if vision_capable {
@@ -102,6 +105,16 @@ pub fn assemble_prompt(
     let soul_trimmed = soul.trim();
     if !soul_trimmed.is_empty() {
         parts.push(soul_trimmed.to_owned());
+    }
+
+    if let Some(name) = user_name {
+        let name = name.trim();
+        if !name.is_empty() {
+            parts.push(format!(
+                "User context:\n\
+                 - The user's name is {name}. Address them by name naturally when appropriate."
+            ));
+        }
     }
 
     let skills_trimmed = skills.trim();
@@ -158,26 +171,26 @@ mod tests {
 
     #[test]
     fn assemble_includes_core_and_soul() {
-        let prompt = assemble_prompt("fae", "", None, false);
+        let prompt = assemble_prompt("fae", "", None, false, None);
         assert!(prompt.contains("You are Fae"));
         assert!(prompt.starts_with(CORE_PROMPT.trim()));
     }
 
     #[test]
     fn assemble_appends_user_add_on() {
-        let prompt = assemble_prompt("any", "Be extra concise.", None, false);
+        let prompt = assemble_prompt("any", "Be extra concise.", None, false, None);
         assert!(prompt.ends_with("Be extra concise."));
     }
 
     #[test]
     fn assemble_includes_built_in_skills() {
-        let prompt = assemble_prompt("any", "", None, false);
+        let prompt = assemble_prompt("any", "", None, false, None);
         assert!(prompt.contains("You have a canvas window."));
     }
 
     #[test]
     fn prompt_includes_companion_presence() {
-        let prompt = assemble_prompt("fae", "", None, false);
+        let prompt = assemble_prompt("fae", "", None, false, None);
         assert!(prompt.contains("Companion presence:"));
         assert!(prompt.contains("always present and listening"));
         assert!(prompt.contains("Direct address"));
@@ -195,20 +208,20 @@ mod tests {
 
     #[test]
     fn assemble_includes_vision_section_when_capable() {
-        let prompt = assemble_prompt("fae", "", None, true);
+        let prompt = assemble_prompt("fae", "", None, true, None);
         assert!(prompt.contains("Vision understanding:"));
         assert!(prompt.contains("images never leave the device"));
     }
 
     #[test]
     fn assemble_excludes_vision_section_when_not_capable() {
-        let prompt = assemble_prompt("fae", "", None, false);
+        let prompt = assemble_prompt("fae", "", None, false, None);
         assert!(!prompt.contains("Vision understanding:"));
     }
 
     #[test]
     fn assemble_includes_apple_ecosystem_skill() {
-        let prompt = assemble_prompt("fae", "", None, false);
+        let prompt = assemble_prompt("fae", "", None, false, None);
         // The apple-ecosystem skill references Apple tool names.
         assert!(prompt.contains("search_contacts"));
         assert!(prompt.contains("list_calendar_events"));
@@ -221,7 +234,7 @@ mod tests {
         let mut store = PermissionStore::default();
         store.grant(PermissionKind::Calendar);
 
-        let prompt = assemble_prompt("fae", "", Some(&store), false);
+        let prompt = assemble_prompt("fae", "", Some(&store), false, None);
         // CalendarSkill's fragment mentions "schedule management".
         assert!(
             prompt.contains("schedule management") || prompt.contains("calendar"),
@@ -237,7 +250,7 @@ mod tests {
         // Default store has nothing granted.
         let store = PermissionStore::default();
 
-        let prompt = assemble_prompt("fae", "", Some(&store), false);
+        let prompt = assemble_prompt("fae", "", Some(&store), false, None);
         // Mail should appear in "requiring permission" section.
         assert!(prompt.contains("Capabilities requiring permission"));
         assert!(prompt.contains("mail"));
@@ -248,7 +261,7 @@ mod tests {
         use crate::permissions::PermissionStore;
         let store = PermissionStore::default();
 
-        let prompt = assemble_prompt("fae", "", Some(&store), false);
+        let prompt = assemble_prompt("fae", "", Some(&store), false, None);
         assert!(prompt.contains("Capabilities requiring permission"));
         // All 9 built-in skills should be listed as unavailable.
         for name in [

@@ -89,7 +89,7 @@ impl FaeAgentLlm {
         // the guard so `shared_permissions` can be moved into `build_registry`.
         let system_prompt = {
             let perm_guard = shared_permissions.as_ref().and_then(|sp| sp.lock().ok());
-            config.effective_system_prompt(perm_guard.as_deref())
+            config.effective_system_prompt(perm_guard.as_deref(), None)
         };
 
         let provider = build_provider(config, preloaded_llm.as_ref(), credential_manager).await;

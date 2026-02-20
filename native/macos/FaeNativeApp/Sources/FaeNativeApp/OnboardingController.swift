@@ -127,7 +127,19 @@ final class OnboardingController: ObservableObject {
     }
 
     /// Complete the onboarding flow and signal the backend.
+    ///
+    /// If a user name was captured from the Contacts Me Card, it is sent to the
+    /// Rust backend BEFORE the completion notification so the name is persisted
+    /// before onboarding finalises.
     func complete() {
+        // Send user name to backend before completing (if available).
+        if let name = userName, !name.isEmpty {
+            NotificationCenter.default.post(
+                name: .faeOnboardingSetUserName,
+                object: nil,
+                userInfo: ["name": name]
+            )
+        }
         isComplete = true
         onOnboardingComplete?()
         NotificationCenter.default.post(
@@ -171,4 +183,6 @@ extension Notification.Name {
     static let faeOnboardingComplete = Notification.Name("faeOnboardingComplete")
     /// Posted when the onboarding phase should advance (Welcome→Permissions→Ready).
     static let faeOnboardingAdvance = Notification.Name("faeOnboardingAdvance")
+    /// Posted to send the user's name (from Me Card) to the Rust backend.
+    static let faeOnboardingSetUserName = Notification.Name("faeOnboardingSetUserName")
 }

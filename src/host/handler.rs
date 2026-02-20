@@ -650,6 +650,41 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(())
     }
 
+    fn set_user_name(&self, name: &str) -> Result<()> {
+        info!(name, "onboarding.set_user_name — storing user name");
+
+        // 1. Store in config
+        {
+            let mut guard = self.lock_config()?;
+            guard.user_name = Some(name.to_owned());
+        }
+        self.save_config()?;
+
+        // 2. Store in memory system's PrimaryUser record
+        let memory_root = {
+            let guard = self.lock_config()?;
+            guard.memory.root_dir.clone()
+        };
+        let store = crate::memory::MemoryStore::new(&memory_root);
+        let user = match store.load_primary_user() {
+            Ok(Some(mut existing)) => {
+                existing.name = name.to_owned();
+                existing
+            }
+            _ => crate::memory::PrimaryUser {
+                name: name.to_owned(),
+                voiceprint: None,
+                voice_sample_wav: None,
+            },
+        };
+        if let Err(e) = store.save_primary_user(&user) {
+            warn!("failed to save primary user to memory: {e}");
+        }
+
+        info!(name, "onboarding.set_user_name persisted to config and memory");
+        Ok(())
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self

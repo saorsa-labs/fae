@@ -239,7 +239,7 @@ impl LocalLlm {
         // system prompt accurately reflects what the model can do.
         let history = vec![HistoryEntry::Text {
             role: TextMessageRole::System,
-            content: config.effective_system_prompt_with_vision(None, vision_capable),
+            content: config.effective_system_prompt_with_vision(None, vision_capable, None),
         }];
 
         Ok(Self {
