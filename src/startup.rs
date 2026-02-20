@@ -6,7 +6,7 @@
 //! For GUI consumers, use [`initialize_models_with_progress`] which accepts a
 //! [`ProgressCallback`] for structured progress events.
 
-use crate::config::{LlmBackend, MemoryConfig, SpeechConfig, TtsBackend};
+use crate::config::{MemoryConfig, SpeechConfig, TtsBackend};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
 use crate::models::ModelManager;
@@ -38,20 +38,8 @@ const STT_FILES: &[&str] = &[
 /// LLM tokenizer files to pre-download (from the tokenizer repo).
 const LLM_TOKENIZER_FILES: &[&str] = &["tokenizer.json", "tokenizer_config.json"];
 
-fn has_agent_remote_brain_config(config: &SpeechConfig) -> bool {
-    config.llm.has_remote_provider_configured()
-}
-
-fn should_preload_local_llm(config: &SpeechConfig) -> bool {
-    match config.llm.backend {
-        LlmBackend::Local => true,
-        LlmBackend::Api => config.llm.enable_local_fallback,
-        // Compatibility auto-mode: local brain unless explicit remote config,
-        // with optional fallback preload when enabled.
-        LlmBackend::Agent => {
-            !has_agent_remote_brain_config(config) || config.llm.enable_local_fallback
-        }
-    }
+fn should_preload_local_llm(_config: &SpeechConfig) -> bool {
+    true
 }
 
 /// Build a download plan listing all files needed for startup.
@@ -183,18 +171,6 @@ pub async fn initialize_models_with_progress(
     crate::fae_dirs::ensure_hf_home();
 
     let mut resolved_config = config.clone();
-    match crate::external_llm::apply_external_profile(&mut resolved_config.llm) {
-        Ok(Some(applied)) => {
-            info!(
-                "applied external LLM profile '{}' (provider={}, model={})",
-                applied.profile_id, applied.provider, applied.api_model
-            );
-        }
-        Ok(None) => {}
-        Err(e) => {
-            warn!("failed to apply external LLM profile: {e}");
-        }
-    }
     // Apply RAM-based model selection for managed default models.
     // This upgrades default Qwen3-4B to Qwen3-VL based on available memory,
     // but never overwrites user-customised model_id values.
@@ -311,43 +287,10 @@ pub async fn initialize_models_with_progress(
     println!("\nLoading models...");
 
     let stt = load_stt(config, callback)?;
-    let api_model_display = if config.llm.api_model.trim().is_empty() {
-        "<unset>"
-    } else {
-        config.llm.api_model.as_str()
-    };
-    let api_url_display = if config.llm.api_url.trim().is_empty() {
-        "<unset>"
-    } else {
-        config.llm.api_url.as_str()
-    };
     let llm = if use_local_llm {
-        match config.llm.backend {
-            LlmBackend::Local => {
-                println!("  LLM brain: local (agent runtime)");
-            }
-            LlmBackend::Api => {
-                println!(
-                    "  LLM brain: API ({} @ {}) with local fallback (agent runtime)",
-                    api_model_display, api_url_display
-                );
-            }
-            LlmBackend::Agent => {
-                if has_agent_remote_brain_config(config) {
-                    println!(
-                        "  LLM brain: API (compat auto-mode) with local fallback (agent runtime)"
-                    );
-                } else {
-                    println!("  LLM brain: local (compat auto-mode, agent runtime)");
-                }
-            }
-        }
+        println!("  LLM brain: local (embedded)");
         Some(load_llm(config, callback).await?)
     } else {
-        println!(
-            "  LLM brain: API ({} @ {}) (agent runtime)",
-            api_model_display, api_url_display
-        );
         None
     };
     let tts = if let Some(paths) = kokoro_paths {
@@ -851,7 +794,7 @@ pub fn start_scheduler_with_memory(
 /// Start the background scheduler using explicit runtime configuration.
 ///
 /// Scheduled conversations use this config directly instead of process defaults,
-/// so API/provider settings stay aligned with the active application config.
+/// so model settings stay aligned with the active application config.
 pub fn start_scheduler_with_config(
     config: &SpeechConfig,
 ) -> (
@@ -967,144 +910,21 @@ async fn handle_conversation_requests(
     }
 }
 
-/// Execute a scheduled conversation using the agent.
+/// Execute a scheduled conversation using the embedded local agent.
 ///
-/// This creates a minimal agent session for the scheduled task, runs the
-/// conversation, and returns the assistant's response text.
+/// # TODO (Phase 6.2)
+/// Wire to the embedded local LLM instead of external API.
 async fn execute_scheduled_conversation(
-    config: &SpeechConfig,
+    _config: &SpeechConfig,
     request: &crate::pipeline::messages::ConversationRequest,
 ) -> crate::error::Result<String> {
-    use crate::config::LlmApiType;
-    use crate::fae_llm::provider::ProviderAdapter;
-    use crate::fae_llm::providers::anthropic::{AnthropicAdapter, AnthropicConfig};
-    use crate::fae_llm::providers::message::Message;
-    use crate::fae_llm::providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
-    use crate::fae_llm::types::RequestOptions;
-    use futures_util::StreamExt;
-    use std::sync::Arc;
-    use tracing::{debug, info, warn};
-
-    // Build system prompt with optional addon
-    let mut system_prompt = config.llm.effective_system_prompt(None);
-    if let Some(addon) = &request.system_addon {
-        system_prompt.push('\n');
-        system_prompt.push_str(addon);
-    }
-
-    // Prepare messages
-    let messages = vec![
-        Message::system(system_prompt),
-        Message::user(&request.prompt),
-    ];
-
-    // Create credential manager and resolve API key
-    let credential_manager = crate::credentials::create_manager();
-    let api_key = config
-        .llm
-        .api_key
-        .resolve(credential_manager.as_ref())
-        .await
-        .unwrap_or_else(|e| {
-            warn!("Failed to resolve API key: {e}");
-            String::new()
-        });
-
-    if api_key.is_empty() {
-        return Err(SpeechError::Config(
-            "No API key configured for scheduled conversations".to_string(),
-        ));
-    }
-
-    // Determine model to use
-    let model_id = config
-        .llm
-        .cloud_model
-        .clone()
-        .unwrap_or_else(|| config.llm.api_model.clone());
-
-    // Build provider based on API type
-    let provider_hint = config
-        .llm
-        .cloud_provider
-        .clone()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    let resolved_api_type = match config.llm.api_type {
-        LlmApiType::Auto => {
-            if provider_hint == "anthropic" || config.llm.api_url.contains("anthropic.com") {
-                LlmApiType::AnthropicMessages
-            } else {
-                LlmApiType::OpenAiCompletions
-            }
-        }
-        explicit => explicit,
-    };
-
-    let provider: Arc<dyn ProviderAdapter> = match resolved_api_type {
-        LlmApiType::AnthropicMessages => {
-            let mut provider_cfg =
-                AnthropicConfig::new(api_key, model_id).with_max_tokens(config.llm.max_tokens);
-
-            if !config.llm.api_url.trim().is_empty() {
-                provider_cfg = provider_cfg
-                    .with_base_url(config.llm.api_url.trim().trim_end_matches('/').to_string());
-            }
-
-            Arc::new(AnthropicAdapter::new(provider_cfg))
-        }
-        LlmApiType::OpenAiCompletions | LlmApiType::OpenAiResponses | LlmApiType::Auto => {
-            let mut provider_cfg = if let Some(provider_name) = config.llm.cloud_provider.as_deref()
-            {
-                OpenAiConfig::for_provider(provider_name, api_key.clone(), model_id)
-            } else {
-                OpenAiConfig::new(api_key.clone(), model_id)
-            };
-
-            if !config.llm.api_url.trim().is_empty() {
-                provider_cfg = provider_cfg
-                    .with_base_url(config.llm.api_url.trim().trim_end_matches('/').to_string());
-            }
-
-            if matches!(resolved_api_type, LlmApiType::OpenAiResponses) {
-                provider_cfg = provider_cfg.with_api_mode(OpenAiApiMode::Responses);
-            }
-
-            Arc::new(OpenAiAdapter::new(provider_cfg))
-        }
-    };
-
-    info!(
-        "Executing scheduled conversation for task {} with provider {:?}",
-        request.task_id, resolved_api_type
+    tracing::warn!(
+        "Scheduled conversation for task {} deferred: local LLM wiring pending (Phase 6.2)",
+        request.task_id
     );
-
-    // Make streaming request
-    let options = RequestOptions::default().with_stream(true);
-
-    let mut stream = provider.send(&messages, &options, &[]).await.map_err(|e| {
-        SpeechError::Llm(format!(
-            "Failed to start conversation stream for task {}: {e}",
-            request.task_id
-        ))
-    })?;
-
-    // Collect text from stream
-    let mut response_text = String::new();
-    while let Some(event) = stream.next().await {
-        if let crate::fae_llm::events::LlmEvent::TextDelta { text } = event {
-            response_text.push_str(&text);
-        }
-    }
-
-    debug!(
-        "Scheduled conversation completed for task {}: {} chars",
-        request.task_id,
-        response_text.len()
-    );
-
-    Ok(response_text)
+    Err(SpeechError::Config(
+        "Scheduled conversation via embedded LLM not yet implemented (Phase 6.2)".to_owned(),
+    ))
 }
 
 fn execute_scheduler_task(

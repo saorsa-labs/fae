@@ -1,26 +1,26 @@
 {
-  "version": 2,
-  "project": "fae-native-production-readiness",
+  "version": 3,
+  "project": "fae-dogfood-readiness",
   "active": true,
   "milestone": {
-    "number": 5,
-    "name": "Handoff & Production Polish"
+    "number": 6,
+    "name": "Dogfood Readiness"
   },
   "phase": {
-    "number": "5.2",
-    "name": "Error Recovery & Resilience",
-    "plan": "PLAN-phase-5.2.md",
-    "status": "complete"
+    "number": "6.1",
+    "name": "Backend Cleanup",
+    "plan": "PLAN-phase-6.1.md"
   },
   "progress": {
     "total_tasks": 8,
     "completed_tasks": 8,
-    "current_task": 8
+    "current_task": null
   },
-  "status": "continuation_spawned",
   "review": {
     "status": "passed",
-    "iteration": 2
+    "iteration": 1,
+    "last_verdict": "PASS"
   },
-  "last_updated": "2026-02-19T23:30:00Z"
+  "status": "phase_transition",
+  "last_updated": "2026-02-20T13:40:00Z"
 }

@@ -15,8 +15,6 @@ use std::fmt;
 /// This struct intentionally implements a custom [`Debug`] that redacts
 /// all values to prevent accidental secret leakage in logs.
 pub struct LoadedCredentials {
-    /// Resolved LLM API key.
-    pub llm_api_key: String,
     /// Resolved Discord bot token.
     pub discord_bot_token: String,
     /// Resolved WhatsApp access token.
@@ -30,7 +28,6 @@ pub struct LoadedCredentials {
 impl fmt::Debug for LoadedCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadedCredentials")
-            .field("llm_api_key", &redact(&self.llm_api_key))
             .field("discord_bot_token", &redact(&self.discord_bot_token))
             .field(
                 "whatsapp_access_token",
@@ -45,6 +42,17 @@ impl fmt::Debug for LoadedCredentials {
                 &self.gateway_bearer_token.as_ref().map(|_| "[REDACTED]"),
             )
             .finish()
+    }
+}
+
+impl LoadedCredentials {
+    /// Returns true if all channel credentials are empty or absent.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.discord_bot_token.is_empty()
+            && self.whatsapp_access_token.is_empty()
+            && self.whatsapp_verify_token.is_empty()
+            && self.gateway_bearer_token.is_none()
     }
 }
 
@@ -89,7 +97,6 @@ pub fn load_all_credentials(
     config: &SpeechConfig,
     manager: &dyn CredentialManager,
 ) -> Result<LoadedCredentials, CredentialError> {
-    let llm_api_key = resolve_credential(&config.llm.api_key, manager)?;
     let discord_bot_token = match &config.channels.discord {
         Some(dc) => resolve_credential(&dc.bot_token, manager)?,
         None => String::new(),
@@ -116,7 +123,6 @@ pub fn load_all_credentials(
     };
 
     Ok(LoadedCredentials {
-        llm_api_key,
         discord_bot_token,
         whatsapp_access_token,
         whatsapp_verify_token,
@@ -228,7 +234,6 @@ mod tests {
         let mgr = MockManager::new();
         let config = SpeechConfig::default();
         let loaded = load_all_credentials(&config, &mgr).unwrap();
-        assert!(loaded.llm_api_key.is_empty());
         assert!(loaded.discord_bot_token.is_empty());
         assert!(loaded.whatsapp_access_token.is_empty());
         assert!(loaded.whatsapp_verify_token.is_empty());
@@ -237,12 +242,8 @@ mod tests {
 
     #[test]
     fn load_all_mixed_refs() {
-        let mgr = MockManager::new().with_entry("llm.api_key", "from-keychain");
+        let mgr = MockManager::new();
         let mut config = SpeechConfig::default();
-        config.llm.api_key = CredentialRef::Keychain {
-            service: "com.saorsalabs.fae".to_owned(),
-            account: "llm.api_key".to_owned(),
-        };
         config.channels.discord = Some(crate::config::DiscordChannelConfig {
             bot_token: CredentialRef::Plaintext("discord-plain".to_owned()),
             ..Default::default()
@@ -252,7 +253,6 @@ mod tests {
             Some(CredentialRef::Plaintext("bearer-val".to_owned()));
 
         let loaded = load_all_credentials(&config, &mgr).unwrap();
-        assert_eq!(loaded.llm_api_key, "from-keychain");
         assert_eq!(loaded.discord_bot_token, "discord-plain");
         assert!(loaded.whatsapp_access_token.is_empty());
         assert!(loaded.whatsapp_verify_token.is_empty());
@@ -262,14 +262,12 @@ mod tests {
     #[test]
     fn debug_redacts_values() {
         let loaded = LoadedCredentials {
-            llm_api_key: "sk-secret".to_owned(),
             discord_bot_token: "bot-secret".to_owned(),
             whatsapp_access_token: String::new(),
             whatsapp_verify_token: "verify-secret".to_owned(),
             gateway_bearer_token: Some("bearer-secret".to_owned()),
         };
         let debug = format!("{loaded:?}");
-        assert!(!debug.contains("sk-secret"));
         assert!(!debug.contains("bot-secret"));
         assert!(!debug.contains("verify-secret"));
         assert!(!debug.contains("bearer-secret"));
@@ -279,7 +277,6 @@ mod tests {
     #[test]
     fn debug_empty_fields_not_redacted() {
         let loaded = LoadedCredentials {
-            llm_api_key: String::new(),
             discord_bot_token: String::new(),
             whatsapp_access_token: String::new(),
             whatsapp_verify_token: String::new(),
@@ -287,6 +284,6 @@ mod tests {
         };
         let debug = format!("{loaded:?}");
         // Empty strings show as empty, not [REDACTED]
-        assert!(debug.contains("llm_api_key: \"\""));
+        assert!(debug.contains("discord_bot_token: \"\""));
     }
 }

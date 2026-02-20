@@ -197,32 +197,10 @@ impl Default for SttConfig {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmBackend {
-    /// Agent runtime with a local mistralrs brain (GGUF + Metal where available).
+    /// Embedded local model (GGUF + Metal where available).
     #[default]
-    #[serde(alias = "candle")]
+    #[serde(alias = "candle", alias = "api", alias = "agent")]
     Local,
-    /// Agent runtime with an API brain (OpenAI-compatible/Anthropic provider).
-    Api,
-    /// Compatibility auto-mode for older configs:
-    /// local brain when remote credentials are absent, otherwise API brain.
-    Agent,
-}
-
-/// API protocol type for remote LLM providers.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LlmApiType {
-    /// Infer protocol from provider hint / URL (backward-compatible).
-    #[default]
-    Auto,
-    /// OpenAI Chat Completions-compatible API.
-    #[serde(rename = "openai_completions", alias = "open_ai_completions")]
-    OpenAiCompletions,
-    /// OpenAI Responses API.
-    #[serde(rename = "openai_responses", alias = "open_ai_responses")]
-    OpenAiResponses,
-    /// Anthropic Messages API.
-    AnthropicMessages,
 }
 
 /// Tool capability mode for the agent harness.
@@ -286,25 +264,7 @@ pub struct LlmConfig {
     /// This enables image understanding through the camera skill.
     #[serde(default)]
     pub enable_vision: bool,
-    /// Base URL for the API server (API backend only).
-    pub api_url: String,
-    /// Model name to request from the API (API backend only).
-    pub api_model: String,
-    /// API protocol type for remote providers.
-    pub api_type: LlmApiType,
-    /// Optional API version value (used by providers like Anthropic).
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Optional API organization/project hint (OpenAI-compatible providers).
-    #[serde(default)]
-    pub api_organization: Option<String>,
-    /// API key for the remote provider (API/Agent backends only).
-    ///
-    /// Stored as a credential reference for secure storage. For local
-    /// OpenAI-compatible servers, this is typically `CredentialRef::None`.
-    #[serde(default, alias = "api_key")]
-    pub api_key: CredentialRef,
-    /// Tool capability mode (Agent backend only).
+    /// Tool capability mode for the embedded agent harness.
     pub tool_mode: AgentToolMode,
     /// Maximum tokens to generate per response.
     pub max_tokens: usize,
@@ -344,30 +304,6 @@ pub struct LlmConfig {
     ///
     /// Keep this short and specific.
     pub system_prompt: String,
-    /// Cloud provider name for remote model selection.
-    ///
-    /// When set (and backend is `Agent` or `Api`), this provider's base_url
-    /// and api_key are used instead of `api_url`/`api_key`.
-    #[serde(default)]
-    pub cloud_provider: Option<String>,
-    /// Cloud model ID within the selected provider.
-    ///
-    /// When set, overrides `api_model` for the cloud provider.
-    #[serde(default)]
-    pub cloud_model: Option<String>,
-    /// Optional external LLM profile ID (see [`crate::fae_dirs::external_apis_dir`]).
-    ///
-    /// When set, runtime loads `<profile>.toml` and overlays API fields.
-    #[serde(default)]
-    pub external_profile: Option<String>,
-    /// Whether to fall back to the local model when a remote provider fails.
-    ///
-    /// When enabled and the backend is `Agent` or `Api`, the local Qwen model
-    /// is pre-loaded alongside the remote provider. If the remote provider
-    /// returns a retryable error (network outage, timeout, rate limit), the
-    /// request is transparently retried against the local model.
-    #[serde(default = "default_enable_local_fallback")]
-    pub enable_local_fallback: bool,
     /// Timeout in seconds for the interactive model selection prompt.
     ///
     /// When multiple top-tier models are available and the user is prompted to
@@ -375,13 +311,6 @@ pub struct LlmConfig {
     /// candidate. Defaults to 30 seconds.
     #[serde(default = "default_model_selection_timeout_secs")]
     pub model_selection_timeout_secs: u32,
-    /// Network timeout in milliseconds for external LLM API calls.
-    ///
-    /// Applies when the backend is `Api` or `Agent` with a remote provider.
-    /// Transient failures (timeout, 5xx) trigger a retry with this timeout.
-    /// Defaults to 30 000 ms (30 seconds).
-    #[serde(default = "default_network_timeout_ms")]
-    pub network_timeout_ms: u64,
 }
 
 impl Default for LlmConfig {
@@ -396,13 +325,6 @@ impl Default for LlmConfig {
             gguf_file: gguf_file.to_owned(),
             tokenizer_id: tokenizer_id.to_owned(),
             enable_vision,
-            // Remote provider fields are intentionally unset by default.
-            api_url: String::new(),
-            api_model: String::new(),
-            api_type: LlmApiType::default(),
-            api_version: None,
-            api_organization: None,
-            api_key: CredentialRef::None,
             tool_mode: AgentToolMode::default(),
             max_tokens: 200,
             context_size_tokens: default_llm_context_size_tokens(),
@@ -417,12 +339,7 @@ impl Default for LlmConfig {
             personality: "system".to_owned(),
             // User add-on prompt (optional). The fixed base prompt is always applied.
             system_prompt: String::new(),
-            cloud_provider: None,
-            cloud_model: None,
-            external_profile: None,
-            enable_local_fallback: default_enable_local_fallback(),
             model_selection_timeout_secs: default_model_selection_timeout_secs(),
-            network_timeout_ms: default_network_timeout_ms(),
         }
     }
 }
@@ -496,14 +413,6 @@ pub fn is_managed_default_model_id(model_id: &str) -> bool {
             | "Qwen/Qwen3-VL-4B-Instruct"
             | "Qwen/Qwen3-VL-8B-Instruct"
     )
-}
-
-fn default_network_timeout_ms() -> u64 {
-    30_000
-}
-
-fn default_enable_local_fallback() -> bool {
-    true
 }
 
 fn default_model_selection_timeout_secs() -> u32 {
@@ -611,37 +520,7 @@ Personal context:\n\
 
     /// Returns a display name for the effective provider.
     pub fn effective_provider_name(&self) -> String {
-        if let Some(ref name) = self.cloud_provider {
-            if let Some(ref model) = self.cloud_model {
-                format!("{name}/{model}")
-            } else {
-                name.clone()
-            }
-        } else {
-            match self.backend {
-                LlmBackend::Local => format!("local/{}", self.model_id),
-                LlmBackend::Api => {
-                    format!("{}/{}", self.api_url, self.api_model)
-                }
-                LlmBackend::Agent => {
-                    if !self.api_key.is_set() && self.cloud_provider.is_none() {
-                        format!("local/{} (agent-auto)", self.model_id)
-                    } else {
-                        format!("{}/{} (agent-auto)", self.api_url, self.api_model)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Returns true when a remote provider is configured directly or via an external profile.
-    pub fn has_remote_provider_configured(&self) -> bool {
-        self.api_key.is_set()
-            || self.cloud_provider.is_some()
-            || self
-                .external_profile
-                .as_ref()
-                .is_some_and(|id| !id.trim().is_empty())
+        format!("local/{}", self.model_id)
     }
 
     /// Returns the fully assembled system prompt.
@@ -1348,6 +1227,19 @@ mod tests {
     }
 
     #[test]
+    fn llm_backend_api_alias_deserializes_to_local() {
+        use serde::Deserialize;
+        #[derive(Deserialize)]
+        struct Wrapper {
+            backend: LlmBackend,
+        }
+        let w: Wrapper = toml::from_str(r#"backend = "api""#).unwrap();
+        assert_eq!(w.backend, LlmBackend::Local);
+        let w2: Wrapper = toml::from_str(r#"backend = "agent""#).unwrap();
+        assert_eq!(w2.backend, LlmBackend::Local);
+    }
+
+    #[test]
     fn config_serializes_to_toml() {
         let config = SpeechConfig::default();
         let result = toml::to_string_pretty(&config);
@@ -1397,8 +1289,6 @@ mod tests {
     fn llm_config_model_selection_timeout_default() {
         let config = LlmConfig::default();
         assert_eq!(config.model_selection_timeout_secs, 30);
-        assert!(config.api_url.is_empty());
-        assert!(config.api_model.is_empty());
         assert_eq!(config.message_queue_mode, LlmMessageQueueMode::Followup);
         assert_eq!(config.message_queue_max_pending, 8);
         assert_eq!(
@@ -1484,29 +1374,6 @@ clear_queue_on_stop = false
             LlmMessageQueueDropPolicy::Newest
         );
         assert!(!config.llm.clear_queue_on_stop);
-    }
-
-    #[test]
-    fn llm_config_enable_local_fallback_default_is_true() {
-        let config = LlmConfig::default();
-        assert!(config.enable_local_fallback);
-    }
-
-    #[test]
-    fn llm_config_enable_local_fallback_deserializes() {
-        let toml_str = r#"
-[llm]
-enable_local_fallback = false
-"#;
-        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
-        assert!(!config.llm.enable_local_fallback);
-    }
-
-    #[test]
-    fn llm_config_enable_local_fallback_missing_uses_default() {
-        let toml_str = "[llm]";
-        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.llm.enable_local_fallback);
     }
 
     #[test]

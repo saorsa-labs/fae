@@ -47,7 +47,6 @@ pub use types::{
     ActionResult, ExtractionResult, IntelligenceAction, IntelligenceItem, IntelligenceKind,
 };
 
-use crate::config::LlmConfig;
 use crate::memory::MemoryRepository;
 use crate::runtime::RuntimeEvent;
 use tokio::sync::broadcast;
@@ -61,11 +60,7 @@ pub struct ExtractionParams {
     pub assistant_text: String,
     /// Memory context for deduplication and enrichment.
     pub memory_context: Option<String>,
-    /// LLM configuration (API URL, model, key).
-    pub llm_config: LlmConfig,
-    /// Resolved API key (pre-resolved before spawning).
-    pub resolved_api_key: String,
-    /// Optional override model for extraction.
+    /// Optional override model for extraction (reserved for future local use).
     pub extraction_model: Option<String>,
     /// Memory repository path for creating the intelligence store.
     pub memory_path: std::path::PathBuf,
@@ -76,64 +71,44 @@ pub struct ExtractionParams {
 /// Run intelligence extraction in the background.
 ///
 /// This function is designed to be called via `tokio::spawn` after each
-/// conversation turn. It builds an extraction prompt, makes a non-streaming
-/// LLM call, parses the result, and executes any resulting actions.
+/// conversation turn. It builds an extraction prompt, parses the result,
+/// and executes any resulting actions.
 ///
 /// Errors are logged but never propagated — extraction is best-effort and
 /// must never block or disrupt the conversation pipeline.
+///
+/// # Note
+///
+/// Extraction via a local embedded model is planned for Phase 6.2.
+/// Until then, extraction is skipped to avoid blocking the pipeline.
 pub async fn run_background_extraction(params: ExtractionParams) {
-    let extractor = IntelligenceExtractor::new();
-
-    let (system_prompt, user_prompt) = extractor.build_extraction_prompt(
-        &params.user_text,
-        &params.assistant_text,
-        params.memory_context.as_deref(),
+    // Intelligence extraction via local embedded model is deferred to Phase 6.2.
+    // Log at trace level so it doesn't clutter normal operation.
+    tracing::trace!(
+        user_len = params.user_text.len(),
+        assistant_len = params.assistant_text.len(),
+        extraction_model = ?params.extraction_model,
+        "intelligence extraction deferred: local LLM wiring pending (Phase 6.2)"
     );
 
-    let model = params
-        .extraction_model
-        .unwrap_or_else(|| params.llm_config.api_model.clone());
-    let api_url = params.llm_config.api_url.clone();
-    let api_key = params.resolved_api_key;
-    let max_tokens = extractor.max_tokens();
-
-    // Make the LLM call in a blocking task (ureq is synchronous).
-    let raw_response = match tokio::task::spawn_blocking(move || {
-        extraction_llm_call(
-            &api_url,
-            &model,
-            &api_key,
-            &system_prompt,
-            &user_prompt,
-            max_tokens,
-        )
-    })
-    .await
-    {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => {
-            warn!("intelligence extraction LLM call failed: {e}");
-            return;
-        }
-        Err(e) => {
-            warn!("intelligence extraction task panicked: {e}");
-            return;
-        }
-    };
-
-    let result = extractor.parse_response(&raw_response);
-
-    if result.is_empty() {
-        info!("intelligence extraction found no actionable items");
-        if let Some(ref rt) = params.runtime_tx {
-            let _ = rt.send(RuntimeEvent::IntelligenceExtraction {
-                items_count: 0,
-                actions_count: 0,
-            });
-        }
-        return;
+    if let Some(ref rt) = params.runtime_tx {
+        let _ = rt.send(RuntimeEvent::IntelligenceExtraction {
+            items_count: 0,
+            actions_count: 0,
+        });
     }
+}
 
+/// Store extracted items and execute resulting actions.
+///
+/// This is kept as a standalone helper for future use when local extraction
+/// is wired up in Phase 6.2.
+#[allow(dead_code)]
+fn apply_extraction_result(
+    result: &crate::intelligence::types::ExtractionResult,
+    memory_path: &std::path::Path,
+    runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
+) {
     let items_count = result.items.len();
     let actions_count = result.actions.len();
     info!(
@@ -141,8 +116,7 @@ pub async fn run_background_extraction(params: ExtractionParams) {
         actions_count, "intelligence extraction completed"
     );
 
-    // Store extracted items and execute actions.
-    let repo = MemoryRepository::new(&params.memory_path);
+    let repo = MemoryRepository::new(memory_path);
     let store = IntelligenceStore::new(repo);
 
     for item in &result.items {
@@ -169,61 +143,10 @@ pub async fn run_background_extraction(params: ExtractionParams) {
         }
     }
 
-    if let Some(ref rt) = params.runtime_tx {
+    if let Some(rt) = runtime_tx {
         let _ = rt.send(RuntimeEvent::IntelligenceExtraction {
             items_count,
             actions_count,
         });
     }
-}
-
-/// Make a non-streaming LLM API call for intelligence extraction.
-///
-/// Uses the OpenAI-compatible chat completions endpoint with `stream: false`.
-fn extraction_llm_call(
-    api_url: &str,
-    model: &str,
-    api_key: &str,
-    system_prompt: &str,
-    user_prompt: &str,
-    max_tokens: usize,
-) -> Result<String, String> {
-    let base = api_url
-        .strip_suffix("/v1")
-        .unwrap_or(api_url)
-        .trim_end_matches('/');
-    let url = format!("{base}/v1/chat/completions");
-
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "stream": false,
-        "temperature": 0.3,
-        "max_tokens": max_tokens,
-    });
-
-    let body_str = serde_json::to_string(&body).map_err(|e| format!("JSON serialize: {e}"))?;
-
-    let agent = ureq::agent();
-    let mut req = agent.post(&url).set("Content-Type", "application/json");
-    if !api_key.is_empty() {
-        req = req.set("Authorization", &format!("Bearer {api_key}"));
-    }
-
-    let response = req
-        .send_string(&body_str)
-        .map_err(|e| format!("extraction API request failed: {e}"))?;
-
-    let response_body: serde_json::Value = response
-        .into_json()
-        .map_err(|e| format!("extraction API response parse failed: {e}"))?;
-
-    // Extract the assistant's message content from the response.
-    response_body["choices"][0]["message"]["content"]
-        .as_str()
-        .map(|s| s.to_owned())
-        .ok_or_else(|| "no content in extraction response".to_owned())
 }

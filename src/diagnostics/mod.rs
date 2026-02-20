@@ -270,7 +270,10 @@ pub fn delete_all_user_data() -> Result<Vec<String>> {
     // 1. Delete data directory.
     let data = crate::fae_dirs::data_dir();
     if data.is_dir() {
-        tracing::info!("delete_all_user_data: removing data directory: {}", data.display());
+        tracing::info!(
+            "delete_all_user_data: removing data directory: {}",
+            data.display()
+        );
         if let Err(e) = fs::remove_dir_all(&data) {
             failures.push(format!("data dir ({}): {e}", data.display()));
         }
@@ -279,7 +282,10 @@ pub fn delete_all_user_data() -> Result<Vec<String>> {
     // 2. Delete cache directory.
     let cache = crate::fae_dirs::cache_dir();
     if cache.is_dir() {
-        tracing::info!("delete_all_user_data: removing cache directory: {}", cache.display());
+        tracing::info!(
+            "delete_all_user_data: removing cache directory: {}",
+            cache.display()
+        );
         if let Err(e) = fs::remove_dir_all(&cache) {
             failures.push(format!("cache dir ({}): {e}", cache.display()));
         }
@@ -288,7 +294,10 @@ pub fn delete_all_user_data() -> Result<Vec<String>> {
     // 3. Delete config directory.
     let config = crate::fae_dirs::config_dir();
     if config.is_dir() {
-        tracing::info!("delete_all_user_data: removing config directory: {}", config.display());
+        tracing::info!(
+            "delete_all_user_data: removing config directory: {}",
+            config.display()
+        );
         if let Err(e) = fs::remove_dir_all(&config) {
             failures.push(format!("config dir ({}): {e}", config.display()));
         }
@@ -370,7 +379,6 @@ pub fn export_all_data(destination: &Path) -> Result<PathBuf> {
         ("data/logs", crate::fae_dirs::logs_dir()),
         ("data/skills", crate::fae_dirs::skills_dir()),
         ("data/memory", data.join("memory")),
-        ("data/external_apis", crate::fae_dirs::external_apis_dir()),
         ("data/wakeword", crate::fae_dirs::wakeword_dir()),
         ("data/voices", data.join("voices")),
         ("data/soul_versions", data.join("soul_versions")),
@@ -489,7 +497,6 @@ fn build_backup_metadata() -> String {
          - Logs (data/logs/)\n\
          - Custom voices (data/voices/)\n\
          - Wakeword recordings (data/wakeword/)\n\
-         - External API profiles (data/external_apis/)\n\
          - Soul version history (data/soul_versions/)\n\
          \n\
          Excluded (re-downloadable):\n\
@@ -509,6 +516,10 @@ fn build_backup_metadata() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Guards env-var-mutating tests against parallel execution races.
+    static DIAG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_chrono_timestamp_format() {
@@ -533,6 +544,7 @@ mod tests {
 
     #[test]
     fn test_fae_log_dir_path() {
+        let _guard = DIAG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = fae_log_dir();
         let path_str = dir.to_string_lossy();
         assert!(path_str.contains("fae"));
@@ -598,9 +610,9 @@ mod tests {
     fn test_delete_all_user_data_missing_dirs() {
         let tmp = tempfile::TempDir::new().unwrap_or_else(|_| unreachable!());
 
-        let data_dir = tmp.path().join("nonexistent-data");
-        let config_dir = tmp.path().join("nonexistent-config");
-        let cache_dir = tmp.path().join("nonexistent-cache");
+        let data_dir = tmp.path().join("fae-nonexistent-data");
+        let config_dir = tmp.path().join("fae-nonexistent-config");
+        let cache_dir = tmp.path().join("fae-nonexistent-cache");
 
         let result = with_test_dirs(&data_dir, &config_dir, &cache_dir, || {
             delete_all_user_data()
@@ -617,6 +629,8 @@ mod tests {
     where
         F: FnOnce() -> R,
     {
+        let _guard = DIAG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
         let dk = "FAE_DATA_DIR";
         let ck = "FAE_CONFIG_DIR";
         let xk = "FAE_CACHE_DIR";
@@ -624,7 +638,7 @@ mod tests {
         let oc = std::env::var_os(ck);
         let ox = std::env::var_os(xk);
 
-        // SAFETY: consolidated into a single test to avoid parallel env var races.
+        // SAFETY: guarded by DIAG_ENV_LOCK to avoid parallel env var races.
         unsafe {
             std::env::set_var(dk, data_dir);
             std::env::set_var(ck, config_dir);
@@ -834,12 +848,6 @@ mod tests {
         fs::write(rt_logs.join("fae.log"), "2026-01-01 INFO boot")
             .unwrap_or_else(|_| unreachable!());
 
-        // External APIs.
-        let rt_apis = rt_data.join("external_apis");
-        fs::create_dir_all(&rt_apis).unwrap_or_else(|_| unreachable!());
-        fs::write(rt_apis.join("openai.toml"), "[openai]\nmodel = \"gpt-4\"")
-            .unwrap_or_else(|_| unreachable!());
-
         // Wakeword (binary).
         let rt_wakeword = rt_data.join("wakeword");
         fs::create_dir_all(&rt_wakeword).unwrap_or_else(|_| unreachable!());
@@ -907,7 +915,6 @@ mod tests {
         check("soul_versions/v1.md", &rt_data, &dst_data);
         check("soul_versions/2026/v2.md", &rt_data, &dst_data);
         check("logs/fae.log", &rt_data, &dst_data);
-        check("external_apis/openai.toml", &rt_data, &dst_data);
         check("wakeword/sample.wav", &rt_data, &dst_data);
         check("voices/emma.bin", &rt_data, &dst_data);
     }

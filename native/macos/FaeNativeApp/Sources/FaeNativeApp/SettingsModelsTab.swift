@@ -34,7 +34,7 @@ struct SettingsModelsTab: View {
             }
 
             Section("LLM") {
-                modelRow(label: "Provider", value: "Local / API")
+                modelRow(label: "Provider", value: "Local (Embedded)")
                 Text("LLM configuration is managed via config.toml.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)

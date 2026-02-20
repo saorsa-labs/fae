@@ -6,7 +6,7 @@
 use crate::approval::{ToolApprovalRequest, ToolApprovalResponse};
 use crate::canvas::registry::CanvasSessionRegistry;
 use crate::canvas::tools::{CanvasExportTool, CanvasInteractTool, CanvasRenderTool};
-use crate::config::{AgentToolMode, LlmApiType, LlmConfig};
+use crate::config::{AgentToolMode, LlmConfig};
 use crate::error::{Result, SpeechError};
 use crate::fae_llm::agent::{
     AgentConfig as FaeAgentConfig, AgentLoop, AgentLoopResult, StopReason,
@@ -15,11 +15,9 @@ use crate::fae_llm::agent::{
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::provider::{LlmEventStream, ProviderAdapter, ToolDefinition};
-use crate::fae_llm::providers::anthropic::{AnthropicAdapter, AnthropicConfig};
-use crate::fae_llm::providers::fallback::FallbackProvider;
 use crate::fae_llm::providers::local::{LocalMistralrsAdapter, LocalMistralrsConfig};
 use crate::fae_llm::providers::message::{Message, Role};
-use crate::fae_llm::providers::openai::{OpenAiAdapter, OpenAiApiMode, OpenAiConfig};
+
 use crate::fae_llm::tools::{
     BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool,
 };
@@ -301,39 +299,10 @@ impl FaeAgentLlm {
     }
 }
 
-/// Returns `true` when the config has a remote API explicitly configured
-/// (non-empty API key or a cloud provider set). When neither is present,
-/// there is no remote LLM to talk to and we should use local inference only.
-fn has_remote_provider_configured(config: &LlmConfig) -> bool {
-    config.has_remote_provider_configured()
-}
-
-fn has_explicit_remote_target(config: &LlmConfig) -> bool {
-    !config.api_url.trim().is_empty()
-        || config
-            .cloud_provider
-            .as_ref()
-            .is_some_and(|provider| !provider.trim().is_empty())
-        || config
-            .external_profile
-            .as_ref()
-            .is_some_and(|profile| !profile.trim().is_empty())
-}
-
-struct MissingProviderConfigAdapter {
-    reason: String,
-}
-
-impl MissingProviderConfigAdapter {
-    fn new(reason: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
-        }
-    }
-}
+struct MissingLocalModelAdapter;
 
 #[async_trait::async_trait]
-impl ProviderAdapter for MissingProviderConfigAdapter {
+impl ProviderAdapter for MissingLocalModelAdapter {
     fn name(&self) -> &str {
         "missing_provider_config"
     }
@@ -344,160 +313,35 @@ impl ProviderAdapter for MissingProviderConfigAdapter {
         _options: &RequestOptions,
         _tools: &[ToolDefinition],
     ) -> std::result::Result<LlmEventStream, FaeLlmError> {
-        Err(FaeLlmError::ConfigValidationError(self.reason.clone()))
+        Err(FaeLlmError::ConfigValidationError(
+            "local backend selected but no preloaded local model is available. \
+             Ensure a GGUF or vision model is configured."
+                .to_owned(),
+        ))
     }
 }
 
 async fn build_provider(
     config: &LlmConfig,
     preloaded_llm: Option<&LocalLlm>,
-    manager: &dyn crate::credentials::CredentialManager,
+    _manager: &dyn crate::credentials::CredentialManager,
 ) -> Arc<dyn ProviderAdapter> {
-    // All runtime paths use the agent loop; backend selects which provider
-    // the agent should use as its "brain":
-    // - Local: local mistralrs only
-    // - Api: remote provider only (with optional local fallback)
-    // - Agent: compatibility auto mode (local when remote isn't configured)
-    let use_local_only = match config.backend {
-        crate::config::LlmBackend::Local => true,
-        crate::config::LlmBackend::Api => false,
-        crate::config::LlmBackend::Agent => !has_remote_provider_configured(config),
-    };
-
-    if use_local_only {
-        if let Some(local_llm) = preloaded_llm {
-            tracing::info!(
-                "agent using local mistralrs provider (model={})",
-                config.model_id
-            );
-            let provider_cfg =
-                LocalMistralrsConfig::new(local_llm.shared_model(), config.model_id.clone())
-                    .with_temperature(config.temperature as f32)
-                    .with_top_p(config.top_p as f32)
-                    .with_max_tokens(config.max_tokens);
-            return Arc::new(LocalMistralrsAdapter::new(provider_cfg));
-        }
-        let reason = "local backend selected but no preloaded local model is available. \
-Set `llm.backend = \"local\"` with a valid GGUF, or configure a remote provider explicitly.";
-        tracing::warn!("{reason}");
-        return Arc::new(MissingProviderConfigAdapter::new(reason));
-    }
-
-    // Build the remote provider.
-    let remote = build_remote_provider(config, manager).await;
-
-    // Wrap with local fallback when enabled and a local model is available
-    if config.enable_local_fallback {
-        if let Some(local_llm) = preloaded_llm {
-            tracing::info!(
-                "local fallback enabled: {} + local/{}",
-                config.effective_provider_name(),
-                config.model_id
-            );
-            let local_cfg =
-                LocalMistralrsConfig::new(local_llm.shared_model(), config.model_id.clone())
-                    .with_temperature(config.temperature as f32)
-                    .with_top_p(config.top_p as f32)
-                    .with_max_tokens(config.max_tokens);
-            let local: Arc<dyn ProviderAdapter> = Arc::new(LocalMistralrsAdapter::new(local_cfg));
-            return Arc::new(FallbackProvider::new(remote, local));
-        }
-        tracing::warn!(
-            "enable_local_fallback=true but no local model available; fallback disabled"
+    if let Some(local_llm) = preloaded_llm {
+        tracing::info!(
+            "agent using embedded local provider (model={})",
+            config.model_id
         );
+        let provider_cfg =
+            LocalMistralrsConfig::new(local_llm.shared_model(), config.model_id.clone())
+                .with_temperature(config.temperature as f32)
+                .with_top_p(config.top_p as f32)
+                .with_max_tokens(config.max_tokens);
+        return Arc::new(LocalMistralrsAdapter::new(provider_cfg));
     }
-
-    remote
-}
-
-/// Build the remote (API) provider from config.
-async fn build_remote_provider(
-    config: &LlmConfig,
-    manager: &dyn crate::credentials::CredentialManager,
-) -> Arc<dyn ProviderAdapter> {
-    if !has_explicit_remote_target(config) {
-        let reason = "remote backend selected but no endpoint is configured. \
-Set `llm.api_url`, `llm.cloud_provider`, or `llm.external_profile`.";
-        tracing::warn!("{reason}");
-        return Arc::new(MissingProviderConfigAdapter::new(reason));
-    }
-
-    let model_id = config
-        .cloud_model
-        .clone()
-        .unwrap_or_else(|| config.api_model.clone());
-    if model_id.trim().is_empty() {
-        let reason = "remote backend selected but no model is configured. \
-Set `llm.api_model` or `llm.cloud_model`.";
-        tracing::warn!("{reason}");
-        return Arc::new(MissingProviderConfigAdapter::new(reason));
-    }
-
-    let provider_hint = config
-        .cloud_provider
-        .clone()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let resolved_api_type = match config.api_type {
-        LlmApiType::Auto => {
-            if provider_hint == "anthropic" || config.api_url.contains("anthropic.com") {
-                LlmApiType::AnthropicMessages
-            } else {
-                LlmApiType::OpenAiCompletions
-            }
-        }
-        explicit => explicit,
-    };
-
-    // Resolve API key using the credential manager
-    let api_key = config.api_key.resolve(manager).await.unwrap_or_else(|e| {
-        tracing::warn!("failed to resolve API key: {}", e);
-        String::new()
-    });
-
-    match resolved_api_type {
-        LlmApiType::AnthropicMessages => {
-            let mut provider_cfg = AnthropicConfig::new(api_key, model_id);
-            if !config.api_url.trim().is_empty() {
-                provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
-            }
-            if let Some(version) = config.api_version.as_deref()
-                && !version.trim().is_empty()
-            {
-                provider_cfg = provider_cfg.with_api_version(version.to_owned());
-            }
-            provider_cfg = provider_cfg.with_max_tokens(config.max_tokens);
-            Arc::new(AnthropicAdapter::new(provider_cfg))
-        }
-        LlmApiType::OpenAiCompletions | LlmApiType::OpenAiResponses | LlmApiType::Auto => {
-            let mut provider_cfg = if let Some(provider_name) = config.cloud_provider.as_deref() {
-                OpenAiConfig::for_provider(provider_name, api_key.clone(), model_id)
-            } else {
-                OpenAiConfig::new(api_key.clone(), model_id)
-            };
-            if !config.api_url.trim().is_empty() {
-                provider_cfg = provider_cfg.with_base_url(normalize_base_url(&config.api_url));
-            }
-            if let Some(org) = config.api_organization.as_deref()
-                && !org.trim().is_empty()
-            {
-                provider_cfg = provider_cfg.with_org_id(org.to_owned());
-            }
-            if matches!(resolved_api_type, LlmApiType::OpenAiResponses) {
-                provider_cfg = provider_cfg.with_api_mode(OpenAiApiMode::Responses);
-            }
-            Arc::new(OpenAiAdapter::new(provider_cfg))
-        }
-    }
-}
-
-fn normalize_base_url(url: &str) -> String {
-    let trimmed = url.trim().trim_end_matches('/');
-    if let Some(base) = trimmed.strip_suffix("/v1") {
-        base.to_string()
-    } else {
-        trimmed.to_string()
-    }
+    let reason = "local backend selected but no preloaded local model is available. \
+Ensure a GGUF or vision model is configured.";
+    tracing::warn!("{reason}");
+    Arc::new(MissingLocalModelAdapter)
 }
 
 /// Build a tool registry from the config.
@@ -844,7 +688,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
-    use crate::config::LlmBackend;
     use crate::credentials::{CredentialError, CredentialManager, CredentialRef};
 
     struct NoopCredentialManager;
@@ -885,46 +728,5 @@ mod tests {
             .send(&[Message::user("hello")], &RequestOptions::new(), &[])
             .await;
         assert!(matches!(result, Err(FaeLlmError::ConfigValidationError(_))));
-    }
-
-    #[tokio::test]
-    async fn api_backend_requires_explicit_remote_endpoint() {
-        let config = LlmConfig {
-            backend: LlmBackend::Api,
-            ..LlmConfig::default()
-        };
-        let manager = NoopCredentialManager;
-
-        let provider = build_provider(&config, None, &manager).await;
-        let result = provider
-            .send(&[Message::user("hello")], &RequestOptions::new(), &[])
-            .await;
-        match result {
-            Err(FaeLlmError::ConfigValidationError(message)) => {
-                assert!(message.contains("no endpoint is configured"));
-            }
-            _ => panic!("expected config validation error for missing endpoint"),
-        }
-    }
-
-    #[tokio::test]
-    async fn api_backend_requires_model_id() {
-        let config = LlmConfig {
-            backend: LlmBackend::Api,
-            api_url: "http://127.0.0.1:8080/v1".to_owned(),
-            ..LlmConfig::default()
-        };
-        let manager = NoopCredentialManager;
-
-        let provider = build_provider(&config, None, &manager).await;
-        let result = provider
-            .send(&[Message::user("hello")], &RequestOptions::new(), &[])
-            .await;
-        match result {
-            Err(FaeLlmError::ConfigValidationError(message)) => {
-                assert!(message.contains("no model is configured"));
-            }
-            _ => panic!("expected config validation error for missing model"),
-        }
     }
 }

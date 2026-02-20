@@ -30,7 +30,6 @@ impl fmt::Debug for PlaintextCredential {
 /// Scan a config for credentials stored as plaintext.
 ///
 /// Checks the following fields:
-/// - `llm.api_key`
 /// - `channels.discord.bot_token` (if discord configured)
 /// - `channels.whatsapp.access_token` (if whatsapp configured)
 /// - `channels.whatsapp.verify_token` (if whatsapp configured)
@@ -38,13 +37,6 @@ impl fmt::Debug for PlaintextCredential {
 #[must_use]
 pub fn detect_plaintext_credentials(config: &SpeechConfig) -> Vec<PlaintextCredential> {
     let mut found = Vec::new();
-
-    if let CredentialRef::Plaintext(v) = &config.llm.api_key {
-        found.push(PlaintextCredential {
-            account: "llm.api_key".to_owned(),
-            value: v.clone(),
-        });
-    }
 
     if let Some(dc) = &config.channels.discord
         && let CredentialRef::Plaintext(v) = &dc.bot_token
@@ -121,10 +113,6 @@ pub fn migrate_to_keychain(
     manager: &dyn CredentialManager,
 ) -> Result<usize, CredentialError> {
     let mut count = 0usize;
-
-    if migrate_single(&mut config.llm.api_key, "llm.api_key", manager)? {
-        count += 1;
-    }
 
     if let Some(dc) = &mut config.channels.discord
         && migrate_single(&mut dc.bot_token, "discord.bot_token", manager)?
@@ -206,7 +194,6 @@ mod tests {
     #[test]
     fn detect_finds_plaintext_fields() {
         let mut config = SpeechConfig::default();
-        config.llm.api_key = CredentialRef::Plaintext("key1".to_owned());
         config.channels.discord = Some(DiscordChannelConfig {
             bot_token: CredentialRef::Plaintext("tok1".to_owned()),
             ..Default::default()
@@ -219,21 +206,16 @@ mod tests {
         config.channels.gateway.bearer_token = Some(CredentialRef::Plaintext("bearer".to_owned()));
 
         let found = detect_plaintext_credentials(&config);
-        assert_eq!(found.len(), 5);
-        assert_eq!(found[0].account, "llm.api_key");
-        assert_eq!(found[1].account, "discord.bot_token");
-        assert_eq!(found[2].account, "whatsapp.access_token");
-        assert_eq!(found[3].account, "whatsapp.verify_token");
-        assert_eq!(found[4].account, "gateway.bearer_token");
+        assert_eq!(found.len(), 4);
+        assert_eq!(found[0].account, "discord.bot_token");
+        assert_eq!(found[1].account, "whatsapp.access_token");
+        assert_eq!(found[2].account, "whatsapp.verify_token");
+        assert_eq!(found[3].account, "gateway.bearer_token");
     }
 
     #[test]
     fn detect_skips_non_plaintext() {
-        let mut config = SpeechConfig::default();
-        config.llm.api_key = CredentialRef::Keychain {
-            service: "svc".to_owned(),
-            account: "acc".to_owned(),
-        };
+        let config = SpeechConfig::default();
         // discord/whatsapp default to None (no adapter configured)
         let found = detect_plaintext_credentials(&config);
         assert!(found.is_empty());
@@ -250,17 +232,15 @@ mod tests {
     fn migrate_converts_plaintext_to_keychain() {
         let mgr = MockManager::new();
         let mut config = SpeechConfig::default();
-        config.llm.api_key = CredentialRef::Plaintext("secret-key".to_owned());
         config.channels.discord = Some(DiscordChannelConfig {
             bot_token: CredentialRef::Plaintext("discord-tok".to_owned()),
             ..Default::default()
         });
 
         let count = migrate_to_keychain(&mut config, &mgr).unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 1);
 
-        // Verify fields are now Keychain refs
-        assert!(config.llm.api_key.is_keychain());
+        // Verify field is now a Keychain ref
         assert!(
             config
                 .channels
@@ -271,9 +251,8 @@ mod tests {
                 .is_keychain()
         );
 
-        // Verify values are stored in the mock
+        // Verify value is stored in the mock
         let store = mgr.store.lock().unwrap();
-        assert_eq!(store.get("llm.api_key").unwrap(), "secret-key");
         assert_eq!(store.get("discord.bot_token").unwrap(), "discord-tok");
     }
 
@@ -290,7 +269,6 @@ mod tests {
     fn migrate_partial() {
         let mgr = MockManager::new();
         let mut config = SpeechConfig::default();
-        config.llm.api_key = CredentialRef::Plaintext("secret".to_owned());
         config.channels.discord = Some(DiscordChannelConfig {
             bot_token: CredentialRef::Keychain {
                 service: "svc".to_owned(),
@@ -301,8 +279,8 @@ mod tests {
         // whatsapp not configured
 
         let count = migrate_to_keychain(&mut config, &mgr).unwrap();
-        assert_eq!(count, 1);
-        assert!(config.llm.api_key.is_keychain());
+        // Discord is already Keychain, so nothing to migrate
+        assert_eq!(count, 0);
         // Discord stays as Keychain (not re-migrated)
         assert!(
             config

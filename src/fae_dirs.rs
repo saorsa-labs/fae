@@ -25,7 +25,7 @@ use std::path::PathBuf;
 /// Application data root directory.
 ///
 /// Used for persistent user data: memory records, SOUL.md, skills,
-/// external API profiles, voice samples, logs, and diagnostics.
+/// voice samples, logs, and diagnostics.
 ///
 /// Resolves to `dirs::data_dir()/fae/` by default. Override with
 /// the `FAE_DATA_DIR` environment variable.
@@ -121,12 +121,6 @@ pub fn hf_cache_dir() -> PathBuf {
     cache_dir().join("huggingface")
 }
 
-/// External API profiles directory (`data_dir()/external_apis/`).
-#[must_use]
-pub fn external_apis_dir() -> PathBuf {
-    data_dir().join("external_apis")
-}
-
 /// Wakeword recordings directory (`data_dir()/wakeword/`).
 #[must_use]
 pub fn wakeword_dir() -> PathBuf {
@@ -173,6 +167,7 @@ mod tests {
 
     #[test]
     fn data_dir_contains_fae() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = data_dir();
         let s = dir.to_string_lossy();
         assert!(s.contains("fae"), "data_dir should contain 'fae': {s}");
@@ -186,6 +181,7 @@ mod tests {
 
     #[test]
     fn config_dir_contains_fae() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = config_dir();
         let s = dir.to_string_lossy();
         assert!(s.contains("fae"), "config_dir should contain 'fae': {s}");
@@ -199,6 +195,7 @@ mod tests {
 
     #[test]
     fn cache_dir_contains_fae() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = cache_dir();
         let s = dir.to_string_lossy();
         assert!(s.contains("fae"), "cache_dir should contain 'fae': {s}");
@@ -279,9 +276,9 @@ mod tests {
         let original = std::env::var_os(key);
 
         // SAFETY: Tests run single-threaded per module.
-        unsafe { std::env::set_var(key, "/custom/data") };
+        unsafe { std::env::set_var(key, "/custom/fae-data") };
         let result = data_dir();
-        assert_eq!(result, PathBuf::from("/custom/data"));
+        assert_eq!(result, PathBuf::from("/custom/fae-data"));
 
         // Restore.
         match original {
@@ -296,9 +293,9 @@ mod tests {
         let key = "FAE_CONFIG_DIR";
         let original = std::env::var_os(key);
 
-        unsafe { std::env::set_var(key, "/custom/config") };
+        unsafe { std::env::set_var(key, "/custom/fae-config") };
         let result = config_dir();
-        assert_eq!(result, PathBuf::from("/custom/config"));
+        assert_eq!(result, PathBuf::from("/custom/fae-config"));
 
         match original {
             Some(val) => unsafe { std::env::set_var(key, val) },
@@ -312,26 +309,14 @@ mod tests {
         let key = "FAE_CACHE_DIR";
         let original = std::env::var_os(key);
 
-        unsafe { std::env::set_var(key, "/custom/cache") };
+        unsafe { std::env::set_var(key, "/custom/fae-cache") };
         let result = cache_dir();
-        assert_eq!(result, PathBuf::from("/custom/cache"));
+        assert_eq!(result, PathBuf::from("/custom/fae-cache"));
 
         match original {
             Some(val) => unsafe { std::env::set_var(key, val) },
             None => unsafe { std::env::remove_var(key) },
         }
-    }
-
-    #[test]
-    fn external_apis_dir_is_subpath_of_data_dir() {
-        let apis = external_apis_dir();
-        let data = data_dir();
-        assert!(
-            apis.starts_with(&data),
-            "external_apis_dir ({}) should start with data_dir ({})",
-            apis.display(),
-            data.display()
-        );
     }
 
     #[test]

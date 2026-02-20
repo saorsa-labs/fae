@@ -1,5 +1,5 @@
 use crate::agent::FaeAgentLlm;
-use crate::config::{LlmBackend, SpeechConfig};
+use crate::config::SpeechConfig;
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
 use crate::pipeline::messages::SentenceChunk;
@@ -16,19 +16,8 @@ pub struct ChannelBrain {
 
 impl ChannelBrain {
     pub async fn from_config(config: &SpeechConfig) -> Result<Self> {
-        let mut llm_cfg = config.llm.clone();
-        let _ = crate::external_llm::apply_external_profile(&mut llm_cfg)?;
-
-        let requires_local_model = matches!(llm_cfg.backend, LlmBackend::Local)
-            || (matches!(llm_cfg.backend, LlmBackend::Agent)
-                && !llm_cfg.has_remote_provider_configured())
-            || llm_cfg.enable_local_fallback;
-
-        let preloaded_local = if requires_local_model {
-            Some(LocalLlm::new(&llm_cfg).await?)
-        } else {
-            None
-        };
+        let llm_cfg = config.llm.clone();
+        let preloaded_local = Some(LocalLlm::new(&llm_cfg).await?);
 
         let credential_manager = crate::credentials::create_manager();
         let agent = FaeAgentLlm::new(

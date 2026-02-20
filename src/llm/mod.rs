@@ -1,13 +1,9 @@
 //! Language model inference.
 //!
-//! Provides two backends:
-//! - **Local** (default): GGUF models via `mistralrs`, with Metal GPU on Apple Silicon.
-//! - **API** (remote): Any OpenAI-compatible server (MLX, vLLM, llama.cpp, etc.).
+//! Provides local inference using GGUF models via `mistralrs`,
+//! with Metal GPU acceleration on Apple Silicon.
 
-pub mod api;
 pub mod fallback;
-
-pub use api::ApiLlm;
 
 use crate::config::LlmConfig;
 use crate::error::{Result, SpeechError};
