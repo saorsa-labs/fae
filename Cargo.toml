@@ -146,6 +146,10 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 url = "2"
 
+# SQLite memory store (bundled compiles SQLite from source — no system dep)
+rusqlite = { version = "0.31", features = ["bundled"] }
+sqlite-vec = "0.1"
+
 # Utilities
 crossbeam-channel = "0.5"
 async-trait = "0.1"

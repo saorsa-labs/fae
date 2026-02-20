@@ -13,7 +13,7 @@ pub fn temp_test_root(prefix: &str, name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "fae-{prefix}-{name}-{}-{}",
         std::process::id(),
-        crate::memory::now_epoch_nanos()
+        crate::memory::types::now_epoch_nanos()
     ));
     std::fs::create_dir_all(&dir).expect("create temp test dir");
     dir

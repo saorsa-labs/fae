@@ -1,14 +1,12 @@
-//! Persistent memory system for Fae.
+//! JSONL-backed memory storage implementation.
 //!
-//! Backward compatibility:
-//! - Keeps the original markdown-backed identity store (`primary_user.md`, `people.md`).
+//! This module contains the original flat-file `MemoryRepository` (JSONL records
+//! + TOML manifest) and the `MemoryOrchestrator` (recall, capture, onboarding).
 //!
-//! New runtime memory core:
-//! - Versioned manifest.
-//! - JSONL record store (`records.jsonl`).
-//! - Append-only audit log (`audit.jsonl`).
-//! - Automatic recall and capture orchestrator hooks.
+//! Also includes the legacy markdown-backed identity store (`MemoryStore`,
+//! `PrimaryUser`, `Person`).
 
+use super::types::*;
 use crate::config::MemoryConfig;
 use crate::error::{Result, SpeechError};
 use serde::{Deserialize, Serialize};
@@ -17,51 +15,25 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
 
-static RECORD_COUNTER: AtomicU64 = AtomicU64::new(1);
+// ---------------------------------------------------------------------------
+// JSONL-specific statics and constants
+// ---------------------------------------------------------------------------
+
 static MEMORY_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-const CURRENT_SCHEMA_VERSION: u32 = 2;
+
 const MANIFEST_FILE: &str = "manifest.toml";
 const RECORDS_FILE: &str = "records.jsonl";
 const AUDIT_FILE: &str = "audit.jsonl";
-const PROFILE_NAME_CONFIDENCE: f32 = 0.98;
-const PROFILE_PREFERENCE_CONFIDENCE: f32 = 0.86;
-const FACT_REMEMBER_CONFIDENCE: f32 = 0.80;
-const FACT_CONVERSATIONAL_CONFIDENCE: f32 = 0.75;
-const CODING_ASSISTANT_PERMISSION_CONFIDENCE: f32 = 0.92;
-const CODING_ASSISTANT_PERMISSION_PENDING_CONFIDENCE: f32 = 0.55;
-const ONBOARDING_COMPLETION_CONFIDENCE: f32 = 0.95;
-const TRUNCATION_SUFFIX: &str = " [truncated]";
-const ONBOARDING_REQUIRED_FIELDS: &[(&str, &str)] = &[
-    ("onboarding:name", "name / preferred form of address"),
-    ("onboarding:address", "location or home context"),
-    ("onboarding:family", "family or household context"),
-    ("onboarding:interests", "interests or hobbies"),
-    ("onboarding:job", "job or work context"),
-];
-
-/// Maximum length (in bytes) of record text. Prevents unbounded growth from
-/// excessively long LLM outputs or user input.
-const MAX_RECORD_TEXT_LEN: usize = 32_768;
-
-// -- Scoring weights for `score_record()` --
-const SCORE_EMPTY_QUERY_BASELINE: f32 = 0.2;
-const SCORE_CONFIDENCE_WEIGHT: f32 = 0.20;
-const SCORE_FRESHNESS_WEIGHT: f32 = 0.10;
-const SCORE_KIND_BONUS_PROFILE: f32 = 0.05;
-const SCORE_KIND_BONUS_FACT: f32 = 0.03;
-const SECS_PER_DAY: f32 = 86_400.0;
 
 fn memory_write_lock() -> &'static Mutex<()> {
     MEMORY_WRITE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-#[must_use]
-pub fn current_memory_schema_version() -> u32 {
-    CURRENT_SCHEMA_VERSION
-}
+// ---------------------------------------------------------------------------
+// Legacy markdown-backed identity store
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct MemoryStore {
@@ -185,89 +157,9 @@ Known people and (optional) voiceprints.\n\n\
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryKind {
-    Profile,
-    Episode,
-    Fact,
-    /// A date-based event (birthday, meeting, deadline, anniversary).
-    Event,
-    /// A known person (friend, colleague, family member).
-    Person,
-    /// A user interest or hobby.
-    Interest,
-    /// A commitment or promise the user made.
-    Commitment,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryStatus {
-    Active,
-    Superseded,
-    Invalidated,
-    Forgotten,
-}
-
-fn default_memory_status() -> MemoryStatus {
-    MemoryStatus::Active
-}
-
-fn default_confidence() -> f32 {
-    0.5
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryRecord {
-    pub id: String,
-    pub kind: MemoryKind,
-    #[serde(default = "default_memory_status")]
-    pub status: MemoryStatus,
-    pub text: String,
-    #[serde(default = "default_confidence")]
-    pub confidence: f32,
-    #[serde(default)]
-    pub source_turn_id: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub supersedes: Option<String>,
-    #[serde(default)]
-    pub created_at: u64,
-    #[serde(default)]
-    pub updated_at: u64,
-    /// Optional importance score for prioritization (0.0–1.0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub importance_score: Option<f32>,
-    /// Optional staleness threshold in seconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stale_after_secs: Option<u64>,
-    /// Optional structured metadata (JSON blob).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryAuditOp {
-    Insert,
-    Patch,
-    Supersede,
-    Invalidate,
-    ForgetSoft,
-    ForgetHard,
-    Migrate,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryAuditEntry {
-    pub id: String,
-    pub op: MemoryAuditOp,
-    pub target_id: Option<String>,
-    pub note: String,
-    pub at: u64,
-}
+// ---------------------------------------------------------------------------
+// JSONL manifest
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MemoryManifest {
@@ -291,11 +183,9 @@ impl Default for MemoryManifest {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MemorySearchHit {
-    pub record: MemoryRecord,
-    pub score: f32,
-}
+// ---------------------------------------------------------------------------
+// MemoryRepository (JSONL backend)
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct MemoryRepository {
@@ -546,7 +436,7 @@ impl MemoryRepository {
         Ok(out)
     }
 
-    fn rewrite_records(&self, records: &[MemoryRecord]) -> Result<()> {
+    pub(crate) fn rewrite_records(&self, records: &[MemoryRecord]) -> Result<()> {
         let temp_path = self.root.join("records.jsonl.tmp");
         let mut temp = OpenOptions::new()
             .create(true)
@@ -917,28 +807,9 @@ impl MemoryRepository {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct MemoryCaptureReport {
-    pub episodes_written: usize,
-    pub facts_written: usize,
-    pub profile_updates: usize,
-    pub forgotten: usize,
-    pub conflicts_resolved: usize,
-    pub writes: Vec<MemoryWriteSummary>,
-    pub conflicts: Vec<MemoryConflictSummary>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryWriteSummary {
-    pub op: String,
-    pub target_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemoryConflictSummary {
-    pub existing_id: String,
-    pub replacement_id: Option<String>,
-}
+// ---------------------------------------------------------------------------
+// MemoryOrchestrator
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct MemoryOrchestrator {
@@ -1554,6 +1425,10 @@ checklist:\n\
     }
 }
 
+// ---------------------------------------------------------------------------
+// Free functions
+// ---------------------------------------------------------------------------
+
 pub fn run_memory_reflection(root_dir: &Path) -> Result<String> {
     let repo = MemoryRepository::new(root_dir);
     repo.ensure_layout()?;
@@ -1630,80 +1505,9 @@ pub fn run_memory_migration(root_dir: &Path) -> Result<String> {
     Ok(msg)
 }
 
-pub fn default_memory_root_dir() -> PathBuf {
-    crate::fae_dirs::memory_dir()
-}
-
-fn display_kind(kind: MemoryKind) -> &'static str {
-    match kind {
-        MemoryKind::Profile => "profile",
-        MemoryKind::Episode => "episode",
-        MemoryKind::Fact => "fact",
-        MemoryKind::Event => "event",
-        MemoryKind::Person => "person",
-        MemoryKind::Interest => "interest",
-        MemoryKind::Commitment => "commitment",
-    }
-}
-
-fn tokenize(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '\'' || ch == '-' {
-            current.push(ch.to_ascii_lowercase());
-        } else if !current.is_empty() {
-            if current.len() > 1 {
-                tokens.push(current.clone());
-            }
-            current.clear();
-        }
-    }
-    if !current.is_empty() && current.len() > 1 {
-        tokens.push(current);
-    }
-
-    tokens
-}
-
-fn score_record(record: &MemoryRecord, query_tokens: &[String]) -> f32 {
-    let mut score = 0.0f32;
-
-    if query_tokens.is_empty() {
-        score += SCORE_EMPTY_QUERY_BASELINE;
-    } else {
-        let text_tokens: HashSet<String> = tokenize(&record.text).into_iter().collect();
-        let mut overlap = 0usize;
-        for token in query_tokens {
-            if text_tokens.contains(token) {
-                overlap = overlap.saturating_add(1);
-            }
-        }
-        if overlap > 0 {
-            score += overlap as f32 / query_tokens.len() as f32;
-        }
-    }
-
-    score += SCORE_CONFIDENCE_WEIGHT * record.confidence.clamp(0.0, 1.0);
-
-    let now = now_epoch_secs();
-    if record.updated_at > 0 && record.updated_at <= now {
-        let age_days = (now - record.updated_at) as f32 / SECS_PER_DAY;
-        let freshness = 1.0 / (1.0 + age_days);
-        score += SCORE_FRESHNESS_WEIGHT * freshness;
-    }
-
-    match record.kind {
-        MemoryKind::Profile => score += SCORE_KIND_BONUS_PROFILE,
-        MemoryKind::Fact => score += SCORE_KIND_BONUS_FACT,
-        MemoryKind::Event | MemoryKind::Commitment => score += SCORE_KIND_BONUS_FACT,
-        MemoryKind::Person | MemoryKind::Interest => score += SCORE_KIND_BONUS_FACT,
-        MemoryKind::Episode => {}
-    }
-
-    score
-}
+// ---------------------------------------------------------------------------
+// Parse helpers (used by MemoryOrchestrator)
+// ---------------------------------------------------------------------------
 
 fn parse_remember_command(text: &str) -> Option<String> {
     let raw = text.trim();
@@ -2280,48 +2084,6 @@ fn capitalize_first(s: &str) -> String {
     out
 }
 
-fn truncate_record_text(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.len() <= MAX_RECORD_TEXT_LEN {
-        return trimmed.to_owned();
-    }
-
-    let max_bytes = MAX_RECORD_TEXT_LEN.saturating_sub(TRUNCATION_SUFFIX.len());
-    let mut out = String::with_capacity(MAX_RECORD_TEXT_LEN);
-    let mut used = 0usize;
-
-    for ch in trimmed.chars() {
-        let bytes = ch.len_utf8();
-        if used.saturating_add(bytes) > max_bytes {
-            break;
-        }
-        out.push(ch);
-        used = used.saturating_add(bytes);
-    }
-
-    out.push_str(TRUNCATION_SUFFIX);
-    out
-}
-
-fn new_id(prefix: &str) -> String {
-    let counter = RECORD_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
-    format!("{prefix}-{}-{counter}", now_epoch_nanos())
-}
-
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-pub(crate) fn now_epoch_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-}
-
 fn extract_toml_block(md: &str) -> Option<String> {
     // Very small parser:
     // - find a line that is exactly ```toml (trimmed)
@@ -2347,6 +2109,10 @@ fn extract_toml_block(md: &str) -> Option<String> {
         Some(buf.join("\n"))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
