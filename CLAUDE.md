@@ -75,13 +75,35 @@ Current core toolset:
 - `bash`
 - canvas tools when registered
 
-Tool modes:
+Tool modes (configurable via Settings > Tools or `config.patch`):
 
 - `off`
 - `read_only`
 - `read_write`
 - `full`
 - `full_no_approval`
+
+## Skills (builtin)
+
+8 permission-gated builtin skills: calendar, contacts, mail, reminders, files, notifications, location, desktop_automation.
+
+CameraSkill was removed in v0.7.0 (Phase 6.4) — vision capabilities are handled directly by the LLM provider without a dedicated skill gate.
+
+## config.patch keys
+
+The `config.patch` command (Swift → Rust via HostCommandBridge) supports these keys:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `tool_mode` | string | Agent tool mode (`off`, `read_only`, `read_write`, `full`, `full_no_approval`) |
+| `channels.enabled` | bool | Master toggle for channel integrations |
+| `channels.discord.bot_token` | string | Discord bot token (stored as CredentialRef::Plaintext) |
+| `channels.discord.guild_id` | string | Discord guild/server ID |
+| `channels.discord.allowed_channel_ids` | string | Comma-separated channel IDs |
+| `channels.whatsapp.access_token` | string | WhatsApp access token (stored as CredentialRef::Plaintext) |
+| `channels.whatsapp.phone_number_id` | string | WhatsApp phone number ID |
+| `channels.whatsapp.verify_token` | string | WhatsApp webhook verify token |
+| `channels.whatsapp.allowed_numbers` | string | Comma-separated allowed phone numbers |
 
 ## Prompt/identity stack
 
@@ -134,12 +156,20 @@ The Rust core runs in-process — no subprocess for the primary path.
 |------|------|
 | `native/macos/.../FaeNativeApp.swift` | App entry, environment wiring, embedded core init |
 | `native/macos/.../EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
-| `native/macos/.../ContentView.swift` | Main view, window state |
+| `native/macos/.../ContentView.swift` | Main view, window state, orb context menu |
 | `native/macos/.../ConversationWebView.swift` | WKWebView bridge (orb animation + input bar) |
 | `native/macos/.../ConversationController.swift` | Conversation state (messages, listening) |
+| `native/macos/.../ConversationBridgeController.swift` | Routes backend events to conversation WebView (JS injection) |
+| `native/macos/.../OrbStateBridgeController.swift` | Maps pipeline/runtime events to orb visual state |
+| `native/macos/.../PipelineAuxBridgeController.swift` | Routes voice commands to auxiliary windows (canvas/conversation) |
 | `native/macos/.../AuxiliaryWindowManager.swift` | Independent conversation & canvas NSPanels |
-| `native/macos/.../WindowStateController.swift` | Adaptive window (collapsed/compact) |
+| `native/macos/.../WindowStateController.swift` | Adaptive window (collapsed/compact), hide/show |
 | `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
+| `native/macos/.../SettingsView.swift` | TabView settings (General, Models, Tools, Channels, About, Developer) |
+| `native/macos/.../SettingsToolsTab.swift` | Tool mode picker with config.patch sync |
+| `native/macos/.../SettingsChannelsTab.swift` | Discord/WhatsApp channel configuration |
+| `native/macos/.../JitPermissionController.swift` | Just-in-time macOS permission requests |
+| `native/macos/.../HelpWindowController.swift` | Help HTML pages in native window |
 
 ### Rust-side host layer
 
@@ -199,6 +229,18 @@ On startup, `restore_all_bookmarks()` re-establishes access; stale bookmarks are
 
 File picker flows call `bookmark_and_persist()` after user selection.
 
+## NotificationCenter names
+
+| Name | Purpose |
+|------|---------|
+| `.faeBackendEvent` | Raw backend events from Rust core |
+| `.faeOrbStateChanged` | Orb visual state changes (mode, feeling, palette) |
+| `.faePipelineState` | Pipeline lifecycle (stopped/starting/running/stopping/error) |
+| `.faeRuntimeState` | Runtime lifecycle (starting/started/stopped/error) |
+| `.faeRuntimeProgress` | Model download/load progress |
+| `.faeAssistantGenerating` | LLM generation active/inactive |
+| `.faeAudioLevel` | Audio level updates for orb visualization |
+
 ## Delivery quality requirements
 
 Always run:
@@ -206,7 +248,19 @@ Always run:
 ```bash
 cargo fmt --all
 cargo clippy --all-features -- -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
-cargo test --all-features
+cargo test
 ```
 
+**Important:** Use plain `cargo test`, NOT `cargo test --all-features`. The `--all-features` flag enables feature combinations that cause excessive memory usage (300GB+).
+
 When changing memory logic, add tests first (TDD), then implementation.
+
+## Completed milestones
+
+- **v0.6.2** — Production hardening: pipeline startup fix, runtime event routing, settings redesign (TabView), help menu, onboarding reset, config.patch implementation
+- **v0.7.0 (Milestone 6: Dogfood Readiness):**
+  - Phase 6.1: Backend cleanup — removed API/Agent code, non-embedded providers
+  - Phase 6.2: Voice command routing — PipelineAuxBridgeController for "show conversation"/"show canvas"
+  - Phase 6.3: UX feedback — download progress bar, partial STT, streaming assistant text, orb audio level, right-click context menu
+  - Phase 6.4: Settings expansion — tool mode tab, channel config tab, CameraSkill removal
+  - Phase 6.5: Integration validation — full Rust/Swift build verification, all 11 dogfood findings confirmed resolved
