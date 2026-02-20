@@ -811,19 +811,35 @@ impl MemoryRepository {
 // MemoryOrchestrator
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MemoryOrchestrator {
-    repo: MemoryRepository,
+    repo: super::sqlite::SqliteMemoryRepository,
     config: MemoryConfig,
 }
 
 impl MemoryOrchestrator {
-    #[must_use]
-    pub fn new(config: &MemoryConfig) -> Self {
-        Self {
-            repo: MemoryRepository::new(&config.root_dir),
-            config: config.clone(),
+    /// Create a new orchestrator backed by SQLite.
+    ///
+    /// If JSONL data files exist and the SQLite database is empty, runs
+    /// the one-time JSONL→SQLite migration before returning.
+    pub fn new(config: &MemoryConfig) -> Result<Self> {
+        // Run JSONL→SQLite migration if needed.
+        if super::migrate::needs_migration(&config.root_dir) {
+            let report = super::migrate::run_jsonl_to_sqlite(&config.root_dir)?;
+            tracing::info!(
+                records = report.records_migrated,
+                audit = report.audit_entries_migrated,
+                records_backup = ?report.records_backup,
+                audit_backup = ?report.audit_backup,
+                "JSONL → SQLite migration complete"
+            );
         }
+
+        let repo = super::sqlite::SqliteMemoryRepository::new(&config.root_dir)?;
+        Ok(Self {
+            repo,
+            config: config.clone(),
+        })
     }
 
     pub fn ensure_ready(&self) -> Result<()> {
@@ -834,13 +850,18 @@ impl MemoryOrchestrator {
     pub fn ensure_ready_with_migration(&self) -> Result<Option<(u32, u32)>> {
         self.repo.ensure_layout()?;
         if self.config.schema_auto_migrate {
-            return self.repo.migrate_if_needed(CURRENT_SCHEMA_VERSION);
+            let before = self.repo.schema_version()?;
+            self.repo.migrate_if_needed(CURRENT_SCHEMA_VERSION)?;
+            let after = self.repo.schema_version()?;
+            if after > before {
+                return Ok(Some((before, after)));
+            }
         }
         Ok(None)
     }
 
     pub fn schema_version(&self) -> Result<u32> {
-        self.repo.schema_version()
+        Ok(self.repo.schema_version()?)
     }
 
     #[must_use]
@@ -1047,7 +1068,7 @@ checklist:\n\
             &episode_text,
             0.55,
             Some(turn_id),
-            vec!["turn".to_owned()],
+            &["turn".to_owned()],
         )?;
         report.episodes_written = 1;
         report.writes.push(MemoryWriteSummary {
@@ -1080,7 +1101,7 @@ checklist:\n\
                     &remember,
                     FACT_REMEMBER_CONFIDENCE,
                     Some(turn_id),
-                    vec!["remembered".to_owned()],
+                    &["remembered".to_owned()],
                 )?;
                 report.facts_written = report.facts_written.saturating_add(1);
                 report.writes.push(MemoryWriteSummary {
@@ -1101,12 +1122,12 @@ checklist:\n\
                 let existing = self.repo.find_active_by_tag("name")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
-                        let new_record = self.repo.supersede_record(
+                        let new_record = self.repo.supersede_record_by_id(
                             &previous.id,
                             &profile,
                             PROFILE_NAME_CONFIDENCE,
                             Some(turn_id),
-                            name_tags.clone(),
+                            &name_tags,
                             "name updated from user statement",
                         )?;
                         report.profile_updates = report.profile_updates.saturating_add(1);
@@ -1126,7 +1147,7 @@ checklist:\n\
                         &profile,
                         PROFILE_NAME_CONFIDENCE,
                         Some(turn_id),
-                        name_tags,
+                        &name_tags,
                     )?;
                     report.profile_updates = report.profile_updates.saturating_add(1);
                     report.writes.push(MemoryWriteSummary {
@@ -1147,12 +1168,12 @@ checklist:\n\
                 let existing = self.repo.find_active_by_tag("preference")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
-                        let new_record = self.repo.supersede_record(
+                        let new_record = self.repo.supersede_record_by_id(
                             &previous.id,
                             &profile,
                             PROFILE_PREFERENCE_CONFIDENCE,
                             Some(turn_id),
-                            preference_tags.clone(),
+                            &preference_tags,
                             "preference updated from user statement",
                         )?;
                         report.profile_updates = report.profile_updates.saturating_add(1);
@@ -1172,7 +1193,7 @@ checklist:\n\
                         &profile,
                         PROFILE_PREFERENCE_CONFIDENCE,
                         Some(turn_id),
-                        preference_tags,
+                        &preference_tags,
                     )?;
                     report.profile_updates = report.profile_updates.saturating_add(1);
                     report.writes.push(MemoryWriteSummary {
@@ -1195,7 +1216,7 @@ checklist:\n\
                     "Awaiting user decision on local Claude/Codex use for coding tasks.",
                     CODING_ASSISTANT_PERMISSION_PENDING_CONFIDENCE,
                     Some(turn_id),
-                    vec!["coding_assistant_permission_pending".to_owned()],
+                    &["coding_assistant_permission_pending".to_owned()],
                 )?;
                 report.profile_updates = report.profile_updates.saturating_add(1);
                 report.writes.push(MemoryWriteSummary {
@@ -1228,12 +1249,12 @@ checklist:\n\
                 .find_active_by_tag("coding_assistant_permission")?;
             if let Some(previous) = existing.first() {
                 if !previous.text.eq_ignore_ascii_case(profile) {
-                    let new_record = self.repo.supersede_record(
+                    let new_record = self.repo.supersede_record_by_id(
                         &previous.id,
                         profile,
                         CODING_ASSISTANT_PERMISSION_CONFIDENCE,
                         Some(turn_id),
-                        permission_tags.clone(),
+                        &permission_tags,
                         "user updated local coding assistant permission",
                     )?;
                     report.profile_updates = report.profile_updates.saturating_add(1);
@@ -1253,7 +1274,7 @@ checklist:\n\
                     profile,
                     CODING_ASSISTANT_PERMISSION_CONFIDENCE,
                     Some(turn_id),
-                    permission_tags,
+                    &permission_tags,
                 )?;
                 report.profile_updates = report.profile_updates.saturating_add(1);
                 report.writes.push(MemoryWriteSummary {
@@ -1283,12 +1304,12 @@ checklist:\n\
                 let existing = self.repo.find_active_by_tag("onboarding:job")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
-                        let new_record = self.repo.supersede_record(
+                        let new_record = self.repo.supersede_record_by_id(
                             &previous.id,
                             &profile,
                             FACT_CONVERSATIONAL_CONFIDENCE,
                             Some(turn_id),
-                            vec!["onboarding:job".to_owned(), "personal".to_owned()],
+                            &["onboarding:job".to_owned(), "personal".to_owned()],
                             "job updated from user statement",
                         )?;
                         report.profile_updates = report.profile_updates.saturating_add(1);
@@ -1308,7 +1329,7 @@ checklist:\n\
                         &profile,
                         FACT_CONVERSATIONAL_CONFIDENCE,
                         Some(turn_id),
-                        vec!["onboarding:job".to_owned(), "personal".to_owned()],
+                        &["onboarding:job".to_owned(), "personal".to_owned()],
                     )?;
                     report.profile_updates = report.profile_updates.saturating_add(1);
                     report.writes.push(MemoryWriteSummary {
@@ -1338,7 +1359,7 @@ checklist:\n\
                     &fact,
                     FACT_CONVERSATIONAL_CONFIDENCE,
                     Some(turn_id),
-                    tags,
+                    &tags,
                 )?;
                 report.facts_written = report.facts_written.saturating_add(1);
                 report.writes.push(MemoryWriteSummary {
@@ -1353,7 +1374,7 @@ checklist:\n\
         if self.config.retention_days > 0 {
             let _changed = self
                 .repo
-                .apply_retention_policy(self.config.retention_days)?;
+                .apply_retention_policy(u64::from(self.config.retention_days))?;
         }
 
         Ok(report)
@@ -1413,7 +1434,7 @@ checklist:\n\
             "Onboarding checklist is complete.",
             ONBOARDING_COMPLETION_CONFIDENCE,
             Some(turn_id),
-            vec!["onboarding_complete".to_owned(), "onboarding".to_owned()],
+            &["onboarding_complete".to_owned(), "onboarding".to_owned()],
         )?;
         report.profile_updates = report.profile_updates.saturating_add(1);
         report.writes.push(MemoryWriteSummary {
@@ -2119,6 +2140,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use crate::memory::sqlite::SqliteMemoryRepository;
     use crate::test_utils::temp_test_root;
     use std::sync::Arc;
 
@@ -2252,7 +2274,7 @@ mod tests {
     fn orchestrator_captures_episode_and_profile_updates() {
         let root = test_root("orchestrator-capture");
         let cfg = test_cfg(&root);
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
 
         let report = orchestrator
             .capture_turn(
@@ -2265,8 +2287,8 @@ mod tests {
         assert_eq!(report.episodes_written, 1);
         assert!(report.profile_updates >= 1);
 
-        let repo = MemoryRepository::new(&root);
-        let name = repo.find_active_by_tag("name").expect("find name");
+        let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+        let name = sqlite_repo.find_active_by_tag("name").expect("find name");
         assert!(!name.is_empty());
 
         let recall = orchestrator
@@ -2282,7 +2304,7 @@ mod tests {
     fn orchestrator_forget_command_soft_forgets_match() {
         let root = test_root("orchestrator-forget");
         let cfg = test_cfg(&root);
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
 
         orchestrator
             .capture_turn(
@@ -2322,7 +2344,7 @@ mod tests {
         let root = test_root("orchestrator-threshold");
         let mut cfg = test_cfg(&root);
         cfg.min_profile_confidence = 0.90;
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
 
         let pref_report = orchestrator
             .capture_turn("turn-1", "I prefer tea in the morning.", "Noted.")
@@ -2334,13 +2356,15 @@ mod tests {
             .expect("capture name");
         assert_eq!(name_report.profile_updates, 1);
 
-        let repo = MemoryRepository::new(&root);
-        let prefs = repo
+        let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+        let prefs = sqlite_repo
             .find_active_by_tag("preference")
             .expect("find preference memories");
         assert!(prefs.is_empty());
 
-        let names = repo.find_active_by_tag("name").expect("find name memories");
+        let names = sqlite_repo
+            .find_active_by_tag("name")
+            .expect("find name memories");
         assert_eq!(names.len(), 1);
 
         let _ = std::fs::remove_dir_all(root);
@@ -2350,7 +2374,7 @@ mod tests {
     fn orchestrator_truncates_oversized_episode_text() {
         let root = test_root("orchestrator-large-episode");
         let cfg = test_cfg(&root);
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
 
         let giant_assistant = "a".repeat(MAX_RECORD_TEXT_LEN.saturating_add(512));
         let report = orchestrator
@@ -2358,8 +2382,10 @@ mod tests {
             .expect("capture oversized episode");
         assert_eq!(report.episodes_written, 1);
 
-        let repo = MemoryRepository::new(&root);
-        let records = repo.list_records().expect("list records");
+        let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+        let records = sqlite_repo
+            .list_records_filtered(true)
+            .expect("list records");
         let episode = records
             .iter()
             .find(|record| {
@@ -2596,7 +2622,7 @@ mod tests {
     fn orchestrator_captures_personal_facts_from_conversation() {
         let root = test_root("orchestrator-personal-facts");
         let cfg = test_cfg(&root);
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
 
         let report = orchestrator
             .capture_turn(
@@ -2611,8 +2637,8 @@ mod tests {
             report.facts_written,
         );
 
-        let repo = MemoryRepository::new(&root);
-        let personal = repo
+        let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+        let personal = sqlite_repo
             .find_active_by_tag("personal")
             .expect("find personal facts");
         assert!(!personal.is_empty(), "should have personal fact records");
@@ -2625,7 +2651,7 @@ mod tests {
     fn orchestrator_marks_onboarding_complete_when_required_fields_exist() {
         let root = test_root("onboarding-complete");
         let cfg = test_cfg(&root);
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
 
         orchestrator
             .capture_turn("turn-1", "My name is Alice.", "Noted.")
@@ -2649,8 +2675,8 @@ mod tests {
                 .expect("onboarding state should load")
         );
 
-        let repo = MemoryRepository::new(&root);
-        let completion = repo
+        let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+        let completion = sqlite_repo
             .find_active_by_tag("onboarding_complete")
             .expect("completion tag query");
         assert!(!completion.is_empty());
@@ -2662,7 +2688,7 @@ mod tests {
     fn orchestrator_captures_coding_assistant_permission_across_turns() {
         let root = test_root("coding-assistant-permission");
         let cfg = test_cfg(&root);
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
 
         orchestrator
             .capture_turn(
@@ -2690,8 +2716,8 @@ mod tests {
             Some(true)
         );
 
-        let repo = MemoryRepository::new(&root);
-        let pending = repo
+        let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+        let pending = sqlite_repo
             .find_active_by_tag("coding_assistant_permission_pending")
             .expect("query pending permission markers");
         assert!(pending.is_empty(), "pending marker should be cleared");
@@ -2703,20 +2729,20 @@ mod tests {
     fn recall_context_includes_relevant_episodes_as_fallback() {
         let root = test_root("recall-episodes");
         let cfg = test_cfg(&root);
-        let repo = MemoryRepository::new(&root);
-        repo.ensure_layout().expect("ensure layout");
+        let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
 
         // Insert only an episode (no durable records).
-        repo.insert_record(
-            MemoryKind::Episode,
-            "User: I have sheep and chickens\nAssistant: I'll remember that.",
-            0.55,
-            Some("turn-1"),
-            vec!["turn".to_owned()],
-        )
-        .expect("insert episode");
+        sqlite_repo
+            .insert_record(
+                MemoryKind::Episode,
+                "User: I have sheep and chickens\nAssistant: I'll remember that.",
+                0.55,
+                Some("turn-1"),
+                &["turn".to_owned()],
+            )
+            .expect("insert episode");
 
-        let orchestrator = MemoryOrchestrator::new(&cfg);
+        let orchestrator = MemoryOrchestrator::new(&cfg).expect("orchestrator init");
         // With the episode inclusion fix, this should find the episode
         // if the search score is high enough.
         let result = orchestrator.recall_context("sheep chickens");

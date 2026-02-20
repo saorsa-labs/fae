@@ -1727,41 +1727,48 @@ async fn run_llm_stage(
 
     let name = "Fae".to_owned();
     let memory_orchestrator = if config.memory.enabled {
-        let orchestrator = MemoryOrchestrator::new(&config.memory);
-        let migration_from = if config.memory.schema_auto_migrate {
-            orchestrator.schema_version().ok()
-        } else {
-            None
-        };
+        match MemoryOrchestrator::new(&config.memory) {
+            Ok(orchestrator) => {
+                let migration_from = if config.memory.schema_auto_migrate {
+                    orchestrator.schema_version().ok()
+                } else {
+                    None
+                };
 
-        match orchestrator.ensure_ready_with_migration() {
-            Ok(Some((from, to))) => {
-                if let Some(rt) = &ctl.runtime_tx {
-                    let _ = rt.send(RuntimeEvent::MemoryMigration {
-                        from,
-                        to,
-                        success: true,
-                    });
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                warn!("memory orchestrator init failed: {e}");
-                if let Some(from) = migration_from {
-                    let to = orchestrator.target_schema_version();
-                    if from < to
-                        && let Some(rt) = &ctl.runtime_tx
-                    {
-                        let _ = rt.send(RuntimeEvent::MemoryMigration {
-                            from,
-                            to,
-                            success: false,
-                        });
+                match orchestrator.ensure_ready_with_migration() {
+                    Ok(Some((from, to))) => {
+                        if let Some(rt) = &ctl.runtime_tx {
+                            let _ = rt.send(RuntimeEvent::MemoryMigration {
+                                from,
+                                to,
+                                success: true,
+                            });
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!("memory orchestrator init failed: {e}");
+                        if let Some(from) = migration_from {
+                            let to = orchestrator.target_schema_version();
+                            if from < to
+                                && let Some(rt) = &ctl.runtime_tx
+                            {
+                                let _ = rt.send(RuntimeEvent::MemoryMigration {
+                                    from,
+                                    to,
+                                    success: false,
+                                });
+                            }
+                        }
                     }
                 }
+                Some(orchestrator)
+            }
+            Err(e) => {
+                warn!("memory orchestrator creation failed: {e}");
+                None
             }
         }
-        Some(orchestrator)
     } else {
         None
     };

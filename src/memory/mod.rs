@@ -10,6 +10,7 @@
 //! - `sqlite`: SQLite-backed `SqliteMemoryRepository`.
 
 pub mod jsonl;
+pub(crate) mod migrate;
 pub(crate) mod schema;
 pub mod sqlite;
 pub mod types;

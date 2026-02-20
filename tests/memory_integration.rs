@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use fae::config::MemoryConfig;
-use fae::memory::{MemoryOrchestrator, MemoryRepository, MemoryStatus};
+use fae::memory::{MemoryOrchestrator, MemoryRepository, MemoryStatus, SqliteMemoryRepository};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,7 +32,7 @@ fn cfg_for(root: &Path) -> MemoryConfig {
 #[test]
 fn contradiction_resolution_supersedes_name_memory() {
     let root = temp_root("name-contradiction");
-    let orchestrator = MemoryOrchestrator::new(&cfg_for(&root));
+    let orchestrator = MemoryOrchestrator::new(&cfg_for(&root)).expect("orchestrator init");
 
     orchestrator
         .capture_turn("turn-1", "My name is Alice.", "Hello Alice")
@@ -41,14 +41,16 @@ fn contradiction_resolution_supersedes_name_memory() {
         .capture_turn("turn-2", "Actually my name is Bob.", "Thanks Bob")
         .expect("capture second turn");
 
-    let repo = MemoryRepository::new(&root);
-    let name_records = repo
+    let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+    let name_records = sqlite_repo
         .find_active_by_tag("name")
         .expect("find active name records");
     assert_eq!(name_records.len(), 1);
     assert!(name_records[0].text.contains("Bob"));
 
-    let all = repo.list_records().expect("list records");
+    let all = sqlite_repo
+        .list_records_filtered(true)
+        .expect("list records");
     let superseded = all
         .iter()
         .filter(|r| r.tags.iter().any(|t| t == "name") && r.status == MemoryStatus::Superseded)
@@ -86,7 +88,7 @@ fn contradiction_resolution_supersedes_name_memory() {
 #[test]
 fn contradiction_resolution_supersedes_preference_memory() {
     let root = temp_root("preference-contradiction");
-    let orchestrator = MemoryOrchestrator::new(&cfg_for(&root));
+    let orchestrator = MemoryOrchestrator::new(&cfg_for(&root)).expect("orchestrator init");
 
     orchestrator
         .capture_turn("turn-1", "I prefer tea.", "Noted")
@@ -95,15 +97,17 @@ fn contradiction_resolution_supersedes_preference_memory() {
         .capture_turn("turn-2", "Actually I prefer coffee.", "Noted")
         .expect("capture second preference");
 
-    let repo = MemoryRepository::new(&root);
-    let active_pref = repo
+    let sqlite_repo = SqliteMemoryRepository::new(&root).expect("sqlite repo");
+    let active_pref = sqlite_repo
         .find_active_by_tag("preference")
         .expect("find active preferences");
 
     assert_eq!(active_pref.len(), 1);
     assert!(active_pref[0].text.to_ascii_lowercase().contains("coffee"));
 
-    let all = repo.list_records().expect("list records");
+    let all = sqlite_repo
+        .list_records_filtered(true)
+        .expect("list records");
     let superseded_pref = all
         .iter()
         .filter(|r| {

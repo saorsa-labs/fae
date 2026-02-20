@@ -38,6 +38,14 @@ pub struct SqliteMemoryRepository {
     conn: Mutex<Connection>,
 }
 
+impl std::fmt::Debug for SqliteMemoryRepository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteMemoryRepository")
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SqliteMemoryRepository {
     /// Open (or create) the SQLite database at `{root_dir}/fae.db`.
     ///
@@ -299,7 +307,12 @@ impl SqliteMemoryRepository {
     }
 
     /// Supersede an old record with a new one (transactional).
-    pub fn supersede_record(&self, p: &SupersedeParams<'_>) -> Result<String, SqliteMemoryError> {
+    ///
+    /// Caller provides the kind explicitly via `SupersedeParams`.
+    pub fn supersede_record(
+        &self,
+        p: &SupersedeParams<'_>,
+    ) -> Result<MemoryRecord, SqliteMemoryError> {
         let conn = self.lock()?;
         let now = now_epoch_secs();
         let new_id_val = new_id(display_kind(p.kind));
@@ -360,7 +373,62 @@ impl SqliteMemoryRepository {
         .map_err(SqliteMemoryError::Sqlite)?;
 
         tx.commit().map_err(SqliteMemoryError::Sqlite)?;
-        Ok(new_id_val)
+
+        Ok(MemoryRecord {
+            id: new_id_val,
+            kind: p.kind,
+            status: MemoryStatus::Active,
+            text,
+            confidence: p.confidence.clamp(0.0, 1.0),
+            source_turn_id: p.source_turn_id.map(ToOwned::to_owned),
+            tags: p.tags.to_vec(),
+            supersedes: Some(p.old_id.to_owned()),
+            created_at: now,
+            updated_at: now,
+            importance_score: None,
+            stale_after_secs: None,
+            metadata: None,
+        })
+    }
+
+    /// Supersede by looking up the old record's kind automatically.
+    ///
+    /// Matches the JSONL `MemoryRepository::supersede_record` signature.
+    pub fn supersede_record_by_id(
+        &self,
+        old_id: &str,
+        new_text: &str,
+        confidence: f32,
+        source_turn_id: Option<&str>,
+        tags: &[String],
+        note: &str,
+    ) -> Result<MemoryRecord, SqliteMemoryError> {
+        // Look up the old record's kind.
+        let conn = self.lock()?;
+        let kind_str: String = conn
+            .query_row(
+                "SELECT kind FROM memory_records WHERE id = ?1",
+                params![old_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    SqliteMemoryError::NotFound(old_id.to_owned())
+                }
+                other => SqliteMemoryError::Sqlite(other),
+            })?;
+        drop(conn); // Release lock before calling supersede_record
+
+        let kind = str_to_kind(&kind_str);
+        self.supersede_record(&SupersedeParams {
+            old_id,
+            kind,
+            new_text,
+            confidence,
+            source_turn_id,
+            tags,
+            note,
+        })
     }
 
     /// Invalidate a record (set status to `invalidated`).
@@ -752,7 +820,7 @@ mod tests {
             .insert_record(MemoryKind::Profile, "Name: Dave", 0.95, None, &[])
             .expect("insert old");
 
-        let new_id = repo
+        let new_rec = repo
             .supersede_record(&SupersedeParams {
                 old_id: &old.id,
                 kind: MemoryKind::Profile,
@@ -766,7 +834,6 @@ mod tests {
 
         let records = repo.list_records_filtered(true).expect("list");
         let old_rec = records.iter().find(|r| r.id == old.id).expect("old record");
-        let new_rec = records.iter().find(|r| r.id == new_id).expect("new record");
 
         assert_eq!(old_rec.status, MemoryStatus::Superseded);
         assert_eq!(new_rec.status, MemoryStatus::Active);
