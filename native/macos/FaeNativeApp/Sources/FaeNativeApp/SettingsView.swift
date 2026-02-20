@@ -28,6 +28,16 @@ struct SettingsView: View {
                     Label("Models", systemImage: "cpu")
                 }
 
+            SettingsToolsTab(commandSender: commandSender)
+                .tabItem {
+                    Label("Tools", systemImage: "wrench.and.screwdriver")
+                }
+
+            SettingsChannelsTab(commandSender: commandSender)
+                .tabItem {
+                    Label("Channels", systemImage: "bubble.left.and.bubble.right")
+                }
+
             SettingsAboutTab(commandSender: commandSender)
                 .environmentObject(handoff)
                 .environmentObject(onboarding)

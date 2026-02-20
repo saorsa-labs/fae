@@ -1,3 +1,5 @@
 # Codex External Review
-**Status**: CODEX_REVIEW_FAILED (timeout or unavailable)
-**Grade**: N/A
+**Date**: 2026-02-20
+**Status**: UNAVAILABLE — Requires --uncommitted/--base/--commit flag; not compatible with current invocation
+
+## Grade: N/A

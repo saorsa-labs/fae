@@ -1,33 +1,24 @@
 # Security Review
 **Date**: 2026-02-20
-**Mode**: task (GSD)
-**Scope**: Swift/HTML/JS changes in Phase 6.3
-
-## Analysis
-
-### Potential Security Concerns
-
-**ContentView.swift - showOrbContextMenu():**
-- Uses `Selector(("showSettingsWindow:"))` with a string literal — MEDIUM: using string-based selectors bypasses Swift type safety. If the selector doesn't exist, this menu item will be silently inoperable (NSMenuItem won't validate). Not a security vulnerability but a robustness concern.
-- `objc_setAssociatedObject` with `NSArray` for handler retention — ACCEPTABLE: standard AppKit pattern for menu targets
-
-**ConversationBridgeController.swift:**
-- JS string interpolation with `escapeForJS()`: partial transcription text is user-derived data injected into JS — MEDIUM: relies entirely on `escapeForJS()` being correct. If `escapeForJS` misses quote/backslash escapes, XSS within WKWebView could occur. (WKWebView is sandboxed, but can still execute arbitrary JS in the web content context)
-- `window.appendStreamingBubble('\(escaped)')` — same concern as above
-- `window.showProgress('download', '\(escaped)', \(pct))` — `escaped` here is from userInfo `message` field (Rust-controlled). `pct` is integer arithmetic, safe.
-
-**conversation.html JS:**
-- `postToSwift('orbContextMenu', { x: e.clientX, y: e.clientY })` — passes mouse coordinates to Swift; coordinates are numbers, not user text — SAFE
-- `document.getElementById('scene').addEventListener('contextmenu', ...)` — standard event listener — SAFE
-- `e.preventDefault()` on contextmenu — ACCEPTABLE for custom menu
-- JS patching of `window.addMessage` — if any external script could override this first, the patch chain breaks — ACCEPTABLE (no external scripts)
+**Mode**: gsd-task
+**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/.../SettingsChannelsTab.swift, native/macos/.../SettingsToolsTab.swift
 
 ## Findings
 
-- [MEDIUM] `ConversationBridgeController.swift` - JS string interpolation of user-derived text (partial transcription, assistant streaming) depends on `escapeForJS()` correctness; recommend audit of that function to ensure it escapes single quotes, backslashes, and newlines
-- [LOW] `ContentView.swift` - `Selector(("showSettingsWindow:"))` uses string-based selector; no runtime validation. The menu item will silently fail if the responder chain has no handler. Not a security issue but a reliability concern.
-- [INFO] No hardcoded credentials, API keys, or secrets found in the diff
-- [INFO] No unsafe Rust code in this diff (Swift/JS only)
-- [INFO] No HTTP (non-TLS) endpoints introduced
+- [MEDIUM] src/host/handler.rs:238 - `CredentialRef::Plaintext(s.to_owned())` stores Discord bot_token as plaintext in config. This is an accepted design decision (user is warned in UI: "stored in your local config only"), but secrets are not encrypted at rest. This is pre-existing design per `CredentialRef` type design — not a regression introduced by this task.
+- [MEDIUM] src/host/handler.rs:273/291 - Same plaintext credential storage for WhatsApp access_token and verify_token.
+- [LOW] native/macos/.../SettingsChannelsTab.swift:48 - `SecureField` used for Discord bot token — correct. Tokens will not appear in UI.
+- [LOW] native/macos/.../SettingsChannelsTab.swift:73/77 - `SecureField` used for WhatsApp access token and verify token — correct.
+- [OK] native/macos/.../SettingsChannelsTab.swift:63 - Footnote warns user that tokens are "stored in your local config only" — appropriate disclosure.
+- [OK] No hardcoded credentials found in any changed file.
+- [OK] No new `unsafe` blocks introduced.
+- [OK] No HTTP URLs introduced (no network calls in this diff).
+- [OK] No command injection vectors (no `Command::new` in changed code).
+- [OK] Tool mode values are validated via `serde_json::from_value::<AgentToolMode>` — no injection possible.
+- [OK] CameraSkill removal has no security impact (reduces attack surface slightly).
+- [OK] `PermissionKind::Camera` remains in permissions.rs for future use — not a security issue.
+
+## Summary
+No new security vulnerabilities. The plaintext credential storage is a known pre-existing design tradeoff documented in the UI footnotes. `SecureField` is correctly used for all sensitive inputs.
 
 ## Grade: B+

@@ -1,39 +1,20 @@
 # Error Handling Review
 **Date**: 2026-02-20
-**Mode**: task (GSD)
-**Scope**: Swift/HTML/CSS changes in Phase 6.3
-
-## Analysis
-
-This is primarily a Swift + HTML/JS review. No Rust source changes in this task diff.
-
-### Swift Error Handling Patterns Checked
-
-**ContentView.swift - showOrbContextMenu():**
-- Uses `guard let window = windowState.window, let contentView = window.contentView else { return }` — GOOD: safe optional unwrapping
-- `objc_setAssociatedObject` key uses string literal "actionHandlers" — LOW risk, no error handling needed here
-
-**ConversationBridgeController.swift:**
-- `guard let userInfo = notification.userInfo, let text = userInfo["text"] as? String, !text.isEmpty else { return }` — GOOD: proper guard
-- `let isFinal = userInfo["is_final"] as? Bool ?? false` — GOOD: safe optional cast with fallback
-- `let filesComplete = userInfo["files_complete"] as? Int ?? 0` — GOOD: safe cast with default
-- `let filesTotal = userInfo["files_total"] as? Int ?? 0` — GOOD: safe cast with default
-- JS evaluation via `evaluateJS(...)` has no completion handler — ACCEPTABLE: fire-and-forget JS calls
-- `conversationBridge.webView?.evaluateJavaScript("...", completionHandler: nil)` — ACCEPTABLE in menu closure
-
-**WindowStateController.swift:**
-- `window?.orderOut(nil)` — GOOD: optional chaining, safe if window is nil
-- `window?.makeKeyAndOrderFront(nil)` — GOOD: optional chaining
-
-**conversation.html JS:**
-- `pct = Math.max(0, Math.min(100, pct || 0))` — GOOD: bounds clamping
-- `progressFill.style.width = pct + '%'` — no null check on DOM elements (minor)
-- `_origAddMessage = window.addMessage` — monkey-patching approach is functional but fragile if addMessage is undefined at patch time
+**Mode**: gsd-task
+**Scope**: src/host/handler.rs, src/personality.rs, src/skills/builtins.rs, native/macos/.../SettingsView.swift
 
 ## Findings
 
-- [LOW] `conversation.html` - `progressBar`, `progressFill`, `progressLabel` assumed non-null at var declaration time; no defensive null check if DOM not yet loaded (JS runs at end of body, so safe in practice)
-- [LOW] `conversation.html` - `window.addMessage` monkey-patch assumes original function exists; if `_origAddMessage` is undefined, calling it will throw
-- [LOW] `ConversationBridgeController.swift` - `evaluateJS` calls with interpolated JS strings (no sanitization beyond `escapeForJS`) — acceptable for internal data but note the risk if text contains backticks or template literal chars
+- [OK] src/host/handler.rs:224-317 - `patch_channel_config`: no `.unwrap()` or `.expect()`. All operations use `?` and `if let Some(...)`.
+- [OK] src/host/handler.rs:1500-1516 - `tool_mode` patch: `Err(_)` branch logs warning and continues cleanly — no panic.
+- [OK] src/host/handler.rs:307-310 - Unknown channel key returns `Ok(())` after warning — silent-ignore is appropriate for unknown patch keys, consistent with existing pattern.
+- [LOW] src/host/handler.rs:1512 - `Err(_)` silently discards the deserialization error detail. Could log `Err(e)` for better observability but not a regression — same pattern as the rest of the file.
+- [OK] src/skills/builtins.rs - Removal of `CameraSkill` has no error handling impact. No error types changed.
+- [OK] src/personality.rs - Comment-only change. No error handling impact.
+- [OK] All `.unwrap()` occurrences in handler.rs (lines 193, 656, 690, 724, 1050, 1062, 1096) are pre-existing, not part of this diff, and are in non-critical paths (`.unwrap_or()` or `.unwrap_or_default()` variants).
+- [OK] Test-only `.unwrap()` uses inside `#[cfg(test)]` block are acceptable per project policy.
 
-## Grade: A-
+## Summary
+No new error handling regressions introduced. The `patch_channel_config` method correctly uses `?` propagation, `if let Some(...)` for optional values, and `get_or_insert_with` for Option<Config> initialization. Consistent with existing codebase error patterns.
+
+## Grade: A

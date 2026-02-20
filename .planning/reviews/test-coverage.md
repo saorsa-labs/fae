@@ -1,39 +1,20 @@
 # Test Coverage Review
 **Date**: 2026-02-20
-**Mode**: task (GSD)
-
-## Statistics
-
-This task is entirely Swift + HTML/JS frontend changes. The Rust test suite is not affected.
-
-- Changed files: 5 Swift files + 1 HTML file
-- Rust test changes: None
-- Swift unit tests: Not applicable (no XCTest infrastructure visible in diff)
-- JS tests: Not applicable (no test infrastructure in conversation.html)
-
-## Assessment
-
-The changes implement UI/UX feedback features that are inherently difficult to unit test:
-- NSMenu creation and display (requires AppKit runtime)
-- WKWebView JS evaluation (requires WebKit runtime)
-- Visual CSS transitions (requires browser rendering)
-
-These types of changes are typically tested through:
-1. Manual UI testing
-2. Integration tests (UI test targets)
-3. Screenshot comparison tests
-
-The task spec does not require test coverage for these frontend-only changes.
-
-## Rust Test Status
-
-No Rust changes in this diff. Existing Rust tests are unaffected.
+**Mode**: gsd-task
+**Scope**: src/host/handler.rs, src/skills/builtins.rs, src/personality.rs
 
 ## Findings
 
-- [INFO] No unit tests added for new Swift functionality — acceptable for AppKit/WebKit UI code
-- [INFO] No Rust code changes — existing Rust test suite unaffected
-- [LOW] `MenuActionHandler.invoke()` is testable in isolation but lacks unit test
-- [LOW] `WindowStateController.hideWindow()` and `showWindow()` lack unit tests (acceptable for window management code)
+- [OK] src/skills/builtins.rs - Tests updated atomically with implementation: `assert_eq!(set.len(), 9)` → `assert_eq!(set.len(), 8)` and `assert_eq!(set.available(&store).len(), 9)` → `assert_eq!(set.available(&store).len(), 8)`. `all_builtins_have_nonempty_fields` and `available_skills_with_all_permissions` tests updated correctly.
+- [OK] src/personality.rs - Test comment and skill list updated: `camera` removed from the list of 8 skills verified as unavailable. Test remains structurally correct.
+- [MEDIUM] src/host/handler.rs - No new unit tests added for `patch_channel_config` or the `tool_mode` / `channels.enabled` patch arms. These are new code paths with no test coverage.
+- [LOW] `patch_channel_config` handles 7 distinct match arms — none covered by tests. Discovery of bugs requires manual testing or integration testing.
+- [OK] The existing test module (`#[cfg(test)]`) at handler.rs:1538 covers `grant_capability`, `deny_capability`, `onboarding`, and `config_get` — pre-existing tests unaffected.
 
-## Grade: B (no regression, appropriate for UI-only changes)
+## Summary
+Test updates for CameraSkill removal and personality.rs are correct and comprehensive. New Rust config.patch handlers (`tool_mode`, `channels.*`) lack unit tests — this is a gap but consistent with the existing test pattern for config.patch handlers in the file (most patch arms are not individually unit tested).
+
+## Recommendation
+Add a `patch_tool_mode` and `patch_channel_config_discord` test in handler.rs tests module to verify the new code paths.
+
+## Grade: B

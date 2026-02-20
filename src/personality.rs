@@ -263,7 +263,7 @@ mod tests {
 
         let prompt = assemble_prompt("fae", "", Some(&store), false, None);
         assert!(prompt.contains("Capabilities requiring permission"));
-        // All 9 built-in skills should be listed as unavailable.
+        // All 8 built-in skills should be listed as unavailable.
         for name in [
             "calendar",
             "contacts",
@@ -272,7 +272,6 @@ mod tests {
             "files",
             "notifications",
             "location",
-            "camera",
             "desktop_automation",
         ] {
             assert!(

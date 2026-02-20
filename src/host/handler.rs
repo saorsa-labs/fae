@@ -1,7 +1,7 @@
 //! Production host command handler for the embedded Fae runtime.
 
 use crate::approval::ToolApprovalRequest;
-use crate::config::SpeechConfig;
+use crate::config::{AgentToolMode, SpeechConfig};
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
 use crate::host::contract::EventEnvelope;
@@ -219,6 +219,101 @@ impl FaeDeviceTransferHandler {
                     .join(", ")
             ))
         })
+    }
+
+    /// Apply a `config.patch` for a nested channel key (Discord or WhatsApp).
+    fn patch_channel_config(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        use crate::config::{DiscordChannelConfig, WhatsAppChannelConfig};
+        use crate::credentials::CredentialRef;
+
+        let mut guard = self.lock_config()?;
+
+        match key {
+            "channels.discord.bot_token" => {
+                if let Some(s) = value.as_str() {
+                    let dc = guard
+                        .channels
+                        .discord
+                        .get_or_insert_with(DiscordChannelConfig::default);
+                    dc.bot_token = CredentialRef::Plaintext(s.to_owned());
+                }
+            }
+            "channels.discord.guild_id" => {
+                if let Some(s) = value.as_str() {
+                    let dc = guard
+                        .channels
+                        .discord
+                        .get_or_insert_with(DiscordChannelConfig::default);
+                    dc.guild_id = if s.is_empty() {
+                        None
+                    } else {
+                        Some(s.to_owned())
+                    };
+                }
+            }
+            "channels.discord.allowed_channel_ids" => {
+                if let Some(arr) = value.as_array() {
+                    let ids: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    let dc = guard
+                        .channels
+                        .discord
+                        .get_or_insert_with(DiscordChannelConfig::default);
+                    dc.allowed_channel_ids = ids;
+                }
+            }
+            "channels.whatsapp.access_token" => {
+                if let Some(s) = value.as_str() {
+                    let wa = guard
+                        .channels
+                        .whatsapp
+                        .get_or_insert_with(WhatsAppChannelConfig::default);
+                    wa.access_token = CredentialRef::Plaintext(s.to_owned());
+                }
+            }
+            "channels.whatsapp.phone_number_id" => {
+                if let Some(s) = value.as_str() {
+                    let wa = guard
+                        .channels
+                        .whatsapp
+                        .get_or_insert_with(WhatsAppChannelConfig::default);
+                    wa.phone_number_id = s.to_owned();
+                }
+            }
+            "channels.whatsapp.verify_token" => {
+                if let Some(s) = value.as_str() {
+                    let wa = guard
+                        .channels
+                        .whatsapp
+                        .get_or_insert_with(WhatsAppChannelConfig::default);
+                    wa.verify_token = CredentialRef::Plaintext(s.to_owned());
+                }
+            }
+            "channels.whatsapp.allowed_numbers" => {
+                if let Some(arr) = value.as_array() {
+                    let nums: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    let wa = guard
+                        .channels
+                        .whatsapp
+                        .get_or_insert_with(WhatsAppChannelConfig::default);
+                    wa.allowed_numbers = nums;
+                }
+            }
+            _ => {
+                warn!(key, "config.patch: unknown channel key, ignored");
+                return Ok(());
+            }
+        }
+
+        drop(guard);
+        self.save_config()?;
+        info!(key, "config.patch applied");
+        Ok(())
     }
 }
 
@@ -1401,6 +1496,36 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     self.save_config()?;
                     info!(onboarded = v, "config.patch applied: onboarded");
                 }
+            }
+            "tool_mode" => {
+                if let Some(s) = value.as_str() {
+                    match serde_json::from_value::<AgentToolMode>(serde_json::Value::String(
+                        s.to_owned(),
+                    )) {
+                        Ok(mode) => {
+                            let mut guard = self.lock_config()?;
+                            guard.llm.tool_mode = mode;
+                            drop(guard);
+                            self.save_config()?;
+                            info!(?mode, "config.patch applied: tool_mode");
+                        }
+                        Err(_) => {
+                            warn!(key, value = s, "config.patch: invalid tool_mode value");
+                        }
+                    }
+                }
+            }
+            "channels.enabled" => {
+                if let Some(v) = value.as_bool() {
+                    let mut guard = self.lock_config()?;
+                    guard.channels.enabled = v;
+                    drop(guard);
+                    self.save_config()?;
+                    info!(enabled = v, "config.patch applied: channels.enabled");
+                }
+            }
+            k if k.starts_with("channels.discord.") || k.starts_with("channels.whatsapp.") => {
+                self.patch_channel_config(key, value)?;
             }
             _ => {
                 warn!(key, "config.patch: unknown key, ignored");

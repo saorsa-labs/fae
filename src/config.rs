@@ -265,7 +265,7 @@ pub struct LlmConfig {
     ///
     /// When `true` and `gguf_file` is empty, the model is loaded via
     /// `VisionModelBuilder` with in-situ quantisation instead of `GgufModelBuilder`.
-    /// This enables image understanding through the camera skill.
+    /// This enables image understanding capabilities.
     #[serde(default)]
     pub enable_vision: bool,
     /// Tool capability mode for the embedded agent harness.

@@ -1,30 +1,25 @@
 # Quality Patterns Review
 **Date**: 2026-02-20
-**Mode**: task (GSD)
+**Mode**: gsd-task
+**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/*.swift
 
 ## Good Patterns Found
 
-### Swift
-- `MenuActionHandler: NSObject` with `@objc func invoke()` — correct AppKit target-action pattern for closures
-- `final class MenuActionHandler` — correctly marked final
-- `[weak self]` capture in all notification/Task closures — correct memory management
-- `[weak conversation, conversationBridge]` in menu closure — correct capture list
-- `[weak windowState]` in menu closure — correct capture list
-- Optional chaining throughout (`window?.orderOut`, `window?.makeKeyAndOrderFront`, `webView?.evaluateJavaScript`)
-- `guard let` for early-exit on optional unwrapping
-- Inactivity timer management: `cancelInactivityTimer()` on hide, `startInactivityTimer()` on show
-
-### JavaScript
-- Progress bar bounds clamping `Math.max(0, Math.min(100, ...))`
-- Exponential moving average for audio level smoothing (`smoothedAudioLevel * 0.7 + rms * 0.3`)
-- `clearTimeout` before setting new timer to prevent duplicate timers
-- `e.preventDefault()` on contextmenu to suppress default browser/WKWebView context menu
-- Defer progress bar DOM reset until after CSS transition completes (500ms timeout)
+- Uses `thiserror`/`anyhow` error propagation via `?` consistently throughout new code.
+- `get_or_insert_with(T::default)` is idiomatic Rust for optional config initialization.
+- `CredentialRef::Plaintext` wraps tokens in a typed credential enum rather than raw `String`.
+- `@AppStorage` used for persistent UI state — correct SwiftUI pattern.
+- `SecureField` for sensitive inputs — correct security-conscious UI pattern.
+- Conditional rendering (`if channelsEnabled`) to hide irrelevant sections — good UX pattern.
+- `MARK: -` comments in Swift separating Discord/WhatsApp sections — good code organization.
+- Test counts updated atomically with implementation changes — no drift.
 
 ## Anti-Patterns Found
 
-- [MEDIUM] **JS Monkey-Patching**: `var _origAddMessage = window.addMessage; window.addMessage = function(role, text) { ... }` — monkey-patching global functions is fragile and an anti-pattern. The original `addMessage` is captured before this patch block runs, which means load order matters. Better approach: use a custom event or a proper state management pattern.
-- [LOW] **String-based Selector**: `Selector(("showSettingsWindow:"))` — bypasses Swift type safety. The double parentheses suggest this was intentional to avoid a compiler warning, but it's still a fragile pattern.
-- [LOW] **Magic Strings in JS**: Color values like `rgba(180, 168, 196, 0.6)` in progress bar CSS are hardcoded rather than referencing CSS custom properties/variables used elsewhere in the document.
+- [LOW] The `Err(_)` at handler.rs:1512 discards error context. Minor — could use `Err(e)` with `warn!(error = ?e, ...)` for better observability.
+- [LOW] `saveDiscordSettings()` and `saveWhatsAppSettings()` skip empty strings but cannot clear previously set values. This is a UX limitation, not a code quality anti-pattern per se, but worth noting.
+- [OK] No string error types introduced.
+- [OK] No new `impl Error` without proper `thiserror` usage.
+- [OK] No raw `HashMap<String, String>` for config — proper typed structs used throughout.
 
-## Grade: A-
+## Grade: A

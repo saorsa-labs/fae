@@ -1,57 +1,22 @@
 # Code Quality Review
 **Date**: 2026-02-20
-**Mode**: task (GSD)
-
-## Analysis
-
-### ContentView.swift
-
-**MenuActionHandler class:**
-- Clean, well-scoped helper class for NSMenuItem action targets
-- Uses `@escaping () -> Void` closure — GOOD
-- `@objc func invoke()` bridging pattern — CORRECT for AppKit target-action
-- Class is `final` — GOOD (no subclassing needed)
-- Missing documentation comment — LOW
-
-**showOrbContextMenu():**
-- Clean NSMenu construction
-- `objc_setAssociatedObject` for lifetime management is idiomatic AppKit — GOOD
-- `window.mouseLocationOutsideOfEventStream` for menu position — GOOD (uses correct API)
-- The "Hide Fae" item uses `keyEquivalent: "h"` — NOTE: `Cmd+H` is the system-wide hide shortcut. NSMenuItem key equivalents without explicit `keyEquivalentModifierMask` default to `Cmd`. This may conflict with system hide shortcut if the key mask isn't set to `.init(rawValue: 0)` for no modifier. Worth checking.
-
-### ConversationBridgeController.swift
-
-- Partial transcription handling is clean and well-structured
-- `handlePartialTranscription(text:)` is a good single-responsibility function
-- `appendStreamingBubble` / `finalizeStreamingBubble` separation is logical
-- Progress bar wiring is clean: extract fields, compute pct, call JS
-- `let pct = filesTotal > 0 ? (100 * filesComplete / filesTotal) : 0` — GOOD: division-by-zero guard
-
-### ConversationWebView.swift
-
-- Clean extension of existing `onOrbContextMenu` callback pattern — consistent with existing `onOrbClicked`
-- `updateNSView` correctly propagates the callback — GOOD
-- Handler registration in `contentController.add` is correctly updated — GOOD
-
-### WindowStateController.swift
-
-- `hideWindow()` and `showWindow()` are clean, minimal additions
-- `cancelInactivityTimer()` called in `hideWindow()` — GOOD: prevents timer firing on hidden window
-- Missing `@MainActor` annotation consideration (though likely called from main thread)
-
-### conversation.html JS
-
-- `window.setSubtitlePartial` correctly avoids starting auto-hide timer
-- `pendingAssistantText` accumulation with space joining is simple and correct
-- `Math.max(0, Math.min(100, pct || 0))` clamping — GOOD
-- `setTimeout` for progress bar reset after fade is correct
-- Monkey-patching `window.addMessage` via `_origAddMessage` — FRAGILE pattern, should use event-based approach instead
+**Mode**: gsd-task
+**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/.../SettingsToolsTab.swift, native/macos/.../SettingsChannelsTab.swift, native/macos/.../SettingsView.swift
 
 ## Findings
 
-- [MEDIUM] `ContentView.swift:77` — `hideItem` has `keyEquivalent: "h"` which may conflict with system `Cmd+H` hide shortcut. Should use `keyEquivalentModifierMask = []` or empty string for key equivalent.
-- [LOW] `conversation.html` — `window.addMessage` monkey-patching is fragile. If load order changes, `_origAddMessage` could be undefined.
-- [LOW] `MenuActionHandler` class lacks documentation comment (per zero-tolerance docs standard).
-- [LOW] `showOrbContextMenu()` lacks documentation comment.
+- [LOW] src/host/handler.rs:224-317 - `patch_channel_config` has notable repetition: the `get_or_insert_with(DiscordChannelConfig::default)` call appears 3 times for Discord and 4 times for WhatsApp. Could extract a helper, but this is idiomatic Rust for this pattern and the repetition is clear.
+- [OK] No TODO/FIXME/HACK comments introduced.
+- [OK] No `#[allow(clippy::*)]` suppressions added.
+- [OK] No unused imports or variables.
+- [OK] `AgentToolMode` import added to handler.rs is used — no dead import.
+- [OK] Swift files follow consistent patterns from existing tabs (SettingsGeneralTab, SettingsAboutTab patterns).
+- [OK] `@AppStorage` used correctly for persisted UI state (toolMode, channelsEnabled).
+- [OK] `@State` used correctly for transient form fields (Discord/WhatsApp token strings).
+- [LOW] native/.../SettingsChannelsTab.swift:99-120, 123-151 — `saveDiscordSettings()` and `saveWhatsAppSettings()` only send config.patch if fields are non-empty. Empty string for guild_id is not sent — means clearing a guild_id after setting it is not possible through the UI without additional "clear" functionality.
+- [LOW] native/.../SettingsChannelsTab.swift — No validation of Discord bot token format or WhatsApp phone number ID format. Could be a UX improvement but not a functional bug.
+- [OK] Tab ordering in SettingsView: General, Models, Tools, Channels, About, (Developer) — matches spec.
+- [OK] CameraSkill removal is clean — macro, registration, and tests all updated consistently.
+- [OK] `src/personality.rs` test comment updated accurately to reflect 8 skills (was 9).
 
 ## Grade: A-

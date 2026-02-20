@@ -1,40 +1,18 @@
 # Type Safety Review
 **Date**: 2026-02-20
-**Mode**: task (GSD)
-
-## Analysis
-
-### Swift Type Safety
-
-**ContentView.swift:**
-- `Selector(("showSettingsWindow:"))` — string-based selector bypasses Swift type system — MEDIUM: The selector is not validated at compile time. If `showSettingsWindow:` doesn't exist in the responder chain, it silently fails (NSMenuItem validates).
-- `objc_setAssociatedObject(menu, "actionHandlers", [resetHandler, hideHandler] as NSArray, .OBJC_ASSOCIATION_RETAIN)` — casting to `NSArray` loses type info — ACCEPTABLE: standard AppKit pattern
-- All other Swift is properly typed
-
-**ConversationBridgeController.swift:**
-- `userInfo["files_complete"] as? Int ?? 0` — safe optional cast — GOOD
-- `userInfo["files_total"] as? Int ?? 0` — safe optional cast — GOOD
-- `userInfo["message"] as? String ?? "Loading…"` — safe optional cast with fallback — GOOD
-- `userInfo["is_final"] as? Bool ?? false` — safe optional cast with fallback — GOOD (this was the old guard, now properly defaulted)
-- `(100 * filesComplete / filesTotal)` — integer arithmetic, potential truncation (not overflow), intentional — ACCEPTABLE
-
-**ConversationWebView.swift:**
-- `var onOrbContextMenu: (() -> Void)?` — properly optional typed — GOOD
-- All callback properties are consistently typed
-
-**WindowStateController.swift:**
-- `window?.orderOut(nil)` — properly typed AppKit call — GOOD
-- `window?.makeKeyAndOrderFront(nil)` — properly typed — GOOD
-
-### JavaScript (Dynamically Typed)
-- JS type safety is inherently limited
-- `pct || 0` fallback handles undefined/null/NaN — GOOD
-- `Math.max(0, Math.min(100, ...))` clamping prevents out-of-range values — GOOD
+**Mode**: gsd-task
+**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/.../SettingsToolsTab.swift, native/macos/.../SettingsChannelsTab.swift
 
 ## Findings
 
-- [MEDIUM] `ContentView.swift` — `Selector(("showSettingsWindow:"))` bypasses Swift type safety; consider using `#selector` if the responder is known, or at minimum add a comment explaining why string-based selector is used
-- [INFO] No unsafe type casts, transmutes, or force downcasts in the diff
-- [INFO] No integer overflow risk identified (Swift uses checked arithmetic by default in debug)
+- [OK] src/host/handler.rs:1502-1504 - `AgentToolMode` is deserialized via `serde_json::from_value::<AgentToolMode>()` — fully typed, no string comparison against raw literals.
+- [OK] src/host/handler.rs:238/273/291 - `CredentialRef::Plaintext(s.to_owned())` — typed assignment to a `CredentialRef` field, no type coercion issues.
+- [OK] `get_or_insert_with(DiscordChannelConfig::default)` returns `&mut DiscordChannelConfig` — mutable reference correctly used to update fields.
+- [OK] `get_or_insert_with(WhatsAppChannelConfig::default)` — same, for `&mut WhatsAppChannelConfig`.
+- [OK] Swift: `@AppStorage("toolMode") private var toolMode: String` — typed storage. The value set is always from the `toolModes` array, so type safety is maintained at the UI level.
+- [OK] Swift: `@AppStorage("channelsEnabled") private var channelsEnabled: Bool` — correctly typed as Bool, matched with `channels.enabled` patch which passes a bool value.
+- [LOW] native/.../SettingsChannelsTab.swift:118 - `payload: ["key": "channels.discord.allowed_channel_ids", "value": channelIds]` — `channelIds` is `[String]`, passed as `Any` in the `[String: Any]` dictionary. Type safety depends on the `sendCommand` implementation correctly serializing arrays. This is consistent with existing usage in the codebase.
+- [OK] No use of `as!` forced casts in changed Swift code.
+- [OK] No `Any` coercions that could cause runtime type panics.
 
-## Grade: A-
+## Grade: A

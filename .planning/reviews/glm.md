@@ -1,3 +1,5 @@
-Error: Claude Code cannot be launched inside another Claude Code session.
-Nested sessions share runtime resources and will crash all active sessions.
-To bypass this check, unset the CLAUDECODE environment variable.
+# GLM-4.7 External Review
+**Date**: 2026-02-20
+**Status**: UNAVAILABLE — External CLI blocked in nested Claude Code session
+
+## Grade: N/A

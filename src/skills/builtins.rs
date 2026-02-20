@@ -113,17 +113,6 @@ user's location with external services without explicit consent.",
 );
 
 define_skill!(
-    CameraSkill,
-    name: "camera",
-    description: "Camera — capture photos and analyse visual input",
-    permissions: [PermissionKind::Camera],
-    prompt: "You have access to the device camera and can genuinely see and understand images. \
-When a photo is captured, it is passed directly to your vision system — you describe \
-what you actually see. You can read text in images, identify objects, describe scenes, \
-scan documents and QR codes. Always indicate when the camera is active. Ask before capturing.",
-);
-
-define_skill!(
     DesktopAutomationSkill,
     name: "desktop_automation",
     description: "Desktop control — screenshots, window management, AppleScript",
@@ -144,7 +133,6 @@ pub fn builtin_skills() -> SkillSet {
         Box::new(FilesSkill),
         Box::new(NotificationsSkill),
         Box::new(LocationSkill),
-        Box::new(CameraSkill),
         Box::new(DesktopAutomationSkill),
     ])
 }
@@ -159,7 +147,7 @@ mod tests {
     #[test]
     fn all_builtins_have_nonempty_fields() {
         let set = builtin_skills();
-        assert_eq!(set.len(), 9);
+        assert_eq!(set.len(), 8);
 
         for skill in set.all() {
             assert!(!skill.name().is_empty(), "skill name empty");
@@ -222,7 +210,7 @@ mod tests {
             store.grant(*kind);
         }
 
-        assert_eq!(set.available(&store).len(), 9);
+        assert_eq!(set.available(&store).len(), 8);
     }
 
     #[test]
