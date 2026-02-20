@@ -1,29 +1,40 @@
-# Type Safety Review — Phase 6.2 (User Name Personalization)
+# Type Safety Review
+**Date**: 2026-02-20
+**Mode**: task (GSD)
 
-**Reviewer:** Type Safety Analyst
-**Scope:** Phase 6.2 changes — onboarding user name feature
+## Analysis
+
+### Swift Type Safety
+
+**ContentView.swift:**
+- `Selector(("showSettingsWindow:"))` — string-based selector bypasses Swift type system — MEDIUM: The selector is not validated at compile time. If `showSettingsWindow:` doesn't exist in the responder chain, it silently fails (NSMenuItem validates).
+- `objc_setAssociatedObject(menu, "actionHandlers", [resetHandler, hideHandler] as NSArray, .OBJC_ASSOCIATION_RETAIN)` — casting to `NSArray` loses type info — ACCEPTABLE: standard AppKit pattern
+- All other Swift is properly typed
+
+**ConversationBridgeController.swift:**
+- `userInfo["files_complete"] as? Int ?? 0` — safe optional cast — GOOD
+- `userInfo["files_total"] as? Int ?? 0` — safe optional cast — GOOD
+- `userInfo["message"] as? String ?? "Loading…"` — safe optional cast with fallback — GOOD
+- `userInfo["is_final"] as? Bool ?? false` — safe optional cast with fallback — GOOD (this was the old guard, now properly defaulted)
+- `(100 * filesComplete / filesTotal)` — integer arithmetic, potential truncation (not overflow), intentional — ACCEPTABLE
+
+**ConversationWebView.swift:**
+- `var onOrbContextMenu: (() -> Void)?` — properly optional typed — GOOD
+- All callback properties are consistently typed
+
+**WindowStateController.swift:**
+- `window?.orderOut(nil)` — properly typed AppKit call — GOOD
+- `window?.makeKeyAndOrderFront(nil)` — properly typed — GOOD
+
+### JavaScript (Dynamically Typed)
+- JS type safety is inherently limited
+- `pct || 0` fallback handles undefined/null/NaN — GOOD
+- `Math.max(0, Math.min(100, ...))` clamping prevents out-of-range values — GOOD
 
 ## Findings
 
-### 1. PASS — Option<String> semantics correct
-`pub user_name: Option<String>` with `#[serde(default)]` — deserializes to `None` when absent from TOML. Correct.
+- [MEDIUM] `ContentView.swift` — `Selector(("showSettingsWindow:"))` bypasses Swift type safety; consider using `#selector` if the responder is known, or at minimum add a comment explaining why string-based selector is used
+- [INFO] No unsafe type casts, transmutes, or force downcasts in the diff
+- [INFO] No integer overflow risk identified (Swift uses checked arithmetic by default in debug)
 
-### 2. PASS — Function signature change is type-checked
-`assemble_prompt` and `effective_system_prompt` now take `Option<&str>` which is the correct borrowed type for an optional string reference. All 10+ call sites updated and pass `None` (or `Some(name)` in the new test).
-
-### 3. PASS — Swift typed cast with nil guard
-`notification.userInfo?["name"] as? String` — conditional cast with optional chaining, guarded by `guard let name = ... else { return }`. No force unwrap.
-
-### 4. PASS — No type coercions or unsafe conversions
-`name.to_owned()` is the correct String-from-&str conversion. No transmutes or unsafe.
-
-### 5. PASS — Enum variant serde renaming is correct
-`#[serde(rename = "onboarding.set_user_name")]` matches the wire protocol string `"onboarding.set_user_name"` used in Swift dispatch. Consistent.
-
-### 6. PASS — must_use retained on assemble_prompt
-The `#[must_use]` attribute on `assemble_prompt` ensures callers cannot silently discard the return value.
-
-## Verdict
-**PASS — No type safety issues**
-
-All type changes are backward compatible for existing call sites (new parameter with None default). New parameter is correctly typed.
+## Grade: A-

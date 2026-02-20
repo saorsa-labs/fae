@@ -156,6 +156,18 @@ final class WindowStateController: ObservableObject {
         transitionToCollapsed()
     }
 
+    // MARK: - Visibility
+
+    func hideWindow() {
+        cancelInactivityTimer()
+        window?.orderOut(nil)
+    }
+
+    func showWindow() {
+        window?.makeKeyAndOrderFront(nil)
+        startInactivityTimer()
+    }
+
     // MARK: - Helpers
 
     private func applyModeToWindow() {

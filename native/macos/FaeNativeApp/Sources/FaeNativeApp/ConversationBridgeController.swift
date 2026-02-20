@@ -48,18 +48,22 @@ final class ConversationBridgeController: ObservableObject {
     private func subscribe() {
         let center = NotificationCenter.default
 
-        // User transcription (final segments only → show in conversation)
+        // User transcription (partial + final segments)
         observations.append(
             center.addObserver(
                 forName: .faeTranscription, object: nil, queue: .main
             ) { [weak self] notification in
                 guard let userInfo = notification.userInfo,
                       let text = userInfo["text"] as? String,
-                      let isFinal = userInfo["is_final"] as? Bool,
-                      isFinal, !text.isEmpty
+                      !text.isEmpty
                 else { return }
+                let isFinal = userInfo["is_final"] as? Bool ?? false
                 Task { @MainActor [weak self] in
-                    self?.handleUserTranscription(text: text)
+                    if isFinal {
+                        self?.handleUserTranscription(text: text)
+                    } else {
+                        self?.handlePartialTranscription(text: text)
+                    }
                 }
             }
         )
@@ -133,6 +137,11 @@ final class ConversationBridgeController: ObservableObject {
 
     // MARK: - Handlers
 
+    private func handlePartialTranscription(text: String) {
+        let escaped = escapeForJS(text)
+        evaluateJS("window.setSubtitlePartial && window.setSubtitlePartial('\(escaped)');")
+    }
+
     private func handleUserTranscription(text: String) {
         let escaped = escapeForJS(text)
         evaluateJS("window.addMessage && window.addMessage('user', '\(escaped)');")
@@ -150,9 +159,14 @@ final class ConversationBridgeController: ObservableObject {
             let fullText = streamingAssistantText
             streamingAssistantText = ""
             let escaped = escapeForJS(fullText)
-            evaluateJS("window.addMessage && window.addMessage('assistant', '\(escaped)');")
+            // Finalize streaming bubble and show final message
+            evaluateJS("window.finalizeStreamingBubble && window.finalizeStreamingBubble('\(escaped)');")
             // Dual-write: push completed message to native store.
             conversationController?.appendMessage(role: .assistant, content: fullText)
+        } else {
+            // Stream partial sentence to the orb subtitle
+            let escaped = escapeForJS(text)
+            evaluateJS("window.appendStreamingBubble && window.appendStreamingBubble('\(escaped)');")
         }
     }
 
@@ -192,9 +206,12 @@ final class ConversationBridgeController: ObservableObject {
             let model = userInfo["model_name"] as? String ?? "models"
             appendStatusMessage("Downloading \(model)...")
         case "aggregate_progress":
-            // Progress updates are frequent — skip injecting into the conversation
-            // to avoid flooding the UI. The orb thinking animation provides feedback.
-            break
+            let filesComplete = userInfo["files_complete"] as? Int ?? 0
+            let filesTotal = userInfo["files_total"] as? Int ?? 0
+            let message = userInfo["message"] as? String ?? "Loading…"
+            let pct = filesTotal > 0 ? Int(100.0 * Double(filesComplete) / Double(filesTotal)) : 0
+            let escaped = escapeForJS(message)
+            evaluateJS("window.showProgress && window.showProgress('download', '\(escaped)', \(pct));")
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
             appendStatusMessage("Loading \(model)...")
@@ -211,6 +228,7 @@ final class ConversationBridgeController: ObservableObject {
     private func handleRuntimeState(event: String, userInfo: [AnyHashable: Any]) {
         switch event {
         case "runtime.started":
+            evaluateJS("window.hideProgress && window.hideProgress();")
             appendStatusMessage("Ready to talk!")
         case "runtime.error":
             let payload = userInfo["payload"] as? [String: Any] ?? [:]

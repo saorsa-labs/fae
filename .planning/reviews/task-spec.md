@@ -1,47 +1,83 @@
-# Task Assessor — Phase 6.2 (User Name Personalization)
+# Task Specification Review
+**Date**: 2026-02-20
+**Mode**: task (GSD)
+**Phase**: 6.3 — UX Feedback
+**Task**: All tasks 1-7 (final task = 7, all completed)
 
-**Reviewer:** Task Assessor
-**Scope:** Was the Phase 6.2 task correctly implemented?
+## Phase 6.3 Goals vs Implementation
 
-## Task Specification
+### Task 1 — Progress JS API and CSS skeleton
+**Goal:** Add `window.showProgress(stage, message, pct)` and `window.hideProgress()` to conversation.html
 
-Phase 6.2 — Personalization & User Name:
-- Capture user name from Contacts Me Card during onboarding
-- Persist to config and memory system
-- Inject into system prompt so LLM addresses user by name
-- Expose via `onboarding.set_user_name` command
+- [x] `#progressBar` div added with proper HTML structure
+- [x] CSS for `.progress-bar`, `.progress-bar-track`, `.progress-bar-fill`, `.progress-bar-label` added
+- [x] `window.showProgress(stage, message, pct)` implemented with clamping
+- [x] `window.hideProgress()` implemented with fade-out and reset
+- [x] `window.setProgress(pct)` convenience function added
+- [x] `body[data-window-mode="collapsed"] .progress-bar { display: none !important }` added to CSS
+- **Result: COMPLETE**
 
-## Assessment
+### Task 2 — Wire aggregate_progress to JS
+**Goal:** ConversationBridgeController handles `aggregate_progress` and calls `window.showProgress`
 
-### 1. PASS — onboarding.set_user_name command implemented
-Command registered in `CommandName` enum, routed in `channel.rs`, handled by `set_user_name()` in `handler.rs`. Wire protocol string matches Swift dispatch.
+- [x] `aggregate_progress` case now extracts `files_complete`, `files_total`, `message`
+- [x] Computes `pct = filesTotal > 0 ? (100 * filesComplete / filesTotal) : 0`
+- [x] Calls `window.showProgress('download', escaped, pct)`
+- [x] `runtime.started` event calls `window.hideProgress()`
+- **Result: COMPLETE**
 
-### 2. PASS — Validation: empty/whitespace names rejected
-`parse_non_empty_field` rejects blank names with a clear error. Tested.
+### Task 3 — Partial STT transcription display
+**Goal:** Live partial transcription as faded subtitle
 
-### 3. PASS — Persisted to config.toml
-`SpeechConfig.user_name: Option<String>` with `#[serde(default)]`. Saved via `save_config()`. Tests verify disk persistence.
+- [x] `window.setSubtitlePartial(text)` added to conversation.html
+- [x] Sets opacity 0.5, italic style, clears Fae subtitle
+- [x] Does NOT start auto-hide timer (`clearTimeout(subUserTimer)`)
+- [x] `window.addMessage` patched to clear partial styling on final
+- [x] `ConversationBridgeController` removes `isFinal` guard, dispatches to `handlePartialTranscription` or `handleUserTranscription`
+- **Result: COMPLETE**
 
-### 4. PASS — Persisted to MemoryStore as PrimaryUser
-`store.save_primary_user(&user)` called with updated or new PrimaryUser. Failure is non-fatal (warning).
+### Task 4 — Incremental assistant streaming display
+**Goal:** Show each assistant sentence as it arrives
 
-### 5. PASS — Injected into system prompt
-`assemble_prompt` accepts `user_name: Option<&str>`. When Some and non-empty, injects:
-`"User context:\n- The user's name is {name}. Address them by name naturally when appropriate."`
+- [x] `window.appendStreamingBubble(text)` added — accumulates and shows in subtitle
+- [x] `window.finalizeStreamingBubble(fullText)` added — finalizes bubble
+- [x] `ConversationBridgeController.handleAssistantText()` calls `appendStreamingBubble` for partial, `finalizeStreamingBubble` for final
+- **Result: COMPLETE**
 
-### 6. PASS — Swift integration complete
-`OnboardingController.complete()` posts `faeOnboardingSetUserName` before `faeOnboardingComplete`.
-`HostCommandBridge` observes the notification and dispatches to Rust.
+### Task 5 — Audio level visualization
+**Goal:** Hook audio level to orb animation
 
-### 7. PASS — All existing call sites updated
-`effective_system_prompt`, `effective_system_prompt_with_vision`, `assemble_prompt` — all callers pass `None` as default, maintaining backward compatibility.
+- [x] `window.setAudioLevel(rms)` added to conversation.html
+- [x] Exponential moving average smoothing applied
+- [x] Only drives urgency during listening mode
+- **Note:** Task 5 completion is in this diff under conversation.html
 
-### 8. SHOULD FIX — Formatting violations in committed code
-Three rustfmt violations present in the committed state. Working-tree fixes exist. Must commit.
+### Task 6 — Orb right-click context menu
+**Goal:** Right-click on orb shows native NSMenu
 
-## Verdict
-**PASS — Task requirements fully met**
+- [x] `contextmenu` event listener added to `#scene` in conversation.html
+- [x] `postToSwift('orbContextMenu', ...)` called
+- [x] `ConversationWebView.swift` registers `orbContextMenu` message handler
+- [x] `ConversationWebView.swift` wires `onOrbContextMenu` callback
+- [x] `ContentView.swift` implements `showOrbContextMenu()` with Settings, Reset, Hide, Quit items
+- [x] `MenuActionHandler` helper class for closure-based NSMenuItem targets
+- **Result: COMPLETE**
 
-| # | Severity | Finding |
-|---|----------|---------|
-| 8 | SHOULD FIX | Formatting violations need to be committed |
+### Task 7 — WindowStateController.hideWindow/showWindow
+**Goal:** Add hide/show window methods for use by context menu
+
+- [x] `hideWindow()` added with `cancelInactivityTimer()` + `window?.orderOut(nil)`
+- [x] `showWindow()` added with `window?.makeKeyAndOrderFront(nil)` + `startInactivityTimer()`
+- **Result: COMPLETE**
+
+## Scope Compliance
+
+All changes are confined to Swift + HTML/JS frontend as specified. No Rust changes were made (as required by phase spec — "No Rust changes required").
+
+## Findings
+
+- [INFO] All 7 tasks appear to be fully implemented per spec
+- [INFO] No scope creep identified — changes are within stated boundaries
+- [LOW] Task 5 (audio level) implementation in conversation.html is correct but `urgencyLevel` variable is set but its consumption by the orb animation engine wasn't in scope to verify in this diff alone
+
+## Grade: A

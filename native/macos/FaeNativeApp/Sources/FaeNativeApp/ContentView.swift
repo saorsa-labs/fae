@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -9,6 +10,8 @@ struct ContentView: View {
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @State private var viewLoaded = false
+
+    private static var menuHandlersKey: UInt8 = 0
 
     var body: some View {
         ZStack {
@@ -34,6 +37,75 @@ struct ContentView: View {
         )
         .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
+    }
+
+    // MARK: - Context Menu
+
+    private func showOrbContextMenu() {
+        guard let window = windowState.window,
+              let contentView = window.contentView else { return }
+
+        let menu = NSMenu()
+
+        // Settings — SwiftUI Settings scene uses the AppKit responder chain
+        // selector "showSettingsWindow:" which is the standard macOS action.
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: Selector(("showSettingsWindow:")),
+            keyEquivalent: ","
+        )
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
+        // Reset Conversation
+        let resetHandler = MenuActionHandler { [conversation, conversationBridge] in
+            conversation.clearMessages()
+            conversationBridge.webView?.evaluateJavaScript(
+                "window.clearMessages && window.clearMessages();",
+                completionHandler: nil
+            )
+        }
+        let resetItem = NSMenuItem(
+            title: "Reset Conversation",
+            action: #selector(MenuActionHandler.invoke),
+            keyEquivalent: ""
+        )
+        resetItem.target = resetHandler
+        menu.addItem(resetItem)
+
+        // Hide Fae
+        let hideHandler = MenuActionHandler { [windowState] in
+            windowState.hideWindow()
+        }
+        let hideItem = NSMenuItem(
+            title: "Hide Fae",
+            action: #selector(MenuActionHandler.invoke),
+            keyEquivalent: ""
+        )
+        hideItem.target = hideHandler
+        menu.addItem(hideItem)
+
+        menu.addItem(.separator())
+
+        // Quit
+        let quitItem = NSMenuItem(
+            title: "Quit Fae",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        menu.addItem(quitItem)
+
+        // Retain handlers for the lifetime of the menu via associated object
+        objc_setAssociatedObject(
+            menu, &ContentView.menuHandlersKey,
+            [resetHandler, hideHandler] as NSArray,
+            .OBJC_ASSOCIATION_RETAIN
+        )
+
+        // Show at mouse location
+        let mouseLocation = window.mouseLocationOutsideOfEventStream
+        menu.popUp(positioning: nil, at: mouseLocation, in: contentView)
     }
 
     // MARK: - Conversation View
@@ -67,6 +139,9 @@ struct ContentView: View {
                     if windowState.mode == .collapsed {
                         windowState.transitionToCompact()
                     }
+                },
+                onOrbContextMenu: {
+                    showOrbContextMenu()
                 }
             )
             .opacity(viewLoaded ? 1 : 0)
@@ -84,5 +159,18 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
+    }
+}
+
+/// Lightweight Objective-C target for NSMenuItem action callbacks.
+private final class MenuActionHandler: NSObject {
+    private let closure: () -> Void
+
+    init(_ closure: @escaping () -> Void) {
+        self.closure = closure
+    }
+
+    @objc func invoke() {
+        closure()
     }
 }

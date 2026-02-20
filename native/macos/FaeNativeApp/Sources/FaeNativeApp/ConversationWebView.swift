@@ -18,6 +18,7 @@ struct ConversationWebView: NSViewRepresentable {
     var onOpenCanvasWindow: (() -> Void)?
     var onUserInteraction: (() -> Void)?
     var onOrbClicked: (() -> Void)?
+    var onOrbContextMenu: (() -> Void)?
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var loaded = false
@@ -35,6 +36,7 @@ struct ConversationWebView: NSViewRepresentable {
         var onOpenCanvasWindow: (() -> Void)?
         var onUserInteraction: (() -> Void)?
         var onOrbClicked: (() -> Void)?
+        var onOrbContextMenu: (() -> Void)?
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             _ = navigation
@@ -71,6 +73,8 @@ struct ConversationWebView: NSViewRepresentable {
                 onUserInteraction?()
             case "orbClicked":
                 onOrbClicked?()
+            case "orbContextMenu":
+                onOrbContextMenu?()
             case "ready":
                 break
             default:
@@ -90,6 +94,7 @@ struct ConversationWebView: NSViewRepresentable {
         coordinator.onOpenCanvasWindow = onOpenCanvasWindow
         coordinator.onUserInteraction = onUserInteraction
         coordinator.onOrbClicked = onOrbClicked
+        coordinator.onOrbContextMenu = onOrbContextMenu
         return coordinator
     }
 
@@ -100,7 +105,8 @@ struct ConversationWebView: NSViewRepresentable {
         let contentController = config.userContentController
         let handlers = [
             "sendMessage", "toggleListening", "linkDetected", "ready",
-            "openConversationWindow", "openCanvasWindow", "userInteraction", "orbClicked"
+            "openConversationWindow", "openCanvasWindow", "userInteraction",
+            "orbClicked", "orbContextMenu"
         ]
         for handler in handlers {
             contentController.add(context.coordinator, name: handler)
@@ -139,6 +145,7 @@ struct ConversationWebView: NSViewRepresentable {
         context.coordinator.onOpenCanvasWindow = onOpenCanvasWindow
         context.coordinator.onUserInteraction = onUserInteraction
         context.coordinator.onOrbClicked = onOrbClicked
+        context.coordinator.onOrbContextMenu = onOrbContextMenu
 
         guard context.coordinator.loaded else { return }
 

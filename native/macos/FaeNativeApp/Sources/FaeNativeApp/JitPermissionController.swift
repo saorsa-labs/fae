@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 @preconcurrency import Contacts
 import EventKit

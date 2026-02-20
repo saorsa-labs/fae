@@ -1,50 +1,47 @@
-# Documentation Review — Phase 6.2 (User Name Personalization)
+# Documentation Review
+**Date**: 2026-02-20
+**Mode**: task (GSD)
 
-**Reviewer:** Documentation Auditor
-**Scope:** Phase 6.2 changes — onboarding user name feature
+## Analysis
+
+### New Public/Internal APIs Added
+
+**ContentView.swift:**
+- `MenuActionHandler` class — no doc comment
+- `showOrbContextMenu()` private method — no doc comment (private, acceptable)
+
+**ConversationBridgeController.swift:**
+- `handlePartialTranscription(text:)` private method — no doc comment (private, acceptable)
+
+**WindowStateController.swift:**
+- `hideWindow()` public method — no doc comment
+- `showWindow()` public method — no doc comment
+
+**ConversationWebView.swift:**
+- `onOrbContextMenu` property — no doc comment (inline with other undocumented properties)
+
+**conversation.html JS:**
+- `window.showProgress(stage, message, pct)` — no JSDoc
+- `window.hideProgress()` — no JSDoc
+- `window.setProgress(pct)` — no JSDoc
+- `window.setSubtitlePartial(text)` — no JSDoc
+- `window.appendStreamingBubble(text)` — no JSDoc
+- `window.finalizeStreamingBubble(fullText)` — no JSDoc
+- `window.setAudioLevel(rms)` — no JSDoc
+
+### Assessment
+
+This codebase appears to be consistent in its documentation style — most Swift private/internal methods don't have doc comments, and JS APIs are inline without JSDoc. The new additions follow the existing pattern.
+
+The `MenuActionHandler` class is a new public-ish type (accessible within the module) and would benefit from a doc comment explaining its purpose (capturing NSMenuItem action closures).
+
+The JS window API functions are part of a Swift-JS bridge contract. While they're not "public APIs" in the traditional sense, documenting them helps future maintainers understand the bridge contract.
 
 ## Findings
 
-### 1. PASS — New config field has doc comment
-```rust
-/// User's display name, captured from Contacts Me Card during onboarding.
-/// Injected into the system prompt so the LLM can address the user by name.
-#[serde(default)]
-pub user_name: Option<String>,
-```
-Clear, accurate, explains purpose and source.
+- [MEDIUM] `conversation.html` — New `window.*` bridge API functions (`showProgress`, `hideProgress`, `setProgress`, `setSubtitlePartial`, `appendStreamingBubble`, `finalizeStreamingBubble`, `setAudioLevel`) lack any comment documentation. These are a Swift-JS contract and should have brief comments.
+- [LOW] `MenuActionHandler` — Class lacks doc comment explaining its purpose
+- [LOW] `WindowStateController.swift` — `hideWindow()` and `showWindow()` lack doc comments
+- [INFO] Existing code style is inconsistent on documentation; new additions are consistent with existing practice
 
-### 2. PASS — New trait method has doc comment
-```rust
-/// Store the user's display name (from Contacts Me Card) in config and memory.
-fn set_user_name(&self, _name: &str) -> Result<()> {
-```
-Accurate and complete.
-
-### 3. PASS — assemble_prompt doc comment updated
-The function doc comment was updated with a `user_name` parameter description.
-
-### 4. PASS — Swift complete() method doc comment updated
-```swift
-/// Complete the onboarding flow and signal the backend.
-///
-/// If a user name was captured from the Contacts Me Card, it is sent to the
-/// Rust backend BEFORE the completion notification so the name is persisted
-/// before onboarding finalises.
-```
-Explains the ordering guarantee clearly.
-
-### 5. PASS — Notification name has doc comment
-```swift
-/// Posted to send the user's name (from Me Card) to the Rust backend.
-static let faeOnboardingSetUserName = Notification.Name("faeOnboardingSetUserName")
-```
-Follows the pattern of the other notification names.
-
-### 6. INFO — CommandName::OnboardingSetUserName has no doc comment
-Other `CommandName` enum variants also lack doc comments (pre-existing pattern). Not a regression.
-
-## Verdict
-**PASS — Documentation is adequate and complete for public APIs**
-
-All new public Rust API additions have doc comments. Swift additions follow existing documentation patterns.
+## Grade: B

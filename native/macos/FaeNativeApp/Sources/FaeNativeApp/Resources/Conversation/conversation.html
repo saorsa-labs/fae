@@ -342,10 +342,59 @@
   }
 
   /* =========================================================
+     Progress Bar (model loading / download)
+     ========================================================= */
+  .progress-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 24px 8px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+
+  .progress-bar.visible {
+    display: flex;
+    opacity: 1;
+  }
+
+  .progress-bar-track {
+    width: 100%;
+    max-width: 280px;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, rgba(180, 168, 196, 0.6), rgba(180, 168, 196, 0.9));
+    border-radius: 2px;
+    transition: width 0.5s ease;
+  }
+
+  .progress-bar-label {
+    margin-top: 6px;
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.4);
+    letter-spacing: 0.04em;
+    text-align: center;
+  }
+
+  /* =========================================================
      Window Mode: Collapsed — tiny orb only
      ========================================================= */
   body[data-window-mode="collapsed"] .subtitle-area,
-  body[data-window-mode="collapsed"] .input-bar-wrap {
+  body[data-window-mode="collapsed"] .input-bar-wrap,
+  body[data-window-mode="collapsed"] .progress-bar {
     display: none !important;
   }
 
@@ -387,6 +436,16 @@
       </div>
       <div class="orb-highlight"></div>
     </div>
+  </div>
+
+  <!-- =========================================================
+       Progress Bar (model loading)
+       ========================================================= -->
+  <div class="progress-bar" id="progressBar">
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <span class="progress-bar-label" id="progressLabel"></span>
   </div>
 
   <!-- =========================================================
@@ -1443,6 +1502,101 @@ document.getElementById('scene').addEventListener('click', function() {
   if (document.body.dataset.windowMode === 'collapsed') {
     postToSwift('orbClicked', {});
   }
+});
+
+/* ---------------------------------------------------------
+   Progress Bar API (Swift → JS)
+   --------------------------------------------------------- */
+var progressBar = document.getElementById('progressBar');
+var progressFill = document.getElementById('progressFill');
+var progressLabel = document.getElementById('progressLabel');
+
+window.showProgress = function(stage, message, pct) {
+  pct = Math.max(0, Math.min(100, pct || 0));
+  progressFill.style.width = pct + '%';
+  progressLabel.textContent = message || stage || '';
+  progressBar.classList.add('visible');
+};
+
+window.setProgress = function(pct) {
+  pct = Math.max(0, Math.min(100, pct || 0));
+  progressFill.style.width = pct + '%';
+};
+
+window.hideProgress = function() {
+  progressBar.classList.remove('visible');
+  /* Reset fill after fade-out */
+  setTimeout(function() {
+    if (!progressBar.classList.contains('visible')) {
+      progressFill.style.width = '0%';
+      progressLabel.textContent = '';
+    }
+  }, 500);
+};
+
+/* ---------------------------------------------------------
+   Partial STT Transcription (Swift → JS)
+   --------------------------------------------------------- */
+window.setSubtitlePartial = function(text) {
+  subFae.textContent = '';
+  subUser.textContent = text;
+  subUser.style.opacity = '0.5';
+  subUser.style.fontStyle = 'italic';
+  subUser.classList.add('visible');
+  /* Do NOT start auto-hide timer for partials */
+  clearTimeout(subUserTimer);
+};
+
+/* Override addMessage to clear partial state */
+var _origAddMessage = window.addMessage;
+window.addMessage = function(role, text) {
+  if (role === 'user') {
+    /* Clear partial styling when final transcription arrives */
+    subUser.style.opacity = '';
+    subUser.style.fontStyle = '';
+  }
+  if (typeof _origAddMessage === 'function') { _origAddMessage(role, text); }
+};
+
+/* ---------------------------------------------------------
+   Streaming Assistant Bubbles (Swift → JS)
+   --------------------------------------------------------- */
+var pendingAssistantText = '';
+
+window.appendStreamingBubble = function(text) {
+  pendingAssistantText += (pendingAssistantText ? ' ' : '') + text;
+  subFae.textContent = pendingAssistantText;
+  subFae.style.opacity = '0.7';
+  subFae.classList.add('visible');
+  clearTimeout(subFaeTimer);
+};
+
+window.finalizeStreamingBubble = function(fullText) {
+  pendingAssistantText = '';
+  subFae.style.opacity = '';
+  showSubtitle('assistant', fullText || subFae.textContent);
+};
+
+/* ---------------------------------------------------------
+   Audio Level API (Swift → JS)
+   --------------------------------------------------------- */
+var smoothedAudioLevel = 0;
+
+window.setAudioLevel = function(rms) {
+  /* Exponential moving average for smooth orb response */
+  smoothedAudioLevel = smoothedAudioLevel * 0.7 + rms * 0.3;
+  /* Only drive urgency during listening mode */
+  if (mode === 'listening') {
+    urgencyLevel = Math.max(0, Math.min(1, smoothedAudioLevel));
+  }
+};
+
+/* ---------------------------------------------------------
+   Context Menu (right-click on orb)
+   --------------------------------------------------------- */
+document.getElementById('scene').addEventListener('contextmenu', function(e) {
+  e.preventDefault();
+  postToSwift('orbContextMenu', { x: e.clientX, y: e.clientY });
 });
 
 /* Signal ready to Swift host */

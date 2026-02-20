@@ -1,29 +1,39 @@
-# Error Handling Review — Phase 6.2 (User Name Personalization)
+# Error Handling Review
+**Date**: 2026-02-20
+**Mode**: task (GSD)
+**Scope**: Swift/HTML/CSS changes in Phase 6.3
 
-**Reviewer:** Error Handling Hunter
-**Scope:** Phase 6.2 changes — onboarding user name feature
+## Analysis
+
+This is primarily a Swift + HTML/JS review. No Rust source changes in this task diff.
+
+### Swift Error Handling Patterns Checked
+
+**ContentView.swift - showOrbContextMenu():**
+- Uses `guard let window = windowState.window, let contentView = window.contentView else { return }` — GOOD: safe optional unwrapping
+- `objc_setAssociatedObject` key uses string literal "actionHandlers" — LOW risk, no error handling needed here
+
+**ConversationBridgeController.swift:**
+- `guard let userInfo = notification.userInfo, let text = userInfo["text"] as? String, !text.isEmpty else { return }` — GOOD: proper guard
+- `let isFinal = userInfo["is_final"] as? Bool ?? false` — GOOD: safe optional cast with fallback
+- `let filesComplete = userInfo["files_complete"] as? Int ?? 0` — GOOD: safe cast with default
+- `let filesTotal = userInfo["files_total"] as? Int ?? 0` — GOOD: safe cast with default
+- JS evaluation via `evaluateJS(...)` has no completion handler — ACCEPTABLE: fire-and-forget JS calls
+- `conversationBridge.webView?.evaluateJavaScript("...", completionHandler: nil)` — ACCEPTABLE in menu closure
+
+**WindowStateController.swift:**
+- `window?.orderOut(nil)` — GOOD: optional chaining, safe if window is nil
+- `window?.makeKeyAndOrderFront(nil)` — GOOD: optional chaining
+
+**conversation.html JS:**
+- `pct = Math.max(0, Math.min(100, pct || 0))` — GOOD: bounds clamping
+- `progressFill.style.width = pct + '%'` — no null check on DOM elements (minor)
+- `_origAddMessage = window.addMessage` — monkey-patching approach is functional but fragile if addMessage is undefined at patch time
 
 ## Findings
 
-### 1. PASS — parse_non_empty_field validates input correctly
-`handle_onboarding_set_user_name` calls `parse_non_empty_field(&envelope.payload, "name", ...)` which returns `Err` for missing or whitespace-only names. Error propagation via `?` is correct.
+- [LOW] `conversation.html` - `progressBar`, `progressFill`, `progressLabel` assumed non-null at var declaration time; no defensive null check if DOM not yet loaded (JS runs at end of body, so safe in practice)
+- [LOW] `conversation.html` - `window.addMessage` monkey-patch assumes original function exists; if `_origAddMessage` is undefined, calling it will throw
+- [LOW] `ConversationBridgeController.swift` - `evaluateJS` calls with interpolated JS strings (no sanitization beyond `escapeForJS`) — acceptable for internal data but note the risk if text contains backticks or template literal chars
 
-### 2. PASS — Config save uses established save_config() helper
-`self.save_config()?` propagates errors correctly. The lock-acquire-then-drop pattern is correct (lock released before calling `save_config`).
-
-### 3. PASS — Memory store failure is demoted to warning (intentional)
-`if let Err(e) = store.save_primary_user(&user) { warn!("failed to save primary user to memory: {e}"); }` — memory store failure is non-fatal by design. Config is the canonical persistence layer; memory is auxiliary. Correct.
-
-### 4. PASS — Double lock pattern is safe
-The implementation acquires the config lock twice: once to write `user_name`, and once to read `memory_root`. Both are short critical sections. No deadlock risk since each lock is released before the next acquire.
-
-### 5. PASS — Swift observer uses weak self correctly
-`{ [weak self] notification in ... self?.dispatch(...) }` — weak capture prevents retain cycle in the NotificationCenter observer. The guard for `name` from userInfo is present.
-
-### 6. PASS — Default trait impl returns Ok(())
-`fn set_user_name(&self, _name: &str) -> Result<()> { Ok(()) }` — default impl is a no-op, correct for handlers that don't support user name (e.g., test doubles).
-
-## Verdict
-**PASS — No error handling issues**
-
-All error paths are handled correctly. Non-fatal memory store errors are intentionally demoted to warnings.
+## Grade: A-

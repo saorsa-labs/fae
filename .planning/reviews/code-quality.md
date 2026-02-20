@@ -1,44 +1,57 @@
-# Code Quality Review — Phase 6.2 (User Name Personalization)
+# Code Quality Review
+**Date**: 2026-02-20
+**Mode**: task (GSD)
 
-**Reviewer:** Code Quality Analyst
-**Scope:** Phase 6.2 changes — onboarding user name feature
+## Analysis
+
+### ContentView.swift
+
+**MenuActionHandler class:**
+- Clean, well-scoped helper class for NSMenuItem action targets
+- Uses `@escaping () -> Void` closure — GOOD
+- `@objc func invoke()` bridging pattern — CORRECT for AppKit target-action
+- Class is `final` — GOOD (no subclassing needed)
+- Missing documentation comment — LOW
+
+**showOrbContextMenu():**
+- Clean NSMenu construction
+- `objc_setAssociatedObject` for lifetime management is idiomatic AppKit — GOOD
+- `window.mouseLocationOutsideOfEventStream` for menu position — GOOD (uses correct API)
+- The "Hide Fae" item uses `keyEquivalent: "h"` — NOTE: `Cmd+H` is the system-wide hide shortcut. NSMenuItem key equivalents without explicit `keyEquivalentModifierMask` default to `Cmd`. This may conflict with system hide shortcut if the key mask isn't set to `.init(rawValue: 0)` for no modifier. Worth checking.
+
+### ConversationBridgeController.swift
+
+- Partial transcription handling is clean and well-structured
+- `handlePartialTranscription(text:)` is a good single-responsibility function
+- `appendStreamingBubble` / `finalizeStreamingBubble` separation is logical
+- Progress bar wiring is clean: extract fields, compute pct, call JS
+- `let pct = filesTotal > 0 ? (100 * filesComplete / filesTotal) : 0` — GOOD: division-by-zero guard
+
+### ConversationWebView.swift
+
+- Clean extension of existing `onOrbContextMenu` callback pattern — consistent with existing `onOrbClicked`
+- `updateNSView` correctly propagates the callback — GOOD
+- Handler registration in `contentController.add` is correctly updated — GOOD
+
+### WindowStateController.swift
+
+- `hideWindow()` and `showWindow()` are clean, minimal additions
+- `cancelInactivityTimer()` called in `hideWindow()` — GOOD: prevents timer firing on hidden window
+- Missing `@MainActor` annotation consideration (though likely called from main thread)
+
+### conversation.html JS
+
+- `window.setSubtitlePartial` correctly avoids starting auto-hide timer
+- `pendingAssistantText` accumulation with space joining is simple and correct
+- `Math.max(0, Math.min(100, pct || 0))` clamping — GOOD
+- `setTimeout` for progress bar reset after fade is correct
+- Monkey-patching `window.addMessage` via `_origAddMessage` — FRAGILE pattern, should use event-based approach instead
 
 ## Findings
 
-### 1. PASS — Consistent naming conventions
-`user_name` (Rust snake_case), `userName` (Swift camelCase), `"onboarding.set_user_name"` (wire protocol) — all follow the established conventions of each language/layer.
+- [MEDIUM] `ContentView.swift:77` — `hideItem` has `keyEquivalent: "h"` which may conflict with system `Cmd+H` hide shortcut. Should use `keyEquivalentModifierMask = []` or empty string for key equivalent.
+- [LOW] `conversation.html` — `window.addMessage` monkey-patching is fragile. If load order changes, `_origAddMessage` could be undefined.
+- [LOW] `MenuActionHandler` class lacks documentation comment (per zero-tolerance docs standard).
+- [LOW] `showOrbContextMenu()` lacks documentation comment.
 
-### 2. PASS — Clean separation of concerns
-Command parsing lives in `channel.rs`, business logic in `handler.rs`, prompt assembly in `personality.rs`, persistence in `config.rs`. No concern leakage.
-
-### 3. PASS — Default trait impl is idiomatic
-`fn set_user_name(&self, _name: &str) -> Result<()> { Ok(()) }` on the `DeviceTransferHandler` trait follows the same pattern as all other optional handler methods in the trait.
-
-### 4. SHOULD FIX — Formatting violation in channel.rs
-```rust
-// BAD (committed state):
-CommandName::OnboardingSetUserName => {
-    self.handle_onboarding_set_user_name(envelope)
-}
-// CORRECT (fmt fix in working tree):
-CommandName::OnboardingSetUserName => self.handle_onboarding_set_user_name(envelope),
-```
-The working tree contains the correct fmt fix. This just needs to be committed.
-
-### 5. SHOULD FIX — Formatting violation in handler.rs
-`info!(name, "onboarding.set_user_name persisted to config and memory");` — rustfmt expands this to multi-line format. Working tree has the fix. Needs commit.
-
-### 6. INFO — Memory root re-locked after save
-The implementation locks config once to write `user_name`, saves, then locks again to read `memory_root`. This is slightly redundant — `memory_root` could be read in the first lock. But it's correct and the overhead is negligible (in-memory lock on local data).
-
-### 7. PASS — Vec capacity pre-allocated correctly
-`Vec::with_capacity(8)` in `assemble_prompt` correctly updated from 7 to account for the new user context section.
-
-## Verdict
-**CONDITIONAL PASS — Formatting fixes need to be committed**
-
-| # | Severity | Finding |
-|---|----------|---------|
-| 4 | SHOULD FIX | channel.rs match arm formatting (fix is in working tree) |
-| 5 | SHOULD FIX | handler.rs info! macro formatting (fix is in working tree) |
-| 6 | INFO | Redundant second lock acquire for memory_root |
+## Grade: A-
