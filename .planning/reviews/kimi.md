@@ -1,34 +1,35 @@
-# Kimi K2 External Review
-## Phase 6.1b: fae_llm Provider Cleanup
+# Kimi K2 External Review — Phase 6.2 Task 7
 
-## Analysis
+**Reviewer:** Kimi K2 (External)
+**Grade:** B+
 
-### Architecture Coherence
-The removal of HTTP-based providers (OpenAI, Anthropic) and the SSE streaming
-infrastructure aligns well with an embedded model architecture. The codebase
-now has a clear separation: the Rust core handles only local inference, while
-all network communication is removed from this layer.
+## Review
 
-### Test Coverage Assessment
-- Deleted tests were appropriate deletions (testing removed functionality)
-- Updated tests accurately cover remaining functionality
-- setup_config_with_comments() uses 'openai' as a fixture — acceptable as test data
-- No coverage regressions for remaining code
+The implementation is functionally complete and follows the project's established conventions.
 
-### Integration Test Quality
-The integration tests in tests/llm_config_integration.rs show good coverage:
-- Round-trip persistence
-- Comment preservation (with accurate limitation note)
-- Unknown field handling (with accurate limitation note)
-- Provider/model CRUD operations
-- Validation of invalid references
-- Backup creation
-All tests updated consistently.
+## Key Observations
 
-### Observations
-1. The test setup_config_with_comments() still uses OpenAI config format as fixture
-   data — this is fine as it tests the generic TOML handling, not the OpenAI provider.
-2. FaeLlmError has both legacy and locked taxonomy variants — intentional design.
+### Positive
+- Clean Rust enum additions with matching doc comments
+- The `matches!(cmd, VoiceCommand::ShowConversation)` pattern is idiomatic
+- The `pipeline.conversation_visibility` event name is symmetric with `pipeline.canvas_visibility`
+- EKEventStore closure callbacks properly dispatch back to `@MainActor`
 
-### Grade: A
-### Verdict: PASS
+### Issues Found
+
+**SHOULD FIX: Observer registration without storage**
+In `FaeNativeApp.swift`, the device transfer observer:
+```swift
+NotificationCenter.default.addObserver(forName: .faeDeviceTransfer, ...) { [weak handoff] ... }
+```
+The returned `NSObjectProtocol` is not stored. SwiftUI's `onAppear` can fire on window restoration, causing duplicate observers. Store in a `@State` or environment-held array.
+
+**SHOULD FIX: Coordinator code duplication**
+The `VoiceCommand::ShowConversation/HideConversation/ShowCanvas/HideCanvas` handling block is identical in both the normal and interrupted code paths. Extract to a standalone function.
+
+**INFO: voice_command.rs module description**
+Module doc says "for runtime model switching" but now covers panel visibility too.
+
+## Grade: B+
+
+Solid implementation. Two SHOULD FIX items but no blocking issues.

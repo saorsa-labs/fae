@@ -62,6 +62,10 @@ struct FaeNativeApp: App {
     /// triggers native macOS permission dialogs mid-conversation.
     @StateObject private var jitPermissions = JitPermissionController()
 
+    /// Retained observer token for `.faeDeviceTransfer` notifications.
+    /// Stored to prevent duplicate observer registration if `onAppear` fires more than once.
+    @State private var deviceTransferObserver: NSObjectProtocol?
+
     /// Glassmorphic onboarding window shown on first launch. The main
     /// ``WindowGroup`` is hidden until onboarding completes.
     @StateObject private var onboardingWindow = OnboardingWindowController()
@@ -115,13 +119,64 @@ struct FaeNativeApp: App {
                     orbBridge.orbState = orbState
                     // Wire conversation bridge to the native message store.
                     conversationBridge.conversationController = conversation
-                    // Wire pipeline aux to the canvas controller.
+                    // Wire pipeline aux to the canvas controller and auxiliary window manager.
                     pipelineAux.canvasController = canvasController
+                    pipelineAux.auxiliaryWindows = auxiliaryWindows
                     // Wire auxiliary window manager to its dependencies.
                     auxiliaryWindows.windowState = windowState
                     auxiliaryWindows.conversationController = conversation
                     auxiliaryWindows.canvasController = canvasController
                     auxiliaryWindows.observeWindowState()
+                    // Wire onboarding permission results to the backend via HostCommandBridge.
+                    // Both onboarding and JIT paths converge on .faeCapabilityGranted → Rust.
+                    onboarding.onPermissionResult = { capability, state in
+                        guard state == "granted" else { return }
+                        NotificationCenter.default.post(
+                            name: .faeCapabilityGranted,
+                            object: nil,
+                            userInfo: ["capability": capability]
+                        )
+                    }
+                    // Wire device handoff controller dependencies.
+                    handoff.orbState = orbState
+                    handoff.snapshotProvider = { [weak conversation, weak orbState] in
+                        let entries = (conversation?.messages ?? [])
+                            .filter { $0.role == .user || $0.role == .assistant }
+                            .map { SnapshotEntry(role: $0.role == .user ? "user" : "assistant", content: $0.content) }
+                        return ConversationSnapshot(
+                            entries: entries,
+                            orbMode: orbState?.mode.rawValue ?? "idle",
+                            orbFeeling: orbState?.feeling.rawValue ?? "neutral",
+                            timestamp: Date()
+                        )
+                    }
+                    // Subscribe to device transfer events from the Rust backend.
+                    // Guard against re-registration if onAppear fires more than once
+                    // (e.g. window restoration), storing the token for the app lifetime.
+                    if deviceTransferObserver == nil {
+                        deviceTransferObserver = NotificationCenter.default.addObserver(
+                            forName: .faeDeviceTransfer,
+                            object: nil,
+                            queue: .main
+                        ) { [weak handoff] notification in
+                            guard let handoff,
+                                  let event = notification.userInfo?["event"] as? String,
+                                  let payload = notification.userInfo?["payload"] as? [String: Any]
+                            else { return }
+                            Task { @MainActor in
+                                switch event {
+                                case "device.transfer_requested":
+                                    let targetStr = payload["target"] as? String ?? "iphone"
+                                    let target = DeviceTarget(rawValue: targetStr) ?? .iphone
+                                    handoff.move(to: target)
+                                case "device.home_requested":
+                                    handoff.goHome()
+                                default:
+                                    break
+                                }
+                            }
+                        }
+                    }
                     // pipelineAux.webView is set via ContentView's onWebViewReady callback.
                     if let sender = commandSender {
                         hostBridge.sender = sender

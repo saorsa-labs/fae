@@ -29,6 +29,10 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Set by `FaeNativeApp` during wiring.
     weak var canvasController: CanvasController?
 
+    /// Auxiliary window manager for showing/hiding conversation and canvas panels.
+    /// Set by `FaeNativeApp` during wiring.
+    weak var auxiliaryWindows: AuxiliaryWindowManager?
+
     private var observations: [NSObjectProtocol] = []
 
     init() {
@@ -80,7 +84,19 @@ final class PipelineAuxBridgeController: ObservableObject {
         switch event {
         case "pipeline.canvas_visibility":
             let visible = payload["visible"] as? Bool ?? false
-            canvasController?.isVisible = visible
+            if visible {
+                auxiliaryWindows?.showCanvas()
+            } else {
+                auxiliaryWindows?.hideCanvas()
+            }
+
+        case "pipeline.conversation_visibility":
+            let visible = payload["visible"] as? Bool ?? false
+            if visible {
+                auxiliaryWindows?.showConversation()
+            } else {
+                auxiliaryWindows?.hideConversation()
+            }
 
         case "pipeline.canvas_content":
             let html = payload["html"] as? String ?? ""

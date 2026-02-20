@@ -135,6 +135,11 @@ pub enum RuntimeEvent {
     ///
     /// This is emitted when the user asks to show/hide conversation canvas.
     ConversationCanvasVisibility { visible: bool },
+    /// Explicit conversation panel visibility command.
+    ///
+    /// Emitted when the user asks to show/hide the conversation panel
+    /// (distinct from the canvas panel).
+    ConversationVisibility { visible: bool },
     /// The primary LLM provider failed and the request was retried against the
     /// local fallback model.
     ///

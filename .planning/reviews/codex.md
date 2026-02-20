@@ -1,34 +1,35 @@
-# Codex External Review
-## Phase 6.1b: fae_llm Provider Cleanup
+# Codex External Review — Phase 6.2 Task 7
 
-## Summary Assessment
+**Reviewer:** Codex Task Reviewer (External)
+**Grade:** B+
 
-### What Was Done
-This phase removed all external LLM provider code (OpenAI, Anthropic, SSE streaming,
-fallback logic, local probe) from the fae_llm module, leaving only the local embedded
-GGUF inference backend. This is a significant architectural simplification.
+## Summary
 
-### Code Quality Assessment
+The Phase 6.2 implementation wires a set of event chains that were previously broken stubs. All seven tasks are complete and the approach is technically sound.
 
-**Changes are well-executed:**
-- Clean deletions with no stale references
-- Test updates are coherent with implementation
-- Documentation accurately reflects the new state
-- Error taxonomy additions are backward compatible
+## Strengths
 
-**Credential cleanup is thorough:**
-- Removed 'llm.api_key' from diagnostics list (no longer needed)
-- Updated doc examples to non-LLM credential examples (appropriate)
+1. **Correct use of weak references** in Swift prevents retain cycles across the bridge layer.
+2. **Two-path coordinator coverage** — the visibility events are emitted in both the normal and the interrupted-generation code paths, which is necessary for correctness.
+3. **Fallback-safe device target parsing** — `DeviceTarget(rawValue:) ?? .iphone` avoids panics on unknown values.
+4. **EventKit integration** uses the correct non-deprecated async APIs.
 
-**Config validation fix is correct:**
-- Local endpoint type legitimately needs no base_url
-- The validation exemption is logically sound
+## Concerns
 
-### Concerns
-None critical. One observation:
-- Integration tests still have TOML config fixtures referencing 'openai' provider
-  in test helper setup_config_with_comments() — this is used as a test fixture
-  and is not production code, so it's acceptable.
+1. **Observer token leak in FaeNativeApp** — `addObserver(forName:)` without storing the returned `NSObjectProtocol` token means the observation cannot be removed. If `onAppear` is called multiple times, duplicate observers accumulate. This should store the token in an array and clean up in `onDisappear`.
 
-### Grade: A
-### Verdict: PASS
+2. **Duplicate coordinator logic** — The 14-line panel visibility dispatch block is copy-pasted in two locations within `run_llm_stage`. Should be extracted to a private function.
+
+3. **No coordinator integration test** — The coordinator-level event emission for ShowConversation/ShowCanvas is not tested end-to-end. Handler-level mapping tests exist but do not cover the coordinator dispatch.
+
+## Grade Breakdown
+
+| Area | Grade |
+|------|-------|
+| Correctness | A |
+| Completeness | A |
+| Code quality | B |
+| Test coverage | B |
+| Swift patterns | B+ |
+
+**Overall: B+**

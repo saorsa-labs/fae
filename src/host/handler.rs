@@ -422,6 +422,10 @@ fn map_runtime_event(event: &RuntimeEvent) -> (String, serde_json::Value) {
             "pipeline.canvas_visibility".to_owned(),
             serde_json::json!({"visible": visible}),
         ),
+        RuntimeEvent::ConversationVisibility { visible } => (
+            "pipeline.conversation_visibility".to_owned(),
+            serde_json::json!({"visible": visible}),
+        ),
         RuntimeEvent::ProviderFallback { primary, error } => (
             "pipeline.provider_fallback".to_owned(),
             serde_json::json!({"primary": primary, "error": error}),
@@ -459,11 +463,21 @@ fn map_runtime_event(event: &RuntimeEvent) -> (String, serde_json::Value) {
 impl DeviceTransferHandler for FaeDeviceTransferHandler {
     fn request_move(&self, target: DeviceTarget) -> Result<()> {
         info!(target = target.as_str(), "device.move requested");
+        // Hide canvas during handoff transition.
+        self.emit_event(
+            "pipeline.canvas_visibility",
+            serde_json::json!({"visible": false}),
+        );
+        self.emit_event(
+            "device.transfer_requested",
+            serde_json::json!({"target": target.as_str()}),
+        );
         Ok(())
     }
 
     fn request_go_home(&self) -> Result<()> {
         info!("device.go_home requested");
+        self.emit_event("device.home_requested", serde_json::json!({}));
         Ok(())
     }
 
@@ -1942,6 +1956,74 @@ mod tests {
         assert_eq!(
             count, 1,
             "unexpected exit must increment restart_count to 1"
+        );
+    }
+
+    #[test]
+    fn map_conversation_visibility_event() {
+        let event = RuntimeEvent::ConversationVisibility { visible: true };
+        let (name, payload) = map_runtime_event(&event);
+        assert_eq!(name, "pipeline.conversation_visibility");
+        assert_eq!(payload["visible"], true);
+
+        let event_hide = RuntimeEvent::ConversationVisibility { visible: false };
+        let (name_hide, payload_hide) = map_runtime_event(&event_hide);
+        assert_eq!(name_hide, "pipeline.conversation_visibility");
+        assert_eq!(payload_hide["visible"], false);
+    }
+
+    #[test]
+    fn map_canvas_visibility_event() {
+        let event = RuntimeEvent::ConversationCanvasVisibility { visible: true };
+        let (name, payload) = map_runtime_event(&event);
+        assert_eq!(name, "pipeline.canvas_visibility");
+        assert_eq!(payload["visible"], true);
+    }
+
+    #[test]
+    fn request_move_emits_canvas_hide_and_transfer() {
+        let (handler, mut event_rx, _dir, _rt) = temp_handler_with_events();
+        handler.request_move(DeviceTarget::Iphone).unwrap();
+
+        let mut events = Vec::new();
+        while let Ok(evt) = event_rx.try_recv() {
+            events.push((evt.event, evt.payload));
+        }
+
+        // Should emit canvas_visibility: false first
+        let canvas_evt = events
+            .iter()
+            .find(|(name, _)| name == "pipeline.canvas_visibility");
+        assert!(
+            canvas_evt.is_some(),
+            "should emit pipeline.canvas_visibility"
+        );
+        assert_eq!(canvas_evt.unwrap().1["visible"], false);
+
+        // Should emit device.transfer_requested
+        let transfer_evt = events
+            .iter()
+            .find(|(name, _)| name == "device.transfer_requested");
+        assert!(
+            transfer_evt.is_some(),
+            "should emit device.transfer_requested"
+        );
+        assert_eq!(transfer_evt.unwrap().1["target"], "iphone");
+    }
+
+    #[test]
+    fn request_go_home_emits_home_requested() {
+        let (handler, mut event_rx, _dir, _rt) = temp_handler_with_events();
+        handler.request_go_home().unwrap();
+
+        let mut events = Vec::new();
+        while let Ok(evt) = event_rx.try_recv() {
+            events.push(evt.event);
+        }
+
+        assert!(
+            events.contains(&"device.home_requested".to_owned()),
+            "should emit device.home_requested"
         );
     }
 }

@@ -1,52 +1,43 @@
-# Documentation Review
+# Documentation Review — Phase 6.2 Task 7
 
-## Scope: Phase 6.1b - fae_llm Provider Cleanup
+**Reviewer:** Documentation Auditor
+**Scope:** All changed files
 
-## Module-level Documentation
+## Findings
 
-### fae_llm/mod.rs
-- Module doc now correctly says 'locally downloaded embedded models'
-- Removed providers submodule description now only mentions 'local provider implementations (embedded GGUF inference)'
-- PASS
+### 1. PASS — New RuntimeEvent::ConversationVisibility has doc comment
+Well-documented with a description matching the existing `ConversationCanvasVisibility` pattern.
 
-### fae_llm/config/mod.rs
-- Doc updated: 'Multi-provider support' → 'Local embedded provider support'
-- Example code updated to reference 'local' not 'openai'
-- PASS
+### 2. PASS — New VoiceCommand variants are documented
+All four variants (ShowConversation, HideConversation, ShowCanvas, HideCanvas) have doc comments.
 
-### fae_llm/providers/mod.rs
-- Doc clearly lists only available providers: local + message
-- Accurately reflects current state
-- PASS
+### 3. PASS — voice_command.rs module table updated
+The module-level table of supported commands was updated to include the four new panel visibility phrases.
 
-### credentials/mod.rs
-- Example updated to 'discord.bot_token' (correct non-LLM example)
-- PASS
+### 4. PASS — BackendEventRouter notification name documented
+`.faeDeviceTransfer` has a full doc comment with userInfo keys documented, consistent with all other notification names.
 
-### credentials/types.rs
-- Doc examples updated to reflect real credential types post-cleanup
-- PASS
+### 5. SHOULD FIX — JitPermissionController class-level doc comment not updated
+The class comment lists supported capabilities but was not updated to mention "calendar", "reminders", "mail" are now supported. This is a documentation accuracy issue for a public-facing class:
 
-### credentials/migration.rs
-- PlaintextCredential doc example updated correctly
-- PASS
+```swift
+/// Supported capabilities (JIT):
+/// - `"microphone"` → ...
+/// - `"contacts"` → ...
+/// - `"calendar"` → ... (MISSING)
+/// - `"reminders"` → ... (MISSING)
+/// - `"mail"` → ... (MISSING)
+```
 
-### fae_llm/error.rs
-- All error variants have doc comments
-- error_codes module items all documented
-- PASS
+Wait — actually checking the diff: the class-level comment WAS updated in the diff. Lines 14-17 show calendar/reminders/mail added. **This is a PASS.**
 
-## Potential Documentation Issues
+### 6. PASS — help_response() updated
+The help response string now mentions "show conversation, show canvas, or grant permissions" covering the new commands.
 
-### SHOULD FIX: Stale references to removed providers
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/mod.rs:174:        let endpoint = EndpointType::Anthropic;
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/mod.rs:303:            EndpointType::OpenAI,
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/mod.rs:304:            EndpointType::Anthropic,
+### 7. INFO — voice_command.rs module doc comment stale
+First line still says "for runtime model switching" but the module now covers panel visibility too. Minor accuracy issue.
 
-## Summary
-- All changed files have accurate documentation
-- No stale references to deleted providers in documentation
-- Public API surfaces are correctly described
+## Verdict
+**PASS**
 
-## Vote: PASS
-## Grade: A
+All public API surfaces are documented. Minor stale module description (informational only).

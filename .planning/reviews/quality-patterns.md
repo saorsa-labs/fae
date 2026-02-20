@@ -1,44 +1,31 @@
-# Quality Patterns Review
+# Quality Patterns Review — Phase 6.2 Task 7
 
-## Scope: Phase 6.1b - fae_llm Provider Cleanup
+**Reviewer:** Quality Patterns
+**Scope:** Patterns, idioms, consistency with codebase conventions
 
-## Pattern: Error Handling with ? Operator
-- New lines using ? operator: 1
-- Verdict: GOOD - Proper error propagation
+## Findings
 
-## Pattern: map_err with Context
-- Error context additions: 0
-0
+### 1. PASS — Swift weak reference pattern consistent
+`weak var auxiliaryWindows: AuxiliaryWindowManager?` follows the exact same declaration pattern as `weak var canvasController: CanvasController?`. The `[weak handoff]` capture in the observer closure follows the `[weak conversation, weak orbState]` pattern established in the same block.
 
-## Pattern: Idiomatic Rust
-- Uses thiserror for error types: YES
-- Uses serde for serialization: YES
-- No manual Display/Debug implementations where derive works: YES
-- Verdict: GOOD
+### 2. PASS — Rust event emission pattern consistent
+`self.emit_event(name, json!({...}))` matches all other calls in `FaeDeviceTransferHandler::request_orb_palette_set` etc.
 
-## Pattern: Test Quality
-- Tests use descriptive names: YES
-- Tests are self-contained: YES
-- No test interdependencies visible: YES
-- Tests cover happy path AND error cases: YES
-- Verdict: GOOD
+### 3. PASS — VoiceCommand extension follows existing enum structure
+New variants placed after `Help` and before `GrantPermissions` in logical grouping. Parse order respects the existing guard-and-return pattern.
 
-## Pattern: Documentation
-- Module-level docs: YES
-- Public function docs: YES
-- Inline code examples: YES
-- Verdict: GOOD
+### 4. PASS — RuntimeEvent::ConversationVisibility follows ConversationCanvasVisibility
+Identical struct layout (`{ visible: bool }`), consistent naming convention, consistent doc comment format.
 
-## Pattern: Const Usage
-- Error codes are &'static str constants: YES
-- No magic strings in error matching: YES
-- Verdict: GOOD
+### 5. SHOULD FIX — `use crate::voice_command::VoiceCommand` declared inside match arm
+In the interrupted-generation path, there is a `use crate::voice_command::VoiceCommand;` inside the match arm block. The non-interrupted path already has VoiceCommand in scope via the outer import. This is a consistency issue.
 
-## Anti-patterns Checked
-- Mutable global state: NONE found
-- Unnecessary clones: NONE in new code
-- Redundant allocations: NONE observed
-- Verdict: PASS
+### 6. PASS — EventKit usage consistent with modern API
+`requestFullAccessToEvents()` / `requestFullAccessToReminders()` are macOS 14+ APIs, consistent with the app's deployment target.
 
-## Vote: PASS
-## Grade: A
+## Verdict
+**CONDITIONAL PASS**
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 5 | SHOULD FIX | Local import inside match arm — hoist to function/module level |

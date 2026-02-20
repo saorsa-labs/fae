@@ -1,40 +1,49 @@
-# Complexity Review
+# Complexity Review — Phase 6.2 Task 7
 
-## Scope: Phase 6.1b - fae_llm Provider Cleanup
+**Reviewer:** Complexity Analyst
+**Scope:** All changed files
 
-## Lines of Code Removed
-- Added lines: ~     116
-- Removed lines: ~    8669
-- Net reduction: ~8553 lines
+## Findings
 
-## Complexity Improvements
+### 1. SHOULD FIX — Duplicated match arms in coordinator.rs
+As noted by code quality reviewer: the panel visibility match arms appear in two separate code paths in `run_llm_stage`. The duplication is ~14 lines each. Extracting to a helper reduces cognitive load and maintenance burden.
 
-### fae_llm/providers/ module
-- Before: 8+ files, 4000+ lines
-- After: 2 files (local.rs, message.rs) + mod.rs
-- Complexity reduction: ~85%
-- Verdict: MAJOR IMPROVEMENT
+Proposed refactor:
+```rust
+fn emit_panel_visibility_events(
+    cmd: &VoiceCommand,
+    runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
+) {
+    match cmd {
+        VoiceCommand::ShowConversation | VoiceCommand::HideConversation => {
+            if let Some(rt) = runtime_tx {
+                let visible = matches!(cmd, VoiceCommand::ShowConversation);
+                let _ = rt.send(RuntimeEvent::ConversationVisibility { visible });
+            }
+        }
+        VoiceCommand::ShowCanvas | VoiceCommand::HideCanvas => {
+            if let Some(rt) = runtime_tx {
+                let visible = matches!(cmd, VoiceCommand::ShowCanvas);
+                let _ = rt.send(RuntimeEvent::ConversationCanvasVisibility { visible });
+            }
+        }
+        _ => {}
+    }
+}
+```
 
-### fae_llm/config/defaults.rs
-- Before: 3 providers, 2+ models hardcoded
-- After: 1 provider, no hardcoded models
-- Function complexity: dramatically reduced
-- Verdict: GOOD
+### 2. PASS — FaeNativeApp.onAppear wiring block is long but manageable
+The `onAppear` block has grown substantially. It remains linear wiring logic (no branching complexity). Each line has a comment. Acceptable complexity.
 
-### validate_config in service.rs
-- Added one conditional branch for Local endpoint type
-- Complexity increase: minimal (+1 branch)
-- Verdict: ACCEPTABLE
+### 3. PASS — JitPermissionController dispatch is clean
+The new switch cases follow the exact same pattern as existing microphone/contacts cases. Cyclomatic complexity increase is minimal and expected.
 
-## Remaining Complexity Concerns
-- FaeLlmError has 15 variants — this is intentional (locked taxonomy)
-- error_codes module has corresponding constants — necessary for stable API
-- No cyclomatic complexity issues identified
+### 4. PASS — handler.rs request_move complexity unchanged
+Two sequential `emit_event` calls are straightforward.
 
-## Summary
-- Overall complexity dramatically reduced
-- Code is simpler and more focused
-- Single-purpose modules remain
+## Verdict
+**CONDITIONAL PASS**
 
-## Vote: PASS
-## Grade: A
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | SHOULD FIX | Duplicate visibility handling — extract coordinator helper |

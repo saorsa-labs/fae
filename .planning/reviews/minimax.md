@@ -1,35 +1,27 @@
-# MiniMax External Review
-## Phase 6.1b: fae_llm Provider Cleanup
+# MiniMax External Review — Phase 6.2 Task 7
 
-## Architectural Review
+**Reviewer:** MiniMax (External)
+**Grade:** A-
 
-### Before vs After
-| Aspect | Before | After |
-|--------|--------|-------|
-| Provider count | 4+ (openai, anthropic, local, fallback) | 1 (local) |
-| External API calls | HTTP/SSE to OpenAI, Anthropic | None |
-| API key handling | env vars, keychain refs for LLM | Removed |
-| Config defaults | 3 providers + 3 models | 1 provider, 0 models |
-| Attack surface | HTTP external, SSE streaming | Embedded only |
+## Overview
 
-### Decision Quality
-The architectural decision to remove external providers is sound for an embedded
-voice assistant. The implementation is clean and complete.
+Phase 6.2 event wiring is well-executed. The Rust changes are minimal and targeted. The Swift changes correctly connect the event routing layer to the actual panel management layer.
 
-### Code Review Notes
-1. **Correct**: validate_config now correctly skips base_url check for Local endpoints
-2. **Correct**: KNOWN_CREDENTIAL_ACCOUNTS trimmed to remove LLM key account
-3. **Correct**: Tests use neutral examples (discord.bot_token) as credential examples
-4. **Note**: Integration tests have test fixtures with 'openai' config blocks —
-   these are testing the generic config parsing machinery, not OpenAI integration.
-   Acceptable.
+## Findings
 
-### Potential Issue
-The test file tests/llm_config_integration.rs uses:
-  endpoint_type = "openai"  in TOML fixture
-This tests that the config parser handles arbitrary endpoint types.
-Since EndpointType::OpenAI likely still exists as an enum variant,
-this may compile fine. But it should be reviewed.
+### Architecture: Correct Layering
+The split between `BackendEventRouter` (routing raw events to typed notifications) and `PipelineAuxBridgeController` (acting on pipeline events) is maintained correctly. The new `pipeline.conversation_visibility` event follows the same architecture as `pipeline.canvas_visibility`.
 
-### Grade: A-
-### Verdict: PASS (with note about test fixture)
+### Observer Token Issue (SHOULD FIX)
+The `addObserver` in `FaeNativeApp.onAppear` for `.faeDeviceTransfer` doesn't store its token. This is the same pattern as other observers in the codebase (checking existing code shows some observers also don't store tokens). If this is a consistent pattern in the codebase it may be intentional, but it is still a correctness concern.
+
+### Test Quality (PASS)
+The four new handler tests (`map_conversation_visibility_event`, `map_canvas_visibility_event`, `request_move_emits_canvas_hide_and_transfer`, `request_go_home_emits_home_requested`) are well-designed with proper assertions using a `temp_handler_with_events` fixture pattern.
+
+### Code Duplication (SHOULD FIX)
+Coordinator duplicate block — same as other reviewers noted.
+
+### Overall Quality Assessment
+The code is production-quality with two SHOULD FIX items (not blockers).
+
+## Grade: A-

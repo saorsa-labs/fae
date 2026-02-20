@@ -13,6 +13,10 @@
 //! | "use {model}" | `SwitchModel` |
 //! | "list models" | `ListModels` |
 //! | "what model are you using" | `CurrentModel` |
+//! | "show/open conversation" | `ShowConversation` |
+//! | "hide/close conversation" | `HideConversation` |
+//! | "show/open canvas" | `ShowCanvas` |
+//! | "hide/close canvas" | `HideCanvas` |
 
 /// A voice command detected from user speech.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +32,14 @@ pub enum VoiceCommand {
     CurrentModel,
     /// Request help with model switching commands.
     Help,
+    /// Show the conversation panel.
+    ShowConversation,
+    /// Hide the conversation panel.
+    HideConversation,
+    /// Show the canvas panel.
+    ShowCanvas,
+    /// Hide the canvas panel.
+    HideCanvas,
     /// Grant all tool permissions for this session.
     GrantPermissions,
     /// Revoke all granted tool permissions.
@@ -122,6 +134,20 @@ pub fn parse_voice_command(text: &str) -> Option<VoiceCommand> {
     if let Some(target_str) = extract_switch_target(stripped) {
         let target = parse_model_target(target_str);
         return Some(VoiceCommand::SwitchModel { target });
+    }
+
+    // --- Panel visibility ---
+    if matches_any(stripped, &["show conversation", "open conversation"]) {
+        return Some(VoiceCommand::ShowConversation);
+    }
+    if matches_any(stripped, &["hide conversation", "close conversation"]) {
+        return Some(VoiceCommand::HideConversation);
+    }
+    if matches_any(stripped, &["show canvas", "open canvas"]) {
+        return Some(VoiceCommand::ShowCanvas);
+    }
+    if matches_any(stripped, &["hide canvas", "close canvas"]) {
+        return Some(VoiceCommand::HideCanvas);
     }
 
     // --- Grant permissions ---
@@ -338,9 +364,9 @@ pub fn current_model_response(model_name: &str) -> String {
     format!("I'm currently using {model_name}.")
 }
 
-/// Help response listing available model switching commands.
+/// Help response listing available voice commands.
 pub fn help_response() -> String {
-    "You can say: switch to Claude, use the local model, list models, or what model are you using."
+    "You can say: switch to Claude, use the local model, list models, what model are you using, show conversation, show canvas, or grant permissions."
         .to_owned()
 }
 
@@ -794,6 +820,74 @@ mod tests {
         assert_eq!(
             current_model_response("local/qwen3-4b"),
             "I'm currently using local/qwen3-4b."
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Panel visibility commands
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn show_conversation() {
+        assert_eq!(
+            parse_voice_command("show conversation"),
+            Some(VoiceCommand::ShowConversation)
+        );
+    }
+
+    #[test]
+    fn open_conversation() {
+        assert_eq!(
+            parse_voice_command("open conversation"),
+            Some(VoiceCommand::ShowConversation)
+        );
+    }
+
+    #[test]
+    fn hide_conversation() {
+        assert_eq!(
+            parse_voice_command("hide conversation"),
+            Some(VoiceCommand::HideConversation)
+        );
+    }
+
+    #[test]
+    fn close_conversation() {
+        assert_eq!(
+            parse_voice_command("close conversation"),
+            Some(VoiceCommand::HideConversation)
+        );
+    }
+
+    #[test]
+    fn show_canvas() {
+        assert_eq!(
+            parse_voice_command("show canvas"),
+            Some(VoiceCommand::ShowCanvas)
+        );
+    }
+
+    #[test]
+    fn hide_canvas() {
+        assert_eq!(
+            parse_voice_command("hide canvas"),
+            Some(VoiceCommand::HideCanvas)
+        );
+    }
+
+    #[test]
+    fn fae_show_conversation() {
+        assert_eq!(
+            parse_voice_command("fae show conversation"),
+            Some(VoiceCommand::ShowConversation)
+        );
+    }
+
+    #[test]
+    fn hey_fae_open_canvas() {
+        assert_eq!(
+            parse_voice_command("hey fae open canvas"),
+            Some(VoiceCommand::ShowCanvas)
         );
     }
 

@@ -1,35 +1,26 @@
-# GLM-4.7 External Review
-## Phase 6.1b: fae_llm Provider Cleanup
+# GLM-4.7 External Review — Phase 6.2 Task 7
 
-## Review Focus: Completeness and Correctness
+**Reviewer:** GLM-4.7 (External)
+**Grade:** B+
 
-### Deletion Completeness
-Checking for any remaining references to deleted modules...
-POSSIBLE STALE REFS:
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:    #[serde(alias = "openai")]
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:    #[serde(alias = "anthropic")]
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            Self::OpenAiCompletions => write!(f, "openai_completions"),
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            Self::OpenAiResponses => write!(f, "openai_responses"),
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            Self::AnthropicMessages => write!(f, "anthropic_messages"),
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            .with_provider("openai")
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:        assert_eq!(model.provider_id, "openai");
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/config/persist.rs:            "openai".to_string(),
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/config/persist.rs:        assert!(loaded.providers.contains_key("openai"));
-/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/config/editor.rs:default_provider = "openai"
+## Analysis
 
-### Config Type Completeness
-- ProviderConfig struct no longer has compat_profile/profile fields
-- All construction sites updated (config/persist.rs test fixed)
-- Serialization/deserialization tested
-- Result: COMPLETE
+Phase 6.2 successfully wires the critical event gaps between Rust and Swift layers. The implementation correctly handles both the happy path (normal generation) and the interrupted-generation path for panel visibility commands.
 
-### Error Taxonomy Completeness
-- Legacy variants: 5 (ConfigError, AuthError, RequestError, StreamError, ToolError)
-- New locked variants: 10 (ConfigValidation, SecretResolution, ProviderConfig, StreamingParse,
-  ToolValidation, ToolExecution, Timeout, Provider, Session, Continuation)
-- code() method: exhaustive match
-- is_retryable(): exhaustive match
-- Result: COMPLETE AND SOUND
+## Findings
 
-### Grade: A
-### Verdict: PASS
+### Observer Memory Management (SHOULD FIX)
+The `NotificationCenter.addObserver(forName:object:queue:using:)` call in `FaeNativeApp.onAppear` does not capture its return value. This is a Swift memory management concern — the observer will remain registered but cannot be explicitly removed. If `onAppear` is called more than once, duplicate handlers will fire. The fix is to store in a `@State private var observers: [NSObjectProtocol] = []` or similar.
+
+### Duplicate Logic in Coordinator (SHOULD FIX)
+The ShowConversation/HideConversation/ShowCanvas/HideCanvas match arms exist in two places. This is DRY violation.
+
+### EKEventStore Lifecycle (INFO)
+Creating a new `EKEventStore()` per permission request is acceptable but slightly wasteful. For production quality, consider caching the store. Low priority.
+
+### Missing "open canvas" synonym in ListModels check (INFO)
+The voice command parser currently matches "show models" under ListModels. This could theoretically conflict if a user says "show canvas models" but since the patterns use exact match via `matches_any`, there is no conflict. Fine.
+
+## Grade: B+
+
+Clean implementation. The observer retention issue is the most actionable finding.

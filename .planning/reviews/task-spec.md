@@ -1,49 +1,66 @@
-# Task Specification Assessment
+# Task Assessor — Phase 6.2 Task 7
 
-## Phase 6.1b: fae_llm Provider Cleanup
+**Reviewer:** Task Assessor
+**Scope:** PLAN-phase-6.2.md exit criteria vs. implementation
 
-## Task 1: Delete provider files and contract tests
-Expected deletions:
-- [x] src/fae_llm/providers/openai.rs
-- [x] src/fae_llm/providers/anthropic.rs
-- [x] src/fae_llm/providers/fallback.rs
-- [x] src/fae_llm/providers/profile.rs
-- [x] src/fae_llm/providers/profile_tests.rs
-- [x] src/fae_llm/providers/sse.rs
-- [x] src/fae_llm/providers/local_probe.rs
-- [x] src/fae_llm/providers/local_probe_tests.rs
-- [x] tests/anthropic_contract.rs
-- [x] tests/openai_contract.rs
-- [x] src/fae_llm/providers/mod.rs updated
-- [x] src/fae_llm/mod.rs updated
-Status: COMPLETE
+## Task Completion Assessment
 
-## Task 2: Fix compile errors from deletions
-- [x] ProviderConfig fields removed (compat_profile, profile)
-- [x] config/defaults.rs updated (no OpenAI/Anthropic defaults)
-- [x] config/service.rs validation updated for Local endpoint
-- [x] Integration tests fixed
-- [x] Error module locked taxonomy additions (backward compatible)
-Status: COMPLETE
+### Task 1: Wire PipelineAuxBridgeController to AuxiliaryWindowManager
+**COMPLETE**
+- `weak var auxiliaryWindows: AuxiliaryWindowManager?` added to PipelineAuxBridgeController ✓
+- `canvasController?.isVisible = visible` replaced with `auxiliaryWindows?.showCanvas()/hideCanvas()` ✓
+- `pipelineAux.auxiliaryWindows = auxiliaryWindows` wired in FaeNativeApp.onAppear ✓
 
-## Task 3: Clean credential and diagnostics references
-- [x] 'llm.api_key' removed from KNOWN_CREDENTIAL_ACCOUNTS (diagnostics/mod.rs)
-- [x] doc examples updated in credentials/types.rs
-- [x] doc examples updated in credentials/mod.rs
-- [x] doc examples updated in credentials/migration.rs
-- [x] test examples updated in credentials/loader.rs
-Status: COMPLETE
+### Task 2: Add pipeline.conversation_visibility event — Rust side
+**COMPLETE**
+- `RuntimeEvent::ConversationVisibility { visible: bool }` added to runtime.rs ✓
+- `map_runtime_event` maps it to `"pipeline.conversation_visibility"` ✓
+- Unit test added ✓
 
-## Task 4: Final verification
-- Verification: requires running cargo fmt, clippy, test
-- Will be run in Build Validator step
-Status: PENDING BUILD VALIDATION
+### Task 3: Wire "show conversation" voice command through coordinator → Swift panel
+**COMPLETE**
+- `ShowConversation`, `HideConversation`, `ShowCanvas`, `HideCanvas` added to VoiceCommand ✓
+- Parse patterns added for "show/open/hide/close conversation/canvas" ✓
+- Coordinator emits ConversationVisibility/ConversationCanvasVisibility events ✓
+- BackendEventRouter routes `"pipeline.conversation_visibility"` to `.faePipelineState` ✓
+- PipelineAuxBridgeController handles `"pipeline.conversation_visibility"` → auxiliaryWindows calls ✓
 
-## Overall Assessment
-- All 4 tasks completed as specified
-- Scope correctly limited to provider cleanup only
-- No over-reach or under-delivery observed
-- Phase objective met: only embedded models remain
+### Task 4: Extend JitPermissionController for calendar, reminders, mail
+**COMPLETE**
+- `requestCalendar` using `EKEventStore.requestFullAccessToEvents()` ✓
+- `requestReminders` using `EKEventStore.requestFullAccessToReminders()` ✓
+- `requestMail` opening System Settings (correct fallback) ✓
+- All three wired in handleRequest dispatch ✓
 
-## Vote: PASS
-## Grade: A
+### Task 5: Wire OnboardingController.onPermissionResult to HostCommandBridge
+**COMPLETE**
+- `onboarding.onPermissionResult` set in FaeNativeApp.onAppear ✓
+- Posts `.faeCapabilityGranted` notification on grant ✓
+
+### Task 6: Wire Rust device events to DeviceHandoffController
+**COMPLETE**
+- `.faeDeviceTransfer` notification name added ✓
+- BackendEventRouter routes device.transfer_requested/device.home_requested to it ✓
+- FaeNativeApp subscribes and dispatches to `handoff.move(to:)`/`handoff.goHome()` ✓
+- `handoff.snapshotProvider` and `handoff.orbState` wired ✓
+
+### Task 7: Wire Rust handler request_move/request_go_home to emit events
+**COMPLETE**
+- `request_move()` emits `pipeline.canvas_visibility: false` ✓
+- `request_move()` emits `device.transfer_requested` with target ✓
+- `request_go_home()` emits `device.home_requested` ✓
+- Unit tests added for both ✓
+
+## Exit Criteria Check
+
+| Criterion | Status |
+|-----------|--------|
+| "Show conversation" opens conversation NSPanel | WIRED (voice cmd → event → PipelineAux → auxiliaryWindows.showConversation()) |
+| "Show canvas" opens canvas NSPanel | WIRED |
+| `pipeline.canvas_visibility` opens/closes canvas panel | WIRED (not just sets Bool) |
+| JIT permission for calendar/reminders/mail | WIRED |
+| Permission grants propagate `capability.grant` to Rust | WIRED (onboarding path) |
+| "Move to iPhone" calls DeviceHandoffController.move() | WIRED |
+
+## Verdict
+**COMPLETE — All 7 tasks fully implemented**

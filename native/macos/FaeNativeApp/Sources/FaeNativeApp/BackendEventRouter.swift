@@ -194,6 +194,14 @@ final class BackendEventRouter: Sendable {
                 userInfo: ["capability": capability, "reason": reason, "jit": true]
             )
 
+        // MARK: - Device Handoff
+
+        case "device.transfer_requested", "device.home_requested":
+            NotificationCenter.default.post(
+                name: .faeDeviceTransfer, object: nil,
+                userInfo: ["event": event, "payload": payload]
+            )
+
         // MARK: - Runtime Lifecycle
 
         case "runtime.starting", "runtime.started", "runtime.stopped", "runtime.error":
@@ -223,6 +231,7 @@ final class BackendEventRouter: Sendable {
                 "pipeline.permissions_changed",
                 "pipeline.conversation_snapshot",
                 "pipeline.canvas_visibility",
+                "pipeline.conversation_visibility",
                 "pipeline.voice_command",
                 "pipeline.viseme",
                 "pipeline.skill_proposal",
@@ -231,8 +240,6 @@ final class BackendEventRouter: Sendable {
                 "pipeline.briefing_ready",
                 "pipeline.relationship_update",
                 // Host-command echo events from channel.rs
-                "device.transfer_requested",
-                "device.home_requested",
                 "conversation.gate_set",
                 "conversation.text_injected",
                 "conversation.link_detected",
@@ -344,6 +351,15 @@ extension Notification.Name {
     ///   `"runtime.stopped"`, `"runtime.error"`
     /// - `payload: [String: Any]` — event payload (may contain `"error"` message)
     static let faeRuntimeState = Notification.Name("faeRuntimeState")
+
+    // MARK: Device Handoff
+
+    /// Posted when device handoff events arrive (transfer requested, go home).
+    ///
+    /// userInfo keys:
+    /// - `event: String` — `"device.transfer_requested"` or `"device.home_requested"`
+    /// - `payload: [String: Any]` — event payload (may contain `"target"`)
+    static let faeDeviceTransfer = Notification.Name("faeDeviceTransfer")
 
     /// Posted when model download/load progress is reported during startup.
     ///

@@ -1872,6 +1872,7 @@ async fn run_llm_stage(
                             }
                             _ => {}
                         }
+                        emit_panel_visibility_events(&cmd, &runtime_tx);
                         if !response.is_empty() {
                             let _ = tx
                                 .send(SentenceChunk {
@@ -2124,6 +2125,8 @@ async fn run_llm_stage(
                     info!("voice command interrupted active generation");
 
                     if let Some(cmd) = cmd {
+                        // Emit panel visibility events for the GUI.
+                        emit_panel_visibility_events(&cmd, &runtime_tx);
                         let response = handle_voice_command(&cmd);
                         if !response.is_empty() {
                             let _ = tx.send(SentenceChunk { text: response, is_final: true }).await;
@@ -2455,6 +2458,32 @@ fn capture_memory_turn(
     }
 }
 
+/// Emit panel visibility runtime events for the given voice command.
+///
+/// Handles ShowConversation/HideConversation/ShowCanvas/HideCanvas.
+/// Called from both the normal and interrupted-generation code paths.
+fn emit_panel_visibility_events(
+    cmd: &crate::voice_command::VoiceCommand,
+    runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
+) {
+    use crate::voice_command::VoiceCommand;
+    match cmd {
+        VoiceCommand::ShowConversation | VoiceCommand::HideConversation => {
+            if let Some(rt) = runtime_tx {
+                let visible = matches!(cmd, VoiceCommand::ShowConversation);
+                let _ = rt.send(RuntimeEvent::ConversationVisibility { visible });
+            }
+        }
+        VoiceCommand::ShowCanvas | VoiceCommand::HideCanvas => {
+            if let Some(rt) = runtime_tx {
+                let visible = matches!(cmd, VoiceCommand::ShowCanvas);
+                let _ = rt.send(RuntimeEvent::ConversationCanvasVisibility { visible });
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Handle a voice command.
 ///
 /// Returns a human-readable response string for TTS.
@@ -2469,6 +2498,10 @@ fn handle_voice_command(cmd: &crate::voice_command::VoiceCommand) -> String {
             "Voice model info is not currently available.".to_owned()
         }
         VoiceCommand::Help => crate::voice_command::help_response(),
+        VoiceCommand::ShowConversation => "Opening conversation.".to_owned(),
+        VoiceCommand::HideConversation => "Closing conversation.".to_owned(),
+        VoiceCommand::ShowCanvas => "Opening canvas.".to_owned(),
+        VoiceCommand::HideCanvas => "Closing canvas.".to_owned(),
         VoiceCommand::GrantPermissions => {
             "Permissions granted. I can now use tools without asking.".to_owned()
         }

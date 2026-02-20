@@ -1,5 +1,6 @@
 import AVFoundation
 @preconcurrency import Contacts
+import EventKit
 import Foundation
 
 /// Handles just-in-time (JIT) native permission requests during an active conversation.
@@ -13,6 +14,9 @@ import Foundation
 /// Supported capabilities (JIT):
 /// - `"microphone"` → `AVCaptureDevice.requestAccess(for: .audio)`
 /// - `"contacts"` → `CNContactStore.requestAccess(for: .contacts)`
+/// - `"calendar"` → `EKEventStore.requestFullAccessToEvents()`
+/// - `"reminders"` → `EKEventStore.requestFullAccessToReminders()`
+/// - `"mail"` → opens System Settings > Privacy & Security > Automation
 /// - Any other value → deny immediately (unsupported JIT permission)
 @MainActor
 final class JitPermissionController: ObservableObject {
@@ -51,6 +55,12 @@ final class JitPermissionController: ObservableObject {
             requestMicrophone(capability: capability)
         case "contacts":
             requestContacts(capability: capability)
+        case "calendar":
+            requestCalendar(capability: capability)
+        case "reminders":
+            requestReminders(capability: capability)
+        case "mail":
+            requestMail(capability: capability)
         default:
             NSLog("JitPermissionController: unsupported JIT capability '%@' — denying", capability)
             postDenied(capability: capability)
@@ -84,6 +94,50 @@ final class JitPermissionController: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Calendar
+
+    private func requestCalendar(capability: String) {
+        let store = EKEventStore()
+        store.requestFullAccessToEvents { [weak self] granted, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if granted {
+                    self.postGranted(capability: capability)
+                } else {
+                    self.postDenied(capability: capability)
+                }
+            }
+        }
+    }
+
+    // MARK: - Reminders
+
+    private func requestReminders(capability: String) {
+        let store = EKEventStore()
+        store.requestFullAccessToReminders { [weak self] granted, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if granted {
+                    self.postGranted(capability: capability)
+                } else {
+                    self.postDenied(capability: capability)
+                }
+            }
+        }
+    }
+
+    // MARK: - Mail (System Settings fallback)
+
+    private func requestMail(capability: String) {
+        // Mail automation has no direct permission API; open Privacy settings
+        // so the user can grant access manually.
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+            NSWorkspace.shared.open(url)
+        }
+        // Report denied since we can't programmatically detect the grant.
+        postDenied(capability: capability)
     }
 
     // MARK: - Result Notifications
