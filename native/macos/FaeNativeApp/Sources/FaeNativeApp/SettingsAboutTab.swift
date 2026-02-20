@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsAboutTab: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var onboarding: OnboardingController
+    @State private var showResetConfirmation = false
     let commandSender: HostCommandSender?
 
     var body: some View {
@@ -38,6 +39,25 @@ struct SettingsAboutTab: View {
                 Text("Resets onboarding state so you can walk through setup again on next launch.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Data") {
+                Button("Reset Fae...") {
+                    showResetConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .foregroundStyle(.red)
+                Text("Deletes all conversations, memories, settings, cached models, and stored credentials. Fae will quit and start fresh on next launch.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .alert("Reset Fae?", isPresented: $showResetConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete All Data", role: .destructive) {
+                    resetAllData()
+                }
+            } message: {
+                Text("This will permanently delete all your data including conversations, memories, voice recordings, settings, and credentials. This cannot be undone.")
             }
 
             Section("Cross-Device Handoff") {
@@ -86,6 +106,14 @@ struct SettingsAboutTab: View {
 
     private var appBuild: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    }
+
+    private func resetAllData() {
+        commandSender?.sendCommand(name: "data.delete_all", payload: [:])
+        // Give the backend a moment to finish deletion, then quit.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     private func resetOnboarding() {

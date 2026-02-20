@@ -239,6 +239,87 @@ fn add_file_to_zip<W: Write + std::io::Seek>(
     Ok(())
 }
 
+/// Known credential account names that may be stored in the keychain.
+const KNOWN_CREDENTIAL_ACCOUNTS: &[&str] = &[
+    "llm.api_key",
+    "discord.bot_token",
+    "whatsapp.access_token",
+    "whatsapp.verify_token",
+    "gateway.bearer_token",
+];
+
+/// Deletes all user data, cache, and credentials for a full GDPR-compliant reset.
+///
+/// Removes:
+/// - The entire Fae data directory (conversations, memory, logs, skills, etc.)
+/// - The Fae cache directory (downloaded models, browser cache)
+/// - The Fae config directory (config.toml, scheduler state)
+/// - All credentials stored in the keychain under `com.saorsalabs.fae`
+///
+/// Returns a list of items that could not be deleted. An empty list means
+/// complete success.
+///
+/// # Errors
+///
+/// Returns an error only if a critical filesystem operation fails in an
+/// unexpected way. Individual deletion failures are collected and returned
+/// in the success variant.
+pub fn delete_all_user_data() -> Result<Vec<String>> {
+    let mut failures: Vec<String> = Vec::new();
+
+    // 1. Delete data directory.
+    let data = crate::fae_dirs::data_dir();
+    if data.is_dir() {
+        tracing::info!("delete_all_user_data: removing data directory: {}", data.display());
+        if let Err(e) = fs::remove_dir_all(&data) {
+            failures.push(format!("data dir ({}): {e}", data.display()));
+        }
+    }
+
+    // 2. Delete cache directory.
+    let cache = crate::fae_dirs::cache_dir();
+    if cache.is_dir() {
+        tracing::info!("delete_all_user_data: removing cache directory: {}", cache.display());
+        if let Err(e) = fs::remove_dir_all(&cache) {
+            failures.push(format!("cache dir ({}): {e}", cache.display()));
+        }
+    }
+
+    // 3. Delete config directory.
+    let config = crate::fae_dirs::config_dir();
+    if config.is_dir() {
+        tracing::info!("delete_all_user_data: removing config directory: {}", config.display());
+        if let Err(e) = fs::remove_dir_all(&config) {
+            failures.push(format!("config dir ({}): {e}", config.display()));
+        }
+    }
+
+    // 4. Delete keychain credentials.
+    let manager = crate::credentials::create_manager();
+    for account in KNOWN_CREDENTIAL_ACCOUNTS {
+        let cred_ref = crate::credentials::CredentialRef::Keychain {
+            service: "com.saorsalabs.fae".to_owned(),
+            account: (*account).to_owned(),
+        };
+        tracing::info!("delete_all_user_data: removing keychain credential: {account}");
+        if let Err(e) = manager.delete(&cred_ref) {
+            failures.push(format!("keychain ({account}): {e}"));
+        }
+    }
+
+    if failures.is_empty() {
+        tracing::info!("delete_all_user_data: all user data deleted successfully");
+    } else {
+        tracing::warn!(
+            "delete_all_user_data: completed with {} failures: {:?}",
+            failures.len(),
+            failures
+        );
+    }
+
+    Ok(failures)
+}
+
 /// Exports all user data to a ZIP file at the given destination path.
 ///
 /// Includes: configuration files, SOUL.md, memory records, skills, logs,
@@ -472,6 +553,63 @@ mod tests {
         assert!(meta.contains(env!("CARGO_PKG_VERSION")));
         assert!(meta.contains("Included:"));
         assert!(meta.contains("Excluded"));
+    }
+
+    /// Consolidated deletion test — verifies `delete_all_user_data` removes
+    /// data, config, and cache directories.
+    #[test]
+    fn test_delete_all_user_data() {
+        let tmp = tempfile::TempDir::new().unwrap_or_else(|_| unreachable!());
+
+        let data_dir = tmp.path().join("fae-del-data");
+        let config_dir = tmp.path().join("fae-del-config");
+        let cache_dir = tmp.path().join("fae-del-cache");
+        fs::create_dir_all(&data_dir).unwrap_or_else(|_| unreachable!());
+        fs::create_dir_all(&config_dir).unwrap_or_else(|_| unreachable!());
+        fs::create_dir_all(&cache_dir).unwrap_or_else(|_| unreachable!());
+
+        // Populate with some files.
+        fs::write(data_dir.join("SOUL.md"), "# Soul").unwrap_or_else(|_| unreachable!());
+        fs::write(config_dir.join("config.toml"), "[test]").unwrap_or_else(|_| unreachable!());
+        fs::write(cache_dir.join("model.onnx"), "fake model").unwrap_or_else(|_| unreachable!());
+
+        let result = with_test_dirs(&data_dir, &config_dir, &cache_dir, || {
+            delete_all_user_data()
+        });
+
+        assert!(result.is_ok(), "delete_all_user_data failed: {result:?}");
+        let failures = result.unwrap_or_else(|_| unreachable!());
+        // Keychain deletions may fail in test env (no actual keychain items),
+        // but filesystem deletions should succeed.
+        assert!(!data_dir.exists(), "data directory should be deleted");
+        assert!(!config_dir.exists(), "config directory should be deleted");
+        assert!(!cache_dir.exists(), "cache directory should be deleted");
+        // Any failures should only be keychain-related (not found is OK).
+        for f in &failures {
+            assert!(
+                f.contains("keychain"),
+                "only keychain failures expected, got: {f}"
+            );
+        }
+    }
+
+    /// Verify `delete_all_user_data` succeeds when directories don't exist.
+    #[test]
+    fn test_delete_all_user_data_missing_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap_or_else(|_| unreachable!());
+
+        let data_dir = tmp.path().join("nonexistent-data");
+        let config_dir = tmp.path().join("nonexistent-config");
+        let cache_dir = tmp.path().join("nonexistent-cache");
+
+        let result = with_test_dirs(&data_dir, &config_dir, &cache_dir, || {
+            delete_all_user_data()
+        });
+
+        assert!(
+            result.is_ok(),
+            "should succeed with nonexistent dirs: {result:?}"
+        );
     }
 
     /// Helper: set env overrides, run closure, restore env.

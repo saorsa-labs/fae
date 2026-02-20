@@ -66,6 +66,8 @@ pub enum CommandName {
     ConfigGet,
     #[serde(rename = "config.patch")]
     ConfigPatch,
+    #[serde(rename = "data.delete_all")]
+    DataDeleteAll,
 }
 
 impl CommandName {
@@ -102,6 +104,7 @@ impl CommandName {
             Self::ConversationLinkDetected => "conversation.link_detected",
             Self::ConfigGet => "config.get",
             Self::ConfigPatch => "config.patch",
+            Self::DataDeleteAll => "data.delete_all",
         }
     }
 
@@ -138,6 +141,7 @@ impl CommandName {
             "conversation.link_detected" => Some(Self::ConversationLinkDetected),
             "config.get" => Some(Self::ConfigGet),
             "config.patch" => Some(Self::ConfigPatch),
+            "data.delete_all" => Some(Self::DataDeleteAll),
             _ => None,
         }
     }

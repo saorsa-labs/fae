@@ -34,5 +34,19 @@
   <!-- Microphone access for voice input -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+
+  <!-- Contacts access for onboarding user profile -->
+  <key>com.apple.security.personal-information.addressbook</key>
+  <true/>
+
+  <!-- Calendar and reminders access for scheduling assistance -->
+  <key>com.apple.security.personal-information.calendars</key>
+  <true/>
+
+  <!-- Shared keychain access for future extensions -->
+  <key>keychain-access-groups</key>
+  <array>
+    <string>$(AppIdentifierPrefix)com.saorsalabs.fae</string>
+  </array>
 </dict>
 </plist>

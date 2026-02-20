@@ -279,6 +279,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::SchedulerTriggerNow => self.handle_scheduler_trigger_now(envelope),
             CommandName::ConfigGet => self.handle_config_get(envelope),
             CommandName::ConfigPatch => self.handle_config_patch(envelope),
+            CommandName::DataDeleteAll => self.handle_data_delete_all(envelope),
         }
     }
 
@@ -730,6 +731,26 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true, "key": key}),
+        ))
+    }
+
+    fn handle_data_delete_all(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let failures = crate::diagnostics::delete_all_user_data()?;
+        let success = failures.is_empty();
+        self.emit_event(
+            "data.deleted",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "success": success,
+                "failures": failures,
+            }),
+        );
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "success": success,
+                "failures": failures,
+            }),
         ))
     }
 

@@ -62,5 +62,11 @@
   <string>Fae reads your contact card to personalise your experience with your name.</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Fae can automate supported apps only when you explicitly request actions.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Fae needs camera access to see and describe what's in front of you when you ask.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Fae needs calendar access to help manage your schedule when you ask.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>Fae needs reminders access to help manage your tasks when you ask.</string>
 </dict>
 </plist>
