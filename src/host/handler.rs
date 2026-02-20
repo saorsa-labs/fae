@@ -681,7 +681,10 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             warn!("failed to save primary user to memory: {e}");
         }
 
-        info!(name, "onboarding.set_user_name persisted to config and memory");
+        info!(
+            name,
+            "onboarding.set_user_name persisted to config and memory"
+        );
         Ok(())
     }
 

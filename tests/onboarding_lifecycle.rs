@@ -312,10 +312,7 @@ fn onboarding_set_user_name_empty_returns_error() {
         serde_json::json!({"name": "   "}),
     );
     let result = server.route(&envelope);
-    assert!(
-        result.is_err(),
-        "empty/whitespace name should be rejected"
-    );
+    assert!(result.is_err(), "empty/whitespace name should be rejected");
 }
 
 #[test]

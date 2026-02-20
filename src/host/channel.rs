@@ -267,9 +267,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::OnboardingGetState => self.handle_onboarding_get_state(envelope),
             CommandName::OnboardingAdvance => self.handle_onboarding_advance(envelope),
             CommandName::OnboardingComplete => self.handle_onboarding_complete(envelope),
-            CommandName::OnboardingSetUserName => {
-                self.handle_onboarding_set_user_name(envelope)
-            }
+            CommandName::OnboardingSetUserName => self.handle_onboarding_set_user_name(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
