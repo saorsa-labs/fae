@@ -135,8 +135,6 @@ mod tests {
                     var: "OPENAI_API_KEY".to_string(),
                 },
                 models: vec!["gpt-4o".to_string()],
-                compat_profile: None,
-                profile: None,
             },
         );
         config.runtime.request_timeout_secs = 60;

@@ -241,7 +241,6 @@ fn add_file_to_zip<W: Write + std::io::Seek>(
 
 /// Known credential account names that may be stored in the keychain.
 const KNOWN_CREDENTIAL_ACCOUNTS: &[&str] = &[
-    "llm.api_key",
     "discord.bot_token",
     "whatsapp.access_token",
     "whatsapp.verify_token",

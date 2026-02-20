@@ -158,7 +158,7 @@ tool_mode = "full"
 fn test_partial_update_provider() {
     let (_dir, service) = setup_test_config();
 
-    // Get initial provider config
+    // Get initial provider config — default is "local"
     let initial = service.get().expect("get config");
     let provider_id = initial
         .defaults
@@ -168,7 +168,7 @@ fn test_partial_update_provider() {
 
     // Update only base_url
     let update = ProviderUpdate {
-        base_url: Some("https://custom.endpoint.com/v1".into()),
+        base_url: Some("http://custom-local:8080".into()),
         api_key: None,
     };
     service
@@ -182,13 +182,13 @@ fn test_partial_update_provider() {
         .get(provider_id)
         .expect("provider not found");
     assert_eq!(
-        provider.base_url, "https://custom.endpoint.com/v1",
+        provider.base_url, "http://custom-local:8080",
         "base_url not updated"
     );
 
-    // Verify api_key unchanged (still an Env variant)
+    // Verify api_key unchanged (local provider uses SecretRef::None)
     assert!(
-        matches!(provider.api_key, SecretRef::Env { .. }),
+        matches!(provider.api_key, SecretRef::None),
         "api_key was modified"
     );
 }
@@ -197,19 +197,21 @@ fn test_partial_update_provider() {
 fn test_partial_update_model() {
     let (_dir, service) = setup_test_config();
 
-    // Get initial model config
-    let initial = service.get().expect("get config");
-    let model_id = initial
-        .defaults
-        .default_model
-        .as_ref()
-        .expect("no default model");
-    let initial_display_name = initial
-        .models
-        .get(model_id)
-        .expect("model not found")
-        .display_name
-        .clone();
+    // Default config has no models — add one first
+    service
+        .update(|c| {
+            c.models.insert(
+                "test-model".to_string(),
+                fae::fae_llm::ModelConfig {
+                    model_id: "test-model-v1".to_string(),
+                    display_name: "Test Model".to_string(),
+                    tier: fae::fae_llm::ModelTier::Balanced,
+                    max_tokens: 4096,
+                },
+            );
+            c.defaults.default_model = Some("test-model".to_string());
+        })
+        .expect("failed to add model");
 
     // Update only max_tokens
     let update = ModelUpdate {
@@ -217,17 +219,17 @@ fn test_partial_update_model() {
         max_tokens: Some(8192),
     };
     service
-        .update_model(model_id, update)
+        .update_model("test-model", update)
         .expect("failed to update model");
 
     // Verify update applied
     let updated = service.get().expect("get config");
-    let model = updated.models.get(model_id).expect("model not found");
+    let model = updated.models.get("test-model").expect("model not found");
     assert_eq!(model.max_tokens, 8192, "max_tokens not updated");
 
     // Verify display_name unchanged
     assert_eq!(
-        model.display_name, initial_display_name,
+        model.display_name, "Test Model",
         "display_name was modified"
     );
 }

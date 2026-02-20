@@ -1,34 +1,48 @@
-# Code Quality Review — Iteration 2
+# Code Quality Review
 
-## Grade: A-
+## Scope: Phase 6.1b - fae_llm Provider Cleanup
 
-## Status of Previous Findings
+## Structural Changes Assessment
 
-### RESOLVED: Non-exhaustive ControlEvent match — FIXED
-`AudioDeviceChanged` and `DegradedMode` arms added with clear comments.
+### 1. Provider Architecture Simplification
+- Removed: OpenAI, Anthropic, fallback, local_probe, SSE, profile providers
+- Kept: local (embedded GGUF) + message (shared types)
+- Result: Significantly reduced codebase complexity
+- Quality: GOOD - Single responsibility preserved
 
-### STILL PRESENT (LOW): Redundant Arc clones — acceptable
-Not changed, not worth refactoring at this stage.
+### 2. Config Cleanup
+- Removed compat_profile and profile fields from ProviderConfig
+- These were OpenAI-specific compatibility fields
+- Local embedded provider doesn't need base_url validation
+- Quality: GOOD - Config is now coherent with architecture
 
-## New Findings
+### 3. Default Config Simplification
+- Before: 3 providers (openai, anthropic, local) + 2+ model entries
+- After: 1 provider (local) + no pre-configured models
+- Models added dynamically when downloaded
+- Quality: GOOD - Matches embedded-only architecture
 
-### OK: New test code quality is good
-The two acceptance-criterion tests are well-structured:
-- `clean_stop_does_not_emit_auto_restart_event`: clear setup, drain, action, drain, assert pattern
-- `unexpected_exit_emits_auto_restart_event`: correctly mirrors the watcher body for isolation
+### 4. Error Module
+- Added locked taxonomy variants alongside legacy variants
+- Legacy variants preserved for backward compatibility
+- Code/message pattern consistent throughout
+- Quality: GOOD - Progressive error taxonomy improvement
 
-### MINOR: `unexpected_exit_emits_auto_restart_event` is long (150+ lines)
-The test duplicates the watcher body to test it in isolation. This is acceptable since
-the watcher logic can't easily be unit-tested through the handler API. The length is
-justified by the need to replicate the exact watcher state machine.
+### 5. Credential Cleanup
+- doc examples updated from 'llm.api_key' to 'discord.bot_token'
+- KNOWN_CREDENTIAL_ACCOUNTS list trimmed (removed 'llm.api_key')
+- Changes are doc/metadata only
+- Quality: GOOD
 
-### OK: Comment clarity on new match arms
-```rust
-// New variants added in phase 5.2: no GUI action needed in the
-// Dioxus UI; the native app handles these via the host event channel.
-fae::pipeline::messages::ControlEvent::AudioDeviceChanged { .. } => {}
-fae::pipeline::messages::ControlEvent::DegradedMode { .. } => {}
-```
-Clear explanation of why the arms are empty.
+### 6. Integration Tests
+- Tests updated to reflect local-only provider
+- Comment preservation test correctly notes limitation of write_config_atomic
+- Quality: GOOD - Tests match current implementation reality
 
-## Verdict: PASS. No new MUST FIX or SHOULD FIX items.
+## Findings
+- No code quality issues found
+- All changes are consistent and coherent
+- Massive reduction in dead code
+
+## Vote: PASS
+## Grade: A

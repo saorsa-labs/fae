@@ -1,18 +1,40 @@
-# Complexity Review — Iteration 2
+# Complexity Review
 
-## Grade: B+
+## Scope: Phase 6.1b - fae_llm Provider Cleanup
 
-## Status of Previous Findings
+## Lines of Code Removed
+- Added lines: ~     116
+- Removed lines: ~    8669
+- Net reduction: ~8553 lines
 
-### STILL PRESENT (LOW): `request_runtime_start` length
-Not refactored — acceptable since no new complexity was added in this fix commit.
-The method is long but this is a pre-existing concern from the task implementation,
-not introduced by the fix commit.
+## Complexity Improvements
 
-## New Findings
+### fae_llm/providers/ module
+- Before: 8+ files, 4000+ lines
+- After: 2 files (local.rs, message.rs) + mod.rs
+- Complexity reduction: ~85%
+- Verdict: MAJOR IMPROVEMENT
 
-### MINOR: `unexpected_exit_emits_auto_restart_event` is 150+ lines
-Long test but justified by the need to replicate isolated watcher state.
-Not a production complexity issue.
+### fae_llm/config/defaults.rs
+- Before: 3 providers, 2+ models hardcoded
+- After: 1 provider, no hardcoded models
+- Function complexity: dramatically reduced
+- Verdict: GOOD
 
-## Verdict: No new complexity concerns introduced by fixes.
+### validate_config in service.rs
+- Added one conditional branch for Local endpoint type
+- Complexity increase: minimal (+1 branch)
+- Verdict: ACCEPTABLE
+
+## Remaining Complexity Concerns
+- FaeLlmError has 15 variants — this is intentional (locked taxonomy)
+- error_codes module has corresponding constants — necessary for stable API
+- No cyclomatic complexity issues identified
+
+## Summary
+- Overall complexity dramatically reduced
+- Code is simpler and more focused
+- Single-purpose modules remain
+
+## Vote: PASS
+## Grade: A

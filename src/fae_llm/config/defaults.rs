@@ -7,97 +7,29 @@ use std::path::Path;
 
 use super::persist::write_config_atomic;
 use super::types::{
-    DefaultsConfig, EndpointType, FaeLlmConfig, ModelConfig, ModelTier, ProviderConfig,
-    RuntimeConfig, SecretRef, ToolConfig, ToolMode,
+    DefaultsConfig, EndpointType, FaeLlmConfig, ProviderConfig, RuntimeConfig, SecretRef,
+    ToolConfig, ToolMode,
 };
 
-/// Generate a default configuration with common providers and tools.
+/// Generate a default configuration with local embedded provider and tools.
 ///
 /// Includes:
-/// - OpenAI provider (gpt-4o) with env-based API key
-/// - Anthropic provider (claude-sonnet-4.5) with env-based API key
-/// - Local OpenAI-compatible provider template (disabled, explicit endpoint required)
+/// - Local embedded provider (downloaded GGUF models)
 /// - All 4 tools enabled (read, bash, edit, write)
 /// - Tool mode: read_only (safe default)
 /// - Reasonable timeouts (30s, 3 retries)
 pub fn default_config() -> FaeLlmConfig {
     let mut config = FaeLlmConfig::default();
 
-    // OpenAI provider
-    config.providers.insert(
-        "openai".to_string(),
-        ProviderConfig {
-            endpoint_type: EndpointType::OpenAI,
-            enabled: true,
-            base_url: "https://api.openai.com/v1".to_string(),
-            api_key: SecretRef::Env {
-                var: "OPENAI_API_KEY".to_string(),
-            },
-            models: vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()],
-            compat_profile: None,
-            profile: None,
-        },
-    );
-
-    // Anthropic provider
-    config.providers.insert(
-        "anthropic".to_string(),
-        ProviderConfig {
-            endpoint_type: EndpointType::Anthropic,
-            enabled: true,
-            base_url: "https://api.anthropic.com".to_string(),
-            api_key: SecretRef::Env {
-                var: "ANTHROPIC_API_KEY".to_string(),
-            },
-            models: vec![
-                "claude-sonnet-4-5-20250929".to_string(),
-                "claude-haiku-4-5-20251001".to_string(),
-            ],
-            compat_profile: None,
-            profile: None,
-        },
-    );
-
-    // Local provider
+    // Local embedded provider
     config.providers.insert(
         "local".to_string(),
         ProviderConfig {
             endpoint_type: EndpointType::Local,
-            enabled: false,
+            enabled: true,
             base_url: String::new(),
             api_key: SecretRef::None,
             models: Vec::new(),
-            compat_profile: None,
-            profile: None,
-        },
-    );
-
-    // Models
-    config.models.insert(
-        "gpt-4o".to_string(),
-        ModelConfig {
-            model_id: "gpt-4o".to_string(),
-            display_name: "GPT-4o".to_string(),
-            tier: ModelTier::Balanced,
-            max_tokens: 16384,
-        },
-    );
-    config.models.insert(
-        "gpt-4o-mini".to_string(),
-        ModelConfig {
-            model_id: "gpt-4o-mini".to_string(),
-            display_name: "GPT-4o Mini".to_string(),
-            tier: ModelTier::Fast,
-            max_tokens: 16384,
-        },
-    );
-    config.models.insert(
-        "claude-sonnet-4-5".to_string(),
-        ModelConfig {
-            model_id: "claude-sonnet-4-5-20250929".to_string(),
-            display_name: "Claude Sonnet 4.5".to_string(),
-            tier: ModelTier::Balanced,
-            max_tokens: 8192,
         },
     );
 
@@ -116,8 +48,8 @@ pub fn default_config() -> FaeLlmConfig {
 
     // Defaults
     config.defaults = DefaultsConfig {
-        default_provider: Some("anthropic".to_string()),
-        default_model: Some("claude-sonnet-4-5".to_string()),
+        default_provider: Some("local".to_string()),
+        default_model: None,
         tool_mode: ToolMode::ReadOnly,
         reasoning: crate::fae_llm::types::ReasoningLevel::Off,
     };
@@ -163,19 +95,10 @@ mod tests {
     }
 
     #[test]
-    fn default_config_has_providers() {
+    fn default_config_has_local_provider() {
         let config = default_config();
-        assert!(config.providers.contains_key("openai"));
-        assert!(config.providers.contains_key("anthropic"));
         assert!(config.providers.contains_key("local"));
-        assert_eq!(config.providers.len(), 3);
-    }
-
-    #[test]
-    fn default_config_has_models() {
-        let config = default_config();
-        assert!(config.models.contains_key("gpt-4o"));
-        assert!(config.models.contains_key("claude-sonnet-4-5"));
+        assert_eq!(config.providers.len(), 1);
     }
 
     #[test]
@@ -193,10 +116,7 @@ mod tests {
     fn default_config_safe_defaults() {
         let config = default_config();
         assert_eq!(config.defaults.tool_mode, ToolMode::ReadOnly);
-        assert_eq!(
-            config.defaults.default_provider,
-            Some("anthropic".to_string())
-        );
+        assert_eq!(config.defaults.default_provider, Some("local".to_string()));
     }
 
     #[test]
@@ -214,7 +134,6 @@ mod tests {
         assert!(result.is_ok());
         let toml_str = result.unwrap_or_default();
         assert!(toml_str.contains("[providers."));
-        assert!(toml_str.contains("[models."));
         assert!(toml_str.contains("[tools."));
         assert!(toml_str.contains("[defaults]"));
         assert!(toml_str.contains("[runtime]"));

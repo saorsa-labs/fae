@@ -209,13 +209,13 @@ mod tests {
 
     #[test]
     fn resolve_keychain_variant() {
-        let mgr = MockManager::new().with_entry("llm.api_key", "sk-from-keychain");
+        let mgr = MockManager::new().with_entry("discord.bot_token", "xoxb-from-keychain");
         let cred = CredentialRef::Keychain {
             service: "com.saorsalabs.fae".to_owned(),
-            account: "llm.api_key".to_owned(),
+            account: "discord.bot_token".to_owned(),
         };
         let result = resolve_credential(&cred, &mgr).unwrap();
-        assert_eq!(result, "sk-from-keychain");
+        assert_eq!(result, "xoxb-from-keychain");
     }
 
     #[test]

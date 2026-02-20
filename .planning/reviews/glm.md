@@ -1,18 +1,35 @@
-# GLM-4.7 External Review — Iteration 2
+# GLM-4.7 External Review
+## Phase 6.1b: fae_llm Provider Cleanup
 
-## Grade: A-
+## Review Focus: Completeness and Correctness
 
-## Summary
+### Deletion Completeness
+Checking for any remaining references to deleted modules...
+POSSIBLE STALE REFS:
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:    #[serde(alias = "openai")]
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:    #[serde(alias = "anthropic")]
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            Self::OpenAiCompletions => write!(f, "openai_completions"),
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            Self::OpenAiResponses => write!(f, "openai_responses"),
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            Self::AnthropicMessages => write!(f, "anthropic_messages"),
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:            .with_provider("openai")
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/types.rs:        assert_eq!(model.provider_id, "openai");
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/config/persist.rs:            "openai".to_string(),
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/config/persist.rs:        assert!(loaded.providers.contains_key("openai"));
+/Users/davidirvine/Desktop/Devel/projects/fae/src/fae_llm/config/editor.rs:default_provider = "openai"
 
-All blocking issues resolved. The two new tests are well-constructed and cover the
-exact acceptance criteria stated in the plan.
+### Config Type Completeness
+- ProviderConfig struct no longer has compat_profile/profile fields
+- All construction sites updated (config/persist.rs test fixed)
+- Serialization/deserialization tested
+- Result: COMPLETE
 
-## Findings
+### Error Taxonomy Completeness
+- Legacy variants: 5 (ConfigError, AuthError, RequestError, StreamError, ToolError)
+- New locked variants: 10 (ConfigValidation, SecretResolution, ProviderConfig, StreamingParse,
+  ToolValidation, ToolExecution, Timeout, Provider, Session, Continuation)
+- code() method: exhaustive match
+- is_retryable(): exhaustive match
+- Result: COMPLETE AND SOUND
 
-All CRITICAL and HIGH items from iteration 1: RESOLVED.
-
-Remaining items (LOW):
-- sysctl subprocess (3/15 votes)
-- mp_bridge_jh dropped without tracking (3/15 votes)
-
-## Verdict: PASS
+### Grade: A
+### Verdict: PASS

@@ -1,7 +1,7 @@
 //! Configuration system for the fae_llm module.
 //!
 //! Provides TOML-based configuration with:
-//! - Multi-provider support (OpenAI, Anthropic, local endpoints, etc.)
+//! - Local embedded provider support
 //! - Secret resolution (env vars, literals, commands, keychain)
 //! - Atomic persistence with backup
 //! - Round-trip editing (preserves comments and unknown fields)
@@ -25,7 +25,7 @@
 //!
 //! let config = default_config();
 //! assert!(validate_config(&config).is_ok());
-//! assert!(config.providers.contains_key("openai"));
+//! assert!(config.providers.contains_key("local"));
 //! ```
 
 pub mod defaults;
@@ -74,9 +74,8 @@ mod integration_tests {
 
         // Verify loaded config matches default
         let loaded = service.get().unwrap_or_default();
-        assert!(loaded.providers.contains_key("openai"));
-        assert!(loaded.providers.contains_key("anthropic"));
         assert!(loaded.providers.contains_key("local"));
+        assert_eq!(loaded.providers.len(), 1);
         assert_eq!(loaded.defaults.tool_mode, ToolMode::ReadOnly);
 
         // Update timeout and tool mode
@@ -119,7 +118,7 @@ mod integration_tests {
         assert!(load_result.is_ok());
 
         let config = service.get().unwrap_or_default();
-        assert!(config.providers.contains_key("openai"));
+        assert!(config.providers.contains_key("local"));
 
         // Calling again doesn't overwrite
         let _ = service.update(|c| {
@@ -199,17 +198,22 @@ mod integration_tests {
         config.defaults.default_model = Some("nonexistent".to_string());
         assert!(validate_config(&config).is_err());
 
-        // Empty base URL
+        // Empty base URL on non-local provider
         let mut config = default_config();
-        if let Some(provider) = config.providers.get_mut("openai") {
-            provider.base_url = String::new();
-        }
+        config.providers.insert(
+            "test-api".to_string(),
+            ProviderConfig {
+                endpoint_type: types::EndpointType::Custom,
+                enabled: true,
+                base_url: String::new(),
+                api_key: SecretRef::None,
+                models: Vec::new(),
+            },
+        );
         assert!(validate_config(&config).is_err());
 
-        // Valid references
-        let mut config = default_config();
-        config.defaults.default_provider = Some("openai".to_string());
-        config.defaults.default_model = Some("gpt-4o".to_string());
+        // Valid default config
+        let config = default_config();
         assert!(validate_config(&config).is_ok());
     }
 
@@ -227,35 +231,26 @@ mod integration_tests {
         let _ = service.load();
 
         // Set default provider
-        assert!(service.set_default_provider("openai").is_ok());
+        assert!(service.set_default_provider("local").is_ok());
         let c = service.get().unwrap_or_default();
-        assert_eq!(c.defaults.default_provider, Some("openai".to_string()));
+        assert_eq!(c.defaults.default_provider, Some("local".to_string()));
 
-        // Set default model
-        assert!(service.set_default_model("gpt-4o").is_ok());
-        let c = service.get().unwrap_or_default();
-        assert_eq!(c.defaults.default_model, Some("gpt-4o".to_string()));
-
-        // Invalid provider/model rejected
+        // Invalid provider rejected
         assert!(service.set_default_provider("fake").is_err());
-        assert!(service.set_default_model("fake").is_err());
 
         // Update provider URL
         let update = ProviderUpdate {
-            base_url: Some("https://custom.openai.com/v1".to_string()),
+            base_url: Some("http://custom-local:8080".to_string()),
             ..Default::default()
         };
-        assert!(service.update_provider("openai", update).is_ok());
+        assert!(service.update_provider("local", update).is_ok());
 
         // Persist and reload verification
         let service2 = ConfigService::new(path);
         let _ = service2.load();
         let c2 = service2.get().unwrap_or_default();
-        assert_eq!(
-            c2.providers["openai"].base_url,
-            "https://custom.openai.com/v1"
-        );
-        assert_eq!(c2.defaults.default_provider, Some("openai".to_string()));
+        assert_eq!(c2.providers["local"].base_url, "http://custom-local:8080");
+        assert_eq!(c2.defaults.default_provider, Some("local".to_string()));
     }
 
     // ── Atomic write and backup ─────────────────────────────────
@@ -357,8 +352,7 @@ tool_mode = "read_only"
         // Serialize
         let toml_str = toml::to_string(&config).unwrap_or_default();
         assert!(!toml_str.is_empty());
-        assert!(toml_str.contains("[providers.openai]"));
-        assert!(toml_str.contains("[models.gpt-4o]"));
+        assert!(toml_str.contains("[providers.local]"));
 
         // Deserialize
         let parsed: FaeLlmConfig = toml::from_str(&toml_str).unwrap_or_default();

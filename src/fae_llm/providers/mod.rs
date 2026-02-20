@@ -7,25 +7,9 @@
 //! # Available providers
 //!
 //! - [`message`] — Shared message types for all providers
-//! - [`openai`] — OpenAI Chat Completions and Responses API
-//! - [`anthropic`] — Anthropic Messages API
-//! - [`local`] — Local mistralrs GGUF inference
-//! - [`profile`] — Compatibility profiles for OpenAI-compatible providers
-//! - [`local_probe`] — Health-check and model discovery for local endpoints
+//! - [`local`] — Local mistralrs GGUF inference (embedded models)
 
-pub mod anthropic;
-pub mod fallback;
 pub mod local;
-pub mod local_probe;
 pub mod message;
-pub mod openai;
-pub mod profile;
-pub mod sse;
 
-pub use fallback::FallbackProvider;
 pub use local::{LocalMistralrsAdapter, LocalMistralrsConfig};
-
-#[cfg(test)]
-mod local_probe_tests;
-#[cfg(test)]
-mod profile_tests;

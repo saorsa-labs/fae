@@ -25,7 +25,7 @@ pub enum CredentialRef {
     Keychain {
         /// Service name (e.g., "com.saorsalabs.fae")
         service: String,
-        /// Account identifier (e.g., "llm.api_key", "discord.bot_token")
+        /// Account identifier (e.g., "discord.bot_token", "gateway.bearer_token")
         account: String,
     },
     /// Plaintext credential value (legacy, for migration).
@@ -221,7 +221,7 @@ mod tests {
     fn credential_ref_serde_keychain_json() {
         let cred_ref = CredentialRef::Keychain {
             service: "com.saorsalabs.fae".to_owned(),
-            account: "llm.api_key".to_owned(),
+            account: "discord.bot_token".to_owned(),
         };
 
         let serialized = serde_json::to_string(&cred_ref);

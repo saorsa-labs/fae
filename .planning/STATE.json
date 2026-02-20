@@ -7,20 +7,21 @@
     "name": "Dogfood Readiness"
   },
   "phase": {
-    "number": "6.1",
-    "name": "Backend Cleanup",
-    "plan": "PLAN-phase-6.1.md"
+    "number": "6.1b",
+    "name": "fae_llm Provider Cleanup",
+    "plan": "PLAN-phase-6.1b.md"
   },
   "progress": {
-    "total_tasks": 8,
-    "completed_tasks": 8,
+    "total_tasks": 4,
+    "completed_tasks": 4,
     "current_task": null
   },
+  "status": "phase_complete",
+  "last_updated": "2026-02-20T15:30:00Z",
   "review": {
     "status": "passed",
     "iteration": 1,
-    "last_verdict": "PASS"
-  },
-  "status": "phase_transition",
-  "last_updated": "2026-02-20T13:40:00Z"
+    "verdict": "PASS",
+    "timestamp": "2026-02-20T14:37:00Z"
+  }
 }

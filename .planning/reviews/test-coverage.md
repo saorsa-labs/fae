@@ -1,35 +1,42 @@
-# Test Coverage Review — Iteration 2
+# Test Coverage Review
 
-## Grade: A
+## Scope: Phase 6.1b - fae_llm Provider Cleanup
 
-## Status of Previous Findings
+## Tests Deleted (intentional)
+- tests/anthropic_contract.rs — provider no longer exists
+- tests/openai_contract.rs — provider no longer exists
+- src/fae_llm/providers/profile_tests.rs — profile module deleted
+- src/fae_llm/providers/local_probe_tests.rs — local_probe deleted
+- Rationale: Tests for deleted functionality should be deleted too
+- Verdict: PASS - Correct cleanup
 
-### RESOLVED: Missing acceptance-criterion tests — FIXED
+## Tests Updated
+- tests/llm_config_integration.rs
+  - Updated to reference only 'local' provider
+  - All test scenarios still meaningful
+  - Added dynamic model creation in test_partial_update_model
+  - Verdict: PASS
 
-Two new tests added to `src/host/handler.rs`:
+## Tests Retained
+- Unit tests in src/fae_llm/config/defaults.rs (updated)
+- Unit tests in src/fae_llm/config/service.rs (updated)
+- Unit tests in src/fae_llm/config/mod.rs (updated)
+- Unit tests in src/credentials/types.rs (updated)
+- Unit tests in src/credentials/loader.rs (updated)
+- Unit tests in src/credentials/migration.rs (updated)
+- Unit tests in src/fae_llm/error.rs (unchanged)
+- Verdict: PASS
 
-1. **`clean_stop_does_not_emit_auto_restart_event`**: Starts the handler, performs
-   a clean stop, waits 100ms for task settling, then verifies no `auto_restart`
-   `pipeline.control` event was emitted and `restart_count == 0`. PASS.
+## Coverage Assessment
+- Error codes: covered by error_codes tests
+- Config CRUD: covered by service tests and integration tests
+- Credential types: comprehensive serde round-trip tests
+- Default config: structure and field tests
+- Config validation: validation tests with edge cases
 
-2. **`unexpected_exit_emits_auto_restart_event`**: Constructs the watcher state
-   machine in isolation, cancels the token WITHOUT setting `clean_exit_flag`,
-   and verifies an `auto_restart` event is emitted with `attempt == 1` and
-   correct backoff. PASS.
+## Gaps
+- Local provider adapter (mistralrs) tests: not in scope for this cleanup phase
+- These are in src/fae_llm/providers/local.rs (unchanged)
 
-Both tests pass: confirmed by `cargo nextest run` (2551/2551).
-
-## Pre-existing Coverage (Confirmed Passing)
-
-- `restart_count_starts_at_zero` — PASS
-- `clean_stop_does_not_increment_restart_count` — PASS
-- `restart_backoff_constants_are_valid` — PASS
-- `runtime_start_transitions_to_running` — PASS
-- `runtime_stop_transitions_to_stopped` — PASS
-
-## Remaining Low-Priority Gap
-
-No test for `run_sysctl_u64` graceful degradation when sysctl unavailable.
-Acceptable — this is platform-specific and difficult to mock without subprocess isolation.
-
-## Verdict: PASS. All plan acceptance-criterion tests now exist and pass.
+## Vote: PASS
+## Grade: A-

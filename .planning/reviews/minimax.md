@@ -1,22 +1,35 @@
-# MiniMax External Review — Iteration 2
+# MiniMax External Review
+## Phase 6.1b: fae_llm Provider Cleanup
 
-## Grade: A-
+## Architectural Review
 
-## Summary
+### Before vs After
+| Aspect | Before | After |
+|--------|--------|-------|
+| Provider count | 4+ (openai, anthropic, local, fallback) | 1 (local) |
+| External API calls | HTTP/SSE to OpenAI, Anthropic | None |
+| API key handling | env vars, keychain refs for LLM | Removed |
+| Config defaults | 3 providers + 3 models | 1 provider, 0 models |
+| Attack surface | HTTP external, SSE streaming | Embedded only |
 
-Both MUST FIX items from iteration 1 have been addressed:
+### Decision Quality
+The architectural decision to remove external providers is sound for an embedded
+voice assistant. The implementation is clean and complete.
 
-1. Build error: FIXED — `ControlEvent` match is now exhaustive.
-2. Missing tests: FIXED — both acceptance-criterion tests present and passing.
+### Code Review Notes
+1. **Correct**: validate_config now correctly skips base_url check for Local endpoints
+2. **Correct**: KNOWN_CREDENTIAL_ACCOUNTS trimmed to remove LLM key account
+3. **Correct**: Tests use neutral examples (discord.bot_token) as credential examples
+4. **Note**: Integration tests have test fixtures with 'openai' config blocks —
+   these are testing the generic config parsing machinery, not OpenAI integration.
+   Acceptable.
 
-Build passes cleanly. No regressions introduced.
+### Potential Issue
+The test file tests/llm_config_integration.rs uses:
+  endpoint_type = "openai"  in TOML fixture
+This tests that the config parser handles arbitrary endpoint types.
+Since EndpointType::OpenAI likely still exists as an enum variant,
+this may compile fine. But it should be reviewed.
 
-## Remaining LOW items
-
-- sysctl subprocess in memory_pressure.rs (consider sysctl crate for future)
-- mp_bridge_jh detached without handle tracking (minor leak risk)
-- request_runtime_start length (refactor opportunity)
-
-None of these block acceptance.
-
-## Verdict: PASS
+### Grade: A-
+### Verdict: PASS (with note about test fixture)

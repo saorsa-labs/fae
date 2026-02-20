@@ -12,7 +12,7 @@ use std::fmt;
 ///
 /// The [`Debug`] implementation redacts the secret value.
 pub struct PlaintextCredential {
-    /// Credential account identifier (e.g. `"llm.api_key"`).
+    /// Credential account identifier (e.g. `"discord.bot_token"`).
     pub account: String,
     /// The plaintext secret value.
     pub value: String,
@@ -296,11 +296,11 @@ mod tests {
     #[test]
     fn plaintext_credential_debug_redacts() {
         let cred = PlaintextCredential {
-            account: "llm.api_key".to_owned(),
+            account: "discord.bot_token".to_owned(),
             value: "super-secret-key".to_owned(),
         };
         let debug = format!("{cred:?}");
-        assert!(debug.contains("llm.api_key"));
+        assert!(debug.contains("discord.bot_token"));
         assert!(!debug.contains("super-secret-key"));
         assert!(debug.contains("[REDACTED]"));
     }

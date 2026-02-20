@@ -1,21 +1,34 @@
-# Codex External Review — Iteration 2
+# Codex External Review
+## Phase 6.1b: fae_llm Provider Cleanup
 
-## Grade: A-
+## Summary Assessment
 
-## Summary
+### What Was Done
+This phase removed all external LLM provider code (OpenAI, Anthropic, SSE streaming,
+fallback logic, local probe) from the fae_llm module, leaving only the local embedded
+GGUF inference backend. This is a significant architectural simplification.
 
-Both critical findings from iteration 1 have been resolved:
+### Code Quality Assessment
 
-1. The `ControlEvent` non-exhaustive match in `src/bin/gui.rs` is fixed with appropriate
-   empty arms and explanatory comments.
-2. The two required acceptance-criterion tests are added and passing.
+**Changes are well-executed:**
+- Clean deletions with no stale references
+- Test updates are coherent with implementation
+- Documentation accurately reflects the new state
+- Error taxonomy additions are backward compatible
 
-Build is clean: 0 errors, 0 warnings, 2551/2551 tests pass.
+**Credential cleanup is thorough:**
+- Removed 'llm.api_key' from diagnostics list (no longer needed)
+- Updated doc examples to non-LLM credential examples (appropriate)
 
-## Remaining Observations
+**Config validation fix is correct:**
+- Local endpoint type legitimately needs no base_url
+- The validation exemption is logically sound
 
-- `run_sysctl_u64` subprocess still present — minor concern for App Sandbox environments.
-  Not a blocking issue.
-- `request_runtime_start` method length is cosmetic. Not blocking.
+### Concerns
+None critical. One observation:
+- Integration tests still have TOML config fixtures referencing 'openai' provider
+  in test helper setup_config_with_comments() — this is used as a test fixture
+  and is not production code, so it's acceptable.
 
-## Verdict: PASS — No CRITICAL or HIGH findings remain.
+### Grade: A
+### Verdict: PASS

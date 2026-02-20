@@ -1,23 +1,28 @@
-# Security Scanner Review — Iteration 2
+# Security Review
 
-## Grade: A-
+## Scope: Phase 6.1b - fae_llm Provider Cleanup
 
-## Status of Previous Findings
+## Credential Account Name Changes
+- Removed: 'llm.api_key' from KNOWN_CREDENTIAL_ACCOUNTS (diagnostics/mod.rs)
+- Updated: doc examples now reference 'discord.bot_token' instead of 'llm.api_key'
+- Verdict: PASS - These are doc/test changes only, not behavioral changes
 
-### INFO: sysctl subprocess — still present, low risk
-Still in `src/memory_pressure.rs`. Votes 4/15. Not a critical security issue.
+## Deleted Files Security Impact
+- Deleted anthropic.rs: removed HTTP streaming with API key auth
+- Deleted openai.rs: removed HTTP streaming with API key auth
+- Deleted sse.rs: removed SSE parser (only used by HTTP providers)
+- Impact: REDUCED attack surface (no more HTTP API calls, no API key handling)
+- Verdict: PASS - Security posture improved by removing external API communication
 
-### OK: No secrets in event payloads — confirmed
-Reviewed all new test code. No sensitive data exposed.
+## SecretRef Handling
+- SecretRef::None for local embedded provider (no API key needed)
+- No env vars, plaintext secrets, or keychain refs introduced
+- Verdict: PASS
 
-### OK: AtomicBool Ordering::SeqCst — confirmed correct
+## Findings
+- No hardcoded secrets introduced
+- Attack surface reduced (HTTP external API providers removed)
+- Credential cleanup is doc-only (no behavioral change)
 
-## New Findings
-
-### OK: Test isolation is sound
-The `unexpected_exit_emits_auto_restart_event` test creates its own isolated broadcast
-channel and does not share state with other tests. No test cross-contamination.
-
-### OK: No unsafe code in new test additions
-
-## Verdict: No security concerns introduced. Grade improves from B+ to A-.
+## Vote: PASS
+## Grade: A

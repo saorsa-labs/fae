@@ -43,8 +43,6 @@ pub mod error_codes {
 
     /// Locked taxonomy: continuation state error.
     pub const CONTINUATION_ERROR: &str = "CONTINUATION_ERROR";
-    /// Locked taxonomy: local probe error.
-    pub const LOCAL_PROBE_ERROR: &str = "LOCAL_PROBE_ERROR";
 }
 
 /// A surfaced error payload for API/UI boundaries.
@@ -124,10 +122,6 @@ pub enum FaeLlmError {
     /// Locked taxonomy: continuation state error.
     #[error("[{}] {}", error_codes::CONTINUATION_ERROR, .0)]
     ContinuationError(String),
-
-    /// Locked taxonomy: local probe error.
-    #[error("[{}] {}", error_codes::LOCAL_PROBE_ERROR, .0)]
-    LocalProbeError(String),
 }
 
 impl FaeLlmError {
@@ -149,7 +143,6 @@ impl FaeLlmError {
             Self::ProviderError(_) => error_codes::PROVIDER_ERROR,
             Self::SessionError(_) => error_codes::SESSION_ERROR,
             Self::ContinuationError(_) => error_codes::CONTINUATION_ERROR,
-            Self::LocalProbeError(_) => error_codes::LOCAL_PROBE_ERROR,
         }
     }
 
@@ -170,8 +163,7 @@ impl FaeLlmError {
             | Self::TimeoutError(m)
             | Self::ProviderError(m)
             | Self::SessionError(m)
-            | Self::ContinuationError(m)
-            | Self::LocalProbeError(m) => m,
+            | Self::ContinuationError(m) => m,
         }
     }
 
@@ -192,8 +184,7 @@ impl FaeLlmError {
             | Self::StreamError(_)
             | Self::StreamingParseError(_)
             | Self::TimeoutError(_)
-            | Self::ProviderError(_)
-            | Self::LocalProbeError(_) => true,
+            | Self::ProviderError(_) => true,
         }
     }
 
@@ -273,22 +264,18 @@ mod tests {
             FaeLlmError::ContinuationError("x".into()).code(),
             "CONTINUATION_ERROR"
         );
-        assert_eq!(
-            FaeLlmError::LocalProbeError("x".into()).code(),
-            "LOCAL_PROBE_ERROR"
-        );
     }
 
     #[test]
     fn surfaced_error_includes_metadata() {
         let err = FaeLlmError::RequestError("temporary outage".into());
-        let surfaced = err.surfaced(Some("openai"), Some("gpt-4o"));
+        let surfaced = err.surfaced(Some("local"), Some("llama3:8b"));
 
         assert_eq!(surfaced.code, "REQUEST_FAILED");
         assert_eq!(surfaced.message, "temporary outage");
         assert!(surfaced.retryable);
-        assert_eq!(surfaced.provider_id.as_deref(), Some("openai"));
-        assert_eq!(surfaced.model_id.as_deref(), Some("gpt-4o"));
+        assert_eq!(surfaced.provider_id.as_deref(), Some("local"));
+        assert_eq!(surfaced.model_id.as_deref(), Some("llama3:8b"));
     }
 
     #[test]
@@ -296,6 +283,5 @@ mod tests {
         assert!(!FaeLlmError::AuthError("x".into()).is_retryable());
         assert!(!FaeLlmError::ToolExecutionError("x".into()).is_retryable());
         assert!(FaeLlmError::RequestError("x".into()).is_retryable());
-        assert!(FaeLlmError::LocalProbeError("x".into()).is_retryable());
     }
 }

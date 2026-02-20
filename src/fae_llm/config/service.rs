@@ -281,9 +281,12 @@ pub fn validate_config(config: &FaeLlmConfig) -> Result<(), FaeLlmError> {
         )));
     }
 
-    // Check provider base_urls are non-empty (only for enabled providers)
+    // Check provider base_urls are non-empty (only for enabled non-local providers)
     for (name, provider) in &config.providers {
-        if provider.enabled && provider.base_url.is_empty() {
+        if provider.enabled
+            && provider.base_url.is_empty()
+            && provider.endpoint_type != crate::fae_llm::types::EndpointType::Local
+        {
             return Err(FaeLlmError::ConfigValidationError(format!(
                 "provider '{name}' has empty base_url"
             )));
@@ -377,7 +380,7 @@ mod tests {
         let get_result = service.get();
         assert!(get_result.is_ok());
         let config = get_result.unwrap_or_default();
-        assert!(config.providers.contains_key("openai"));
+        assert!(config.providers.contains_key("local"));
     }
 
     #[test]
@@ -405,11 +408,11 @@ mod tests {
         let service = ConfigService::new(path);
         let _ = service.load();
 
-        let result = service.set_default_provider("openai");
+        let result = service.set_default_provider("local");
         assert!(result.is_ok());
 
         let config = service.get().unwrap_or_default();
-        assert_eq!(config.defaults.default_provider, Some("openai".to_string()));
+        assert_eq!(config.defaults.default_provider, Some("local".to_string()));
     }
 
     #[test]
@@ -432,7 +435,19 @@ mod tests {
         let service = ConfigService::new(path);
         let _ = service.load();
 
-        let result = service.set_default_model("gpt-4o");
+        // Default config has no models — add one first
+        let _ = service.update(|c| {
+            c.models.insert(
+                "test-model".to_string(),
+                crate::fae_llm::config::types::ModelConfig {
+                    model_id: "test-model".to_string(),
+                    display_name: "Test Model".to_string(),
+                    tier: crate::fae_llm::config::types::ModelTier::Balanced,
+                    max_tokens: 4096,
+                },
+            );
+        });
+        let result = service.set_default_model("test-model");
         assert!(result.is_ok());
     }
 
@@ -482,17 +497,17 @@ mod tests {
         let _ = service.load();
 
         let result = service.update_provider(
-            "openai",
+            "local",
             ProviderUpdate {
-                base_url: Some("https://custom.openai.com/v1".to_string()),
+                base_url: Some("http://custom-local:8080".to_string()),
                 ..Default::default()
             },
         );
         assert!(result.is_ok());
 
         let config = service.get().unwrap_or_default();
-        let provider = &config.providers["openai"];
-        assert_eq!(provider.base_url, "https://custom.openai.com/v1");
+        let provider = &config.providers["local"];
+        assert_eq!(provider.base_url, "http://custom-local:8080");
     }
 
     #[test]
@@ -533,9 +548,16 @@ mod tests {
     #[test]
     fn validate_config_empty_base_url() {
         let mut config = default_config();
-        if let Some(provider) = config.providers.get_mut("openai") {
-            provider.base_url = String::new();
-        }
+        config.providers.insert(
+            "test-api".to_string(),
+            ProviderConfig {
+                endpoint_type: EndpointType::Custom,
+                enabled: true,
+                base_url: String::new(),
+                api_key: super::super::types::SecretRef::None,
+                models: Vec::new(),
+            },
+        );
         let result = validate_config(&config);
         assert!(result.is_err());
     }
@@ -551,8 +573,6 @@ mod tests {
                 base_url: "https://example.com".to_string(),
                 api_key: super::super::types::SecretRef::None,
                 models: Vec::new(),
-                compat_profile: None,
-                profile: None,
             },
         );
         // No default_provider or default_model set — should be OK

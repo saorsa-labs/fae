@@ -3,7 +3,6 @@
 //! Defines the TOML configuration structure including providers, models,
 //! defaults, runtime settings, and locked tool-mode behavior.
 
-use crate::fae_llm::providers::profile::CompatibilityProfile;
 pub use crate::fae_llm::types::EndpointType;
 use crate::fae_llm::types::ReasoningLevel;
 use serde::{Deserialize, Serialize};
@@ -80,14 +79,6 @@ pub struct ProviderConfig {
     /// Provider-advertised model IDs.
     #[serde(default)]
     pub models: Vec<String>,
-
-    /// Optional compatibility profile name for OpenAI-compatible providers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compat_profile: Option<String>,
-
-    /// Optional resolved compatibility profile object.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile: Option<CompatibilityProfile>,
 }
 
 /// Configuration for a single model.

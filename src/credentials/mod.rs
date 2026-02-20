@@ -14,7 +14,7 @@
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let manager = fae::credentials::create_manager();
-//! let cred_ref = manager.store("llm.api_key", "sk-...")?;
+//! let cred_ref = manager.store("discord.bot_token", "xoxb-...")?;
 //!
 //! // Later, retrieve the credential
 //! if let Some(value) = manager.retrieve(&cred_ref)? {
@@ -47,7 +47,7 @@ pub trait CredentialManager: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `account` - Unique identifier for this credential (e.g., "llm.api_key")
+    /// * `account` - Unique identifier for this credential (e.g., "discord.bot_token")
     /// * `value` - The secret value to store
     ///
     /// # Returns

@@ -1,21 +1,46 @@
-# Code Simplifier Review — Iteration 2
+# Code Simplification Review
 
-## Grade: B+
+## Scope: Phase 6.1b - fae_llm Provider Cleanup
 
-## Status of Previous Findings
+## Simplification Opportunities Identified
 
-All SHOULD FIX items from iteration 1 are carry-overs not addressed in the fix commit.
-They remain low-severity:
+### 1. FaeLlmError - Legacy Variants
+- Legacy variants (ConfigError, AuthError, RequestError, StreamError, ToolError)
+  co-exist with locked taxonomy variants
+- This is BY DESIGN for backward compatibility
+- The code is more complex but intentionally so
+- Verdict: ACCEPTABLE - Cannot simplify without breaking API
 
-- Restart counter read duplicated — still present, 2/15 votes
-- Memory pressure bridge as inline block — still present, 3/15 votes
-- PressureLevel Display not implemented — still present, 2/15 votes
+### 2. default_config() in defaults.rs
+- Now much simpler: single provider, no models
+- Still has some boilerplate for tool insertion loop
+- The loop over &['read', 'bash', 'edit', 'write'] is clear and idiomatic
+- Verdict: ALREADY SIMPLIFIED
 
-These are style improvements, not correctness issues.
+### 3. validate_config() in service.rs
+- The new EndpointType::Local check adds one branch
+- Could potentially use a method on EndpointType like requires_base_url()
+- Current approach is clear and direct
+- Verdict: MINOR SIMPLIFICATION POSSIBLE (low priority)
 
-## New Findings
+### 4. credentials cleanup
+- Doc example changes are minimal and appropriate
+- No unnecessary complexity introduced
+- Verdict: ALREADY SIMPLE
 
-### MINOR: `unexpected_exit_emits_auto_restart_event` duplicates watcher body
-Unavoidable for isolated unit testing. Acceptable.
+## Potential Improvements (low priority)
+- Consider EndpointType::requires_base_url() method to encapsulate
+  the local endpoint check in validate_config
+- This would make the intent clearer but is not strictly necessary
 
-## Verdict: No new simplification issues. Carry-overs are low priority.
+## Summary
+- This phase DRAMATICALLY simplified the codebase
+- ~4000 lines of provider code deleted
+- Remaining code is cleaner and more focused
+- One minor refactor opportunity (EndpointType::requires_base_url)
+
+## SHOULD CONSIDER (not blocking)
+- EndpointType::requires_base_url() helper method
+
+## Vote: PASS
+## Grade: A-
