@@ -1,66 +1,47 @@
-# Task Assessor — Phase 6.2 Task 7
+# Task Assessor — Phase 6.2 (User Name Personalization)
 
 **Reviewer:** Task Assessor
-**Scope:** PLAN-phase-6.2.md exit criteria vs. implementation
+**Scope:** Was the Phase 6.2 task correctly implemented?
 
-## Task Completion Assessment
+## Task Specification
 
-### Task 1: Wire PipelineAuxBridgeController to AuxiliaryWindowManager
-**COMPLETE**
-- `weak var auxiliaryWindows: AuxiliaryWindowManager?` added to PipelineAuxBridgeController ✓
-- `canvasController?.isVisible = visible` replaced with `auxiliaryWindows?.showCanvas()/hideCanvas()` ✓
-- `pipelineAux.auxiliaryWindows = auxiliaryWindows` wired in FaeNativeApp.onAppear ✓
+Phase 6.2 — Personalization & User Name:
+- Capture user name from Contacts Me Card during onboarding
+- Persist to config and memory system
+- Inject into system prompt so LLM addresses user by name
+- Expose via `onboarding.set_user_name` command
 
-### Task 2: Add pipeline.conversation_visibility event — Rust side
-**COMPLETE**
-- `RuntimeEvent::ConversationVisibility { visible: bool }` added to runtime.rs ✓
-- `map_runtime_event` maps it to `"pipeline.conversation_visibility"` ✓
-- Unit test added ✓
+## Assessment
 
-### Task 3: Wire "show conversation" voice command through coordinator → Swift panel
-**COMPLETE**
-- `ShowConversation`, `HideConversation`, `ShowCanvas`, `HideCanvas` added to VoiceCommand ✓
-- Parse patterns added for "show/open/hide/close conversation/canvas" ✓
-- Coordinator emits ConversationVisibility/ConversationCanvasVisibility events ✓
-- BackendEventRouter routes `"pipeline.conversation_visibility"` to `.faePipelineState` ✓
-- PipelineAuxBridgeController handles `"pipeline.conversation_visibility"` → auxiliaryWindows calls ✓
+### 1. PASS — onboarding.set_user_name command implemented
+Command registered in `CommandName` enum, routed in `channel.rs`, handled by `set_user_name()` in `handler.rs`. Wire protocol string matches Swift dispatch.
 
-### Task 4: Extend JitPermissionController for calendar, reminders, mail
-**COMPLETE**
-- `requestCalendar` using `EKEventStore.requestFullAccessToEvents()` ✓
-- `requestReminders` using `EKEventStore.requestFullAccessToReminders()` ✓
-- `requestMail` opening System Settings (correct fallback) ✓
-- All three wired in handleRequest dispatch ✓
+### 2. PASS — Validation: empty/whitespace names rejected
+`parse_non_empty_field` rejects blank names with a clear error. Tested.
 
-### Task 5: Wire OnboardingController.onPermissionResult to HostCommandBridge
-**COMPLETE**
-- `onboarding.onPermissionResult` set in FaeNativeApp.onAppear ✓
-- Posts `.faeCapabilityGranted` notification on grant ✓
+### 3. PASS — Persisted to config.toml
+`SpeechConfig.user_name: Option<String>` with `#[serde(default)]`. Saved via `save_config()`. Tests verify disk persistence.
 
-### Task 6: Wire Rust device events to DeviceHandoffController
-**COMPLETE**
-- `.faeDeviceTransfer` notification name added ✓
-- BackendEventRouter routes device.transfer_requested/device.home_requested to it ✓
-- FaeNativeApp subscribes and dispatches to `handoff.move(to:)`/`handoff.goHome()` ✓
-- `handoff.snapshotProvider` and `handoff.orbState` wired ✓
+### 4. PASS — Persisted to MemoryStore as PrimaryUser
+`store.save_primary_user(&user)` called with updated or new PrimaryUser. Failure is non-fatal (warning).
 
-### Task 7: Wire Rust handler request_move/request_go_home to emit events
-**COMPLETE**
-- `request_move()` emits `pipeline.canvas_visibility: false` ✓
-- `request_move()` emits `device.transfer_requested` with target ✓
-- `request_go_home()` emits `device.home_requested` ✓
-- Unit tests added for both ✓
+### 5. PASS — Injected into system prompt
+`assemble_prompt` accepts `user_name: Option<&str>`. When Some and non-empty, injects:
+`"User context:\n- The user's name is {name}. Address them by name naturally when appropriate."`
 
-## Exit Criteria Check
+### 6. PASS — Swift integration complete
+`OnboardingController.complete()` posts `faeOnboardingSetUserName` before `faeOnboardingComplete`.
+`HostCommandBridge` observes the notification and dispatches to Rust.
 
-| Criterion | Status |
-|-----------|--------|
-| "Show conversation" opens conversation NSPanel | WIRED (voice cmd → event → PipelineAux → auxiliaryWindows.showConversation()) |
-| "Show canvas" opens canvas NSPanel | WIRED |
-| `pipeline.canvas_visibility` opens/closes canvas panel | WIRED (not just sets Bool) |
-| JIT permission for calendar/reminders/mail | WIRED |
-| Permission grants propagate `capability.grant` to Rust | WIRED (onboarding path) |
-| "Move to iPhone" calls DeviceHandoffController.move() | WIRED |
+### 7. PASS — All existing call sites updated
+`effective_system_prompt`, `effective_system_prompt_with_vision`, `assemble_prompt` — all callers pass `None` as default, maintaining backward compatibility.
+
+### 8. SHOULD FIX — Formatting violations in committed code
+Three rustfmt violations present in the committed state. Working-tree fixes exist. Must commit.
 
 ## Verdict
-**COMPLETE — All 7 tasks fully implemented**
+**PASS — Task requirements fully met**
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 8 | SHOULD FIX | Formatting violations need to be committed |

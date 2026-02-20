@@ -1,31 +1,32 @@
-# Quality Patterns Review — Phase 6.2 Task 7
+# Quality Patterns Review — Phase 6.2 (User Name Personalization)
 
-**Reviewer:** Quality Patterns
-**Scope:** Patterns, idioms, consistency with codebase conventions
+**Reviewer:** Quality Patterns Analyst
+**Scope:** Phase 6.2 changes — onboarding user name feature
 
 ## Findings
 
-### 1. PASS — Swift weak reference pattern consistent
-`weak var auxiliaryWindows: AuxiliaryWindowManager?` follows the exact same declaration pattern as `weak var canvasController: CanvasController?`. The `[weak handoff]` capture in the observer closure follows the `[weak conversation, weak orbState]` pattern established in the same block.
+### 1. PASS — Command pattern consistently followed
+New command follows the established path: enum variant → serde rename → `as_str()` → `from_str()` → router arm → handler method. No shortcuts taken.
 
-### 2. PASS — Rust event emission pattern consistent
-`self.emit_event(name, json!({...}))` matches all other calls in `FaeDeviceTransferHandler::request_orb_palette_set` etc.
+### 2. PASS — Trait default impl pattern followed
+`fn set_user_name` on `DeviceTransferHandler` provides a no-op default, consistent with all other optional handler methods in the trait.
 
-### 3. PASS — VoiceCommand extension follows existing enum structure
-New variants placed after `Help` and before `GrantPermissions` in logical grouping. Parse order respects the existing guard-and-return pattern.
+### 3. PASS — Structured event emission after operation
+`self.emit_event("onboarding.user_name_set", ...)` — follows the pattern of emitting typed events after successful command handling.
 
-### 4. PASS — RuntimeEvent::ConversationVisibility follows ConversationCanvasVisibility
-Identical struct layout (`{ visible: bool }`), consistent naming convention, consistent doc comment format.
+### 4. PASS — Response envelope includes echo
+`ResponseEnvelope::ok(..., json!({"accepted": true, "name": name}))` — the accepted response echoes the name, useful for UI confirmation.
 
-### 5. SHOULD FIX — `use crate::voice_command::VoiceCommand` declared inside match arm
-In the interrupted-generation path, there is a `use crate::voice_command::VoiceCommand;` inside the match arm block. The non-interrupted path already has VoiceCommand in scope via the outer import. This is a consistency issue.
+### 5. PASS — Weak self in Swift observers
+All new Swift `addObserver` blocks use `[weak self]` to prevent retain cycles. Consistent with existing observer code.
 
-### 6. PASS — EventKit usage consistent with modern API
-`requestFullAccessToEvents()` / `requestFullAccessToReminders()` are macOS 14+ APIs, consistent with the app's deployment target.
+### 6. PASS — Notification name follows naming convention
+`faeOnboardingSetUserName` follows the `fae` + domain + action pattern established by all other notification names.
+
+### 7. PASS — #[serde(default)] on optional field
+New config field uses `#[serde(default)]` ensuring deserialization from configs without the field doesn't fail. Idiomatic.
 
 ## Verdict
-**CONDITIONAL PASS**
+**PASS — All established quality patterns followed**
 
-| # | Severity | Finding |
-|---|----------|---------|
-| 5 | SHOULD FIX | Local import inside match arm — hoist to function/module level |
+No quality pattern violations found.

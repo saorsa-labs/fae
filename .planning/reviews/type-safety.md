@@ -1,29 +1,29 @@
-# Type Safety Review — Phase 6.2 Task 7
+# Type Safety Review — Phase 6.2 (User Name Personalization)
 
 **Reviewer:** Type Safety Analyst
-**Scope:** All changed files
+**Scope:** Phase 6.2 changes — onboarding user name feature
 
 ## Findings
 
-### 1. PASS — RuntimeEvent::ConversationVisibility uses named field
-`ConversationVisibility { visible: bool }` is consistent with `ConversationCanvasVisibility { visible: bool }`. Named boolean field prevents argument-order confusion.
+### 1. PASS — Option<String> semantics correct
+`pub user_name: Option<String>` with `#[serde(default)]` — deserializes to `None` when absent from TOML. Correct.
 
-### 2. PASS — DeviceTarget enum used correctly
-`DeviceTarget(rawValue: targetStr) ?? .iphone` provides a safe default for unknown target strings. The fallback to `.iphone` is reasonable.
+### 2. PASS — Function signature change is type-checked
+`assemble_prompt` and `effective_system_prompt` now take `Option<&str>` which is the correct borrowed type for an optional string reference. All 10+ call sites updated and pass `None` (or `Some(name)` in the new test).
 
-### 3. PASS — matches! macro used correctly for visibility bool
-`let visible = matches!(cmd, VoiceCommand::ShowConversation)` is a clean idiom for deriving bool from enum variant. Correct and idiomatic Rust.
+### 3. PASS — Swift typed cast with nil guard
+`notification.userInfo?["name"] as? String` — conditional cast with optional chaining, guarded by `guard let name = ... else { return }`. No force unwrap.
 
-### 4. PASS — Swift payload extraction is guarded
-All `payload["key"] as? Type` casts use nil-coalescing defaults or are wrapped in guard statements. No forced casts.
+### 4. PASS — No type coercions or unsafe conversions
+`name.to_owned()` is the correct String-from-&str conversion. No transmutes or unsafe.
 
-### 5. INFO — SnapshotEntry/ConversationSnapshot types assumed from context
-The `FaeNativeApp.swift` changes reference `SnapshotEntry`, `ConversationSnapshot`, `DeviceTarget` — these are pre-existing types not changed in this diff. Type correctness depends on existing definitions.
+### 5. PASS — Enum variant serde renaming is correct
+`#[serde(rename = "onboarding.set_user_name")]` matches the wire protocol string `"onboarding.set_user_name"` used in Swift dispatch. Consistent.
 
-### 6. PASS — No new implicit type conversions
-No `as!` forced casts or implicit numeric conversions introduced.
+### 6. PASS — must_use retained on assemble_prompt
+The `#[must_use]` attribute on `assemble_prompt` ensures callers cannot silently discard the return value.
 
 ## Verdict
-**PASS**
+**PASS — No type safety issues**
 
-No type safety issues found. All new code is type-safe.
+All type changes are backward compatible for existing call sites (new parameter with None default). New parameter is correctly typed.

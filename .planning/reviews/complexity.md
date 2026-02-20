@@ -1,49 +1,43 @@
-# Complexity Review — Phase 6.2 Task 7
+# Complexity Review — Phase 6.2 (User Name Personalization)
 
 **Reviewer:** Complexity Analyst
-**Scope:** All changed files
+**Scope:** Phase 6.2 changes — onboarding user name feature
 
 ## Findings
 
-### 1. SHOULD FIX — Duplicated match arms in coordinator.rs
-As noted by code quality reviewer: the panel visibility match arms appear in two separate code paths in `run_llm_stage`. The duplication is ~14 lines each. Extracting to a helper reduces cognitive load and maintenance burden.
+### 1. PASS — set_user_name implementation is straightforward
+The implementation is a linear sequence: validate, write config, save, read memory_root, load/update/save primary user. Cyclomatic complexity: ~3 (two conditional branches). Well within acceptable bounds.
 
-Proposed refactor:
+### 2. PASS — assemble_prompt complexity unchanged
+Adding one `if let Some(name)` block to `assemble_prompt` is a trivial linear addition. The function is already a sequential builder pattern.
+
+### 3. INFO — Double lock is a minor inefficiency
+Two separate `self.lock_config()` calls in `set_user_name` could be one. Not a complexity issue per se, but could be simplified:
 ```rust
-fn emit_panel_visibility_events(
-    cmd: &VoiceCommand,
-    runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
-) {
-    match cmd {
-        VoiceCommand::ShowConversation | VoiceCommand::HideConversation => {
-            if let Some(rt) = runtime_tx {
-                let visible = matches!(cmd, VoiceCommand::ShowConversation);
-                let _ = rt.send(RuntimeEvent::ConversationVisibility { visible });
-            }
-        }
-        VoiceCommand::ShowCanvas | VoiceCommand::HideCanvas => {
-            if let Some(rt) = runtime_tx {
-                let visible = matches!(cmd, VoiceCommand::ShowCanvas);
-                let _ = rt.send(RuntimeEvent::ConversationCanvasVisibility { visible });
-            }
-        }
-        _ => {}
-    }
-}
+// Current (two locks):
+{ let mut g = self.lock_config()?; g.user_name = Some(name.to_owned()); }
+self.save_config()?;
+let memory_root = { let g = self.lock_config()?; g.memory.root_dir.clone() };
+
+// Simpler (one lock + save):
+let memory_root = {
+    let mut g = self.lock_config()?;
+    g.user_name = Some(name.to_owned());
+    g.memory.root_dir.clone()
+};
+self.save_config()?;
 ```
+This is a minor style point, not a correctness or performance issue.
 
-### 2. PASS — FaeNativeApp.onAppear wiring block is long but manageable
-The `onAppear` block has grown substantially. It remains linear wiring logic (no branching complexity). Each line has a comment. Acceptable complexity.
+### 4. PASS — Swift observer is minimal
+The `addObserver` block is 4 lines: extract name, dispatch. No branching, no state mutation.
 
-### 3. PASS — JitPermissionController dispatch is clean
-The new switch cases follow the exact same pattern as existing microphone/contacts cases. Cyclomatic complexity increase is minimal and expected.
-
-### 4. PASS — handler.rs request_move complexity unchanged
-Two sequential `emit_event` calls are straightforward.
+### 5. PASS — OnboardingController.complete() remains clear
+The new block is a simple nil-check before posting. No new control flow complexity.
 
 ## Verdict
-**CONDITIONAL PASS**
+**PASS — Complexity is acceptable**
 
 | # | Severity | Finding |
 |---|----------|---------|
-| 1 | SHOULD FIX | Duplicate visibility handling — extract coordinator helper |
+| 3 | INFO | Double lock acquire could be consolidated |

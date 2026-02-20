@@ -1,33 +1,41 @@
-# Code Simplifier Review — Phase 6.2 Task 7
+# Code Simplifier Review — Phase 6.2 (User Name Personalization)
 
 **Reviewer:** Code Simplifier
-**Scope:** Identify over-engineering, unnecessary complexity, simplification opportunities
+**Scope:** Can any Phase 6.2 code be simplified?
 
 ## Findings
 
-### 1. SIMPLIFY — Coordinator duplicate block (SHOULD FIX)
-Two identical 14-line match blocks. Extract to inline function or closure.
+### 1. SUGGEST — Consolidate double lock in set_user_name
+Current code acquires the config lock twice:
+```rust
+// Lock 1: write user_name
+{ let mut guard = self.lock_config()?; guard.user_name = Some(name.to_owned()); }
+self.save_config()?;
+// Lock 2: read memory_root
+let memory_root = { let guard = self.lock_config()?; guard.memory.root_dir.clone() };
+```
+Could be:
+```rust
+// Single lock: write + capture memory_root
+let memory_root = {
+    let mut guard = self.lock_config()?;
+    guard.user_name = Some(name.to_owned());
+    guard.memory.root_dir.clone()
+};
+self.save_config()?;
+```
+Reduces lock acquisitions from 2 to 1 and makes the relationship between config write and memory_root read clear.
 
-### 2. INFO — requestMail could skip the denied post
-Since mail automation grants cannot be detected, the `postDenied` call after opening System Settings is technically misleading — the user might still grant it before the next conversation turn. However, there is no async mechanism to detect this, so reporting denied is the only safe choice. The current behavior is correct, not unnecessarily complex.
+### 2. INFO — user_name trim could be extracted
+`let name = name.trim()` in `assemble_prompt` is a one-liner. The responsibility split between `parse_non_empty_field` (trims at parse) and `assemble_prompt` (trims again) means trimming happens twice. Harmless but slightly redundant.
 
-### 3. INFO — SnapshotProvider closure in FaeNativeApp is verbose
-The snapshot closure in onAppear is 9 lines including the filter/map pipeline. It could be extracted to a `makeSnapshot(conversation:orbState:)` factory method for readability. LOW priority.
-
-### 4. PASS — JIT EKEventStore creation pattern
-Creating `EKEventStore()` locally per request is simple and correct. No simplification needed.
-
-### 5. PASS — matches! macro usage is optimal
-`let visible = matches!(cmd, VoiceCommand::ShowConversation)` is already the simplest correct expression.
-
-## Summary
-
-Two simplification opportunities (1: extract helper, 3: extract snapshot factory). Neither is blocking.
+### 3. PASS — Everything else is already minimal
+The command routing, handler dispatch, and notification chain are all minimal. No opportunities for meaningful simplification elsewhere.
 
 ## Verdict
-**CONDITIONAL PASS**
+**OPTIONAL SIMPLIFICATION — Suggestion 1 is worth implementing**
 
 | # | Severity | Finding |
 |---|----------|---------|
-| 1 | SHOULD FIX | Coordinator duplicate — extract helper |
-| 3 | INFO | SnapshotProvider closure verbose |
+| 1 | SUGGEST | Consolidate double lock in set_user_name |
+| 2 | INFO | Double trim (harmless) |

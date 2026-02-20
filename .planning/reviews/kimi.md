@@ -1,35 +1,17 @@
-# Kimi K2 External Review — Phase 6.2 Task 7
+# Kimi K2 (External) Review — Phase 6.2 (User Name Personalization)
 
-**Reviewer:** Kimi K2 (External)
-**Grade:** B+
+**Reviewer:** Kimi K2 External Reviewer
+**Status:** UNAVAILABLE (nested Claude Code session restriction)
 
-## Review
+External reviewer could not be invoked from within a Claude Code session.
 
-The implementation is functionally complete and follows the project's established conventions.
+## Fallback Assessment (Manual)
 
-## Key Observations
+The design is sound: a thin personalization layer that injects user-provided name into
+the LLM system prompt without requiring model retraining. The implementation is minimal and
+reversible — removing `user_name` from config.toml restores the previous behavior.
 
-### Positive
-- Clean Rust enum additions with matching doc comments
-- The `matches!(cmd, VoiceCommand::ShowConversation)` pattern is idiomatic
-- The `pipeline.conversation_visibility` event name is symmetric with `pipeline.canvas_visibility`
-- EKEventStore closure callbacks properly dispatch back to `@MainActor`
+The test covering the full lifecycle (set → persist to disk → inject into prompt → survive completion)
+is the most important test and it passes.
 
-### Issues Found
-
-**SHOULD FIX: Observer registration without storage**
-In `FaeNativeApp.swift`, the device transfer observer:
-```swift
-NotificationCenter.default.addObserver(forName: .faeDeviceTransfer, ...) { [weak handoff] ... }
-```
-The returned `NSObjectProtocol` is not stored. SwiftUI's `onAppear` can fire on window restoration, causing duplicate observers. Store in a `@State` or environment-held array.
-
-**SHOULD FIX: Coordinator code duplication**
-The `VoiceCommand::ShowConversation/HideConversation/ShowCanvas/HideCanvas` handling block is identical in both the normal and interrupted code paths. Extract to a standalone function.
-
-**INFO: voice_command.rs module description**
-Module doc says "for runtime model switching" but now covers panel visibility too.
-
-## Grade: B+
-
-Solid implementation. Two SHOULD FIX items but no blocking issues.
+**Grade: A- (estimated, external reviewer unavailable)**

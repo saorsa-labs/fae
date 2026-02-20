@@ -1,29 +1,32 @@
-# Security Review — Phase 6.2 Task 7
+# Security Review — Phase 6.2 (User Name Personalization)
 
 **Reviewer:** Security Scanner
-**Scope:** All changed files
+**Scope:** Phase 6.2 changes — onboarding user name feature
 
 ## Findings
 
-### 1. PASS — EventKit permission requests use correct modern API
-`requestFullAccessToEvents()` and `requestFullAccessToReminders()` are the iOS 17 / macOS 14+ APIs. No deprecated `requestAccess(to:completion:)` used.
+### 1. PASS — No SQL/shell injection surface
+User name is stored as a plain `Option<String>` in TOML config and as a struct field in memory. No interpolation into shell commands or SQL.
 
-### 2. INFO — x-apple.systempreferences URL hardcoded
-The URL string `"x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"` is a private Apple URL scheme. It will work on current macOS but is not documented. Acceptable for current target (macOS 14+). Low risk.
+### 2. PASS — System prompt injection considered
+The user name is inserted into the system prompt via `format!("... {name} ...")`. This is a controlled template with no executable code path. The LLM prompt is not a code execution surface. Acceptable.
 
-### 3. PASS — No capability escalation
-New capabilities (calendar, reminders, mail) are JIT-only — they require user presence to grant. No background auto-grant paths introduced.
+### 3. PASS — Input validation: whitespace-trimmed at parse and inject
+`parse_non_empty_field` rejects whitespace-only input. `personality.rs` additionally trims the name before injection (`let name = name.trim()`). Defense in depth is present.
 
-### 4. PASS — Device handoff payload is not trusted for code execution
-`payload["target"]` is used only to construct a `DeviceTarget` enum via `rawValue`. Unknown values fall back to `.iphone`. No injection surface.
+### 4. PASS — No capability escalation
+The new `onboarding.set_user_name` command stores data only. It does not grant permissions, open network connections, or execute code. Sandboxed correctly.
 
-### 5. PASS — Rust event emission uses typed JSON
-`serde_json::json!({})` macro usage is safe. No string interpolation into JSON values.
+### 5. PASS — NotificationCenter payload is typed
+`notification.userInfo?["name"] as? String` — typed cast with nil guard. No arbitrary code execution possible via NotificationCenter payload.
 
-### 6. PASS — No new unsafe code
-No `unsafe` blocks introduced anywhere in the diff.
+### 6. PASS — Memory store write is scoped to user's data directory
+`memory_root` comes from `config.memory.root_dir` which is constrained to `~/.fae/`. No path traversal possible.
+
+### 7. INFO — Name length is unconstrained
+There is no maximum length check on the user name. A pathologically long name would be stored in config and injected into the system prompt, consuming tokens. Low risk for a local app (no remote input path), but worth noting.
 
 ## Verdict
-**PASS — No security concerns**
+**PASS — No security issues**
 
-All findings are informational.
+All inputs are typed and validated. No injection surfaces. Length limit is low-risk informational.

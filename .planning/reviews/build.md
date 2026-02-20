@@ -1,4 +1,4 @@
-# Build Validator — Phase 6.2 Task 7
+# Build Validator — Phase 6.2 (User Name Personalization)
 
 **Reviewer:** Build Validator
 **Scope:** Rust crate build, clippy, fmt, tests
@@ -6,24 +6,33 @@
 ## Build Results
 
 ### cargo check --all-features --all-targets
-**PASS** — Completed in 10.23s with zero errors and zero warnings.
+**PASS** — Zero errors, zero warnings.
 
 ### cargo clippy --all-features --all-targets -- -D warnings
-**PASS** — Completed in 8.01s with zero warnings.
+**PASS** — Zero warnings. Completed in 12.83s.
 
 ### cargo fmt --all -- --check
-**PASS** — No formatting violations.
+**PASS (after fix)** — The committed code had 3 formatting violations that were
+auto-corrected by `cargo fmt --all` in the working tree:
+1. `src/host/channel.rs:267` — match arm expanded to block form, should be single-line
+2. `src/host/handler.rs:681` — `info!()` macro single-line, should be multi-line per rustfmt
+3. `tests/onboarding_lifecycle.rs:312` — multi-line `assert!()`, should be single-line
 
-### cargo test --all-features
-**PASS** — All test suites pass:
-- 47 unit tests: 37 passed, 10 ignored, 0 failed
-- All module test suites: 0 failures across all test binaries
-- Doc tests: 37 passed, 0 failed
+The fmt fixes are staged in the working tree. Commit is required to persist them.
+
+### cargo nextest run --all-features
+**PASS** — 2174 tests run: 2174 passed, 0 failed, 1 skipped.
+All onboarding lifecycle tests pass:
+- `onboarding_set_user_name_persists_and_injects_into_prompt`: PASS
+- `onboarding_set_user_name_empty_returns_error`: PASS
+- `onboarding_set_user_name_missing_field_returns_error`: PASS
 
 ### Swift Build
-Not assessed (requires Xcode toolchain). Swift changes follow established patterns and are syntactically consistent with the existing codebase.
+Not assessed — requires Xcode toolchain. Swift changes follow established patterns.
 
 ## Verdict
-**PASS**
+**CONDITIONAL PASS — fmt fixes must be committed**
 
-Zero build issues. Zero warnings. Zero test failures.
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | MUST FIX | Commit working-tree fmt fixes before marking phase complete |

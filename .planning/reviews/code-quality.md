@@ -1,47 +1,44 @@
-# Code Quality Review — Phase 6.2 Task 7
+# Code Quality Review — Phase 6.2 (User Name Personalization)
 
-**Reviewer:** Code Quality
-**Scope:** All changed files
+**Reviewer:** Code Quality Analyst
+**Scope:** Phase 6.2 changes — onboarding user name feature
 
 ## Findings
 
-### 1. SHOULD FIX — Duplicate visibility command handling in coordinator.rs
-The visibility command block (ShowConversation/HideConversation/ShowCanvas/HideCanvas) appears **twice** in `coordinator.rs`:
-- Once at line ~1873 (in the non-interrupted path)
-- Once at line ~2139 (in the interrupted-generation path)
+### 1. PASS — Consistent naming conventions
+`user_name` (Rust snake_case), `userName` (Swift camelCase), `"onboarding.set_user_name"` (wire protocol) — all follow the established conventions of each language/layer.
 
-This is necessary for correctness (both code paths need to emit events) but the logic is literally duplicated. Consider extracting a `emit_panel_visibility_events(cmd, runtime_tx)` helper function to eliminate duplication and reduce maintenance risk.
+### 2. PASS — Clean separation of concerns
+Command parsing lives in `channel.rs`, business logic in `handler.rs`, prompt assembly in `personality.rs`, persistence in `config.rs`. No concern leakage.
 
+### 3. PASS — Default trait impl is idiomatic
+`fn set_user_name(&self, _name: &str) -> Result<()> { Ok(()) }` on the `DeviceTransferHandler` trait follows the same pattern as all other optional handler methods in the trait.
+
+### 4. SHOULD FIX — Formatting violation in channel.rs
 ```rust
-// Both blocks are identical:
-VoiceCommand::ShowConversation | VoiceCommand::HideConversation => {
-    if let Some(ref rt) = runtime_tx {
-        let visible = matches!(cmd, VoiceCommand::ShowConversation);
-        let _ = rt.send(RuntimeEvent::ConversationVisibility { visible });
-    }
+// BAD (committed state):
+CommandName::OnboardingSetUserName => {
+    self.handle_onboarding_set_user_name(envelope)
 }
-VoiceCommand::ShowCanvas | VoiceCommand::HideCanvas => {
-    ...
-}
+// CORRECT (fmt fix in working tree):
+CommandName::OnboardingSetUserName => self.handle_onboarding_set_user_name(envelope),
 ```
+The working tree contains the correct fmt fix. This just needs to be committed.
 
-### 2. PASS — voice_command.rs module doc comment inconsistency (minor)
-The module-level doc comment still says "Voice command detection for runtime model switching" but now handles panel visibility too. Updated help_response() text, but the module doc comment at line 1 is stale. LOW priority.
+### 5. SHOULD FIX — Formatting violation in handler.rs
+`info!(name, "onboarding.set_user_name persisted to config and memory");` — rustfmt expands this to multi-line format. Working tree has the fix. Needs commit.
 
-### 3. PASS — Coordinator uses `use crate::voice_command::VoiceCommand` inside an arm
-In the interrupted-generation path (line ~2141), `use crate::voice_command::VoiceCommand` is declared inside the match arm block. This is functional but slightly unidiomatic — prefer hoisting the import. Low severity.
+### 6. INFO — Memory root re-locked after save
+The implementation locks config once to write `user_name`, saves, then locks again to read `memory_root`. This is slightly redundant — `memory_root` could be read in the first lock. But it's correct and the overhead is negligible (in-memory lock on local data).
 
-### 4. PASS — All new Swift code follows established patterns
-`weak var auxiliaryWindows` follows the existing `weak var canvasController` pattern. Observer wiring in `onAppear` follows existing observer patterns.
-
-### 5. PASS — New Rust enum variants are fully documented
-All four new `VoiceCommand` variants have doc comments. `RuntimeEvent::ConversationVisibility` has a doc comment consistent with `ConversationCanvasVisibility`.
+### 7. PASS — Vec capacity pre-allocated correctly
+`Vec::with_capacity(8)` in `assemble_prompt` correctly updated from 7 to account for the new user context section.
 
 ## Verdict
-**CONDITIONAL PASS**
+**CONDITIONAL PASS — Formatting fixes need to be committed**
 
 | # | Severity | Finding |
 |---|----------|---------|
-| 1 | SHOULD FIX | Duplicated panel visibility handling in coordinator — extract helper |
-| 2 | INFO | Module doc comment stale |
-| 3 | INFO | Local import inside match arm |
+| 4 | SHOULD FIX | channel.rs match arm formatting (fix is in working tree) |
+| 5 | SHOULD FIX | handler.rs info! macro formatting (fix is in working tree) |
+| 6 | INFO | Redundant second lock acquire for memory_root |
