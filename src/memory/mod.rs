@@ -5,11 +5,13 @@
 //! - `jsonl`: JSONL-backed `MemoryRepository`, `MemoryOrchestrator`, and legacy
 //!   markdown identity store.
 //!
-//! Future modules (Phase 7.1+):
+//! Active modules:
 //! - `schema`: SQLite DDL definitions.
 //! - `sqlite`: SQLite-backed `SqliteMemoryRepository`.
 
 pub mod jsonl;
+pub(crate) mod schema;
+pub mod sqlite;
 pub mod types;
 
 // Re-export everything the rest of the codebase imports from `crate::memory::*`.
@@ -25,11 +27,10 @@ pub use types::{
 pub use types::{current_memory_schema_version, default_memory_root_dir};
 
 // JSONL implementation
-pub use jsonl::{
-    MemoryOrchestrator, MemoryRepository, MemoryStore, Person, PrimaryUser,
-};
+pub use jsonl::{MemoryOrchestrator, MemoryRepository, MemoryStore, Person, PrimaryUser};
 
 // JSONL free functions
-pub use jsonl::{
-    run_memory_gc, run_memory_migration, run_memory_reindex, run_memory_reflection,
-};
+pub use jsonl::{run_memory_gc, run_memory_migration, run_memory_reflection, run_memory_reindex};
+
+// SQLite implementation
+pub use sqlite::{SqliteMemoryError, SqliteMemoryRepository};
