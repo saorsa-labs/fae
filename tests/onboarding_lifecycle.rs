@@ -10,6 +10,7 @@ use fae::host::channel::command_channel;
 use fae::host::contract::{CommandEnvelope, CommandName, EventEnvelope};
 use fae::host::handler::FaeDeviceTransferHandler;
 use fae::onboarding::OnboardingPhase;
+use fae::personality;
 use tokio::sync::broadcast;
 
 // ---------------------------------------------------------------------------
@@ -240,4 +241,93 @@ fn onboarding_advance_emits_phase_advanced_event() {
         .expect("event must be available synchronously");
     assert_eq!(event.event, "onboarding.phase_advanced");
     assert_eq!(event.payload["phase"], "permissions");
+}
+
+#[test]
+fn onboarding_set_user_name_persists_and_injects_into_prompt() {
+    let (handler, dir, _rt) = temp_handler();
+    let config_path = dir.path().join("config.toml");
+    let (_client, server) = command_channel(8, 8, handler);
+
+    // 1. Send set_user_name with "Alice"
+    let resp = route(
+        &server,
+        CommandName::OnboardingSetUserName,
+        serde_json::json!({"name": "Alice"}),
+        "n1",
+    );
+    assert_eq!(resp["accepted"], true);
+    assert_eq!(resp["name"], "Alice");
+
+    // 2. Verify config on disk has user_name
+    let loaded = SpeechConfig::from_file(&config_path).expect("load config");
+    assert_eq!(
+        loaded.user_name.as_deref(),
+        Some("Alice"),
+        "user_name must be persisted to config"
+    );
+
+    // 3. Verify the assembled system prompt contains "Alice"
+    let prompt = personality::assemble_prompt("fae", "", None, false, Some("Alice"));
+    assert!(
+        prompt.contains("Alice"),
+        "assembled prompt must contain user name"
+    );
+    assert!(
+        prompt.contains("User context:"),
+        "assembled prompt must contain user context section"
+    );
+
+    // 4. Complete onboarding
+    let complete = route(
+        &server,
+        CommandName::OnboardingComplete,
+        serde_json::json!({}),
+        "c1",
+    );
+    assert_eq!(complete["accepted"], true);
+    assert_eq!(complete["onboarded"], true);
+
+    // 5. Verify the name persists after completion
+    let loaded_after = SpeechConfig::from_file(&config_path).expect("load config after complete");
+    assert_eq!(
+        loaded_after.user_name.as_deref(),
+        Some("Alice"),
+        "user_name must survive onboarding completion"
+    );
+    assert!(
+        loaded_after.onboarded,
+        "onboarded must be true after completion"
+    );
+}
+
+#[test]
+fn onboarding_set_user_name_empty_returns_error() {
+    let (handler, _dir, _rt) = temp_handler();
+    let (_client, server) = command_channel(8, 8, handler);
+
+    let envelope = CommandEnvelope::new(
+        "n2",
+        CommandName::OnboardingSetUserName,
+        serde_json::json!({"name": "   "}),
+    );
+    let result = server.route(&envelope);
+    assert!(
+        result.is_err(),
+        "empty/whitespace name should be rejected"
+    );
+}
+
+#[test]
+fn onboarding_set_user_name_missing_field_returns_error() {
+    let (handler, _dir, _rt) = temp_handler();
+    let (_client, server) = command_channel(8, 8, handler);
+
+    let envelope = CommandEnvelope::new(
+        "n3",
+        CommandName::OnboardingSetUserName,
+        serde_json::json!({}),
+    );
+    let result = server.route(&envelope);
+    assert!(result.is_err(), "missing name field should be rejected");
 }

@@ -41,6 +41,10 @@ pub struct SpeechConfig {
     /// System permission grants (microphone, contacts, calendar, etc.).
     #[serde(default)]
     pub permissions: crate::permissions::PermissionStore,
+    /// User's display name, captured from Contacts Me Card during onboarding.
+    /// Injected into the system prompt so the LLM can address the user by name.
+    #[serde(default)]
+    pub user_name: Option<String>,
     /// Whether the user has completed the onboarding flow.
     /// Defaults to `false` — existing users who never onboarded will see the flow.
     #[serde(default)]
@@ -658,8 +662,9 @@ Personal context:\n\
     pub fn effective_system_prompt(
         &self,
         permissions: Option<&crate::permissions::PermissionStore>,
+        user_name: Option<&str>,
     ) -> String {
-        self.effective_system_prompt_with_vision(permissions, self.enable_vision)
+        self.effective_system_prompt_with_vision(permissions, self.enable_vision, user_name)
     }
 
     /// Like [`effective_system_prompt`](Self::effective_system_prompt) but with
@@ -668,6 +673,7 @@ Personal context:\n\
         &self,
         permissions: Option<&crate::permissions::PermissionStore>,
         vision_capable: bool,
+        user_name: Option<&str>,
     ) -> String {
         let add_on = self.system_prompt.trim();
         let is_legacy = Self::LEGACY_PROMPTS
@@ -683,6 +689,7 @@ Personal context:\n\
             clean_addon,
             permissions,
             vision_capable,
+            user_name,
         )
     }
 }

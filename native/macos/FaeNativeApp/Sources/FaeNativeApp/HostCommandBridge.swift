@@ -55,6 +55,18 @@ final class HostCommandBridge: ObservableObject {
         )
         observations.append(
             center.addObserver(
+                forName: .faeOnboardingSetUserName,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let name = notification.userInfo?["name"] as? String else { return }
+                Task { @MainActor in
+                    self?.dispatch("onboarding.set_user_name", payload: ["name": name])
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
                 forName: .faeOnboardingComplete,
                 object: nil,
                 queue: .main

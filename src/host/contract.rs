@@ -60,6 +60,8 @@ pub enum CommandName {
     OnboardingAdvance,
     #[serde(rename = "onboarding.complete")]
     OnboardingComplete,
+    #[serde(rename = "onboarding.set_user_name")]
+    OnboardingSetUserName,
     #[serde(rename = "conversation.link_detected")]
     ConversationLinkDetected,
     #[serde(rename = "config.get")]
@@ -101,6 +103,7 @@ impl CommandName {
             Self::OnboardingGetState => "onboarding.get_state",
             Self::OnboardingAdvance => "onboarding.advance",
             Self::OnboardingComplete => "onboarding.complete",
+            Self::OnboardingSetUserName => "onboarding.set_user_name",
             Self::ConversationLinkDetected => "conversation.link_detected",
             Self::ConfigGet => "config.get",
             Self::ConfigPatch => "config.patch",
@@ -138,6 +141,7 @@ impl CommandName {
             "onboarding.get_state" => Some(Self::OnboardingGetState),
             "onboarding.advance" => Some(Self::OnboardingAdvance),
             "onboarding.complete" => Some(Self::OnboardingComplete),
+            "onboarding.set_user_name" => Some(Self::OnboardingSetUserName),
             "conversation.link_detected" => Some(Self::ConversationLinkDetected),
             "config.get" => Some(Self::ConfigGet),
             "config.patch" => Some(Self::ConfigPatch),

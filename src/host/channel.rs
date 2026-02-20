@@ -82,6 +82,10 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn complete_onboarding(&self) -> Result<()> {
         Ok(())
     }
+    /// Store the user's display name (from Contacts Me Card) in config and memory.
+    fn set_user_name(&self, _name: &str) -> Result<()> {
+        Ok(())
+    }
     fn request_conversation_inject_text(&self, _text: &str) -> Result<()> {
         Ok(())
     }
@@ -263,6 +267,9 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::OnboardingGetState => self.handle_onboarding_get_state(envelope),
             CommandName::OnboardingAdvance => self.handle_onboarding_advance(envelope),
             CommandName::OnboardingComplete => self.handle_onboarding_complete(envelope),
+            CommandName::OnboardingSetUserName => {
+                self.handle_onboarding_set_user_name(envelope)
+            }
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -538,6 +545,27 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true, "onboarded": true}),
+        ))
+    }
+
+    fn handle_onboarding_set_user_name(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let name = parse_non_empty_field(&envelope.payload, "name", "onboarding.set_user_name")?;
+        self.handler.set_user_name(&name)?;
+
+        self.emit_event(
+            "onboarding.user_name_set",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "name": name
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "name": name}),
         ))
     }
 
