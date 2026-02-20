@@ -115,17 +115,68 @@ Configure via `Fae -> Channels...` in the menu.
 
 ## Architecture
 
+Fae is built as a Rust core library (`libfae`) with platform-specific native shells:
+
 ```
-Mic (16kHz) -> AEC -> VAD -> STT -> LLM (Agent Loop) -> TTS -> Speaker
-                |                         |                  |
-                +-> Wakeword              +-> Memory         +-> Orb state events (native UI)
-                                          +-> Intelligence
-                                          +-> Scheduler
+┌──────────────────────────────────────────────────────────────┐
+│                     Platform Shells                          │
+│                                                              │
+│  macOS (arm64)          Linux / Windows                      │
+│  ┌────────────────┐     ┌────────────────────┐               │
+│  │ Swift native   │     │ fae-host binary     │               │
+│  │ app (Fae.app)  │     │ (headless bridge)   │               │
+│  │                │     │                     │               │
+│  │ SwiftUI + orb  │     │ JSON stdin/stdout   │               │
+│  │ animation,     │     │ IPC over Unix sock  │               │
+│  │ conversation   │     │ or named pipe       │               │
+│  │ WebView,       │     │                     │               │
+│  │ settings UI    │     │ Connect any UI:     │               │
+│  └───────┬────────┘     │ web, terminal, etc. │               │
+│          │ C ABI        └──────────┬──────────┘               │
+│          │ (in-process)            │ JSON protocol            │
+│          ▼                         ▼                          │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │                   libfae (Rust core)                   │   │
+│  │                                                       │   │
+│  │  Mic -> AEC -> VAD -> STT -> LLM Agent -> TTS -> Spk │   │
+│  │              │                    │                    │   │
+│  │              │                    ├── Memory           │   │
+│  │              │                    ├── Intelligence     │   │
+│  │              │                    ├── Scheduler        │   │
+│  │              │                    └── Tools/Skills     │   │
+│  │              │                                        │   │
+│  │              └── Vision (Qwen3-VL, camera input)      │   │
+│  └───────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**Voice pipeline:** microphone capture at 16kHz, acoustic echo cancellation (AEC), voice activity detection (VAD) with configurable sensitivity, speech-to-text (STT via Parakeet ONNX), LLM processing through the agent loop, text-to-speech (TTS via Kokoro-82M ONNX), and speaker output with orb-state signaling for native shells.
+### macOS — Full Native App
 
-**Intelligence pipeline:** after each conversation turn, a background extraction pass analyses the conversation for dates, people, interests, and commitments. Results are stored as enriched memory records and can trigger scheduler tasks, relationship updates, and briefing items.
+On macOS, Fae ships as a native `.app` bundle. The Swift shell links `libfae.a` directly via C ABI — the Rust core runs in-process with zero IPC overhead. The app includes:
+
+- Adaptive window (floating orb / compact conversation mode)
+- WebView-based conversation + canvas panels
+- Native settings, help, and menu system
+- Code signing + notarization for Gatekeeper
+- Self-update with staged downloads
+
+### Linux and Windows — Headless Host Bridge
+
+On Linux and Windows, Fae ships as `fae-host`, a headless binary that exposes the full Rust core via a JSON protocol over stdin/stdout (or Unix socket on Linux, named pipe on Windows). This is the same core — same voice pipeline, memory, intelligence, and tools — without a platform-specific GUI.
+
+You can connect any frontend to `fae-host`: a terminal UI, a web interface, an Electron app, or anything that speaks JSON. The protocol is documented in `src/host/contract.rs`.
+
+### Experimental: Dioxus Cross-Platform GUI
+
+There is an archived Dioxus-based cross-platform GUI on the [`dioxus-archive`](https://github.com/saorsa-labs/fae/tree/dioxus-archive) branch. This provides a single Rust GUI that runs on macOS, Linux, and Windows. Development focus has moved to the native Swift shell for macOS, but the Dioxus branch is functional and available for anyone who wants to experiment with a cross-platform Rust GUI for Fae. Contributions welcome.
+
+### Voice Pipeline
+
+**Microphone** (16kHz) -> **AEC** (echo cancellation) -> **VAD** (voice activity detection) -> **STT** (Parakeet ONNX) -> **LLM** (agent loop with tool calling) -> **TTS** (Kokoro-82M ONNX) -> **Speaker**
+
+### Intelligence Pipeline
+
+After each conversation turn, a background extraction pass analyses the conversation for dates, people, interests, and commitments. Results are stored as enriched memory records and can trigger scheduler tasks, relationship updates, and briefing items.
 
 ## LLM Backends
 
@@ -133,9 +184,20 @@ Fae always runs through the internal agent loop (tool calling + sandboxing). The
 
 | Backend | Config | Inference | Notes |
 |---|---|---|---|
-| Local | `backend = "local"` | On-device (mistralrs, Metal on Mac) | Private, no network needed |
+| Local | `backend = "local"` | On-device via mistralrs (Metal on Mac, CUDA on Linux) | Private, no network needed |
 | API | `backend = "api"` | Remote (OpenAI, Anthropic, or any OpenAI-compatible endpoint) | More capable models |
 | Agent | `backend = "agent"` | Auto (local when no creds, API otherwise) | Backward compatibility |
+
+### Local Model Selection
+
+Fae automatically selects the best local model based on your system RAM:
+
+| System RAM | Model | Capabilities |
+|---|---|---|
+| 24 GiB+ | Qwen3-VL-8B-Instruct | Vision + text, stronger tool calling and coding |
+| < 24 GiB | Qwen3-VL-4B-Instruct | Vision + text, lighter footprint |
+
+Both models support vision (camera/image understanding) and are loaded via VisionModelBuilder with ISQ Q4K quantization. If a vision model fails to load, Fae falls back to Qwen3-4B text-only (GGUF).
 
 Local fallback: when `enable_local_fallback = true`, Fae falls back to the local model if the remote API is unreachable.
 
@@ -169,7 +231,6 @@ Config file: `~/.config/fae/config.toml`
 ```toml
 [llm]
 backend = "local"
-model_id = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
 context_size_tokens = 32768
 max_history_messages = 24
 enable_local_fallback = true
@@ -207,9 +268,10 @@ Runtime system prompt assembly:
 2. SOUL behavioral contract (`SOUL.md`)
 3. Memory context (from `~/.fae/memory/`)
 4. Proactive intelligence context (when available)
-5. Built-in + user skills
-6. Onboarding context (until onboarding is complete)
-7. User message
+5. Vision capabilities (when vision model is loaded)
+6. Built-in + user skills
+7. Onboarding context (until onboarding is complete)
+8. User message
 
 [`SOUL.md`](SOUL.md) defines Fae's identity, memory principles, tool use rules, presence behaviour, and proactive intelligence guidelines.
 
@@ -236,6 +298,21 @@ just lint             # Run clippy (zero warnings)
 just fmt              # Format code
 just check            # Full CI validation
 ```
+
+## Release Artifacts
+
+Each [release](https://github.com/saorsa-labs/fae/releases) includes:
+
+| Artifact | Platform | Contents |
+|---|---|---|
+| `fae-*-macos-arm64.tar.gz` | macOS (Apple Silicon) | Fae.app bundle (Swift shell + libfae, signed + notarized) |
+| `fae-*-macos-arm64.dmg` | macOS (Apple Silicon) | Drag-to-install disk image |
+| `fae-darwin-aarch64` | macOS (Apple Silicon) | Standalone binary for self-update |
+| `fae-*-linux-x86_64.tar.gz` | Linux (x86_64) | `fae-host` headless binary |
+| `fae-linux-x86_64` | Linux (x86_64) | Standalone binary for self-update |
+| `fae-*-windows-x86_64.zip` | Windows (x86_64) | `fae-host.exe` headless binary |
+| `fae-windows-x86_64.exe` | Windows (x86_64) | Standalone binary for self-update |
+| `SHA256SUMS.txt` | All | GPG-signed checksums |
 
 ## License
 

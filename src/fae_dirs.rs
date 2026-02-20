@@ -160,6 +160,10 @@ pub fn is_sandboxed() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Guards env-var-mutating tests against parallel execution races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn data_dir_is_nonempty() {
@@ -270,6 +274,7 @@ mod tests {
 
     #[test]
     fn data_dir_override_via_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let key = "FAE_DATA_DIR";
         let original = std::env::var_os(key);
 
@@ -287,6 +292,7 @@ mod tests {
 
     #[test]
     fn config_dir_override_via_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let key = "FAE_CONFIG_DIR";
         let original = std::env::var_os(key);
 
@@ -302,6 +308,7 @@ mod tests {
 
     #[test]
     fn cache_dir_override_via_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let key = "FAE_CACHE_DIR";
         let original = std::env::var_os(key);
 
@@ -346,6 +353,7 @@ mod tests {
 
     #[test]
     fn ensure_hf_home_sets_env_when_absent() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let key = "HF_HOME";
         let original = std::env::var_os(key);
 
