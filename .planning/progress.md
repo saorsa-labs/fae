@@ -336,3 +336,10 @@ Summary of Milestone 4:
 Results: All tests pass, zero clippy warnings, zero compilation warnings
 
 ### Phase 8.1 Complete — 2026-02-21
+
+### Phase 8.2: UV Bootstrap & Environment Management
+
+- [x] Task 1: Error Types & UV Directory Helpers (commit: 51c3d0f)
+- [x] Task 2: UV Binary Discovery & Version Check (commit: 8c59c7e)
+- [x] Task 3: UV Auto-Install — Download if Missing (commit: 9c01454)
+- [x] Task 4: PEP 723 Inline Metadata Parser (commit: f0ad37d)

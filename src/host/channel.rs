@@ -674,10 +674,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         ))
     }
 
-    fn handle_skill_python_start(
-        &self,
-        envelope: &CommandEnvelope,
-    ) -> Result<ResponseEnvelope> {
+    fn handle_skill_python_start(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         let skill_name = envelope
             .payload
             .get("skill_name")

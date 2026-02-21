@@ -20,6 +20,7 @@ pub mod uv_bootstrap;
 
 // Re-export core Python runner types for external use.
 pub use error::PythonSkillError;
+pub use pep723::ScriptMetadata;
 pub use python_protocol::{
     HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, METHOD_HANDSHAKE,
     METHOD_HEALTH, SkillMessage,
@@ -28,7 +29,6 @@ pub use python_runner::{
     JsonRpcComm, PythonProcessState, PythonSkillProcess, PythonSkillRunner, RpcOutcome, RunMode,
     SkillProcessConfig, backoff_for_attempt,
 };
-pub use pep723::ScriptMetadata;
 pub use uv_bootstrap::{UvBootstrap, UvInfo};
 
 use serde::{Deserialize, Serialize};

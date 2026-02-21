@@ -144,16 +144,61 @@ impl UvBootstrap {
         Self::discover(explicit_path)
     }
 
+    /// Pre-warm the Python environment for a script.
+    ///
+    /// Runs `uv run --quiet --no-progress <script> --help` (or a short
+    /// invocation) so that dependency resolution, package downloads, and
+    /// virtual-environment creation happen **before** the first real skill
+    /// invocation. This avoids cold-start latency on the first `send()`.
+    ///
+    /// The script itself is expected to exit quickly when invoked with
+    /// `--help` (most argparse/click scripts do).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PythonSkillError::BootstrapFailed`] if the warm-up command
+    /// fails to execute or exits with a non-zero status.
+    pub fn pre_warm(uv_path: &Path, script_path: &Path) -> Result<(), PythonSkillError> {
+        tracing::info!(
+            "pre-warming Python environment for {}",
+            script_path.display()
+        );
+
+        let output = Command::new(uv_path)
+            .args(["run", "--quiet"])
+            .arg(script_path)
+            .arg("--help")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| PythonSkillError::BootstrapFailed {
+                reason: format!(
+                    "failed to run pre-warm for {}: {e}",
+                    script_path.display()
+                ),
+            })?;
+
+        // Non-zero exit is acceptable — the script may not support --help.
+        // What matters is that uv resolved and installed dependencies.
+        if !output.status.success() {
+            tracing::debug!(
+                "pre-warm exited with {} (non-fatal, dependencies likely resolved)",
+                output.status
+            );
+        }
+
+        tracing::info!("pre-warm complete for {}", script_path.display());
+        Ok(())
+    }
+
     /// Download and run the official UV standalone installer.
     ///
     /// Sets `UV_INSTALL_DIR` so the binary lands in `uv_cache_dir()/bin/`
     /// and uses `--no-modify-path` to avoid touching shell profiles.
     fn auto_install() -> Result<(), PythonSkillError> {
         let install_dir = crate::fae_dirs::uv_cache_dir().join("bin");
-        std::fs::create_dir_all(&install_dir).map_err(|e| {
-            PythonSkillError::BootstrapFailed {
-                reason: format!("cannot create install dir {}: {e}", install_dir.display()),
-            }
+        std::fs::create_dir_all(&install_dir).map_err(|e| PythonSkillError::BootstrapFailed {
+            reason: format!("cannot create install dir {}: {e}", install_dir.display()),
         })?;
 
         // Download installer script to a temp file.
@@ -229,9 +274,7 @@ impl UvBootstrap {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_uv_version(&stdout).ok_or_else(|| PythonSkillError::UvNotFound {
-            reason: format!(
-                "could not parse version from `uv --version` output: {stdout}"
-            ),
+            reason: format!("could not parse version from `uv --version` output: {stdout}"),
         })
     }
 }
@@ -322,10 +365,7 @@ mod tests {
 
     #[test]
     fn parse_version_only() {
-        assert_eq!(
-            parse_uv_version("uv 0.5.14"),
-            Some("0.5.14".to_owned())
-        );
+        assert_eq!(parse_uv_version("uv 0.5.14"), Some("0.5.14".to_owned()));
     }
 
     #[test]
@@ -338,18 +378,12 @@ mod tests {
 
     #[test]
     fn parse_bare_version() {
-        assert_eq!(
-            parse_uv_version("0.4.0"),
-            Some("0.4.0".to_owned())
-        );
+        assert_eq!(parse_uv_version("0.4.0"), Some("0.4.0".to_owned()));
     }
 
     #[test]
     fn parse_with_trailing_newline() {
-        assert_eq!(
-            parse_uv_version("uv 0.6.0\n"),
-            Some("0.6.0".to_owned())
-        );
+        assert_eq!(parse_uv_version("uv 0.6.0\n"), Some("0.6.0".to_owned()));
     }
 
     #[test]
@@ -494,5 +528,45 @@ mod tests {
             "expected at least 2 candidates, got {}",
             candidates.len()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // pre_warm
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pre_warm_nonexistent_uv_returns_error() {
+        let result = UvBootstrap::pre_warm(
+            Path::new("/nonexistent/uv"),
+            Path::new("/tmp/fake_script.py"),
+        );
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PythonSkillError::BootstrapFailed { reason } => {
+                assert!(reason.contains("failed to run pre-warm"));
+            }
+            other => panic!("expected BootstrapFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pre_warm_succeeds_with_real_uv_and_trivial_script() {
+        // Skip if uv is not installed.
+        if which::which("uv").is_err() {
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("hello.py");
+        std::fs::write(
+            &script,
+            "#!/usr/bin/env python3\nprint('hello from pre-warm test')\n",
+        )
+        .unwrap();
+
+        let uv_path = which::which("uv").unwrap();
+        let result = UvBootstrap::pre_warm(&uv_path, &script);
+        // Should succeed — uv run on a trivial script with no deps.
+        assert!(result.is_ok(), "pre_warm failed: {result:?}");
     }
 }

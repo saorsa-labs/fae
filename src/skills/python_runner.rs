@@ -10,8 +10,8 @@
 
 use super::error::PythonSkillError;
 use super::python_protocol::{
-    HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, SkillMessage,
-    METHOD_HANDSHAKE, METHOD_HEALTH,
+    HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, METHOD_HANDSHAKE,
+    METHOD_HEALTH, SkillMessage,
 };
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -372,12 +372,11 @@ impl JsonRpcComm {
 
         match outcome.message {
             SkillMessage::Response(resp) => {
-                let result: HandshakeResult =
-                    serde_json::from_value(resp.result).map_err(|e| {
-                        PythonSkillError::HandshakeFailed {
-                            reason: format!("cannot parse handshake result: {e}"),
-                        }
-                    })?;
+                let result: HandshakeResult = serde_json::from_value(resp.result).map_err(|e| {
+                    PythonSkillError::HandshakeFailed {
+                        reason: format!("cannot parse handshake result: {e}"),
+                    }
+                })?;
 
                 if !result.name_matches(expected_name) {
                     return Err(PythonSkillError::HandshakeFailed {
@@ -426,12 +425,11 @@ impl JsonRpcComm {
 
         match outcome.message {
             SkillMessage::Response(resp) => {
-                let result: HealthResult =
-                    serde_json::from_value(resp.result).map_err(|e| {
-                        PythonSkillError::ProtocolError {
-                            message: format!("cannot parse health result: {e}"),
-                        }
-                    })?;
+                let result: HealthResult = serde_json::from_value(resp.result).map_err(|e| {
+                    PythonSkillError::ProtocolError {
+                        message: format!("cannot parse health result: {e}"),
+                    }
+                })?;
 
                 tracing::debug!(
                     skill = %self.skill_name,
@@ -532,13 +530,11 @@ impl JsonRpcComm {
     /// [`PythonSkillError::OutputTruncated`] if the line exceeds `MAX_LINE_BYTES`.
     async fn read_one_message(&mut self) -> Result<SkillMessage, PythonSkillError> {
         let mut line = String::new();
-        let n = self
-            .stdout
-            .read_line(&mut line)
-            .await
-            .map_err(|e| PythonSkillError::ProtocolError {
+        let n = self.stdout.read_line(&mut line).await.map_err(|e| {
+            PythonSkillError::ProtocolError {
                 message: format!("stdout read error: {e}"),
-            })?;
+            }
+        })?;
 
         if n == 0 {
             // EOF — process closed stdout
@@ -620,6 +616,8 @@ pub struct SkillProcessConfig {
     pub script_path: std::path::PathBuf,
     /// Working directory for the subprocess.
     pub work_dir: std::path::PathBuf,
+    /// Absolute path to the `uv` binary used to spawn the subprocess.
+    pub uv_path: std::path::PathBuf,
     /// Run mode: daemon or one-shot.
     pub mode: RunMode,
     /// Maximum number of restart attempts before giving up (daemon mode only).
@@ -634,6 +632,10 @@ pub struct SkillProcessConfig {
 
 impl SkillProcessConfig {
     /// Creates a config with sensible defaults.
+    ///
+    /// `uv_path` defaults to `"uv"` (PATH lookup). Use
+    /// [`with_uv_path`](Self::with_uv_path) to override with a discovered
+    /// binary path.
     pub fn new(skill_name: &str, script_path: std::path::PathBuf) -> Self {
         Self {
             skill_name: skill_name.to_owned(),
@@ -642,12 +644,20 @@ impl SkillProcessConfig {
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .to_path_buf(),
+            uv_path: std::path::PathBuf::from("uv"),
             mode: RunMode::Daemon,
             max_restarts: 5,
             handshake_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             fae_version: env!("CARGO_PKG_VERSION").to_owned(),
         }
+    }
+
+    /// Sets the path to the `uv` binary, consuming and returning `self`
+    /// for builder-style chaining.
+    pub fn with_uv_path(mut self, uv_path: std::path::PathBuf) -> Self {
+        self.uv_path = uv_path;
+        self
     }
 }
 
@@ -775,9 +785,12 @@ impl PythonSkillRunner {
         }
 
         let req = JsonRpcRequest::new(method, params, next_id());
-        let comm = self.comm.as_mut().ok_or_else(|| PythonSkillError::ProtocolError {
-            message: "comm handle missing in daemon mode".to_owned(),
-        })?;
+        let comm = self
+            .comm
+            .as_mut()
+            .ok_or_else(|| PythonSkillError::ProtocolError {
+                message: "comm handle missing in daemon mode".to_owned(),
+            })?;
 
         match comm.send_request(&req, self.config.request_timeout).await {
             Ok(outcome) => extract_result(outcome.message),
@@ -817,9 +830,7 @@ impl PythonSkillRunner {
         proc.transition(PythonProcessState::Running)?;
 
         let req = JsonRpcRequest::new(method, params, next_id());
-        let outcome = comm
-            .send_request(&req, self.config.request_timeout)
-            .await;
+        let outcome = comm.send_request(&req, self.config.request_timeout).await;
 
         proc.kill().await;
 
@@ -888,10 +899,8 @@ impl PythonSkillRunner {
     }
 
     /// Spawns the raw child process and returns a `(PythonSkillProcess, JsonRpcComm)` pair.
-    async fn spawn_child(
-        &self,
-    ) -> Result<(PythonSkillProcess, JsonRpcComm), PythonSkillError> {
-        let mut cmd = tokio::process::Command::new("uv");
+    async fn spawn_child(&self) -> Result<(PythonSkillProcess, JsonRpcComm), PythonSkillError> {
+        let mut cmd = tokio::process::Command::new(&self.config.uv_path);
         cmd.arg("run")
             .arg(&self.config.script_path)
             .current_dir(&self.config.work_dir)
@@ -900,13 +909,13 @@ impl PythonSkillRunner {
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(PythonSkillError::SpawnFailed)?;
+        let mut child = cmd.spawn().map_err(PythonSkillError::SpawnFailed)?;
 
-        let comm = JsonRpcComm::from_child(&mut child, &self.config.skill_name)
-            .ok_or_else(|| PythonSkillError::ProtocolError {
-                message: "child process missing piped stdin/stdout".to_owned(),
+        let comm =
+            JsonRpcComm::from_child(&mut child, &self.config.skill_name).ok_or_else(|| {
+                PythonSkillError::ProtocolError {
+                    message: "child process missing piped stdin/stdout".to_owned(),
+                }
             })?;
 
         let mut proc = PythonSkillProcess::new(&self.config.skill_name);
@@ -922,10 +931,7 @@ fn extract_result(message: SkillMessage) -> Result<serde_json::Value, PythonSkil
     match message {
         SkillMessage::Response(resp) => Ok(resp.result),
         SkillMessage::Error(err) => Err(PythonSkillError::ProtocolError {
-            message: format!(
-                "skill error {}: {}",
-                err.error.code, err.error.message
-            ),
+            message: format!("skill error {}: {}", err.error.code, err.error.message),
         }),
         SkillMessage::Notification(_) => Err(PythonSkillError::ProtocolError {
             message: "unexpected notification where response was expected".to_owned(),
@@ -1267,8 +1273,7 @@ done
     #[tokio::test]
     async fn rpc_receives_notification_before_response() {
         let mut child = spawn_notification_then_response_skill();
-        let mut comm =
-            JsonRpcComm::from_child(&mut child, "notif-skill").expect("from_child");
+        let mut comm = JsonRpcComm::from_child(&mut child, "notif-skill").expect("from_child");
 
         let req = JsonRpcRequest::new("skill.run", None, 7);
         let outcome = comm
@@ -1303,9 +1308,7 @@ done
         let mut comm = JsonRpcComm::from_child(&mut child, "cat-skill").expect("from_child");
 
         let req = JsonRpcRequest::new("method", None, 1);
-        let result = comm
-            .send_request(&req, Duration::from_millis(100))
-            .await;
+        let result = comm.send_request(&req, Duration::from_millis(100)).await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1325,16 +1328,11 @@ done
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let req = JsonRpcRequest::new("test", None, 1);
-        let result = comm
-            .send_request(&req, Duration::from_secs(2))
-            .await;
+        let result = comm.send_request(&req, Duration::from_secs(2)).await;
 
         // We may get either ProcessExited (broken pipe on write or EOF on read)
         // or Timeout — both are valid depending on timing.
-        assert!(
-            result.is_err(),
-            "expected an error when process has exited"
-        );
+        assert!(result.is_err(), "expected an error when process has exited");
     }
 
     #[tokio::test]
@@ -1558,9 +1556,7 @@ done
 
         let mut comm = JsonRpcComm::from_child(&mut child, "slow-skill").expect("from_child");
 
-        let result = comm
-            .perform_health_check(Duration::from_millis(100))
-            .await;
+        let result = comm.perform_health_check(Duration::from_millis(100)).await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1605,10 +1601,21 @@ done
     fn skill_process_config_defaults() {
         let cfg = SkillProcessConfig::new("my-skill", std::path::PathBuf::from("/tmp/skill.py"));
         assert_eq!(cfg.skill_name, "my-skill");
+        assert_eq!(cfg.uv_path, std::path::PathBuf::from("uv"));
         assert_eq!(cfg.mode, RunMode::Daemon);
         assert_eq!(cfg.max_restarts, 5);
         assert_eq!(cfg.handshake_timeout, Duration::from_secs(10));
         assert_eq!(cfg.request_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn skill_process_config_with_uv_path() {
+        let cfg = SkillProcessConfig::new("test", std::path::PathBuf::from("/tmp/t.py"))
+            .with_uv_path(std::path::PathBuf::from("/opt/uv/bin/uv"));
+        assert_eq!(cfg.uv_path, std::path::PathBuf::from("/opt/uv/bin/uv"));
+        // Other defaults should be preserved.
+        assert_eq!(cfg.skill_name, "test");
+        assert_eq!(cfg.mode, RunMode::Daemon);
     }
 
     #[test]

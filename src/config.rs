@@ -1109,6 +1109,18 @@ pub struct PythonSkillsConfig {
     ///
     /// Override with `FAE_PYTHON_SKILLS_DIR`.
     pub skills_dir: std::path::PathBuf,
+    /// Explicit path to the `uv` binary.
+    ///
+    /// When `None`, [`UvBootstrap::discover`](crate::skills::UvBootstrap::discover)
+    /// searches well-known locations automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uv_path: Option<std::path::PathBuf>,
+    /// Python version constraint passed to `uv run --python`.
+    ///
+    /// For example `">=3.11"` or `"3.12"`. When `None`, `uv` picks the best
+    /// available interpreter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_version: Option<String>,
     /// Timeout in seconds for individual JSON-RPC requests.
     pub request_timeout_secs: u64,
     /// Maximum number of concurrent daemon skill processes.
@@ -1129,6 +1141,8 @@ impl Default for PythonSkillsConfig {
         Self {
             enabled: false,
             skills_dir: crate::fae_dirs::python_skills_dir(),
+            uv_path: None,
+            python_version: None,
             request_timeout_secs: 30,
             max_concurrent: 5,
             health_check_interval_secs: 60,
@@ -1816,6 +1830,8 @@ gguf_file = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
         let original = PythonSkillsConfig {
             enabled: true,
             skills_dir: std::path::PathBuf::from("/custom/skills"),
+            uv_path: None,
+            python_version: None,
             request_timeout_secs: 60,
             max_concurrent: 10,
             health_check_interval_secs: 120,
@@ -1867,5 +1883,51 @@ model_id = "some-model"
         let config: SpeechConfig = toml::from_str(toml_str).unwrap();
         assert!(!config.python_skills.enabled);
         assert_eq!(config.python_skills.max_restarts, 5);
+    }
+
+    #[test]
+    fn python_skills_config_defaults_uv_and_python_version_are_none() {
+        let cfg = PythonSkillsConfig::default();
+        assert!(cfg.uv_path.is_none());
+        assert!(cfg.python_version.is_none());
+    }
+
+    #[test]
+    fn python_skills_config_explicit_uv_path_round_trip() {
+        let toml_str = r#"
+[python_skills]
+enabled = true
+uv_path = "/usr/local/bin/uv"
+python_version = ">=3.12"
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.python_skills.uv_path.as_deref(),
+            Some(std::path::Path::new("/usr/local/bin/uv"))
+        );
+        assert_eq!(
+            config.python_skills.python_version.as_deref(),
+            Some(">=3.12")
+        );
+    }
+
+    #[test]
+    fn python_skills_config_omitted_uv_path_defaults_to_none() {
+        let toml_str = r#"
+[python_skills]
+enabled = true
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.python_skills.uv_path.is_none());
+        assert!(config.python_skills.python_version.is_none());
+    }
+
+    #[test]
+    fn python_skills_config_skip_serializing_none_fields() {
+        let cfg = PythonSkillsConfig::default();
+        let serialized = toml::to_string(&cfg).unwrap();
+        // None fields should not appear in output.
+        assert!(!serialized.contains("uv_path"));
+        assert!(!serialized.contains("python_version"));
     }
 }
