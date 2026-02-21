@@ -15,17 +15,19 @@ pub mod error;
 pub mod python_protocol;
 pub mod python_runner;
 pub mod trait_def;
+pub mod uv_bootstrap;
 
 // Re-export core Python runner types for external use.
 pub use error::PythonSkillError;
 pub use python_protocol::{
-    HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, SkillMessage,
-    METHOD_HANDSHAKE, METHOD_HEALTH,
+    HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, METHOD_HANDSHAKE,
+    METHOD_HEALTH, SkillMessage,
 };
 pub use python_runner::{
-    JsonRpcComm, PythonProcessState, PythonSkillProcess, PythonSkillRunner, RunMode,
-    RpcOutcome, SkillProcessConfig, backoff_for_attempt,
+    JsonRpcComm, PythonProcessState, PythonSkillProcess, PythonSkillRunner, RpcOutcome, RunMode,
+    SkillProcessConfig, backoff_for_attempt,
 };
+pub use uv_bootstrap::{UvBootstrap, UvInfo};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
