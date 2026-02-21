@@ -2,24 +2,10 @@
 
 use fae::config::SpeechConfig;
 use fae::host::channel::command_channel;
-use fae::host::contract::{CommandEnvelope, CommandName, EventEnvelope};
-use fae::host::handler::FaeDeviceTransferHandler;
+use fae::host::contract::{CommandEnvelope, CommandName};
 use fae::permissions::PermissionKind;
-use tokio::sync::broadcast;
 
-fn temp_handler() -> (
-    FaeDeviceTransferHandler,
-    tempfile::TempDir,
-    tokio::runtime::Runtime,
-) {
-    let dir = tempfile::tempdir().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    let config = SpeechConfig::default();
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    let (event_tx, _) = broadcast::channel::<EventEnvelope>(16);
-    let handler = FaeDeviceTransferHandler::new(config, path, rt.handle().clone(), event_tx);
-    (handler, dir, rt)
-}
+use super::helpers::temp_handler;
 
 #[test]
 fn capability_grant_via_channel_persists_to_disk() {

@@ -6,51 +6,14 @@
 //! - scheduler CRUD persists to disk via the persisted snapshot API
 //! - approval.respond resolves a pending approval request
 
-use fae::config::SpeechConfig;
 use fae::host::channel::{command_channel, command_channel_with_events};
 use fae::host::contract::{CommandEnvelope, CommandName, EventEnvelope};
-use fae::host::handler::FaeDeviceTransferHandler;
 use fae::scheduler::{Schedule, ScheduledTask};
 use tokio::sync::broadcast;
 
+use super::helpers::{collect_events, temp_handler, temp_handler_with_events};
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
-
-fn temp_handler() -> (
-    FaeDeviceTransferHandler,
-    tempfile::TempDir,
-    tokio::runtime::Runtime,
-) {
-    let dir = tempfile::tempdir().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    let config = SpeechConfig::default();
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    let (event_tx, _) = broadcast::channel::<EventEnvelope>(64);
-    let handler = FaeDeviceTransferHandler::new(config, path, rt.handle().clone(), event_tx);
-    (handler, dir, rt)
-}
-
-fn temp_handler_with_events() -> (
-    FaeDeviceTransferHandler,
-    broadcast::Receiver<EventEnvelope>,
-    tempfile::TempDir,
-    tokio::runtime::Runtime,
-) {
-    let dir = tempfile::tempdir().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    let config = SpeechConfig::default();
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    let (event_tx, event_rx) = broadcast::channel::<EventEnvelope>(64);
-    let handler = FaeDeviceTransferHandler::new(config, path, rt.handle().clone(), event_tx);
-    (handler, event_rx, dir, rt)
-}
-
-fn collect_events(rx: &mut broadcast::Receiver<EventEnvelope>) -> Vec<EventEnvelope> {
-    let mut events = Vec::new();
-    while let Ok(evt) = rx.try_recv() {
-        events.push(evt);
-    }
-    events
-}
 
 fn make_envelope(command: CommandName, payload: serde_json::Value) -> CommandEnvelope {
     CommandEnvelope::new("test-req-1", command, payload)

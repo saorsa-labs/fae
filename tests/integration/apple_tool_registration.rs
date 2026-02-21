@@ -3,7 +3,6 @@
 //! Validates the full tool registration flow: tool construction, permission
 //! gating via [`AvailabilityGatedTool`], rate limiting, and LLM-facing
 //! contract guarantees (names, descriptions, schemas).
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
 

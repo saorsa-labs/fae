@@ -12,8 +12,6 @@
 //! 7. Rollback to last-known-good snapshot
 //! 8. Verify re-install snapshots the previous version
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use fae::skills::SkillPaths;
 use fae::skills::python_lifecycle::{
     PythonSkillStatus, activate_python_skill_at, advance_python_skill_status_at,

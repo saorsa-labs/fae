@@ -4,8 +4,6 @@
 //! than the real `EmbeddingEngine`, so they run fast and don't require the
 //! ONNX model to be downloaded.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use fae::skills::discovery::{
     SkillDiscoveryIndex, extract_builtin_skill_text, extract_markdown_skill_text,
     extract_python_skill_text,

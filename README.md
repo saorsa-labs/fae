@@ -6,9 +6,26 @@
 
 ![Fae](assets/fae.jpg)
 
-Fae is a personal AI companion who listens, remembers, and helps — like having a knowledgeable friend who is always in the room. She runs entirely on your computer, keeping your data private and secure.
+Fae is a personal AI companion who listens, remembers, and helps — like having a knowledgeable friend who is always in the room. She runs entirely on your Mac, keeping your data private and secure.
 
 **The vision is simple:** imagine a computer that your grandmother could use. Fae handles the complexity — setting up software, managing files, scheduling reminders, researching topics, and keeping track of the people and events that matter to you. You just talk to her.
+
+**Website:** [the-fae.com](https://the-fae.com)
+
+## Platform
+
+Fae is a **pure Apple-native app**. The macOS app is built with SwiftUI and ships as a signed, notarized `.app` bundle.
+
+| Platform | Status | Role |
+|---|---|---|
+| **macOS** (Apple Silicon) | Primary | Full app — on-device LLM inference, voice pipeline, memory, tools |
+| **iOS / iPadOS** | Planned | Lightweight companion via Handoff — organisational tasks, reminders, briefings |
+
+The heavy lifting (LLM inference, voice pipeline, memory) stays on your Mac. iOS/iPadOS devices receive Handoff for lighter organisational work — think of your iPhone as a remote for your Mac's brain.
+
+**No web version. No Windows. No Linux builds.**
+
+> **Cross-platform note:** An archived [Dioxus-based cross-platform GUI](https://github.com/saorsa-labs/fae/tree/dioxus-archive) branch exists for anyone wanting to experiment with a Rust GUI on macOS, Linux, and Windows. The headless `fae-host` bridge binary (see Architecture below) also makes it possible to connect any frontend on any platform. Contributions welcome.
 
 ## What Fae Does
 
@@ -51,7 +68,7 @@ Proactivity levels: **Off** (disabled), **Digest Only** (extract but deliver onl
 
 ### Desktop Automation
 
-Fae can manage applications on your computer through a cross-platform desktop automation tool:
+Fae can manage applications on your Mac through desktop automation tools:
 
 - Open, close, and interact with desktop applications.
 - Read and write files, configure software, and manage system settings.
@@ -116,26 +133,26 @@ Configure via `Fae -> Channels...` in the menu.
 
 ## Architecture
 
-Fae is built as a Rust core library (`libfae`) with platform-specific native shells:
+Fae follows a **Ghostty-style architecture**: a large, cross-platform Rust core (`libfae`) with thin, platform-native GUI shells. The Rust core contains all the intelligence — voice pipeline, LLM inference, memory, scheduler, tools, and skills. The native shell is a lightweight SwiftUI wrapper that provides the UI and platform integration.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                     Platform Shells                          │
 │                                                              │
-│  macOS (arm64)          Linux / Windows                      │
-│  ┌────────────────┐     ┌────────────────────┐               │
-│  │ Swift native   │     │ fae-host binary     │               │
-│  │ app (Fae.app)  │     │ (headless bridge)   │               │
-│  │                │     │                     │               │
-│  │ SwiftUI + orb  │     │ JSON stdin/stdout   │               │
-│  │ animation,     │     │ IPC over Unix sock  │               │
-│  │ conversation   │     │ or named pipe       │               │
-│  │ WebView,       │     │                     │               │
-│  │ settings UI    │     │ Connect any UI:     │               │
-│  └───────┬────────┘     │ web, terminal, etc. │               │
-│          │ C ABI        └──────────┬──────────┘               │
-│          │ (in-process)            │ JSON protocol            │
-│          ▼                         ▼                          │
+│  macOS (Apple Silicon)     Headless (any platform)           │
+│  ┌────────────────┐        ┌────────────────────┐            │
+│  │ SwiftUI native │        │ fae-host binary     │            │
+│  │ app (Fae.app)  │        │ (headless bridge)   │            │
+│  │                │        │                     │            │
+│  │ Orb animation, │        │ JSON stdin/stdout   │            │
+│  │ conversation   │        │ IPC over Unix sock  │            │
+│  │ WebView,       │        │                     │            │
+│  │ settings UI,   │        │ Connect any UI:     │            │
+│  │ Handoff        │        │ terminal, web, etc. │            │
+│  └───────┬────────┘        └──────────┬──────────┘            │
+│          │ C ABI                      │ JSON protocol         │
+│          │ (in-process)               │                       │
+│          ▼                            ▼                       │
 │  ┌───────────────────────────────────────────────────────┐   │
 │  │                   libfae (Rust core)                   │   │
 │  │                                                       │   │
@@ -158,18 +175,19 @@ On macOS, Fae ships as a native `.app` bundle. The Swift shell links `libfae.a` 
 - Adaptive window (floating orb / compact conversation mode)
 - WebView-based conversation + canvas panels
 - Native settings, help, and menu system
+- Apple Handoff support for iOS/iPadOS companion devices
 - Code signing + notarization for Gatekeeper
 - Self-update with staged downloads
 
-### Linux and Windows — Headless Host Bridge
+### Headless Host Bridge
 
-On Linux and Windows, Fae ships as `fae-host`, a headless binary that exposes the full Rust core via a JSON protocol over stdin/stdout (or Unix socket on Linux, named pipe on Windows). This is the same core — same voice pipeline, memory, intelligence, and tools — without a platform-specific GUI.
+`fae-host` is a headless binary that exposes the full Rust core via a JSON protocol over stdin/stdout (or Unix socket). This is the same core — same voice pipeline, memory, intelligence, and tools — without a GUI.
 
 You can connect any frontend to `fae-host`: a terminal UI, a web interface, an Electron app, or anything that speaks JSON. The protocol is documented in `src/host/contract.rs`.
 
-### Experimental: Dioxus Cross-Platform GUI
+### Cross-Platform GUI (Archived)
 
-There is an archived Dioxus-based cross-platform GUI on the [`dioxus-archive`](https://github.com/saorsa-labs/fae/tree/dioxus-archive) branch. This provides a single Rust GUI that runs on macOS, Linux, and Windows. Development focus has moved to the native Swift shell for macOS, but the Dioxus branch is functional and available for anyone who wants to experiment with a cross-platform Rust GUI for Fae. Contributions welcome.
+The [`dioxus-archive`](https://github.com/saorsa-labs/fae/tree/dioxus-archive) branch contains a Dioxus-based cross-platform GUI that runs on macOS, Linux, and Windows from a single Rust codebase. Development focus has moved to the native Swift shell, but the Dioxus branch is functional and available for experimentation. Contributions welcome.
 
 ### Voice Pipeline
 
@@ -185,7 +203,7 @@ Fae always runs through the internal agent loop (tool calling + sandboxing). The
 
 | Backend | Config | Inference | Notes |
 |---|---|---|---|
-| Local | `backend = "local"` | On-device via mistralrs (Metal on Mac, CUDA on Linux) | Private, no network needed |
+| Local | `backend = "local"` | On-device via mistralrs (Metal on Apple Silicon) | Private, no network needed |
 
 ### Local Model Selection
 
@@ -311,10 +329,6 @@ Each [release](https://github.com/saorsa-labs/fae/releases) includes:
 | `fae-*-macos-arm64.tar.gz` | macOS (Apple Silicon) | Fae.app bundle (Swift shell + libfae, signed + notarized) |
 | `fae-*-macos-arm64.dmg` | macOS (Apple Silicon) | Drag-to-install disk image |
 | `fae-darwin-aarch64` | macOS (Apple Silicon) | Standalone binary for self-update |
-| `fae-*-linux-x86_64.tar.gz` | Linux (x86_64) | `fae-host` headless binary |
-| `fae-linux-x86_64` | Linux (x86_64) | Standalone binary for self-update |
-| `fae-*-windows-x86_64.zip` | Windows (x86_64) | `fae-host.exe` headless binary |
-| `fae-windows-x86_64.exe` | Windows (x86_64) | Standalone binary for self-update |
 | `SHA256SUMS.txt` | All | GPG-signed checksums |
 
 ## License

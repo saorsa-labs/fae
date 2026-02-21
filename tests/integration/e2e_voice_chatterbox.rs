@@ -8,8 +8,6 @@
 //! cargo test --features chatterbox
 //! ```
 
-#![cfg(feature = "chatterbox")]
-
 /// Check that a local Chatterbox server is reachable. Returns the client on
 /// success; on failure the invoking test returns early (skips) instead of
 /// aborting the entire process.

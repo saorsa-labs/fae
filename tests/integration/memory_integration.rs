@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use fae::config::MemoryConfig;
 use fae::memory::{MemoryOrchestrator, MemoryRepository, MemoryStatus, SqliteMemoryRepository};
 use std::path::{Path, PathBuf};

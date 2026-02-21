@@ -20,4 +20,11 @@ opt-level = 2
 
 [profile.test]
 opt-level = 1
-debug = "line-tables-only"
+debug = false
+codegen-units = 1
+
+# Prevent SIMD codegen explosion in gemm/candle dependencies during tests.
+# Without this, opt-level = 2 from [profile.dev.package."*"] carries into
+# test builds, causing 200GB+ RAM usage from 29 binaries × heavy ML crates.
+[profile.test.package."*"]
+opt-level = 0

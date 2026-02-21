@@ -14,8 +14,6 @@
 //! 6. Collect overwrites an existing credential
 //! 7. Invalid credential name rejected by manifest validation
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use fae::skills::credential_mediation::{
     FAE_SKILLS_KEYCHAIN_SERVICE, check_stored_credentials, clear_skill_credentials,
     collect_skill_credentials, retrieve_skill_credentials,

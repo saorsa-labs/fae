@@ -13,8 +13,6 @@
 //! (`PythonSkillProcess` + `JsonRpcComm`) that `PythonSkillRunner` itself uses
 //! internally. This gives full lifecycle coverage without external dependencies.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use fae::skills::{
     HandshakeResult, HealthResult, JsonRpcComm, JsonRpcRequest, PythonProcessState,
     PythonSkillProcess, RpcOutcome, SkillMessage, backoff_for_attempt,

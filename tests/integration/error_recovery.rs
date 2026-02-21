@@ -3,8 +3,6 @@
 //! Covers model integrity, memory pressure thresholds, graceful degradation
 //! modes, fallback chain ordering, and log rotation cleanup.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::fs;
 
 // ─── Task 2: Model Integrity ──────────────────────────────────────────────────

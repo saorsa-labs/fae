@@ -264,6 +264,43 @@ cargo test
 
 When changing memory logic, add tests first (TDD), then implementation.
 
+## Build memory optimization
+
+Integration tests use the **matklad single-binary pattern** to avoid OOM during `cargo test`.
+
+### Why
+
+Each `tests/*.rs` file compiles to a separate binary linking the full ML stack (mistralrs + candle + ort + 14 gemm crates). With 29 files that meant 29 binaries × ~7GB link-time RAM = 200GB+ peak. Consolidating into `tests/integration/main.rs` reduces this to 1 binary.
+
+### Test structure
+
+```
+tests/
+  integration/
+    main.rs          ← single binary entry point, #![allow(clippy::unwrap_used, ...)]
+    helpers.rs       ← shared test utilities (temp_handler, temp_root, etc.)
+    *.rs             ← one module per original test file
+  fixtures/          ← test data (unchanged)
+```
+
+### Adding new integration tests
+
+New integration tests go as modules in `tests/integration/`, NOT as new top-level `tests/*.rs` files:
+
+1. Create `tests/integration/my_new_test.rs`
+2. Add `mod my_new_test;` to `tests/integration/main.rs`
+3. Use shared helpers from `super::helpers`
+
+### Profile overrides
+
+`.cargo/config.toml` contains test-specific overrides:
+- `[profile.test]` — `opt-level = 1`, `debug = false`, `codegen-units = 1`
+- `[profile.test.package."*"]` — `opt-level = 0` (prevents SIMD explosion in gemm/candle deps)
+
+### CI memory cap
+
+CI runners (7-14GB) use `CARGO_BUILD_JOBS=2` to cap parallel rustc processes. Locally, `just test-ci` does the same.
+
 ## Completed milestones
 
 - **v0.6.2** — Production hardening: pipeline startup fix, runtime event routing, settings redesign (TabView), help menu, onboarding reset, config.patch implementation

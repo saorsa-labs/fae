@@ -2,7 +2,6 @@
 //!
 //! Verifies the full flow: discover/install → bootstrap → pre-warm → spawn → handshake.
 //! Skipped when `uv` is not available on the test machine.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::Write;
 use std::path::PathBuf;

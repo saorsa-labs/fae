@@ -59,9 +59,17 @@ build-release:
 build-strict:
     cargo clippy --all-targets -- -D warnings
 
-# Run all tests
+# Run all tests (single integration binary — see tests/integration/main.rs)
 test:
     cargo test
+
+# Run tests with capped parallelism (CI-safe, ~14GB peak)
+test-ci:
+    CARGO_BUILD_JOBS=2 cargo test
+
+# Run a specific integration test module (e.g., just test-integration memory_integration)
+test-integration MOD:
+    cargo test --test integration {{MOD}}::
 
 # Run tests with output visible
 test-verbose:

@@ -187,6 +187,21 @@ Architecture docs:
 - `docs/architecture/embedded-core.md` — embedding plan, FFI surface, migration path
 - `docs/architecture/native-app-latency-plan.md` — latency SLOs and benchmarks
 
+## Testing guardrails
+
+### Single-binary integration tests
+
+All integration tests live in `tests/integration/` as modules of a single binary (`tests/integration/main.rs`). This prevents OOM from linking 29+ separate binaries against the ML stack.
+
+Rules:
+
+- New integration tests go in `tests/integration/<name>.rs`, NOT as new top-level `tests/*.rs` files.
+- Add the corresponding `mod <name>;` to `tests/integration/main.rs`.
+- Shared test helpers go in `tests/integration/helpers.rs`.
+- Never use `cargo test --all-features` — it enables feature combinations that cause 300GB+ RAM usage.
+- Use `just test-ci` (or `CARGO_BUILD_JOBS=2 cargo test`) on memory-constrained machines.
+- To run a single integration module: `just test-integration <module_name>` or `cargo test --test integration <module_name>::`.
+
 ## Quality gates
 
 Before shipping memory/proactive/personalization changes:

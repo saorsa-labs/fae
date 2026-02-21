@@ -8,59 +8,33 @@
 //! - Tool context (`tool_name`, `tool_action`) is preserved in the event
 //! - Live shared store propagates across multiple tool gate instances
 //! - Revocation blocks a previously-allowed tool
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
 
-use fae::config::SpeechConfig;
 use fae::fae_llm::tools::apple::{
     AvailabilityGatedTool, SearchContactsTool, SearchMailTool, global_contact_store,
     global_mail_store,
 };
 use fae::fae_llm::tools::types::Tool;
 use fae::host::channel::{DeviceTransferHandler, command_channel_with_events};
-use fae::host::contract::{CommandEnvelope, CommandName, EventEnvelope};
-use fae::host::handler::FaeDeviceTransferHandler;
+use fae::host::contract::{CommandEnvelope, CommandName};
 use fae::permissions::{PermissionKind, PermissionStore};
 use tokio::sync::broadcast;
 
-// ─── Test helpers ─────────────────────────────────────────────────────────────
+use super::helpers::{drain_events, temp_handler_with_events};
 
-/// Build a temporary `FaeDeviceTransferHandler` that does not write to disk.
-fn temp_handler() -> (
-    FaeDeviceTransferHandler,
-    broadcast::Receiver<EventEnvelope>,
-    tempfile::TempDir,
-    tokio::runtime::Runtime,
-) {
-    let dir = tempfile::tempdir().expect("create temp dir");
-    let path = dir.path().join("config.toml");
-    let config = SpeechConfig::default();
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    let (event_tx, event_rx) = broadcast::channel(64);
-    let handler = FaeDeviceTransferHandler::new(config, path, rt.handle().clone(), event_tx);
-    (handler, event_rx, dir, rt)
-}
+// ─── Test helpers ─────────────────────────────────────────────────────────────
 
 /// Create a `CommandEnvelope` for the given command and payload.
 fn envelope(command: CommandName, payload: serde_json::Value) -> CommandEnvelope {
     CommandEnvelope::new("test-req", command, payload)
 }
 
-/// Drain all pending events from the broadcast receiver into a Vec.
-fn drain_events(rx: &mut broadcast::Receiver<EventEnvelope>) -> Vec<EventEnvelope> {
-    let mut events = Vec::new();
-    while let Ok(evt) = rx.try_recv() {
-        events.push(evt);
-    }
-    events
-}
-
 // ─── Test 1: JIT capability.request emits event with jit flag ────────────────
 
 #[test]
 fn jit_capability_request_emits_event_with_jit_flag() {
-    let (handler, _, _dir, _rt) = temp_handler();
+    let (handler, _, _dir, _rt) = temp_handler_with_events();
     let (event_tx, mut event_rx) = broadcast::channel(64);
     let (_client, server) = command_channel_with_events(8, event_tx, handler);
 
@@ -89,7 +63,7 @@ fn jit_capability_request_emits_event_with_jit_flag() {
 
 #[test]
 fn jit_grant_via_capability_grant_persists_to_shared_store() {
-    let (handler, _event_rx, _dir, _rt) = temp_handler();
+    let (handler, _event_rx, _dir, _rt) = temp_handler_with_events();
 
     // Get the shared store before granting.
     let shared = handler.shared_permissions();
@@ -112,7 +86,7 @@ fn jit_grant_via_capability_grant_persists_to_shared_store() {
 
 #[test]
 fn jit_deny_via_capability_deny_persists_to_shared_store() {
-    let (handler, _event_rx, _dir, _rt) = temp_handler();
+    let (handler, _event_rx, _dir, _rt) = temp_handler_with_events();
 
     handler
         .grant_capability("contacts", None)
@@ -138,7 +112,7 @@ fn jit_deny_via_capability_deny_persists_to_shared_store() {
 
 #[test]
 fn permissions_changed_event_emitted_on_jit_grant() {
-    let (handler, mut event_rx, _dir, _rt) = temp_handler();
+    let (handler, mut event_rx, _dir, _rt) = temp_handler_with_events();
 
     handler
         .grant_capability("contacts", None)
@@ -158,7 +132,7 @@ fn permissions_changed_event_emitted_on_jit_grant() {
 
 #[test]
 fn permissions_changed_event_emitted_on_jit_deny() {
-    let (handler, mut event_rx, _dir, _rt) = temp_handler();
+    let (handler, mut event_rx, _dir, _rt) = temp_handler_with_events();
 
     handler
         .grant_capability("contacts", None)
@@ -185,7 +159,7 @@ fn permissions_changed_event_emitted_on_jit_deny() {
 
 #[test]
 fn capability_request_with_tool_context_preserved_in_event() {
-    let (handler, _, _dir, _rt) = temp_handler();
+    let (handler, _, _dir, _rt) = temp_handler_with_events();
     let (event_tx, mut event_rx) = broadcast::channel(64);
     let (_client, server) = command_channel_with_events(8, event_tx, handler);
 
@@ -334,7 +308,7 @@ fn revocation_via_deny_blocks_previously_allowed_tool() {
 
 #[test]
 fn permissions_changed_event_includes_all_granted() {
-    let (handler, mut event_rx, _dir, _rt) = temp_handler();
+    let (handler, mut event_rx, _dir, _rt) = temp_handler_with_events();
 
     handler
         .grant_capability("contacts", None)
@@ -369,7 +343,7 @@ fn permissions_changed_event_includes_all_granted() {
 
 #[test]
 fn shared_permissions_is_consistent_with_config() {
-    let (handler, _event_rx, _dir, _rt) = temp_handler();
+    let (handler, _event_rx, _dir, _rt) = temp_handler_with_events();
 
     handler.grant_capability("mail", None).expect("grant mail");
     handler
@@ -388,7 +362,7 @@ fn shared_permissions_is_consistent_with_config() {
 
 #[test]
 fn capability_request_without_jit_fields_has_null_context() {
-    let (handler, _, _dir, _rt) = temp_handler();
+    let (handler, _, _dir, _rt) = temp_handler_with_events();
     let (event_tx, mut event_rx) = broadcast::channel(64);
     let (_client, server) = command_channel_with_events(8, event_tx, handler);
 
