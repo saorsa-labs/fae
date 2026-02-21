@@ -40,7 +40,8 @@ fn ensure_sqlite_vec_loaded() {
 }
 use super::types::{
     MemoryAuditEntry, MemoryAuditOp, MemoryKind, MemoryRecord, MemorySearchHit, MemoryStatus,
-    display_kind, new_id, now_epoch_secs, score_record, tokenize, truncate_record_text,
+    display_kind, hybrid_score, new_id, now_epoch_secs, score_record, tokenize,
+    truncate_record_text,
 };
 
 /// Database filename within the memory root directory.
@@ -554,6 +555,81 @@ impl SqliteMemoryRepository {
             .filter(|h| h.score > 0.0)
             .collect();
 
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
+    /// Retrieve active records by a set of IDs.
+    fn get_records_by_ids(&self, ids: &[String]) -> Result<Vec<MemoryRecord>, SqliteMemoryError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.lock()?;
+        let placeholders: String = (1..=ids.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT id, kind, status, text, confidence, source_turn_id, tags, \
+             supersedes, created_at, updated_at, importance_score, stale_after_secs, \
+             metadata FROM memory_records \
+             WHERE status = 'active' AND id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(SqliteMemoryError::Sqlite)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt
+            .query_map(params.as_slice(), row_to_record)
+            .map_err(SqliteMemoryError::Sqlite)?;
+        let mut records = Vec::new();
+        for r in rows {
+            records.push(r.map_err(SqliteMemoryError::Sqlite)?);
+        }
+        Ok(records)
+    }
+
+    /// Hybrid search combining semantic vector similarity with structural scoring.
+    ///
+    /// Uses sqlite-vec KNN to find semantically similar records, then re-ranks
+    /// with confidence, freshness, and kind bonuses.  Falls back to lexical
+    /// `search()` if the vector search returns no results (e.g. no embeddings
+    /// stored yet).
+    pub fn hybrid_search(
+        &self,
+        query_vec: &[f32],
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchHit>, SqliteMemoryError> {
+        use std::collections::HashMap;
+
+        // Fetch an oversized candidate set from vector search.
+        let candidates = self.search_by_vector(query_vec, limit.saturating_mul(3).max(20))?;
+
+        if candidates.is_empty() {
+            // No embeddings at all — fall back to lexical search.
+            return self.search(query, limit, false);
+        }
+
+        // Build distance map: record_id → L2 distance.
+        let distance_map: HashMap<String, f64> = candidates.into_iter().collect();
+
+        // Load the actual records (active only).
+        let ids: Vec<String> = distance_map.keys().cloned().collect();
+        let records = self.get_records_by_ids(&ids)?;
+
+        // Score each record with hybrid scoring.
+        let mut hits: Vec<MemorySearchHit> = records
+            .into_iter()
+            .filter_map(|record| {
+                let distance = distance_map.get(&record.id).copied()?;
+                let score = hybrid_score(&record, distance);
+                Some(MemorySearchHit { record, score })
+            })
+            .collect();
+
+        // Sort by score descending.
         hits.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -1536,6 +1612,116 @@ mod tests {
     fn schema_version_is_3_with_vec() {
         let (_dir, repo) = test_repo();
         assert_eq!(repo.schema_version().expect("version"), 3);
+    }
+
+    #[test]
+    fn hybrid_search_returns_scored_results() {
+        let (_dir, repo) = test_repo();
+
+        let r1 = repo
+            .insert_record(MemoryKind::Profile, "user likes dark mode", 0.9, None, &[])
+            .expect("r1");
+        let r2 = repo
+            .insert_record(MemoryKind::Fact, "sky is blue", 0.8, None, &[])
+            .expect("r2");
+        let r3 = repo
+            .insert_record(MemoryKind::Episode, "had coffee this morning", 0.5, None, &[])
+            .expect("r3");
+
+        // Store mock embeddings (384-dim, L2-normalized).
+        let dim = super::EMBEDDING_DIM;
+        let mut e1 = vec![0.0f32; dim];
+        e1[0] = 1.0; // direction: [1,0,0,...]
+        let mut e2 = vec![0.0f32; dim];
+        e2[1] = 1.0; // direction: [0,1,0,...]
+        let mut e3 = vec![0.0f32; dim];
+        e3[0] = 0.7;
+        e3[1] = 0.714;
+        let norm3: f32 = e3.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for v in &mut e3 {
+            *v /= norm3;
+        }
+
+        repo.store_embedding(&r1.id, &e1).expect("store e1");
+        repo.store_embedding(&r2.id, &e2).expect("store e2");
+        repo.store_embedding(&r3.id, &e3).expect("store e3");
+
+        // Query vector close to e1 → r1 should rank highest.
+        let mut query = vec![0.0f32; dim];
+        query[0] = 1.0;
+        let results = repo
+            .hybrid_search(&query, "dark mode", 10)
+            .expect("hybrid search");
+
+        assert!(!results.is_empty(), "should return results");
+        assert_eq!(
+            results[0].record.id, r1.id,
+            "closest vector should be first"
+        );
+        for hit in &results {
+            assert!(hit.score > 0.0, "all scores should be positive");
+        }
+    }
+
+    #[test]
+    fn hybrid_search_excludes_inactive_records() {
+        let (_dir, repo) = test_repo();
+
+        let r1 = repo
+            .insert_record(MemoryKind::Fact, "active record", 0.9, None, &[])
+            .expect("r1");
+        let r2 = repo
+            .insert_record(MemoryKind::Fact, "will be forgotten", 0.9, None, &[])
+            .expect("r2");
+
+        let mut e1 = vec![0.0f32; super::EMBEDDING_DIM];
+        e1[0] = 1.0;
+        let mut e2 = vec![0.0f32; super::EMBEDDING_DIM];
+        e2[0] = 0.99;
+        e2[1] = 0.14;
+        let norm2: f32 = e2.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for v in &mut e2 {
+            *v /= norm2;
+        }
+
+        repo.store_embedding(&r1.id, &e1).expect("store e1");
+        repo.store_embedding(&r2.id, &e2).expect("store e2");
+
+        // Soft-forget r2.
+        repo.forget_soft_record(&r2.id, "test").expect("forget");
+
+        let mut query = vec![0.0f32; super::EMBEDDING_DIM];
+        query[0] = 1.0;
+        let results = repo
+            .hybrid_search(&query, "record", 10)
+            .expect("hybrid search");
+
+        // Only r1 should appear (r2 is inactive).
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].record.id, r1.id);
+    }
+
+    #[test]
+    fn hybrid_search_falls_back_to_lexical_when_no_embeddings() {
+        let (_dir, repo) = test_repo();
+
+        repo.insert_record(MemoryKind::Fact, "cats are cool", 0.8, None, &[])
+            .expect("r1");
+        repo.insert_record(MemoryKind::Fact, "dogs are nice", 0.8, None, &[])
+            .expect("r2");
+        // No embeddings stored.
+
+        let query_vec = vec![0.0f32; super::EMBEDDING_DIM];
+        let results = repo
+            .hybrid_search(&query_vec, "cats", 10)
+            .expect("hybrid search");
+
+        // Should fall back to lexical and find "cats are cool".
+        assert!(!results.is_empty(), "lexical fallback should find results");
+        assert!(
+            results[0].record.text.contains("cats"),
+            "lexical fallback should match 'cats'"
+        );
     }
 
     #[test]

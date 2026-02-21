@@ -56,6 +56,16 @@ pub(crate) const SCORE_KIND_BONUS_FACT: f32 = 0.03;
 pub(crate) const SECS_PER_DAY: f32 = 86_400.0;
 
 // ---------------------------------------------------------------------------
+// Hybrid scoring weights (semantic + structural)
+// ---------------------------------------------------------------------------
+
+pub(crate) const HYBRID_SEMANTIC_WEIGHT: f32 = 0.60;
+pub(crate) const HYBRID_CONFIDENCE_WEIGHT: f32 = 0.20;
+pub(crate) const HYBRID_FRESHNESS_WEIGHT: f32 = 0.10;
+pub(crate) const HYBRID_KIND_BONUS_PROFILE: f32 = 0.10;
+pub(crate) const HYBRID_KIND_BONUS_FACT: f32 = 0.06;
+
+// ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
@@ -272,6 +282,40 @@ pub(crate) fn score_record(record: &MemoryRecord, query_tokens: &[String]) -> f3
     score
 }
 
+/// Compute hybrid score combining semantic similarity with structural signals.
+///
+/// `distance` is the L2 distance from sqlite-vec (range 0.0..2.0 for
+/// L2-normalized vectors). Converts to similarity as `1.0 - distance / 2.0`.
+pub(crate) fn hybrid_score(record: &MemoryRecord, distance: f64) -> f32 {
+    // Semantic similarity from L2 distance (normalized vecs: max L2 distance = 2.0)
+    let semantic_sim = (1.0 - distance as f32 / 2.0).clamp(0.0, 1.0);
+    let mut score = HYBRID_SEMANTIC_WEIGHT * semantic_sim;
+
+    // Confidence contribution
+    score += HYBRID_CONFIDENCE_WEIGHT * record.confidence.clamp(0.0, 1.0);
+
+    // Freshness decay
+    let now = now_epoch_secs();
+    if record.updated_at > 0 && record.updated_at <= now {
+        let age_days = (now - record.updated_at) as f32 / SECS_PER_DAY;
+        let freshness = 1.0 / (1.0 + age_days);
+        score += HYBRID_FRESHNESS_WEIGHT * freshness;
+    }
+
+    // Kind bonus
+    match record.kind {
+        MemoryKind::Profile => score += HYBRID_KIND_BONUS_PROFILE,
+        MemoryKind::Fact
+        | MemoryKind::Event
+        | MemoryKind::Commitment
+        | MemoryKind::Person
+        | MemoryKind::Interest => score += HYBRID_KIND_BONUS_FACT,
+        MemoryKind::Episode => {}
+    }
+
+    score
+}
+
 pub(crate) fn truncate_record_text(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.len() <= MAX_RECORD_TEXT_LEN {
@@ -312,4 +356,103 @@ pub(crate) fn now_epoch_nanos() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_record(kind: MemoryKind, confidence: f32, age_secs: u64) -> MemoryRecord {
+        let now = now_epoch_secs();
+        MemoryRecord {
+            id: "test-1".into(),
+            kind,
+            status: MemoryStatus::Active,
+            text: "test record".into(),
+            confidence,
+            source_turn_id: None,
+            tags: vec![],
+            supersedes: None,
+            created_at: now.saturating_sub(age_secs),
+            updated_at: now.saturating_sub(age_secs),
+            importance_score: None,
+            stale_after_secs: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn hybrid_score_perfect_match_high_confidence() {
+        let record = make_record(MemoryKind::Profile, 0.95, 0);
+        // Distance 0.0 = identical vector → semantic_sim = 1.0
+        let score = hybrid_score(&record, 0.0);
+        // Expected: 0.6*1.0 + 0.2*0.95 + 0.1*~1.0 + 0.10 ≈ 1.0
+        assert!(
+            score > 0.95,
+            "perfect match + high confidence should score > 0.95, got {score}"
+        );
+    }
+
+    #[test]
+    fn hybrid_score_distant_match_low_confidence() {
+        let record = make_record(MemoryKind::Episode, 0.3, 86_400 * 30);
+        // Distance 1.5 → semantic_sim = 0.25
+        let score = hybrid_score(&record, 1.5);
+        // Expected: 0.6*0.25 + 0.2*0.3 + 0.1*small + 0.0 ≈ 0.21
+        assert!(
+            score < 0.35,
+            "distant match + low confidence should score < 0.35, got {score}"
+        );
+    }
+
+    #[test]
+    fn hybrid_score_zero_distance_gives_max_semantic() {
+        let record = make_record(MemoryKind::Fact, 0.0, 86_400 * 365 * 10);
+        let score = hybrid_score(&record, 0.0);
+        // 0.6*1.0 + 0.2*0.0 + 0.1*tiny + 0.06 ≈ 0.66
+        assert!(
+            (score - 0.66).abs() < 0.02,
+            "expected ~0.66, got {score}"
+        );
+    }
+
+    #[test]
+    fn hybrid_score_max_distance_gives_zero_semantic() {
+        let record = make_record(MemoryKind::Fact, 0.0, 86_400 * 365 * 10);
+        let score = hybrid_score(&record, 2.0);
+        // 0.6*0.0 + 0.2*0.0 + 0.1*tiny + 0.06 ≈ 0.06
+        assert!(
+            (score - 0.06).abs() < 0.02,
+            "expected ~0.06, got {score}"
+        );
+    }
+
+    #[test]
+    fn hybrid_score_kind_bonuses_differ() {
+        let profile = make_record(MemoryKind::Profile, 0.5, 0);
+        let episode = make_record(MemoryKind::Episode, 0.5, 0);
+        let s_profile = hybrid_score(&profile, 0.5);
+        let s_episode = hybrid_score(&episode, 0.5);
+        assert!(
+            s_profile > s_episode,
+            "profile ({s_profile}) should outscore episode ({s_episode})"
+        );
+        let diff = s_profile - s_episode;
+        assert!(
+            (diff - HYBRID_KIND_BONUS_PROFILE).abs() < 0.001,
+            "difference should be the kind bonus, got {diff}"
+        );
+    }
+
+    #[test]
+    fn hybrid_score_freshness_decays() {
+        let fresh = make_record(MemoryKind::Fact, 0.5, 0);
+        let stale = make_record(MemoryKind::Fact, 0.5, 86_400 * 30);
+        let s_fresh = hybrid_score(&fresh, 0.5);
+        let s_stale = hybrid_score(&stale, 0.5);
+        assert!(
+            s_fresh > s_stale,
+            "fresh ({s_fresh}) should outscore stale ({s_stale})"
+        );
+    }
 }
