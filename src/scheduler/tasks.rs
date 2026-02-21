@@ -861,8 +861,8 @@ fn run_memory_backup_for_root(root: &Path) -> TaskResult {
 
     match crate::memory::backup::backup_database(&db, &backup_dir) {
         Ok(path) => {
-            let rotated = crate::memory::backup::rotate_backups(&backup_dir, keep_count)
-                .unwrap_or(0);
+            let rotated =
+                crate::memory::backup::rotate_backups(&backup_dir, keep_count).unwrap_or(0);
             let name = path
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())

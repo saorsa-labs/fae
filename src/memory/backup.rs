@@ -31,10 +31,7 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Sql
 
     // Generate timestamped filename.
     let now = chrono::Local::now();
-    let filename = format!(
-        "{BACKUP_PREFIX}{}{BACKUP_EXT}",
-        now.format("%Y%m%d-%H%M%S")
-    );
+    let filename = format!("{BACKUP_PREFIX}{}{BACKUP_EXT}", now.format("%Y%m%d-%H%M%S"));
     let backup_path = backup_dir.join(&filename);
 
     // Open source database and run VACUUM INTO.
@@ -67,7 +64,8 @@ pub fn rotate_backups(backup_dir: &Path, keep_count: usize) -> Result<usize, Sql
         return Ok(0);
     }
 
-    let entries = std::fs::read_dir(backup_dir).map_err(|e| SqliteMemoryError::Io(e.to_string()))?;
+    let entries =
+        std::fs::read_dir(backup_dir).map_err(|e| SqliteMemoryError::Io(e.to_string()))?;
 
     // Collect matching backup files.
     let mut backups: Vec<PathBuf> = entries

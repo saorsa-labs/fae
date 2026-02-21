@@ -13,23 +13,31 @@ Fae should be:
 
 ## Memory-first architecture
 
+Storage: SQLite + sqlite-vec (`~/.fae/memory/fae.db`)
+
 Key behavior:
 
-- automatic recall before LLM generation
-- automatic capture after each completed turn
+- automatic recall before LLM generation (hybrid: semantic + structural)
+- automatic capture after each completed turn (with embedding)
 - explicit edit operations with audit history
-- migration-safe storage evolution with rollback
+- PRAGMA quick_check integrity verification on startup
+- daily automated backups with rotation (7 retained)
 
 Behavioral truth sources:
 
 - `Prompts/system_prompt.md`
 - `SOUL.md`
-- `~/.fae/memory/`
+- `~/.fae/memory/fae.db` (SQLite)
 - `docs/Memory.md`
 
 Implementation touchpoints (not behavioral truth):
 
-- `src/memory.rs`
+- `src/memory/sqlite.rs` — SQLite repository
+- `src/memory/types.rs` — types, hybrid scoring
+- `src/memory/jsonl.rs` — orchestrator, recall/capture
+- `src/memory/embedding.rs` — all-MiniLM-L6-v2 ONNX engine
+- `src/memory/backup.rs` — VACUUM INTO backup + rotation
+- `src/memory/schema.rs` — DDL, vec_embeddings virtual table
 - `src/pipeline/coordinator.rs`
 - `src/runtime.rs`
 - `src/scheduler/tasks.rs`
@@ -39,9 +47,10 @@ Implementation touchpoints (not behavioral truth):
 - Scheduler loop tick: every 60s
 - Update check: every 6h
 - Memory migrate: every 1h
-- Memory reindex: every 3h
+- Memory reindex: every 3h (includes integrity check)
 - Memory reflect: every 6h
 - Memory GC: daily at 03:30 local time
+- Memory backup: daily at 02:00 local time
 
 ## Quiet operation policy
 
