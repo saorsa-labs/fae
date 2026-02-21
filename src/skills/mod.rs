@@ -14,6 +14,7 @@ pub mod builtins;
 pub mod credential_mediation;
 pub mod discovery;
 pub mod error;
+pub mod health_monitor;
 pub mod manifest;
 pub mod pep723;
 pub mod python_lifecycle;

@@ -130,6 +130,14 @@ pub enum CommandName {
     /// Payload: `{ "skill_id": "..." }`
     #[serde(rename = "skill.generate.status")]
     SkillGenerateStatus,
+    /// Trigger a health check for one or all Python skills.
+    ///
+    /// Payload: `{ "skill_id": "..." }` (optional — omit for all skills)
+    #[serde(rename = "skill.health.check")]
+    SkillHealthCheck,
+    /// Get the health status summary for all monitored Python skills.
+    #[serde(rename = "skill.health.status")]
+    SkillHealthStatusCmd,
 }
 
 impl CommandName {
@@ -185,6 +193,8 @@ impl CommandName {
             Self::SkillDiscoverySearch => "skill.discovery.search",
             Self::SkillGenerate => "skill.generate",
             Self::SkillGenerateStatus => "skill.generate.status",
+            Self::SkillHealthCheck => "skill.health.check",
+            Self::SkillHealthStatusCmd => "skill.health.status",
         }
     }
 
@@ -240,6 +250,8 @@ impl CommandName {
             "skill.discovery.search" => Some(Self::SkillDiscoverySearch),
             "skill.generate" => Some(Self::SkillGenerate),
             "skill.generate.status" => Some(Self::SkillGenerateStatus),
+            "skill.health.check" => Some(Self::SkillHealthCheck),
+            "skill.health.status" => Some(Self::SkillHealthStatusCmd),
             _ => None,
         }
     }

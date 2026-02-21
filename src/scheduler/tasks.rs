@@ -609,6 +609,8 @@ pub const TASK_STALE_RELATIONSHIPS: &str = "stale_relationships";
 pub const TASK_MORNING_BRIEFING: &str = "morning_briefing";
 /// Well-known task ID for checking skill proposal opportunities.
 pub const TASK_SKILL_PROPOSALS: &str = "skill_proposals";
+/// Well-known task ID for periodic Python skill health checks.
+pub const TASK_SKILL_HEALTH_CHECK: &str = "skill_health_check";
 
 /// Execute a built-in scheduled task by ID.
 ///
@@ -646,6 +648,7 @@ pub fn execute_builtin_with_memory_root(
         TASK_STALE_RELATIONSHIPS => run_stale_relationship_check(memory_root),
         TASK_MORNING_BRIEFING => run_morning_briefing_check(memory_root),
         TASK_SKILL_PROPOSALS => run_skill_proposal_check(memory_root),
+        TASK_SKILL_HEALTH_CHECK => run_skill_health_check(),
         _ => TaskResult::Error(format!("unknown built-in task: {task_id}")),
     }
 }
@@ -718,6 +721,39 @@ fn run_skill_proposal_check(memory_root: &Path) -> TaskResult {
             "detected {} skill opportunities: {}",
             opportunities.len(),
             names.join(", ")
+        ))
+    }
+}
+
+/// Run health checks for all active Python skills.
+///
+/// Lists installed skills and reports on their status. This is a lightweight
+/// check that inspects lifecycle status; actual process-level health checks
+/// are performed by the runtime when skills are running.
+fn run_skill_health_check() -> TaskResult {
+    let skills = crate::skills::list_python_skills();
+    if skills.is_empty() {
+        return TaskResult::Success("no Python skills installed".into());
+    }
+
+    let active_count = skills.iter().filter(|s| s.status.is_runnable()).count();
+    let quarantined: Vec<&str> = skills
+        .iter()
+        .filter(|s| s.status.is_quarantined())
+        .map(|s| s.id.as_str())
+        .collect();
+
+    if quarantined.is_empty() {
+        TaskResult::Success(format!(
+            "{active_count}/{} skills healthy",
+            skills.len()
+        ))
+    } else {
+        TaskResult::Success(format!(
+            "{active_count}/{} skills healthy, {} quarantined: {}",
+            skills.len(),
+            quarantined.len(),
+            quarantined.join(", ")
         ))
     }
 }

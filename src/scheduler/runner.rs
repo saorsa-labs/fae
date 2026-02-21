@@ -216,6 +216,19 @@ impl Scheduler {
         self.add_task_if_missing(skills);
     }
 
+    /// Register periodic health checks for Python skills (every 5 minutes).
+    pub fn with_skill_health_checks(&mut self) {
+        use crate::scheduler::tasks::TASK_SKILL_HEALTH_CHECK;
+
+        let mut task = ScheduledTask::new(
+            TASK_SKILL_HEALTH_CHECK,
+            "Python Skill Health Checks",
+            Schedule::Interval { secs: 300 },
+        );
+        task.kind = TaskKind::Builtin;
+        self.add_task_if_missing(task);
+    }
+
     /// Add (or replace) a task.
     pub fn add_task(&mut self, task: ScheduledTask) {
         if let Some(existing) = self.tasks.iter_mut().find(|t| t.id == task.id) {

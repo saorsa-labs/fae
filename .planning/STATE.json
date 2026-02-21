@@ -1,5 +1,5 @@
 {
-  "version": 14,
+  "version": 16,
   "project": "fae-python-skill-runtime",
   "active": true,
   "milestone": {
@@ -7,9 +7,9 @@
     "name": "Python Skill Runtime (v0.8.1)"
   },
   "phase": {
-    "number": "8.6",
-    "name": "Skill Generator Pipeline",
-    "plan": ".planning/PLAN-phase-8.6.md",
+    "number": "8.7",
+    "name": "Self-Healing & Health Monitoring",
+    "plan": ".planning/PLAN-phase-8.7.md",
     "status": "complete"
   },
   "progress": {
@@ -18,7 +18,7 @@
     "current_task": 7
   },
   "status": "task_complete",
-  "last_updated": "2026-02-22T09:30:00Z",
+  "last_updated": "2026-02-22T10:45:00Z",
   "review": {
     "status": "passed",
     "iteration": 0

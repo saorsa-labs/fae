@@ -224,6 +224,14 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn skill_generate_status(&self, _skill_id: &str) -> Result<serde_json::Value> {
         Ok(serde_json::json!({ "status": "not_implemented" }))
     }
+    /// Trigger a health check for one or all skills.
+    fn skill_health_check(&self, _skill_id: Option<&str>) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "status": "not_implemented" }))
+    }
+    /// Get health status summary for all monitored skills.
+    fn skill_health_status(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "skills": [] }))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -382,6 +390,8 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::SkillDiscoverySearch => self.handle_skill_discovery_search(envelope),
             CommandName::SkillGenerate => self.handle_skill_generate(envelope),
             CommandName::SkillGenerateStatus => self.handle_skill_generate_status(envelope),
+            CommandName::SkillHealthCheck => self.handle_skill_health_check(envelope),
+            CommandName::SkillHealthStatusCmd => self.handle_skill_health_status(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -1102,6 +1112,23 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         }
 
         let result = self.handler.skill_generate_status(skill_id)?;
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
+    }
+
+    fn handle_skill_health_check(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str());
+
+        let result = self.handler.skill_health_check(skill_id)?;
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
+    }
+
+    fn handle_skill_health_status(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let result = self.handler.skill_health_status()?;
 
         Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
     }

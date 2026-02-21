@@ -1124,6 +1124,89 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         }
     }
 
+    fn skill_health_check(&self, skill_id: Option<&str>) -> Result<serde_json::Value> {
+        use crate::skills::health_monitor::{HealthCheckOutcome, HealthLedger, SkillHealthStatus};
+
+        info!(?skill_id, "skill.health.check");
+
+        let skills = crate::skills::list_python_skills();
+        let mut ledger = HealthLedger::new();
+
+        let target_skills: Vec<_> = if let Some(id) = skill_id {
+            skills.into_iter().filter(|s| s.id == id).collect()
+        } else {
+            skills
+        };
+
+        let mut results = Vec::new();
+        for info in &target_skills {
+            let outcome = if info.status.is_runnable() {
+                HealthCheckOutcome::Healthy
+            } else if info.status.is_quarantined() {
+                HealthCheckOutcome::Failed {
+                    error: "skill is quarantined".to_owned(),
+                }
+            } else {
+                HealthCheckOutcome::Unreachable {
+                    reason: format!("skill status: {}", info.status),
+                }
+            };
+
+            match &outcome {
+                HealthCheckOutcome::Healthy => ledger.record_success(&info.id),
+                HealthCheckOutcome::Degraded { detail } => {
+                    ledger.record_degraded(&info.id, detail);
+                }
+                HealthCheckOutcome::Failed { error } => ledger.record_failure(&info.id, error),
+                HealthCheckOutcome::Unreachable { reason } => {
+                    ledger.record_failure(&info.id, reason);
+                }
+            }
+
+            let status_str = match ledger.get(&info.id).map(|r| &r.status) {
+                Some(SkillHealthStatus::Healthy) => "healthy",
+                Some(SkillHealthStatus::Degraded { .. }) => "degraded",
+                Some(SkillHealthStatus::Failing { .. }) => "failing",
+                Some(SkillHealthStatus::Quarantined { .. }) => "quarantined",
+                None => "unknown",
+            };
+
+            results.push(serde_json::json!({
+                "skill_id": info.id,
+                "health": status_str,
+                "lifecycle_status": info.status.to_string(),
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "checked": results.len(),
+            "skills": results,
+        }))
+    }
+
+    fn skill_health_status(&self) -> Result<serde_json::Value> {
+        info!("skill.health.status");
+
+        let skills = crate::skills::list_python_skills();
+        let summaries: Vec<_> = skills
+            .iter()
+            .map(|info| {
+                serde_json::json!({
+                    "skill_id": info.id,
+                    "status": info.status.to_string(),
+                    "version": info.version,
+                    "runnable": info.status.is_runnable(),
+                    "quarantined": info.status.is_quarantined(),
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "total": summaries.len(),
+            "skills": summaries,
+        }))
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self

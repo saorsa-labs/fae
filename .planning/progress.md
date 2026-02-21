@@ -397,3 +397,17 @@ Results: 17 discovery unit tests + 9 integration tests + 16 error tests, all pas
 Results: 26 unit tests + 8 integration tests, all pass, zero clippy warnings
 
 ### Phase 8.6 Complete
+
+## Phase 8.7: Self-Healing & Health Monitoring
+
+- [x] Task 1: SkillHealthRecord + HealthLedger types with failure tracking
+- [x] Task 2: HealthMonitorConfig with configurable thresholds
+- [x] Task 3: HealthMonitor orchestrator + HealthAction enum (restart/quarantine/notify)
+- [x] Task 4: FixPatternStore + normalize_error() for pattern-based fix matching
+- [x] Task 5: Host commands (skill.health.check, skill.health.status)
+- [x] Task 6: Scheduler integration (TASK_SKILL_HEALTH_CHECK every 5 min)
+- [x] Task 7: Integration tests (7 tests in tests/integration/python_skill_health_monitor.rs)
+
+Results: 35 unit tests + 7 integration tests, all pass, zero clippy warnings
+
+### Phase 8.7 Complete
