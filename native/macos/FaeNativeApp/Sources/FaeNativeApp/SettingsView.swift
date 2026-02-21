@@ -11,6 +11,9 @@ struct SettingsView: View {
     /// Injected via the environment from FaeNativeApp.
     var commandSender: HostCommandSender?
 
+    /// Sparkle auto-update controller for "Check for Updates" UI.
+    var sparkleUpdater: SparkleUpdaterController?
+
     /// Hold Option while opening Settings to reveal the Developer tab.
     @State private var showDeveloper: Bool = false
 
@@ -38,7 +41,12 @@ struct SettingsView: View {
                     Label("Channels", systemImage: "bubble.left.and.bubble.right")
                 }
 
-            SettingsAboutTab(commandSender: commandSender)
+            SettingsSkillsTab(commandSender: commandSender)
+                .tabItem {
+                    Label("Skills", systemImage: "sparkles")
+                }
+
+            SettingsAboutTab(commandSender: commandSender, sparkleUpdater: sparkleUpdater)
                 .environmentObject(handoff)
                 .environmentObject(onboarding)
                 .tabItem {

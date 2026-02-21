@@ -1,5 +1,6 @@
 import AppKit
 import FaeHandoffKit
+import Sparkle
 import SwiftUI
 
 @MainActor
@@ -61,6 +62,8 @@ struct FaeNativeApp: App {
     /// Retained for the app lifetime — observes JIT capability.requested events and
     /// triggers native macOS permission dialogs mid-conversation.
     @StateObject private var jitPermissions = JitPermissionController()
+    /// Sparkle 2 auto-update controller (EdDSA-verified, gentle reminders).
+    @StateObject private var sparkleUpdater = SparkleUpdaterController()
 
     /// Retained observer token for `.faeDeviceTransfer` notifications.
     /// Stored to prevent duplicate observer registration if `onAppear` fires more than once.
@@ -211,7 +214,7 @@ struct FaeNativeApp: App {
         .defaultSize(width: 340, height: 500)
 
         Settings {
-            SettingsView(commandSender: commandSender)
+            SettingsView(commandSender: commandSender, sparkleUpdater: sparkleUpdater)
                 .environmentObject(orbState)
                 .environmentObject(handoff)
                 .environmentObject(pipelineAux)

@@ -23,6 +23,16 @@ final class OnboardingController: ObservableObject {
     /// First name extracted from the user's "Me" contacts card, if available.
     @Published var userName: String? = nil
 
+    /// Email extracted from the user's "Me" contacts card.
+    @Published var userEmail: String? = nil
+
+    /// Phone number extracted from the user's "Me" contacts card.
+    @Published var userPhone: String? = nil
+
+    /// Family relationships from the user's "Me" contacts card.
+    /// Each tuple is (relationship label, person name).
+    @Published var familyRelationships: [(label: String, name: String)] = []
+
     /// Current permission states for web layer synchronisation.
     /// Keys: "microphone", "contacts", "calendar", "mail".
     /// Values: "pending" | "granted" | "denied".
@@ -140,6 +150,29 @@ final class OnboardingController: ObservableObject {
                 userInfo: ["name": name]
             )
         }
+
+        // Send contact info (email, phone) to backend if available.
+        if userEmail != nil || userPhone != nil {
+            var contactInfo: [String: Any] = [:]
+            if let email = userEmail { contactInfo["email"] = email }
+            if let phone = userPhone { contactInfo["phone"] = phone }
+            NotificationCenter.default.post(
+                name: .faeOnboardingSetContactInfo,
+                object: nil,
+                userInfo: contactInfo
+            )
+        }
+
+        // Send family relationships to backend if any were found.
+        if !familyRelationships.isEmpty {
+            let relations = familyRelationships.map { ["label": $0.label, "name": $0.name] }
+            NotificationCenter.default.post(
+                name: .faeOnboardingSetFamilyInfo,
+                object: nil,
+                userInfo: ["relations": relations]
+            )
+        }
+
         isComplete = true
         onOnboardingComplete?()
         NotificationCenter.default.post(
@@ -158,16 +191,47 @@ final class OnboardingController: ObservableObject {
 
     // MARK: - Contacts "Me" Card
 
-    /// Attempt to read the user's own contact card and extract their first name.
+    /// Attempt to read the user's own contact card and extract their name,
+    /// email, phone, and family relationships for personalisation.
     private func readMeCard(store: CNContactStore) {
         let keysToFetch: [CNKeyDescriptor] = [
-            CNContactGivenNameKey as CNKeyDescriptor
+            CNContactGivenNameKey as CNKeyDescriptor,
+            CNContactFamilyNameKey as CNKeyDescriptor,
+            CNContactEmailAddressesKey as CNKeyDescriptor,
+            CNContactPhoneNumbersKey as CNKeyDescriptor,
+            CNContactRelationsKey as CNKeyDescriptor,
         ]
         do {
             let meContact = try store.unifiedMeContactWithKeys(toFetch: keysToFetch)
+
+            // Extract first name.
             let firstName = meContact.givenName.trimmingCharacters(in: .whitespacesAndNewlines)
             if !firstName.isEmpty {
                 userName = firstName
+            }
+
+            // Extract first email address.
+            if let firstEmail = meContact.emailAddresses.first {
+                userEmail = firstEmail.value as String
+            }
+
+            // Extract first phone number.
+            if let firstPhone = meContact.phoneNumbers.first {
+                userPhone = firstPhone.value.stringValue
+            }
+
+            // Extract family/contact relationships.
+            familyRelationships = meContact.contactRelations.compactMap { relation in
+                let label = CNLabeledValue<CNContactRelation>.localizedString(
+                    forLabel: relation.label ?? ""
+                )
+                let name = relation.value.name
+                guard !name.isEmpty else { return nil }
+                return (label: label, name: name)
+            }
+
+            if !familyRelationships.isEmpty {
+                NSLog("OnboardingController: found %d contact relationships", familyRelationships.count)
             }
         } catch {
             // Me card unavailable or access failed — not an error, just continue.
@@ -185,4 +249,8 @@ extension Notification.Name {
     static let faeOnboardingAdvance = Notification.Name("faeOnboardingAdvance")
     /// Posted to send the user's name (from Me Card) to the Rust backend.
     static let faeOnboardingSetUserName = Notification.Name("faeOnboardingSetUserName")
+    /// Posted to send contact info (email, phone) to the Rust backend.
+    static let faeOnboardingSetContactInfo = Notification.Name("faeOnboardingSetContactInfo")
+    /// Posted to send family relationships to the Rust backend.
+    static let faeOnboardingSetFamilyInfo = Notification.Name("faeOnboardingSetFamilyInfo")
 }

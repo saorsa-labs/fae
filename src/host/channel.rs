@@ -86,6 +86,18 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn set_user_name(&self, _name: &str) -> Result<()> {
         Ok(())
     }
+    /// Store contact info (email, phone) from the user's Me Card.
+    fn set_contact_info(&self, _email: Option<&str>, _phone: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+    /// Store family relationships from the user's Me Card.
+    fn set_family_info(&self, _relations: &serde_json::Value) -> Result<()> {
+        Ok(())
+    }
+    /// Reload custom skills from `~/.fae/skills/`.
+    fn reload_skills(&self) -> Result<()> {
+        Ok(())
+    }
     fn request_conversation_inject_text(&self, _text: &str) -> Result<()> {
         Ok(())
     }
@@ -268,6 +280,13 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::OnboardingAdvance => self.handle_onboarding_advance(envelope),
             CommandName::OnboardingComplete => self.handle_onboarding_complete(envelope),
             CommandName::OnboardingSetUserName => self.handle_onboarding_set_user_name(envelope),
+            CommandName::OnboardingSetContactInfo => {
+                self.handle_onboarding_set_contact_info(envelope)
+            }
+            CommandName::OnboardingSetFamilyInfo => {
+                self.handle_onboarding_set_family_info(envelope)
+            }
+            CommandName::SkillsReload => self.handle_skills_reload(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -564,6 +583,79 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true, "name": name}),
+        ))
+    }
+
+    fn handle_onboarding_set_contact_info(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let email = envelope
+            .payload
+            .get("email")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let phone = envelope
+            .payload
+            .get("phone")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        self.handler.set_contact_info(email, phone)?;
+
+        self.emit_event(
+            "onboarding.contact_info_set",
+            serde_json::json!({
+                "request_id": envelope.request_id,
+                "email": email,
+                "phone": phone
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
+        ))
+    }
+
+    fn handle_onboarding_set_family_info(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let relations = envelope
+            .payload
+            .get("relations")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(vec![]));
+        self.handler.set_family_info(&relations)?;
+
+        self.emit_event(
+            "onboarding.family_info_set",
+            serde_json::json!({
+                "request_id": envelope.request_id
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
+        ))
+    }
+
+    fn handle_skills_reload(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        self.handler.reload_skills()?;
+
+        self.emit_event(
+            "skills.reloaded",
+            serde_json::json!({
+                "request_id": envelope.request_id
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
         ))
     }
 

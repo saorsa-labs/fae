@@ -123,29 +123,47 @@
     pointer-events: none;
   }
 
+  /* Scrim gradient behind subtitles for guaranteed readability over orb */
+  .subtitle-area::before {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 45%;
+    background: linear-gradient(to top, rgba(8, 9, 12, 0.35) 0%, rgba(8, 9, 12, 0.12) 50%, transparent 100%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
   .subtitle-stack {
     width: 100%;
     display: flex;
     flex-direction: column;
     gap: 10px;
     align-items: stretch;
+    max-height: 40vh;
+    overflow: hidden;
   }
 
   .subtitle-bubble {
-    max-width: 72%;
+    max-width: 78%;
     border-radius: 18px;
     padding: 10px 16px;
     font-size: 0.95rem;
     line-height: 1.5;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.4s ease, visibility 0.4s ease;
+    transition: opacity 0.4s ease, visibility 0.4s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
     word-break: break-word;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    transform: translateY(6px);
   }
 
   .subtitle-bubble.visible {
     opacity: 1;
     visibility: visible;
+    transform: translateY(0);
     animation: bubbleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
   }
 
@@ -162,23 +180,25 @@
 
   #subFae {
     align-self: flex-start;
-    background: rgba(180, 168, 196, 0.12);
-    border: 1px solid rgba(180, 168, 196, 0.2);
+    background: rgba(var(--heather-rgb), 0.22);
+    border: 1px solid rgba(var(--heather-rgb), 0.25);
     -webkit-backdrop-filter: blur(20px) saturate(160%);
     backdrop-filter: blur(20px) saturate(160%);
     color: var(--text-primary);
     transform-origin: left center;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 
   #subUser {
     align-self: flex-end;
-    background: rgba(255, 255, 255, 0.14);
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.22);
     -webkit-backdrop-filter: blur(20px) saturate(160%);
     backdrop-filter: blur(20px) saturate(160%);
     color: var(--text-primary);
     transform-origin: right center;
     text-align: right;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
 
   /* ---- Input Bar ---- */
@@ -189,7 +209,19 @@
     right: 0;
     z-index: 20;
     padding: 0 16px 16px;
-    background: linear-gradient(to top, rgba(8, 9, 12, 0.85) 0%, transparent 100%);
+    background: linear-gradient(to top, rgba(8, 9, 12, 0.88) 0%, rgba(8, 9, 12, 0.4) 60%, transparent 100%);
+    animation: inputBarEntrance 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+  }
+
+  @keyframes inputBarEntrance {
+    0% {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .input-bar-inner {
@@ -208,6 +240,12 @@
     padding: 8px 8px 8px 12px;
     -webkit-backdrop-filter: blur(16px) saturate(140%);
     backdrop-filter: blur(16px) saturate(140%);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .input-row:focus-within {
+    border-color: rgba(var(--heather-rgb), 0.35);
+    box-shadow: 0 0 0 1px rgba(var(--heather-rgb), 0.1), 0 4px 20px rgba(0, 0, 0, 0.25);
   }
 
   #listenToggle {
@@ -220,7 +258,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.25s ease, transform 0.15s ease;
+    transition: background 0.35s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.35s ease;
     padding: 0;
     outline: none;
   }
@@ -232,16 +270,22 @@
 
   #listenToggle.inactive {
     background: rgba(255, 255, 255, 0.12);
+    box-shadow: none;
   }
 
   #listenToggle:hover {
-    transform: scale(1.06);
+    transform: scale(1.08);
+  }
+
+  #listenToggle:active {
+    transform: scale(0.93);
   }
 
   #listenToggle svg {
     width: 16px;
     height: 16px;
     display: block;
+    transition: color 0.3s ease;
   }
 
   #listenToggle.active svg { color: #052416; }
@@ -266,7 +310,8 @@
   }
 
   #msgInput::placeholder {
-    color: rgba(255, 255, 255, 0.32);
+    color: rgba(255, 255, 255, 0.40);
+    font-style: italic;
   }
 
   #msgInput::-webkit-scrollbar {
@@ -292,20 +337,26 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(180, 168, 196, 0.28);
-    border: 1px solid rgba(180, 168, 196, 0.22);
-    transition: background 0.2s ease, opacity 0.2s ease, transform 0.15s ease;
+    background: rgba(var(--heather-rgb), 0.28);
+    border: 1px solid rgba(var(--heather-rgb), 0.22);
+    transition: background 0.25s ease, opacity 0.25s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease;
     padding: 0;
     outline: none;
   }
 
   #sendBtn:not(:disabled):hover {
-    background: rgba(180, 168, 196, 0.45);
-    transform: scale(1.06);
+    background: rgba(var(--heather-rgb), 0.45);
+    box-shadow: 0 0 12px rgba(var(--heather-rgb), 0.2);
+    transform: scale(1.08);
+  }
+
+  #sendBtn:not(:disabled):active {
+    transform: scale(0.90);
+    background: rgba(var(--heather-rgb), 0.55);
   }
 
   #sendBtn:disabled {
-    opacity: 0.35;
+    opacity: 0.30;
     cursor: default;
   }
 
@@ -314,6 +365,11 @@
     height: 16px;
     display: block;
     color: rgba(255, 255, 255, 0.85);
+    transition: transform 0.2s ease;
+  }
+
+  #sendBtn:not(:disabled):hover svg {
+    transform: translateY(-1px);
   }
 
   .action-pills {
@@ -326,19 +382,32 @@
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.09);
     border-radius: 20px;
-    padding: 4px 14px;
+    padding: 5px 16px;
     font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
-    font-size: 0.7rem;
-    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.65);
     cursor: pointer;
     letter-spacing: 0.04em;
-    transition: background 0.2s ease, color 0.2s ease;
-    outline: none;
+    transition: background 0.25s ease, color 0.25s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.25s ease, outline-color 0.15s ease;
   }
 
   .action-pill:hover {
-    background: rgba(255, 255, 255, 0.11);
-    color: rgba(255, 255, 255, 0.8);
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.88);
+    transform: translateY(-1px);
+  }
+
+  .action-pill:active {
+    transform: translateY(0) scale(0.97);
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  .action-pill:focus-visible,
+  #listenToggle:focus-visible,
+  #sendBtn:focus-visible {
+    outline: 2px solid rgba(180, 168, 196, 0.6);
+    outline-offset: 2px;
   }
 
   /* =========================================================
@@ -376,17 +445,19 @@
   .progress-bar-fill {
     height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, rgba(180, 168, 196, 0.6), rgba(180, 168, 196, 0.9));
+    background: linear-gradient(90deg, rgba(var(--heather-rgb), 0.5), rgba(var(--heather-rgb), 0.85));
     border-radius: 2px;
-    transition: width 0.5s ease;
+    transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+    box-shadow: 0 0 8px rgba(var(--heather-rgb), 0.3);
   }
 
   .progress-bar-label {
     margin-top: 6px;
-    font-size: 0.7rem;
-    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.48);
     letter-spacing: 0.04em;
     text-align: center;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
 
   /* =========================================================
@@ -416,6 +487,63 @@
     50% { box-shadow: 0 0 16px rgba(74, 222, 128, 0.6), 0 0 32px rgba(74, 222, 128, 0.25); }
   }
 
+  /* Send feedback — brief scale pulse on message dispatch */
+  @keyframes sendPulse {
+    0% { transform: scale(1); }
+    30% { transform: scale(0.85); }
+    60% { transform: scale(1.08); }
+    100% { transform: scale(1); }
+  }
+
+  #sendBtn.sent {
+    animation: sendPulse 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* =========================================================
+     Reduced Motion — disable non-essential animations
+     ========================================================= */
+  @media (prefers-reduced-motion: reduce) {
+    .input-bar-wrap {
+      animation: none;
+    }
+    .subtitle-bubble {
+      transition: opacity 0.2s ease, visibility 0.2s ease;
+      transform: none !important;
+    }
+    .subtitle-bubble.visible {
+      animation: none;
+      transform: none !important;
+    }
+    .action-pill,
+    #listenToggle,
+    #sendBtn {
+      transition-duration: 0.1s;
+    }
+    .action-pill:hover,
+    #sendBtn:not(:disabled):hover {
+      transform: none;
+    }
+    #listenToggle.active {
+      animation: none;
+    }
+    #sendBtn.sent {
+      animation: none;
+    }
+    .orb-highlight {
+      animation: none;
+    }
+    .aura-1, .aura-2, .aura-3 {
+      animation: none;
+    }
+  }
+
+  /* =========================================================
+     Selection Color
+     ========================================================= */
+  ::selection {
+    background: rgba(var(--heather-rgb), 0.35);
+    color: #fff;
+  }
 
 </style>
 </head>
@@ -453,8 +581,8 @@
        ========================================================= -->
   <div class="subtitle-area">
     <div class="subtitle-stack">
-      <div class="subtitle-bubble" id="subFae"></div>
-      <div class="subtitle-bubble" id="subUser"></div>
+      <div class="subtitle-bubble" id="subFae" aria-live="polite"></div>
+      <div class="subtitle-bubble" id="subUser" aria-live="polite"></div>
     </div>
   </div>
 
@@ -493,8 +621,8 @@
 
       <!-- Action Pills -->
       <div class="action-pills">
-        <button class="action-pill" id="showConvBtn">Conversation</button>
-        <button class="action-pill" id="showCanvasBtn">Canvas</button>
+        <button class="action-pill" id="showConvBtn">Show Discussions</button>
+        <button class="action-pill" id="showCanvasBtn">Show Canvas</button>
       </div>
     </div>
   </div>
@@ -1459,6 +1587,13 @@ function submitMessage() {
   msgInput.value = '';
   msgInput.style.height = 'auto';
   sendBtn.disabled = true;
+
+  /* Brief visual feedback on send */
+  sendBtn.classList.add('sent');
+  sendBtn.addEventListener('animationend', function handler() {
+    sendBtn.classList.remove('sent');
+    sendBtn.removeEventListener('animationend', handler);
+  });
 }
 
 document.getElementById('listenToggle').addEventListener('click', function() {
@@ -1479,6 +1614,20 @@ document.getElementById('showCanvasBtn').addEventListener('click', function() {
    --------------------------------------------------------- */
 window.setWindowMode = function(mode) {
   document.body.dataset.windowMode = mode;
+};
+
+/* ---------------------------------------------------------
+   Panel Visibility API (Swift → JS)
+   Updates pill button labels when panels show/hide.
+   --------------------------------------------------------- */
+window.setPanelVisibility = function(panel, visible) {
+  if (panel === 'conversation') {
+    var btn = document.getElementById('showConvBtn');
+    if (btn) btn.textContent = visible ? 'Hide Discussions' : 'Show Discussions';
+  } else if (panel === 'canvas') {
+    var btn = document.getElementById('showCanvasBtn');
+    if (btn) btn.textContent = visible ? 'Hide Canvas' : 'Show Canvas';
+  }
 };
 
 /* ---------------------------------------------------------

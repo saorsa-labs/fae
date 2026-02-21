@@ -132,8 +132,8 @@ struct ContentView: View {
                     windowState.noteActivity()
                 },
                 onLinkDetected: { url in conversation.handleLinkDetected(url) },
-                onOpenConversationWindow: { auxiliaryWindows.showConversation() },
-                onOpenCanvasWindow: { auxiliaryWindows.showCanvas() },
+                onOpenConversationWindow: { auxiliaryWindows.toggleConversation() },
+                onOpenCanvasWindow: { auxiliaryWindows.toggleCanvas() },
                 onUserInteraction: { windowState.noteActivity() },
                 onOrbClicked: {
                     if windowState.mode == .collapsed {
@@ -145,6 +145,18 @@ struct ContentView: View {
                 }
             )
             .opacity(viewLoaded ? 1 : 0)
+            .onChange(of: auxiliaryWindows.isConversationVisible) { _, visible in
+                conversationBridge.webView?.evaluateJavaScript(
+                    "window.setPanelVisibility && window.setPanelVisibility('conversation', \(visible));",
+                    completionHandler: nil
+                )
+            }
+            .onChange(of: auxiliaryWindows.isCanvasVisible) { _, visible in
+                conversationBridge.webView?.evaluateJavaScript(
+                    "window.setPanelVisibility && window.setPanelVisibility('canvas', \(visible));",
+                    completionHandler: nil
+                )
+            }
 
             if !viewLoaded {
                 Circle()

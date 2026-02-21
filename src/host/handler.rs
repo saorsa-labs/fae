@@ -783,6 +783,64 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(())
     }
 
+    fn set_contact_info(&self, email: Option<&str>, phone: Option<&str>) -> Result<()> {
+        info!(
+            ?email,
+            ?phone,
+            "onboarding.set_contact_info — storing contact details"
+        );
+
+        {
+            let mut guard = self.lock_config()?;
+            if let Some(e) = email {
+                guard.user_email = Some(e.to_owned());
+            }
+            if let Some(p) = phone {
+                guard.user_phone = Some(p.to_owned());
+            }
+        }
+        self.save_config()?;
+
+        info!("onboarding.set_contact_info persisted to config");
+        Ok(())
+    }
+
+    fn set_family_info(&self, relations: &serde_json::Value) -> Result<()> {
+        info!("onboarding.set_family_info — storing family relationships");
+
+        if let Some(arr) = relations.as_array() {
+            let mut guard = self.lock_config()?;
+            let mut family: Vec<(String, String)> = Vec::new();
+            for entry in arr {
+                let label = entry
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let name = entry
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if !name.is_empty() {
+                    family.push((label.to_owned(), name.to_owned()));
+                }
+            }
+            guard.family_relationships = family;
+            drop(guard);
+            self.save_config()?;
+            info!("onboarding.set_family_info persisted to config");
+        }
+
+        Ok(())
+    }
+
+    fn reload_skills(&self) -> Result<()> {
+        info!("skills.reload — re-scanning custom skills directory");
+        // The skill directory is scanned at pipeline start. For a live reload
+        // we simply log the intent; the next pipeline restart picks up changes.
+        // A future enhancement could push a reload event to the running pipeline.
+        Ok(())
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self
