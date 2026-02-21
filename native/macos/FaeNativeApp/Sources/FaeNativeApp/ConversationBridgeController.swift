@@ -202,24 +202,69 @@ final class ConversationBridgeController: ObservableObject {
         let stage = userInfo["stage"] as? String ?? ""
 
         switch stage {
+        case "download_plan_ready":
+            let fileCount = userInfo["file_count"] as? Int ?? 0
+            let totalBytes = userInfo["total_bytes"] as? Int ?? 0
+            let needsDownload = userInfo["needs_download"] as? Bool ?? false
+            if needsDownload {
+                let sizeMB = totalBytes / (1024 * 1024)
+                appendStatusMessage("Preparing to download \(fileCount) model files (\(sizeMB) MB)…")
+            }
+
         case "download_started":
-            let model = userInfo["model_name"] as? String ?? "models"
-            appendStatusMessage("Downloading \(model)...")
+            // Backend emits repo_id + filename, not model_name
+            let repoId = userInfo["repo_id"] as? String ?? ""
+            let filename = userInfo["filename"] as? String ?? "model"
+            let label = repoId.split(separator: "/").last.map(String.init) ?? filename
+            appendStatusMessage("Downloading \(label)…")
+
+        case "download_progress":
+            // Per-file progress — update progress bar
+            let bytesDownloaded = userInfo["bytes_downloaded"] as? Int ?? 0
+            let totalBytes = userInfo["total_bytes"] as? Int ?? 0
+            if totalBytes > 0 {
+                let pct = Int(100.0 * Double(bytesDownloaded) / Double(totalBytes))
+                let filename = userInfo["filename"] as? String ?? "model"
+                let shortName = String(filename.split(separator: "/").last ?? Substring(filename))
+                let escaped = escapeForJS("Downloading \(shortName)…")
+                evaluateJS("window.showProgress && window.showProgress('download', '\(escaped)', \(pct));")
+            }
+
         case "aggregate_progress":
+            // Construct message from actual fields (no "message" field from backend)
+            let bytesDownloaded = userInfo["bytes_downloaded"] as? Int ?? 0
+            let totalBytes = userInfo["total_bytes"] as? Int ?? 0
             let filesComplete = userInfo["files_complete"] as? Int ?? 0
             let filesTotal = userInfo["files_total"] as? Int ?? 0
-            let message = userInfo["message"] as? String ?? "Loading…"
-            let pct = filesTotal > 0 ? Int(100.0 * Double(filesComplete) / Double(filesTotal)) : 0
+            let pct: Int
+            if totalBytes > 0 {
+                pct = Int(100.0 * Double(bytesDownloaded) / Double(totalBytes))
+            } else if filesTotal > 0 {
+                pct = Int(100.0 * Double(filesComplete) / Double(filesTotal))
+            } else {
+                pct = 0
+            }
+            let sizeMB = bytesDownloaded / (1024 * 1024)
+            let totalMB = totalBytes / (1024 * 1024)
+            let message = "Downloading models… \(sizeMB)/\(totalMB) MB (\(filesComplete)/\(filesTotal) files)"
             let escaped = escapeForJS(message)
             evaluateJS("window.showProgress && window.showProgress('download', '\(escaped)', \(pct));")
+
+        case "download_complete", "cached":
+            // Individual file events — aggregate_progress handles overall UI
+            break
+
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
-            appendStatusMessage("Loading \(model)...")
+            appendStatusMessage("Loading \(model)…")
+
         case "load_complete":
             appendStatusMessage("Models loaded.")
+
         case "error":
             let message = userInfo["message"] as? String ?? "unknown error"
             appendStatusMessage("Model loading failed: \(message)")
+
         default:
             break
         }

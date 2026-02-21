@@ -20,6 +20,11 @@ final class OnboardingController: ObservableObject {
     /// Whether onboarding has been completed by the user.
     @Published var isComplete: Bool = false
 
+    /// The onboarding phase to start from when resuming a partially-completed
+    /// onboarding flow. Set by `restoreOnboardingState` before the window appears.
+    /// Values: "welcome" | "permissions" | "ready"
+    @Published var initialPhase: String = "welcome"
+
     /// First name extracted from the user's "Me" contacts card, if available.
     @Published var userName: String? = nil
 

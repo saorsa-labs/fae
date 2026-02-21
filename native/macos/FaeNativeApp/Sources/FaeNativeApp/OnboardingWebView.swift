@@ -32,6 +32,10 @@ struct OnboardingWebView: NSViewRepresentable {
     /// Format: `["microphone": "granted", "contacts": "denied"]`
     var permissionStates: [String: String] = [:]
 
+    /// The onboarding phase to jump to on load (for resuming mid-onboarding).
+    /// Values: "welcome" | "permissions" | "ready"
+    var initialPhase: String = "welcome"
+
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -48,6 +52,8 @@ struct OnboardingWebView: NSViewRepresentable {
         var lastUserName: String?
         /// Tracks the last pushed permission states to avoid redundant JS calls.
         var lastPermissionStates: [String: String] = [:]
+        /// Whether the initial phase has been restored (pushed to JS).
+        var hasRestoredPhase: Bool = false
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             _ = navigation
@@ -121,6 +127,19 @@ struct OnboardingWebView: NSViewRepresentable {
                 }
             }
         }
+
+        /// Jump the web layer to a specific onboarding phase without animation.
+        /// Used to restore mid-onboarding state after a relaunch.
+        func restorePhase(_ phase: String) {
+            guard loaded, let webView else { return }
+            let safe = phase.replacingOccurrences(of: "'", with: "\\'")
+            let js = "window.restorePhase && window.restorePhase('\(safe)');"
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    NSLog("OnboardingWebView restorePhase failed: %@", error.localizedDescription)
+                }
+            }
+        }
     }
 
     // MARK: - NSViewRepresentable
@@ -188,6 +207,12 @@ struct OnboardingWebView: NSViewRepresentable {
         where coordinator.lastPermissionStates[permission] != state {
             coordinator.lastPermissionStates[permission] = state
             coordinator.setPermissionState(permission, state: state)
+        }
+
+        // Restore initial phase once after the page loads (for mid-onboarding resume).
+        if coordinator.loaded, !coordinator.hasRestoredPhase, initialPhase != "welcome" {
+            coordinator.hasRestoredPhase = true
+            coordinator.restorePhase(initialPhase)
         }
     }
 

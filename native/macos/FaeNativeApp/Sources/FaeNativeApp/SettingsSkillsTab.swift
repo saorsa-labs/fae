@@ -29,7 +29,7 @@ struct SettingsSkillsTab: View {
             // MARK: - Custom Skills
 
             Section("Custom Skills") {
-                Text("Import skills from a URL or manage your installed custom skills.")
+                Text("Import skills from a URL or manage your installed custom skills. Changes take effect on next app restart.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
 

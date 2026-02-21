@@ -79,10 +79,8 @@
   }
 
   .orb {
-    border-radius: 50%;
-    overflow: hidden;
+    overflow: visible;
     position: relative;
-    box-shadow: inset 0 0 40px rgba(255, 255, 255, 0.03);
     transition: filter 0.3s ease;
   }
 
@@ -90,12 +88,9 @@
     filter: brightness(1.12);
   }
 
-  #orbCanvas { border-radius: 50%; display: block; }
+  #orbCanvas { display: block; }
 
-  #pulseCanvas {
-    position: absolute;
-    pointer-events: none;
-  }
+  /* pulseCanvas removed — fog cloud has no ring system */
 
   .orb-highlight {
     position: absolute;
@@ -106,6 +101,7 @@
     transform: rotate(-18deg);
     pointer-events: none;
     animation: highlightShift 12s ease-in-out infinite;
+    opacity: 0.7;
   }
 
   .aura {
@@ -610,7 +606,7 @@
     }
 
     .orb {
-      box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.04);
+      /* Light mode: no box-shadow needed without border-radius */
     }
 
     .aura {
@@ -712,6 +708,61 @@
   }
 
   /* =========================================================
+     Download Progress Overlay
+     ========================================================= */
+  .progress-overlay {
+    position: fixed;
+    bottom: 50px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 25;
+    width: clamp(260px, 70vw, 360px);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+
+  .progress-overlay.visible {
+    opacity: 1;
+  }
+
+  .progress-label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+    text-align: center;
+  }
+
+  .progress-track {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--warm-gold), var(--accent));
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  /* =========================================================
+     Permission Skip Hint
+     ========================================================= */
+  .skip-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    margin-top: 8px;
+    opacity: 0.6;
+    text-align: center;
+  }
+
+  /* =========================================================
      Reduced Motion
      ========================================================= */
   @media (prefers-reduced-motion: reduce) {
@@ -766,7 +817,6 @@
     <div class="aura aura-3" id="aura3"></div>
 
     <div class="orb-wrapper" id="orbWrapper">
-      <canvas id="pulseCanvas"></canvas>
       <div class="orb" id="orbContainer">
         <canvas id="orbCanvas"></canvas>
       </div>
@@ -787,7 +837,7 @@
       Hello. I'm Fae — your private, always-available AI companion.
       I live right here on your Mac, and I'm ready to get to know you.
     </div>
-    <p class="tap-hint">tap anywhere to continue</p>
+    <p class="tap-hint">click anywhere to continue</p>
     <button class="btn-primary" id="btnWelcomeNext">Get started</button>
   </div>
 
@@ -858,6 +908,7 @@
     </div>
 
     <button class="btn-primary" id="btnPermissionsNext">Continue</button>
+    <p class="skip-hint" id="skipHint">You can set these up later in Settings</p>
   </div>
 
   <!-- =========================================================
@@ -878,6 +929,16 @@
       <span class="listening-label">Listening</span>
     </div>
     <button class="btn-primary" id="btnReady">Start conversation</button>
+  </div>
+
+  <!-- =========================================================
+       Download Progress Overlay
+       ========================================================= -->
+  <div class="progress-overlay" id="progressOverlay">
+    <div class="progress-label" id="progressLabel">Loading…</div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
   </div>
 
   <!-- =========================================================
@@ -1039,24 +1100,29 @@ var PALETTE = isDarkMode ? PALETTE_DARK : PALETTE_LIGHT;
 
 var orbMode = "speaking";
 var orbColors = [PALETTE.warmGold, PALETTE.warmRose, PALETTE.warmCream];
-var rings = [];
-var lastRingAt = 0;
 var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/* Listen for color scheme changes and update orb palette live */
+/* Scottish palette for color cycling during onboarding */
+var SCOTTISH_PALETTE = [
+  { colors: ["#B4A8C4", "#9B8FB4", "#C4B8D4"] },  /* Heather */
+  { colors: ["#D4A574", "#C4917A", "#E8B88A"] },  /* Warm Gold */
+  { colors: ["#8BA5A0", "#7A9692", "#9CB5B0"] },  /* Sea Glass */
+  { colors: ["#A0B090", "#90A080", "#B0C0A0"] },  /* Moss */
+  { colors: ["#C4917A", "#B48070", "#D4A18A"] },  /* Rose Clay */
+  { colors: ["#6B8E8A", "#5A7D79", "#7C9F9B"] },  /* Deep Teal */
+  { colors: ["#C8B896", "#B8A886", "#D8C8A6"] },  /* Oat */
+  { colors: ["#8E7A6E", "#7E6A5E", "#9E8A7E"] }   /* Peat */
+];
+var colorCycleIdx = 0;
+var colorCycleT = 0;
+var colorCycleSpeed = 0.15; /* Complete cycle every ~6.7 seconds */
+
+/* Listen for color scheme changes and update UI palette live.
+   The orb fog cloud colors are now driven by Scottish palette cycling,
+   so we only update the PALETTE used by UI elements. */
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(e) {
   isDarkMode = e.matches;
   PALETTE = isDarkMode ? PALETTE_DARK : PALETTE_LIGHT;
-  /* Refresh orbColors based on current phase */
-  if (typeof currentPhase !== "undefined") {
-    if (currentPhase === "welcome") {
-      orbColors = [PALETTE.warmGold, PALETTE.warmRose, PALETTE.warmCream];
-    } else if (currentPhase === "permissions") {
-      orbColors = [PALETTE.softAmber, PALETTE.warmGold, PALETTE.warmCream];
-    } else if (currentPhase === "ready") {
-      orbColors = [PALETTE.warmRose, PALETTE.softAmber, PALETTE.dawnLight];
-    }
-  }
 });
 
 /* ---------------------------------------------------------
@@ -1064,8 +1130,6 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", fun
    --------------------------------------------------------- */
 var orbCanvas = document.getElementById("orbCanvas");
 var orbCtx = orbCanvas.getContext("2d");
-var pulseCanvas = document.getElementById("pulseCanvas");
-var pulseCtx = pulseCanvas.getContext("2d");
 var orbWrapper = document.getElementById("orbWrapper");
 var orbContainer = document.getElementById("orbContainer");
 var aura1 = document.getElementById("aura1");
@@ -1077,7 +1141,7 @@ var grainCtx = grainCanvas.getContext("2d");
 var grainPattern = null;
 var grainTileSize = 128;
 
-var orbDiameter, orbRadius, canvasSize, pulseSize, dpr;
+var orbDiameter, orbRadius, canvasSize, dpr;
 
 function recalcSize() {
   var vw = window.innerWidth;
@@ -1085,17 +1149,14 @@ function recalcSize() {
   orbDiameter = Math.round(Math.min(vw, vh) * 0.62);
   orbRadius = orbDiameter / 2;
   dpr = window.devicePixelRatio || 1;
-  canvasSize = Math.round(orbDiameter * dpr);
-  pulseSize = Math.round(orbDiameter * 1.75 * dpr);
-
-  var pulseCss = Math.round(orbDiameter * 1.75);
+  /* 1.4x multiplier so fog cloud overflow isn't clipped */
+  var fogDiameter = Math.round(orbDiameter * 1.4);
+  canvasSize = Math.round(fogDiameter * dpr);
 
   orbCanvas.width = canvasSize; orbCanvas.height = canvasSize;
-  orbCanvas.style.width = orbDiameter + "px"; orbCanvas.style.height = orbDiameter + "px";
-  orbContainer.style.width = orbDiameter + "px"; orbContainer.style.height = orbDiameter + "px";
-  pulseCanvas.width = pulseSize; pulseCanvas.height = pulseSize;
-  pulseCanvas.style.width = pulseCss + "px"; pulseCanvas.style.height = pulseCss + "px";
-  orbWrapper.style.width = pulseCss + "px"; orbWrapper.style.height = pulseCss + "px";
+  orbCanvas.style.width = fogDiameter + "px"; orbCanvas.style.height = fogDiameter + "px";
+  orbContainer.style.width = fogDiameter + "px"; orbContainer.style.height = fogDiameter + "px";
+  orbWrapper.style.width = fogDiameter + "px"; orbWrapper.style.height = fogDiameter + "px";
 
   var a1 = Math.round(orbDiameter * 1.19);
   var a2 = Math.round(orbDiameter * 1.41);
@@ -1132,13 +1193,19 @@ function regenerateGrain() {
 }
 
 /* ---------------------------------------------------------
-   6. Blobs
+   6. Fog Cloud Elements: Blobs, Wisps, Stars
    --------------------------------------------------------- */
-var BLOB_COUNT = reducedMotion ? 4 : 10;
+var FOG_LAYERS = 6;
+var BLOB_COUNT = reducedMotion ? 6 : 14;
+var STAR_COUNT = reducedMotion ? 0 : 80;
+var OUTER_STAR_COUNT = reducedMotion ? 0 : 16;
+var WISP_COUNT = reducedMotion ? 0 : 8;
+
+/* Blobs — internal flowing fog motion */
 var blobs = [];
-for (var bi = 0; bi < 10; bi++) {
+for (var bi = 0; bi < 14; bi++) {
   blobs.push({
-    orbitRadius: 0.1 + (bi / 10) * 0.35,
+    orbitRadius: 0.08 + (bi / 14) * 0.38,
     phaseOffset: (bi * 2.399) % (Math.PI * 2),
     speedVariance: 0.7 + Math.random() * 0.6,
     noiseSeed: bi * 137.5,
@@ -1146,141 +1213,285 @@ for (var bi = 0; bi < 10; bi++) {
   });
 }
 
+/* Wisps — smooth round fog puffs at boundary */
+var wisps = [];
+for (var wi = 0; wi < 8; wi++) {
+  wisps.push({
+    baseAngle: (wi / 8) * Math.PI * 2 + (Math.random() - 0.5) * 0.8,
+    dist: 0.6 + Math.random() * 0.35,
+    sizeBase: 0.7 + Math.random() * 0.6,
+    driftSpeed: 0.03 + Math.random() * 0.08,
+    noiseSeed: wi * 345,
+    alphaBase: 0.7 + Math.random() * 0.6,
+    colorIdx: wi % 3
+  });
+}
+
 /* ---------------------------------------------------------
-   7. Ring System
+   7. Star System — tiny twinkling points in fog
    --------------------------------------------------------- */
-function addRing(nowSec) {
-  var baseSpeed = 90 + (1.9 * 42);
-  var color = orbColors[Math.floor(Math.random() * orbColors.length)];
-  rings.push({
+function spawnStar(nowSec, outer) {
+  var angle = Math.random() * Math.PI * 2;
+  var dist = outer
+    ? (0.7 + Math.random() * 0.35)
+    : (0.04 + Math.random() * 0.62);
+  var isBright = Math.random() < 0.06;
+  return {
+    angle: angle,
+    dist: dist,
+    speed: 0.015 + Math.random() * 0.12,
+    size: isBright ? (0.8 + Math.random() * 0.5) : (0.2 + Math.random() * 0.7),
     born: nowSec,
-    speed: (baseSpeed + Math.random() * 26) * dpr,
-    thickness: (16 + Math.random() * 20) * dpr,
-    max: (orbDiameter * 0.95) * dpr,
-    color: color,
-    alpha: 0.08 + Math.random() * 0.03
-  });
+    lifespan: 3 + Math.random() * 8,
+    noiseSeed: Math.random() * 1000,
+    colorIdx: Math.floor(Math.random() * 3),
+    bright: isBright,
+    twinkleRate: 1.5 + Math.random() * 4,
+    twinklePhase: Math.random() * Math.PI * 2,
+    outer: outer || false
+  };
 }
 
-function drawRings(nowSec) {
-  var PW = pulseCanvas.width, PH = pulseCanvas.height;
-  var PCX = PW / 2, PCY = PH / 2;
-  pulseCtx.clearRect(0, 0, PW, PH);
-  rings = rings.filter(function(ring) {
-    var age = nowSec - ring.born;
-    var radius = age * ring.speed;
-    if (radius > ring.max) return false;
-    var t = radius / ring.max;
-    var fade = t < 0.12 ? t / 0.12 : 1 - ((t - 0.12) / 0.88);
-    var alpha = Math.max(0, fade * ring.alpha);
-    if (alpha < 0.003) return true;
-    var c = hexToRgb(ring.color);
-    var inner = Math.max(0, radius - ring.thickness / 2);
-    var outer = radius + ring.thickness / 2;
-    var grad = pulseCtx.createRadialGradient(PCX, PCY, inner, PCX, PCY, outer);
-    grad.addColorStop(0, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
-    grad.addColorStop(0.42, "rgba(" + c.r + "," + c.g + "," + c.b + "," + alpha + ")");
-    grad.addColorStop(0.7, "rgba(" + c.r + "," + c.g + "," + c.b + "," + (alpha * 0.6) + ")");
-    grad.addColorStop(1, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
-    pulseCtx.fillStyle = grad;
-    pulseCtx.beginPath();
-    pulseCtx.arc(PCX, PCY, outer, 0, Math.PI * 2);
-    pulseCtx.fill();
-    return true;
-  });
+var stars = [];
+for (var si = 0; si < STAR_COUNT; si++) {
+  var s = spawnStar(0, false);
+  s.born = -(Math.random() * s.lifespan);
+  stars.push(s);
+}
+for (var si = 0; si < OUTER_STAR_COUNT; si++) {
+  var s = spawnStar(0, true);
+  s.born = -(Math.random() * s.lifespan);
+  stars.push(s);
 }
 
 /* ---------------------------------------------------------
-   8. Orb Drawing
+   8. Fog Cloud Drawing — color cycling through Scottish palette
    --------------------------------------------------------- */
 function drawOrb(nowSec) {
-  var W = orbCanvas.width, H = orbCanvas.height;
-  var CX = W / 2, CY = H / 2, R = W / 2;
-  var colors = orbColors.map(hexToRgb);
+  var W = orbCanvas.width;
+  var H = orbCanvas.height;
+  var CX = W / 2;
+  var CY = H / 2;
+  /* Fog cloud base radius — tight Warm Whisper style */
+  var R = W / 2 * 0.42;
 
+  var colors = orbColors.map(hexToRgb);
   orbCtx.clearRect(0, 0, W, H);
 
-  var wobble = Math.sin(nowSec * 0.52) * 8 * dpr;
-  var throb = 1 + Math.sin(nowSec * 0.42) * 0.018;
+  /* Breathing */
+  var throb = 1 + Math.sin(nowSec * 0.42) * 0.012;
 
-  orbCtx.save();
-  orbCtx.beginPath();
-  orbCtx.arc(CX, CY, R, 0, Math.PI * 2);
-  orbCtx.clip();
+  /* Organic shape: morph displacement for fog center drift */
+  var driftX = noise.noise2D(nowSec * 0.08, 0) * R * 0.06;
+  var driftY = noise.noise2D(0, nowSec * 0.08 + 50) * R * 0.06;
+
+  /* Morph displacement field for organic boundary shape */
+  var MSEG = 32;
+  var morphPoints = [];
+  var amp = reducedMotion ? 0.02 : 0.06;
+  var mFreq = 2;
+  var mSpeed = reducedMotion ? 0.02 : 0.18;
+  for (var mi = 0; mi < MSEG; mi++) {
+    var angle = (mi / MSEG) * Math.PI * 2;
+    var n1 = noise.noise2D(Math.cos(angle) * mFreq + nowSec * mSpeed,
+                           Math.sin(angle) * mFreq + nowSec * mSpeed * 0.7);
+    var n2 = noise.noise2D(Math.cos(angle) * (mFreq * 0.5) + nowSec * mSpeed * 0.3 + 100,
+                           Math.sin(angle) * (mFreq * 0.5) + nowSec * mSpeed * 0.2 + 100);
+    var disp = n1 * amp * 0.7 + n2 * amp * 0.3;
+    morphPoints.push(1 + disp);
+  }
+
+  /* Helper: get morph scale at any angle */
+  function getMorphAt(a) {
+    var t = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    var idx = (t / (Math.PI * 2)) * MSEG;
+    var i0 = Math.floor(idx) % MSEG;
+    var i1 = (i0 + 1) % MSEG;
+    var frac = idx - Math.floor(idx);
+    return morphPoints[i0] * (1 - frac) + morphPoints[i1] * frac;
+  }
 
   orbCtx.save();
   orbCtx.translate(CX, CY);
   orbCtx.scale(throb, throb);
   orbCtx.translate(-CX, -CY);
 
-  var baseGrad = orbCtx.createRadialGradient(CX - 32 * dpr, CY - 38 * dpr, 20 * dpr, CX, CY, R);
-  baseGrad.addColorStop(0, "rgba(" + colors[2 % colors.length].r + "," + colors[2 % colors.length].g + "," + colors[2 % colors.length].b + ",0.84)");
-  baseGrad.addColorStop(0.46, "rgba(" + colors[0].r + "," + colors[0].g + "," + colors[0].b + ",0.56)");
-  baseGrad.addColorStop(1, "rgba(" + colors[1 % colors.length].r + "," + colors[1 % colors.length].g + "," + colors[1 % colors.length].b + ",0.45)");
-  orbCtx.fillStyle = baseGrad;
-  orbCtx.fillRect(0, 0, W, H);
+  /* ---- SMOOTH ROUND WISPS (soft fog puffs at boundary) ---- */
+  if (!reducedMotion) {
+    for (var wi = 0; wi < WISP_COUNT; wi++) {
+      var wisp = wisps[wi];
+      var wAngle = wisp.baseAngle + noise.noise2D(wisp.noiseSeed + nowSec * wisp.driftSpeed, wi * 3) * 0.6;
+      var wDist = wisp.dist * R * getMorphAt(wAngle);
+      var wx = CX + Math.cos(wAngle) * wDist + driftX * 0.5;
+      var wy = CY + Math.sin(wAngle) * wDist + driftY * 0.5;
+      var wR = 0.25 * wisp.sizeBase * R;
+      var wPulse = 1 + Math.sin(nowSec * 0.3 + wi * 1.5) * 0.15;
+      wR *= wPulse;
+      var wa = 0.05 * wisp.alphaBase;
+      var c = colors[wisp.colorIdx % colors.length];
+      var wGrad = orbCtx.createRadialGradient(wx, wy, 0, wx, wy, wR);
+      wGrad.addColorStop(0, "rgba(" + c.r + "," + c.g + "," + c.b + "," + wa + ")");
+      wGrad.addColorStop(0.5, "rgba(" + c.r + "," + c.g + "," + c.b + "," + (wa * 0.4) + ")");
+      wGrad.addColorStop(1, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
+      orbCtx.fillStyle = wGrad;
+      orbCtx.beginPath();
+      orbCtx.arc(wx, wy, wR, 0, Math.PI * 2);
+      orbCtx.fill();
+    }
+  }
 
-  var blobCount = reducedMotion ? 4 : BLOB_COUNT;
-  for (var i = 0; i < blobCount; i++) {
-    var blob = blobs[i];
-    var speed = 1.9 * blob.speedVariance;
-    if (reducedMotion) speed *= 0.5;
-    var phase = nowSec * (0.2 + (i * 0.07) + speed * 0.08) + blob.phaseOffset;
-
-    var nx = noise.noise2D(blob.noiseSeed + nowSec * 0.15 * speed, i * 0.3);
-    var ny = noise.noise2D(blob.noiseSeed + 100 + nowSec * 0.13 * speed, i * 0.3 + 50);
-
-    var orbitR = blob.orbitRadius * R;
-    var x = CX + Math.cos(phase) * orbitR + nx * orbitR * 0.6;
-    var y = CY + Math.sin(phase * 0.9) * orbitR + ny * orbitR * 0.6;
-
-    var blobR = R * 0.28 + Math.sin(phase * 1.7) * R * 0.06 + wobble;
-    var color = colors[blob.colorIdx % colors.length];
-
-    var blobGrad = orbCtx.createRadialGradient(x, y, 0, x, y, blobR);
-    blobGrad.addColorStop(0, "rgba(" + color.r + "," + color.g + "," + color.b + ",0.13)");
-    blobGrad.addColorStop(1, "rgba(" + color.r + "," + color.g + "," + color.b + ",0)");
-    orbCtx.fillStyle = blobGrad;
+  /* ---- FOG BODY (layered soft radial gradients, organically displaced) ---- */
+  var fogD = 0.6;
+  for (var layer = 0; layer < FOG_LAYERS; layer++) {
+    var layerT = layer / (FOG_LAYERS - 1);
+    var layerR = R * (0.25 + layerT * 0.8);
+    var lAngle = (layer / FOG_LAYERS) * Math.PI * 2;
+    var lMorph = getMorphAt(lAngle + nowSec * 0.05);
+    var lx = CX + noise.noise2D(layer * 12 + nowSec * 0.06, 0) * R * 0.1 * lMorph + driftX;
+    var ly = CY + noise.noise2D(0, layer * 12 + nowSec * 0.06) * R * 0.1 * lMorph + driftY;
+    var layerAlpha = fogD * (0.2 - layerT * 0.1);
+    var c = colors[layer % colors.length];
+    var grad = orbCtx.createRadialGradient(lx, ly, 0, lx, ly, layerR * 1.2);
+    grad.addColorStop(0, "rgba(" + c.r + "," + c.g + "," + c.b + "," + layerAlpha + ")");
+    grad.addColorStop(0.6, "rgba(" + c.r + "," + c.g + "," + c.b + "," + (layerAlpha * 0.5) + ")");
+    grad.addColorStop(1, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
+    orbCtx.fillStyle = grad;
     orbCtx.fillRect(0, 0, W, H);
   }
 
-  orbCtx.globalCompositeOperation = "soft-light";
-  var sheen = orbCtx.createLinearGradient(0, 0, W, H);
-  sheen.addColorStop(0, "rgba(255,255,255,0.08)");
-  sheen.addColorStop(0.4, "rgba(255,255,255,0.02)");
-  sheen.addColorStop(1, "rgba(20,20,30,0.2)");
-  orbCtx.fillStyle = sheen;
+  /* ---- BLOBS (internal flowing fog motion with boundary fade) ---- */
+  var blobCount = reducedMotion ? 6 : BLOB_COUNT;
+  for (var i = 0; i < blobCount; i++) {
+    var blob = blobs[i];
+    var speed = blob.speedVariance;
+    if (reducedMotion) speed *= 0.5;
+    var phase = nowSec * (0.2 + (i * 0.07) + speed * 0.08) + blob.phaseOffset;
+    var nx = noise.noise2D(blob.noiseSeed + nowSec * 0.15 * speed, i * 0.3);
+    var ny = noise.noise2D(blob.noiseSeed + 100 + nowSec * 0.13 * speed, i * 0.3 + 50);
+    var orbitR = blob.orbitRadius * R;
+    var x = CX + Math.cos(phase) * orbitR + nx * orbitR * 0.5 + driftX * 0.3;
+    var y = CY + Math.sin(phase * 0.9) * orbitR + ny * orbitR * 0.5 + driftY * 0.3;
+    var blobR = R * 0.28 + Math.sin(phase * 1.7) * R * 0.05;
+    /* Fade blobs near edge */
+    var dfc = Math.sqrt((x - CX) * (x - CX) + (y - CY) * (y - CY));
+    var bFade = Math.max(0, 1 - dfc / (R * 1.2));
+    bFade = Math.pow(bFade, 0.6);
+    var c = colors[blob.colorIdx % colors.length];
+    var bGrad = orbCtx.createRadialGradient(x, y, 0, x, y, blobR);
+    bGrad.addColorStop(0, "rgba(" + c.r + "," + c.g + "," + c.b + "," + (0.14 * bFade) + ")");
+    bGrad.addColorStop(1, "rgba(" + c.r + "," + c.g + "," + c.b + ",0)");
+    orbCtx.fillStyle = bGrad;
+    orbCtx.fillRect(0, 0, W, H);
+  }
+
+  /* ---- INNER GLOW ---- */
+  var ig = orbCtx.createRadialGradient(CX + driftX, CY + driftY, 0, CX, CY, R * 0.5);
+  ig.addColorStop(0, "rgba(" + colors[0].r + "," + colors[0].g + "," + colors[0].b + ",0.2)");
+  ig.addColorStop(1, "rgba(" + colors[0].r + "," + colors[0].g + "," + colors[0].b + ",0)");
+  orbCtx.fillStyle = ig;
   orbCtx.fillRect(0, 0, W, H);
-  orbCtx.globalCompositeOperation = "source-over";
 
-  orbCtx.restore();
+  /* ---- STARS (tiny twinkling points — stars in fog) ---- */
+  if (!reducedMotion) {
+    for (var i = 0; i < stars.length; i++) {
+      var st = stars[i];
+      var age = nowSec - st.born;
+      if (age > st.lifespan) {
+        stars[i] = spawnStar(nowSec, st.outer);
+        continue;
+      }
+      var lifeT = age / st.lifespan;
+      var alpha = lifeT < 0.1 ? lifeT / 0.1 : lifeT > 0.8 ? (1 - lifeT) / 0.2 : 1.0;
+      /* Twinkle */
+      var twinkleVal = 0.4 + 0.6 * Math.sin(nowSec * st.twinkleRate + st.twinklePhase);
+      alpha *= twinkleVal;
+      /* Brightness */
+      var baseA = st.outer ? 0.35 : 0.55;
+      alpha *= st.bright ? baseA : (baseA * 0.6);
+      if (alpha < 0.003) continue;
 
+      var pNx = noise.noise2D(st.noiseSeed + nowSec * 0.08, st.noiseSeed * 0.3);
+      var orbitSpeed = st.speed * (1 + (1 - st.dist) * 0.5);
+      var sAngle = st.angle + nowSec * orbitSpeed;
+      var sDist = st.dist * R * (st.outer ? 1.4 : 1) + pNx * R * 0.06;
+      var sx = CX + Math.cos(sAngle) * sDist + driftX * (st.outer ? 0.2 : 0.4);
+      var sy = CY + Math.sin(sAngle) * sDist + driftY * (st.outer ? 0.2 : 0.4);
+
+      /* Edge fade for interior stars */
+      if (!st.outer) {
+        var dfc2 = Math.sqrt((sx - CX) * (sx - CX) + (sy - CY) * (sy - CY));
+        var edgeFade = Math.max(0, 1 - dfc2 / (R * 1.15));
+        edgeFade = Math.pow(edgeFade, 0.4);
+        alpha *= edgeFade;
+      }
+      if (alpha < 0.003) continue;
+
+      var sColor = colors[st.colorIdx % colors.length];
+      var sSize = st.size * dpr;
+
+      /* Tiny glow halo for bright stars */
+      if (st.bright && alpha > 0.08) {
+        var glowR = sSize * 2.5;
+        var glow = orbCtx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
+        glow.addColorStop(0, "rgba(" + sColor.r + "," + sColor.g + "," + sColor.b + "," + (alpha * 0.3) + ")");
+        glow.addColorStop(1, "rgba(" + sColor.r + "," + sColor.g + "," + sColor.b + ",0)");
+        orbCtx.fillStyle = glow;
+        orbCtx.fillRect(sx - glowR, sy - glowR, glowR * 2, glowR * 2);
+      }
+
+      orbCtx.beginPath();
+      orbCtx.arc(sx, sy, sSize, 0, Math.PI * 2);
+      orbCtx.fillStyle = "rgba(" + sColor.r + "," + sColor.g + "," + sColor.b + "," + alpha + ")";
+      orbCtx.fill();
+    }
+  }
+
+  orbCtx.restore(); /* Undo throb transform */
+
+  /* Noise grain overlay */
   if (grainPattern) {
     var gx = (nowSec * 12 * dpr) % grainTileSize;
     var gy = (nowSec * 7 * dpr) % grainTileSize;
     orbCtx.save();
-    orbCtx.globalAlpha = 0.03;
+    orbCtx.globalAlpha = 0.025;
     orbCtx.translate(gx, gy);
     orbCtx.fillStyle = grainPattern;
     orbCtx.fillRect(-grainTileSize, -grainTileSize, W + grainTileSize * 2, H + grainTileSize * 2);
     orbCtx.restore();
   }
-
-  orbCtx.restore();
 }
 
 /* ---------------------------------------------------------
-   9. Animation Loop
+   9. Color Cycling — smooth transitions through Scottish palette
    --------------------------------------------------------- */
+function updateColorCycle(dt) {
+  colorCycleT += dt * colorCycleSpeed;
+  if (colorCycleT >= 1) {
+    colorCycleT -= 1;
+    colorCycleIdx = (colorCycleIdx + 1) % SCOTTISH_PALETTE.length;
+  }
+  var fromPal = SCOTTISH_PALETTE[colorCycleIdx];
+  var toPal = SCOTTISH_PALETTE[(colorCycleIdx + 1) % SCOTTISH_PALETTE.length];
+  var t = colorCycleT;
+  /* Smoothstep for gentle transitions */
+  t = t * t * (3 - 2 * t);
+  orbColors = [
+    lerpColorHex(fromPal.colors[0], toPal.colors[0], t),
+    lerpColorHex(fromPal.colors[1], toPal.colors[1], t),
+    lerpColorHex(fromPal.colors[2], toPal.colors[2], t)
+  ];
+}
+
+/* ---------------------------------------------------------
+   10. Animation Loop
+   --------------------------------------------------------- */
+var lastFrameTime = 0;
 function loop(t) {
   var nowSec = t / 1000;
-  if (nowSec - lastRingAt >= 0.8) {
-    addRing(nowSec);
-    if (Math.random() < 0.45) addRing(nowSec + 0.08);
-    lastRingAt = nowSec;
-  }
+  var dt = lastFrameTime > 0 ? (t - lastFrameTime) / 1000 : 0.016;
+  lastFrameTime = t;
+  updateColorCycle(dt);
   drawOrb(nowSec);
-  drawRings(nowSec);
   requestAnimationFrame(loop);
 }
 
@@ -1335,11 +1546,11 @@ function transitionTo(phase) {
     currentPhase = phase;
     updateDots(phase);
 
-    /* Update orb feel based on phase */
+    /* Adjust color cycling speed based on phase */
     if (phase === "permissions") {
-      orbColors = [PALETTE.softAmber, PALETTE.warmGold, PALETTE.warmCream];
+      colorCycleSpeed = 0.12; /* Slightly slower during setup */
     } else if (phase === "ready") {
-      orbColors = [PALETTE.warmRose, PALETTE.softAmber, PALETTE.dawnLight];
+      colorCycleSpeed = 0.08; /* Gentle settling for ready state */
     }
 
     /* Notify Swift host of phase change */
@@ -1441,6 +1652,14 @@ document.getElementById("btnWelcomeNext").addEventListener("click", function() {
   transitionTo("permissions");
 });
 
+/* "Click anywhere to continue" on the welcome screen */
+document.getElementById("screenWelcome").addEventListener("click", function(e) {
+  /* Avoid double-advancing if the button itself was clicked */
+  if (e.target.closest("#btnWelcomeNext")) return;
+  postToSwift("onboardingAdvance", {});
+  transitionTo("permissions");
+});
+
 document.getElementById("btnPermissionsNext").addEventListener("click", function() {
   postToSwift("onboardingAdvance", {});
   transitionTo("ready");
@@ -1480,6 +1699,37 @@ window.setUserName = function(name) {
   }
 };
 
+/* Show download/load progress bar */
+window.showProgress = function(type, message, pct) {
+  var overlay = document.getElementById("progressOverlay");
+  var label = document.getElementById("progressLabel");
+  var fill = document.getElementById("progressFill");
+  if (!overlay) return;
+  overlay.classList.add("visible");
+  if (label) label.textContent = message || "Loading…";
+  if (fill) fill.style.width = Math.min(100, Math.max(0, pct || 0)) + "%";
+};
+
+/* Hide progress bar */
+window.hideProgress = function() {
+  var overlay = document.getElementById("progressOverlay");
+  if (overlay) overlay.classList.remove("visible");
+};
+
+/* Restore onboarding to a specific phase (for resuming mid-onboarding) */
+window.restorePhase = function(phase) {
+  if (!screens[phase] || phase === currentPhase) return;
+  /* Jump directly without slide animation */
+  var currentEl = screens[currentPhase];
+  if (currentEl) {
+    currentEl.classList.remove("active");
+    currentEl.classList.remove("exit-left");
+  }
+  screens[phase].classList.add("active");
+  currentPhase = phase;
+  updateDots(phase);
+};
+
 /* ---------------------------------------------------------
    Orb Entrance → Float Transition
    When orbEntrance finishes, swap to the orbFloat animation
@@ -1497,15 +1747,6 @@ if (orbWrapperEl) {
     orbWrapperEl.addEventListener("animationend", function(e) {
       if (e.animationName === "orbEntrance") {
         orbWrapperEl.classList.add("entered");
-        /* Burst warm rings on entrance completion (if not reduced motion) */
-        var nowSec = performance.now() / 1000;
-        for (var ri = 0; ri < 3; ri++) {
-          (function(delay) {
-            setTimeout(function() {
-              if (!reducedMotion) addRing(performance.now() / 1000);
-            }, delay);
-          })(ri * 120);
-        }
       }
     });
     /* Fallback: guarantee entered class after entrance duration + buffer */

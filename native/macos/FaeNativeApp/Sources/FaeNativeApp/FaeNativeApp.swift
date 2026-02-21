@@ -428,6 +428,20 @@ struct FaeNativeApp: App {
             if payload["onboarded"] as? Bool == true {
                 onboarding.isComplete = true
                 NSLog("FaeNativeApp: restored onboarding state — already complete")
+            } else {
+                // Restore partial onboarding progress (phase + granted permissions).
+                if let phase = payload["phase"] as? String, phase != "welcome" {
+                    onboarding.initialPhase = phase
+                    NSLog("FaeNativeApp: restoring onboarding at phase: %@", phase)
+                }
+                if let granted = payload["granted_permissions"] as? [String] {
+                    for perm in granted {
+                        onboarding.permissionStates[perm] = "granted"
+                    }
+                    if !granted.isEmpty {
+                        NSLog("FaeNativeApp: restored %d granted permissions", granted.count)
+                    }
+                }
             }
         }
     }
