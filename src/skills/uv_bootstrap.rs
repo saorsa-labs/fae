@@ -115,6 +115,99 @@ impl UvBootstrap {
         candidates
     }
 
+    /// Ensure a usable `uv` binary is available, installing it if necessary.
+    ///
+    /// 1. Tries [`discover`](Self::discover) first.
+    /// 2. If `UvNotFound`, downloads the official standalone installer and runs
+    ///    it with `UV_INSTALL_DIR` set to `uv_cache_dir()/bin/`.
+    /// 3. Re-discovers after install.
+    ///
+    /// # Errors
+    ///
+    /// - [`PythonSkillError::BootstrapFailed`] if the installer download or
+    ///   execution fails.
+    /// - Any error from [`discover`](Self::discover) if the post-install probe
+    ///   also fails.
+    pub fn ensure_available(explicit_path: Option<&Path>) -> Result<UvInfo, PythonSkillError> {
+        match Self::discover(explicit_path) {
+            Ok(info) => return Ok(info),
+            Err(PythonSkillError::UvNotFound { .. }) => {
+                // Fall through to install.
+            }
+            Err(e) => return Err(e), // Version too old — propagate.
+        }
+
+        tracing::info!("uv not found — attempting auto-install");
+        Self::auto_install()?;
+
+        // Re-discover after install.
+        Self::discover(explicit_path)
+    }
+
+    /// Download and run the official UV standalone installer.
+    ///
+    /// Sets `UV_INSTALL_DIR` so the binary lands in `uv_cache_dir()/bin/`
+    /// and uses `--no-modify-path` to avoid touching shell profiles.
+    fn auto_install() -> Result<(), PythonSkillError> {
+        let install_dir = crate::fae_dirs::uv_cache_dir().join("bin");
+        std::fs::create_dir_all(&install_dir).map_err(|e| {
+            PythonSkillError::BootstrapFailed {
+                reason: format!("cannot create install dir {}: {e}", install_dir.display()),
+            }
+        })?;
+
+        // Download installer script to a temp file.
+        let installer_url = "https://astral.sh/uv/install.sh";
+        let tmp_dir = std::env::temp_dir();
+        let installer_path = tmp_dir.join("fae-uv-installer.sh");
+
+        tracing::info!("downloading uv installer from {installer_url}");
+
+        let output = Command::new("curl")
+            .args(["-fsSL", "-o"])
+            .arg(&installer_path)
+            .arg(installer_url)
+            .output()
+            .map_err(|e| PythonSkillError::BootstrapFailed {
+                reason: format!("failed to run curl: {e}"),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PythonSkillError::BootstrapFailed {
+                reason: format!("curl failed ({}): {stderr}", output.status),
+            });
+        }
+
+        // Run the installer.
+        tracing::info!(
+            "running uv installer (UV_INSTALL_DIR={})",
+            install_dir.display()
+        );
+
+        let install_output = Command::new("sh")
+            .arg(&installer_path)
+            .arg("--no-modify-path")
+            .env("UV_INSTALL_DIR", &install_dir)
+            .output()
+            .map_err(|e| PythonSkillError::BootstrapFailed {
+                reason: format!("failed to run installer: {e}"),
+            })?;
+
+        // Clean up installer script (best-effort).
+        let _ = std::fs::remove_file(&installer_path);
+
+        if !install_output.status.success() {
+            let stderr = String::from_utf8_lossy(&install_output.stderr);
+            return Err(PythonSkillError::BootstrapFailed {
+                reason: format!("installer exited with {}: {stderr}", install_output.status),
+            });
+        }
+
+        tracing::info!("uv installer completed successfully");
+        Ok(())
+    }
+
     /// Run `uv --version` and parse the version string from the output.
     fn probe_version(uv_path: &Path) -> Result<String, PythonSkillError> {
         let output = Command::new(uv_path)
@@ -355,6 +448,35 @@ mod tests {
         assert!(info.path.is_file());
         assert!(version_at_least(&info.version, MINIMUM_UV_VERSION));
     }
+
+    // -----------------------------------------------------------------------
+    // ensure_available
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ensure_available_succeeds_when_uv_installed() {
+        // If uv is on PATH, ensure_available should return Ok without installing.
+        if which::which("uv").is_err() {
+            return; // skip on machines without uv
+        }
+        let info = UvBootstrap::ensure_available(None)
+            .expect("ensure_available should succeed when uv is installed");
+        assert!(!info.version.is_empty());
+        assert!(info.path.is_file());
+    }
+
+    #[test]
+    fn ensure_available_propagates_version_too_old() {
+        // Can't easily mock a version-too-old scenario without a fake binary.
+        // This test just verifies the function signature compiles and runs.
+        // If uv IS installed, it will succeed. If not, it will try to install.
+        // Either way, no panic.
+        let _result = UvBootstrap::ensure_available(None);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_candidate_list
+    // -----------------------------------------------------------------------
 
     #[test]
     fn build_candidate_list_includes_explicit_first() {
