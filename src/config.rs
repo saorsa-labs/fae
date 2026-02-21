@@ -79,6 +79,9 @@ pub struct SpeechConfig {
     /// ```
     #[serde(default)]
     pub model_checksums: std::collections::HashMap<String, String>,
+    /// Python skill subprocess runtime settings.
+    #[serde(default)]
+    pub python_skills: PythonSkillsConfig,
 }
 
 /// A persisted security-scoped bookmark for App Sandbox file access.
@@ -1094,6 +1097,48 @@ impl Default for ChannelExtensionConfig {
     }
 }
 
+/// Configuration for the Python skill subprocess runtime.
+///
+/// Controls how Fae spawns and manages Python skill processes via `uv run`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PythonSkillsConfig {
+    /// Master switch for the Python skill system.
+    pub enabled: bool,
+    /// Root directory where Python skill packages are installed.
+    ///
+    /// Override with `FAE_PYTHON_SKILLS_DIR`.
+    pub skills_dir: std::path::PathBuf,
+    /// Timeout in seconds for individual JSON-RPC requests.
+    pub request_timeout_secs: u64,
+    /// Maximum number of concurrent daemon skill processes.
+    pub max_concurrent: usize,
+    /// How often (in seconds) the health-check pings each daemon process.
+    pub health_check_interval_secs: u64,
+    /// Maximum restart attempts for a daemon process before it is quarantined.
+    pub max_restarts: u32,
+    /// Initial restart backoff in seconds (doubles each attempt, capped at
+    /// [`max_restart_backoff_secs`](PythonSkillsConfig::max_restart_backoff_secs)).
+    pub restart_backoff_secs: u64,
+    /// Maximum restart backoff duration in seconds.
+    pub max_restart_backoff_secs: u64,
+}
+
+impl Default for PythonSkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            skills_dir: crate::fae_dirs::python_skills_dir(),
+            request_timeout_secs: 30,
+            max_concurrent: 5,
+            health_check_interval_secs: 60,
+            max_restarts: 5,
+            restart_backoff_secs: 1,
+            max_restart_backoff_secs: 60,
+        }
+    }
+}
+
 impl SpeechConfig {
     /// Load configuration from a TOML file, falling back to defaults for missing fields.
     ///
@@ -1750,5 +1795,77 @@ gguf_file = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
         let config: SpeechConfig = toml::from_str(toml_str).unwrap();
         // serde(default) on bool defaults to false.
         assert!(!config.llm.enable_vision);
+    }
+
+    // ── PythonSkillsConfig tests ──
+
+    #[test]
+    fn python_skills_config_defaults() {
+        let cfg = PythonSkillsConfig::default();
+        assert!(!cfg.enabled, "python skills disabled by default");
+        assert_eq!(cfg.request_timeout_secs, 30);
+        assert_eq!(cfg.max_concurrent, 5);
+        assert_eq!(cfg.health_check_interval_secs, 60);
+        assert_eq!(cfg.max_restarts, 5);
+        assert_eq!(cfg.restart_backoff_secs, 1);
+        assert_eq!(cfg.max_restart_backoff_secs, 60);
+    }
+
+    #[test]
+    fn python_skills_config_serde_round_trip() {
+        let original = PythonSkillsConfig {
+            enabled: true,
+            skills_dir: std::path::PathBuf::from("/custom/skills"),
+            request_timeout_secs: 60,
+            max_concurrent: 10,
+            health_check_interval_secs: 120,
+            max_restarts: 3,
+            restart_backoff_secs: 2,
+            max_restart_backoff_secs: 30,
+        };
+        let toml_str = toml::to_string(&original).unwrap();
+        let parsed: PythonSkillsConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.enabled);
+        assert_eq!(parsed.request_timeout_secs, 60);
+        assert_eq!(parsed.max_concurrent, 10);
+        assert_eq!(parsed.health_check_interval_secs, 120);
+        assert_eq!(parsed.max_restarts, 3);
+        assert_eq!(parsed.restart_backoff_secs, 2);
+        assert_eq!(parsed.max_restart_backoff_secs, 30);
+    }
+
+    #[test]
+    fn speech_config_has_python_skills_field() {
+        let config = SpeechConfig::default();
+        assert!(!config.python_skills.enabled);
+        assert_eq!(config.python_skills.request_timeout_secs, 30);
+    }
+
+    #[test]
+    fn python_skills_section_parses_from_full_config() {
+        let toml_str = r#"
+[python_skills]
+enabled = true
+request_timeout_secs = 45
+max_concurrent = 3
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.python_skills.enabled);
+        assert_eq!(config.python_skills.request_timeout_secs, 45);
+        assert_eq!(config.python_skills.max_concurrent, 3);
+        // Defaults for unspecified fields
+        assert_eq!(config.python_skills.max_restarts, 5);
+    }
+
+    #[test]
+    fn python_skills_absent_section_uses_defaults() {
+        // Existing config without [python_skills] should not break deserialization.
+        let toml_str = r#"
+[llm]
+model_id = "some-model"
+"#;
+        let config: SpeechConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.python_skills.enabled);
+        assert_eq!(config.python_skills.max_restarts, 5);
     }
 }

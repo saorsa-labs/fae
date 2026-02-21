@@ -85,6 +85,18 @@ pub fn skills_dir() -> PathBuf {
     data_dir().join("skills")
 }
 
+/// Python skill packages directory (`data_dir()/python-skills/`).
+///
+/// Override with the `FAE_PYTHON_SKILLS_DIR` environment variable.
+/// Each subdirectory is a separate Python skill package managed by `uv`.
+#[must_use]
+pub fn python_skills_dir() -> PathBuf {
+    if let Some(override_dir) = std::env::var_os("FAE_PYTHON_SKILLS_DIR") {
+        return PathBuf::from(override_dir);
+    }
+    data_dir().join("python-skills")
+}
+
 /// Memory data root directory.
 ///
 /// Memory records, manifest, and indexes are stored here.
@@ -355,6 +367,52 @@ mod tests {
         );
 
         // Restore.
+        match original {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    fn python_skills_dir_is_subpath_of_data_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "FAE_PYTHON_SKILLS_DIR";
+        // Ensure override is not set so we test the default path.
+        let original = std::env::var_os(key);
+        unsafe { std::env::remove_var(key) };
+
+        let python_skills = python_skills_dir();
+        let data = data_dir();
+        assert!(
+            python_skills.starts_with(&data),
+            "python_skills_dir ({}) should start with data_dir ({})",
+            python_skills.display(),
+            data.display()
+        );
+        assert!(
+            python_skills
+                .to_string_lossy()
+                .contains("python-skills"),
+            "python_skills_dir should contain 'python-skills': {}",
+            python_skills.display()
+        );
+
+        match original {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    fn python_skills_dir_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "FAE_PYTHON_SKILLS_DIR";
+        let original = std::env::var_os(key);
+
+        unsafe { std::env::set_var(key, "/opt/custom-skills") };
+        let result = python_skills_dir();
+        assert_eq!(result, PathBuf::from("/opt/custom-skills"));
+
         match original {
             Some(v) => unsafe { std::env::set_var(key, v) },
             None => unsafe { std::env::remove_var(key) },
