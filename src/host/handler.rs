@@ -1043,6 +1043,86 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(Vec::new())
     }
 
+    fn skill_generate(&self, intent: &str, confirm: bool) -> Result<serde_json::Value> {
+        info!(intent, confirm, "skill.generate");
+
+        let pipeline = crate::skills::skill_generator::SkillGeneratorPipeline::with_defaults();
+        let staging_dir = crate::fae_dirs::data_dir().join("staging").join(format!(
+            "gen-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&staging_dir)
+            .map_err(|e| SpeechError::Config(format!("cannot create staging dir: {e}")))?;
+
+        let outcome = pipeline
+            .generate(intent, &staging_dir)
+            .map_err(|e| SpeechError::Config(format!("skill generation failed: {e}")))?;
+
+        match outcome {
+            crate::skills::skill_generator::GeneratorOutcome::Proposed(proposal) => {
+                if confirm {
+                    // Install the proposal.
+                    let python_skills_dir = crate::fae_dirs::python_skills_dir();
+                    let info = crate::skills::skill_generator::install_proposal(
+                        &proposal,
+                        &python_skills_dir,
+                    )
+                    .map_err(|e| SpeechError::Config(format!("skill install failed: {e}")))?;
+                    Ok(serde_json::json!({
+                        "status": "installed",
+                        "skill_id": info.id,
+                        "name": proposal.name,
+                    }))
+                } else {
+                    // Return proposal for review.
+                    let proposal_json = serde_json::to_value(&proposal).unwrap_or_default();
+                    Ok(serde_json::json!({
+                        "status": "proposed",
+                        "proposal": proposal_json,
+                    }))
+                }
+            }
+            crate::skills::skill_generator::GeneratorOutcome::ExistingMatch {
+                skill_id,
+                name,
+                score,
+            } => Ok(serde_json::json!({
+                "status": "existing_match",
+                "skill_id": skill_id,
+                "name": name,
+                "score": score,
+            })),
+            crate::skills::skill_generator::GeneratorOutcome::Failed { reason } => {
+                Ok(serde_json::json!({
+                    "status": "failed",
+                    "reason": reason,
+                }))
+            }
+        }
+    }
+
+    fn skill_generate_status(&self, skill_id: &str) -> Result<serde_json::Value> {
+        info!(skill_id, "skill.generate.status");
+
+        // Check if the skill exists in the lifecycle registry.
+        let skills = crate::skills::list_python_skills();
+        if let Some(info) = skills.iter().find(|s| s.id == skill_id) {
+            Ok(serde_json::json!({
+                "skill_id": info.id,
+                "status": format!("{:?}", info.status),
+                "version": info.version,
+            }))
+        } else {
+            Ok(serde_json::json!({
+                "skill_id": skill_id,
+                "status": "not_found",
+            }))
+        }
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self

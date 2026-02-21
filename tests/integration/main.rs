@@ -32,6 +32,7 @@ mod personalization_integration;
 mod phase_1_3_wired_commands;
 mod python_skill_credentials;
 mod python_skill_discovery;
+mod python_skill_generator;
 mod python_skill_lifecycle;
 mod python_skill_runner_e2e;
 mod scheduler_authority_v0;

@@ -383,3 +383,17 @@ Results: 15 credential unit tests + 9 integration tests + 17 manifest tests, all
 Results: 17 discovery unit tests + 9 integration tests + 16 error tests, all pass, zero clippy warnings
 
 ### Phase 8.5 Complete
+
+### Phase 8.6: Skill Generator Pipeline
+
+- [x] Task 1: SkillProposal & GeneratorOutcome types, SkillGeneratorConfig with defaults
+- [x] Task 2: LATM system prompt & build_generation_prompt(), template-based generation
+- [x] Task 3: Staging validation (manifest + PEP 723 + JSON-RPC structure checks)
+- [x] Task 4: SkillGeneratorPipeline::generate() — template-based skill generation
+- [x] Task 5: install_proposal() + index_proposal() for post-approval flow
+- [x] Task 6: Host command wiring (skill.generate + skill.generate.status)
+- [x] Task 7: Integration tests (8 tests in tests/integration/python_skill_generator.rs)
+
+Results: 26 unit tests + 8 integration tests, all pass, zero clippy warnings
+
+### Phase 8.6 Complete

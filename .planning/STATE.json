@@ -1,5 +1,5 @@
 {
-  "version": 13,
+  "version": 14,
   "project": "fae-python-skill-runtime",
   "active": true,
   "milestone": {
@@ -7,18 +7,18 @@
     "name": "Python Skill Runtime (v0.8.1)"
   },
   "phase": {
-    "number": "8.5",
-    "name": "Semantic Skill Discovery",
-    "plan": ".planning/PLAN-phase-8.5.md",
+    "number": "8.6",
+    "name": "Skill Generator Pipeline",
+    "plan": ".planning/PLAN-phase-8.6.md",
     "status": "complete"
   },
   "progress": {
-    "total_tasks": 5,
-    "completed_tasks": 5,
-    "current_task": 5
+    "total_tasks": 7,
+    "completed_tasks": 7,
+    "current_task": 7
   },
   "status": "task_complete",
-  "last_updated": "2026-02-22T08:00:00Z",
+  "last_updated": "2026-02-22T09:30:00Z",
   "review": {
     "status": "passed",
     "iteration": 0

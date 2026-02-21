@@ -19,6 +19,7 @@ pub mod pep723;
 pub mod python_lifecycle;
 pub mod python_protocol;
 pub mod python_runner;
+pub mod skill_generator;
 pub mod trait_def;
 pub mod uv_bootstrap;
 

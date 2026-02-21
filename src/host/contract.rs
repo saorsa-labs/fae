@@ -118,6 +118,18 @@ pub enum CommandName {
     /// Payload: `{ "query": "...", "limit": 5 }`
     #[serde(rename = "skill.discovery.search")]
     SkillDiscoverySearch,
+    /// Generate a new Python skill from a plain-English intent.
+    ///
+    /// Payload: `{ "intent": "...", "confirm": false }`
+    /// When `confirm` is false, returns a skill proposal for review.
+    /// When `confirm` is true, installs the generated skill.
+    #[serde(rename = "skill.generate")]
+    SkillGenerate,
+    /// Query the status of a generated skill.
+    ///
+    /// Payload: `{ "skill_id": "..." }`
+    #[serde(rename = "skill.generate.status")]
+    SkillGenerateStatus,
 }
 
 impl CommandName {
@@ -171,6 +183,8 @@ impl CommandName {
             Self::SkillCredentialCollect => "skill.credential.collect",
             Self::SkillCredentialClear => "skill.credential.clear",
             Self::SkillDiscoverySearch => "skill.discovery.search",
+            Self::SkillGenerate => "skill.generate",
+            Self::SkillGenerateStatus => "skill.generate.status",
         }
     }
 
@@ -224,6 +238,8 @@ impl CommandName {
             "skill.credential.collect" => Some(Self::SkillCredentialCollect),
             "skill.credential.clear" => Some(Self::SkillCredentialClear),
             "skill.discovery.search" => Some(Self::SkillDiscoverySearch),
+            "skill.generate" => Some(Self::SkillGenerate),
+            "skill.generate.status" => Some(Self::SkillGenerateStatus),
             _ => None,
         }
     }

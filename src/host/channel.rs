@@ -214,6 +214,16 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     ) -> Result<Vec<crate::skills::discovery::SkillSearchResult>> {
         Ok(Vec::new())
     }
+    /// Generate a Python skill from a plain-English intent.
+    ///
+    /// Returns a JSON value representing either a proposal or an existing match.
+    fn skill_generate(&self, _intent: &str, _confirm: bool) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "status": "not_implemented" }))
+    }
+    /// Query generation status for a skill.
+    fn skill_generate_status(&self, _skill_id: &str) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "status": "not_implemented" }))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -370,6 +380,8 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::SkillCredentialCollect => self.handle_skill_credential_collect(envelope),
             CommandName::SkillCredentialClear => self.handle_skill_credential_clear(envelope),
             CommandName::SkillDiscoverySearch => self.handle_skill_discovery_search(envelope),
+            CommandName::SkillGenerate => self.handle_skill_generate(envelope),
+            CommandName::SkillGenerateStatus => self.handle_skill_generate_status(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -1050,6 +1062,48 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             envelope.request_id.clone(),
             serde_json::json!({"results": results_json}),
         ))
+    }
+
+    fn handle_skill_generate(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let intent = envelope
+            .payload
+            .get("intent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if intent.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.generate: missing or empty `intent`".to_owned(),
+            ));
+        }
+
+        let confirm = envelope
+            .payload
+            .get("confirm")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let result = self.handler.skill_generate(intent, confirm)?;
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
+    }
+
+    fn handle_skill_generate_status(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.generate.status: missing or empty `skill_id`".to_owned(),
+            ));
+        }
+
+        let result = self.handler.skill_generate_status(skill_id)?;
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
     }
 
     fn handle_conversation_inject_text(
