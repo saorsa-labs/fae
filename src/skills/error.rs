@@ -59,6 +59,29 @@ pub enum PythonSkillError {
     /// JSON serialization/deserialization error.
     #[error("JSON error: {0}")]
     Json(#[source] serde_json::Error),
+
+    /// UV binary was not found on any search path.
+    #[error("uv not found: {reason}")]
+    UvNotFound {
+        /// Why UV could not be located.
+        reason: String,
+    },
+
+    /// UV binary found but version is too old.
+    #[error("uv version {found} is below minimum {minimum}")]
+    UvVersionTooOld {
+        /// The version that was found.
+        found: String,
+        /// The minimum required version.
+        minimum: String,
+    },
+
+    /// UV bootstrap (discovery or auto-install) failed.
+    #[error("uv bootstrap failed: {reason}")]
+    BootstrapFailed {
+        /// Why the bootstrap process failed.
+        reason: String,
+    },
 }
 
 impl From<serde_json::Error> for PythonSkillError {
@@ -140,6 +163,38 @@ mod tests {
         let json_err = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
         let err = PythonSkillError::from(json_err);
         assert!(err.to_string().contains("JSON error"));
+    }
+
+    #[test]
+    fn display_uv_not_found() {
+        let err = PythonSkillError::UvNotFound {
+            reason: "not in PATH or known locations".to_owned(),
+        };
+        assert!(err.to_string().contains("uv not found"));
+        assert!(err.to_string().contains("not in PATH"));
+    }
+
+    #[test]
+    fn display_uv_version_too_old() {
+        let err = PythonSkillError::UvVersionTooOld {
+            found: "0.2.1".to_owned(),
+            minimum: "0.4.0".to_owned(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("0.2.1"), "should contain found version: {msg}");
+        assert!(
+            msg.contains("0.4.0"),
+            "should contain minimum version: {msg}"
+        );
+    }
+
+    #[test]
+    fn display_bootstrap_failed() {
+        let err = PythonSkillError::BootstrapFailed {
+            reason: "installer script exited with code 1".to_owned(),
+        };
+        assert!(err.to_string().contains("bootstrap failed"));
+        assert!(err.to_string().contains("installer script"));
     }
 
     #[test]

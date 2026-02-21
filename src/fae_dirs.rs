@@ -133,6 +133,19 @@ pub fn hf_cache_dir() -> PathBuf {
     cache_dir().join("huggingface")
 }
 
+/// UV tool cache directory (`cache_dir()/uv/`).
+///
+/// Used for the UV binary, installer artifacts, and environment caches.
+///
+/// Override with the `FAE_UV_CACHE_DIR` environment variable.
+#[must_use]
+pub fn uv_cache_dir() -> PathBuf {
+    if let Some(override_dir) = std::env::var_os("FAE_UV_CACHE_DIR") {
+        return PathBuf::from(override_dir);
+    }
+    cache_dir().join("uv")
+}
+
 /// Wakeword recordings directory (`data_dir()/wakeword/`).
 #[must_use]
 pub fn wakeword_dir() -> PathBuf {
@@ -390,12 +403,53 @@ mod tests {
             data.display()
         );
         assert!(
-            python_skills
-                .to_string_lossy()
-                .contains("python-skills"),
+            python_skills.to_string_lossy().contains("python-skills"),
             "python_skills_dir should contain 'python-skills': {}",
             python_skills.display()
         );
+
+        match original {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    fn uv_cache_dir_is_subpath_of_cache_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "FAE_UV_CACHE_DIR";
+        let original = std::env::var_os(key);
+        unsafe { std::env::remove_var(key) };
+
+        let uv = uv_cache_dir();
+        let cache = cache_dir();
+        assert!(
+            uv.starts_with(&cache),
+            "uv_cache_dir ({}) should start with cache_dir ({})",
+            uv.display(),
+            cache.display()
+        );
+        assert!(
+            uv.to_string_lossy().ends_with("uv"),
+            "uv_cache_dir should end with 'uv': {}",
+            uv.display()
+        );
+
+        match original {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    fn uv_cache_dir_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let key = "FAE_UV_CACHE_DIR";
+        let original = std::env::var_os(key);
+
+        unsafe { std::env::set_var(key, "/custom/uv-cache") };
+        let result = uv_cache_dir();
+        assert_eq!(result, PathBuf::from("/custom/uv-cache"));
 
         match original {
             Some(v) => unsafe { std::env::set_var(key, v) },
