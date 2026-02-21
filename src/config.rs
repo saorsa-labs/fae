@@ -826,6 +826,8 @@ pub struct MemoryConfig {
     /// The remaining weight is distributed across confidence, freshness, and
     /// kind bonuses.  Only used when `use_hybrid_search` is `true`.
     pub semantic_weight: f32,
+    /// Run a PRAGMA quick_check on startup to detect database corruption.
+    pub integrity_check_on_startup: bool,
 }
 
 impl Default for MemoryConfig {
@@ -842,6 +844,7 @@ impl Default for MemoryConfig {
             schema_auto_migrate: true,
             use_hybrid_search: true,
             semantic_weight: crate::memory::types::HYBRID_SEMANTIC_WEIGHT,
+            integrity_check_on_startup: true,
         }
     }
 }

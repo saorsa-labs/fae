@@ -92,10 +92,19 @@ impl SqliteMemoryRepository {
         apply_schema(&conn).map_err(SqliteMemoryError::Sqlite)?;
         apply_vec_schema(&conn).map_err(SqliteMemoryError::Sqlite)?;
 
-        Ok(Self {
+        let repo = Self {
             root: root_dir.to_path_buf(),
             conn: Mutex::new(conn),
-        })
+        };
+
+        // Run a fast integrity check after schema setup.  Log a warning on
+        // failure but don't prevent construction — the caller decides how to
+        // handle corruption.
+        if let Err(e) = repo.integrity_check() {
+            tracing::warn!(error = %e, "SQLite integrity check failed on startup");
+        }
+
+        Ok(repo)
     }
 
     /// Returns the root directory path.
@@ -107,6 +116,26 @@ impl SqliteMemoryRepository {
     pub fn ensure_layout(&self) -> Result<(), SqliteMemoryError> {
         let conn = self.lock()?;
         apply_schema(&conn).map_err(SqliteMemoryError::Sqlite)
+    }
+
+    /// Run a fast integrity check on the database.
+    ///
+    /// Uses `PRAGMA quick_check` which is significantly faster than the full
+    /// `PRAGMA integrity_check` — it skips verifying index ordering and
+    /// uniqueness but still validates page-level B-tree structure.
+    ///
+    /// Returns `Ok(())` when the database passes, or
+    /// `Err(SqliteMemoryError::Corrupt(...))` with a description of the issue.
+    pub fn integrity_check(&self) -> Result<(), SqliteMemoryError> {
+        let conn = self.lock()?;
+        let result: String = conn
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .map_err(SqliteMemoryError::Sqlite)?;
+        if result == "ok" {
+            Ok(())
+        } else {
+            Err(SqliteMemoryError::Corrupt(result))
+        }
     }
 
     /// Read the current schema version from the database.
@@ -951,6 +980,9 @@ pub enum SqliteMemoryError {
 
     #[error("lock poisoned: {0}")]
     Lock(String),
+
+    #[error("database corrupt: {0}")]
+    Corrupt(String),
 }
 
 impl From<SqliteMemoryError> for crate::SpeechError {
@@ -1461,6 +1493,20 @@ mod tests {
         let speech_err: crate::SpeechError = err.into();
         let msg = speech_err.to_string();
         assert!(msg.contains("test-id"));
+    }
+
+    #[test]
+    fn integrity_check_passes_on_fresh_db() {
+        let (_dir, repo) = test_repo();
+        repo.integrity_check().expect("integrity check should pass");
+    }
+
+    #[test]
+    fn corrupt_error_variant_displays_message() {
+        let err = SqliteMemoryError::Corrupt("page 42: btree cell count mismatch".to_owned());
+        let msg = err.to_string();
+        assert!(msg.contains("corrupt"));
+        assert!(msg.contains("page 42"));
     }
 
     // -------------------------------------------------------------------
