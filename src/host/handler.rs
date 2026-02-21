@@ -1078,7 +1078,8 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     }))
                 } else {
                     // Return proposal for review.
-                    let proposal_json = serde_json::to_value(&proposal).unwrap_or_default();
+                    let proposal_json = serde_json::to_value(&proposal)
+                        .map_err(|e| SpeechError::Config(format!("failed to serialize proposal: {e}")))?;
                     Ok(serde_json::json!({
                         "status": "proposed",
                         "proposal": proposal_json,
@@ -1112,7 +1113,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         if let Some(info) = skills.iter().find(|s| s.id == skill_id) {
             Ok(serde_json::json!({
                 "skill_id": info.id,
-                "status": format!("{:?}", info.status),
+                "status": info.status.to_string(),
                 "version": info.version,
             }))
         } else {
