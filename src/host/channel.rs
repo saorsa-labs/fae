@@ -145,6 +145,18 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn request_config_patch(&self, _key: &str, _value: &serde_json::Value) -> Result<()> {
         Ok(())
     }
+    /// Signal that a Python skill daemon should be started (or restarted).
+    fn python_skill_start(&self, _skill_name: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Signal that a Python skill daemon should be stopped.
+    fn python_skill_stop(&self, _skill_name: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Return the list of installed Python skill package names.
+    fn python_skill_list(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -287,6 +299,9 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
                 self.handle_onboarding_set_family_info(envelope)
             }
             CommandName::SkillsReload => self.handle_skills_reload(envelope),
+            CommandName::SkillPythonStart => self.handle_skill_python_start(envelope),
+            CommandName::SkillPythonStop => self.handle_skill_python_stop(envelope),
+            CommandName::SkillPythonList => self.handle_skill_python_list(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -656,6 +671,63 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true}),
+        ))
+    }
+
+    fn handle_skill_python_start(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_name = envelope
+            .payload
+            .get("skill_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_name.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.start: missing skill_name".to_owned(),
+            ));
+        }
+
+        tracing::info!(skill_name, "skill.python.start — forwarded to handler");
+        self.handler.python_skill_start(skill_name)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_name": skill_name}),
+        ))
+    }
+
+    fn handle_skill_python_stop(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let skill_name = envelope
+            .payload
+            .get("skill_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_name.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.stop: missing skill_name".to_owned(),
+            ));
+        }
+
+        tracing::info!(skill_name, "skill.python.stop — forwarded to handler");
+        self.handler.python_skill_stop(skill_name)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_name": skill_name}),
+        ))
+    }
+
+    fn handle_skill_python_list(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        tracing::info!("skill.python.list");
+        let skills = self.handler.python_skill_list()?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"skills": skills}),
         ))
     }
 

@@ -16,6 +16,17 @@ pub mod python_protocol;
 pub mod python_runner;
 pub mod trait_def;
 
+// Re-export core Python runner types for external use.
+pub use error::PythonSkillError;
+pub use python_protocol::{
+    HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, SkillMessage,
+    METHOD_HANDSHAKE, METHOD_HEALTH,
+};
+pub use python_runner::{
+    JsonRpcComm, PythonProcessState, PythonSkillProcess, PythonSkillRunner, RunMode,
+    RpcOutcome, SkillProcessConfig, backoff_for_attempt,
+};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

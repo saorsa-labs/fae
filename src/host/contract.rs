@@ -76,6 +76,15 @@ pub enum CommandName {
     SkillsReload,
     #[serde(rename = "data.delete_all")]
     DataDeleteAll,
+    /// Start (or restart) a named Python skill daemon process.
+    #[serde(rename = "skill.python.start")]
+    SkillPythonStart,
+    /// Stop a running Python skill daemon process.
+    #[serde(rename = "skill.python.stop")]
+    SkillPythonStop,
+    /// List installed Python skill packages and their status.
+    #[serde(rename = "skill.python.list")]
+    SkillPythonList,
 }
 
 impl CommandName {
@@ -117,6 +126,9 @@ impl CommandName {
             Self::OnboardingSetFamilyInfo => "onboarding.set_family_info",
             Self::SkillsReload => "skills.reload",
             Self::DataDeleteAll => "data.delete_all",
+            Self::SkillPythonStart => "skill.python.start",
+            Self::SkillPythonStop => "skill.python.stop",
+            Self::SkillPythonList => "skill.python.list",
         }
     }
 
@@ -158,6 +170,9 @@ impl CommandName {
             "onboarding.set_family_info" => Some(Self::OnboardingSetFamilyInfo),
             "skills.reload" => Some(Self::SkillsReload),
             "data.delete_all" => Some(Self::DataDeleteAll),
+            "skill.python.start" => Some(Self::SkillPythonStart),
+            "skill.python.stop" => Some(Self::SkillPythonStop),
+            "skill.python.list" => Some(Self::SkillPythonList),
             _ => None,
         }
     }

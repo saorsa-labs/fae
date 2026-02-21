@@ -841,6 +841,73 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(())
     }
 
+    /// Handle `skill.python.start` — logs the request and returns accepted.
+    ///
+    /// Actual process management is deferred to the tool layer
+    /// ([`PythonSkillTool`](crate::fae_llm::tools::PythonSkillTool)). This
+    /// command is a signal to the host that the user wants to activate a skill;
+    /// the runtime will spin up the daemon on first tool invocation.
+    fn python_skill_start(&self, skill_name: &str) -> Result<()> {
+        info!(skill_name, "skill.python.start — accepted");
+        Ok(())
+    }
+
+    /// Handle `skill.python.stop` — logs the request and returns accepted.
+    ///
+    /// In the current implementation Python skill daemons are managed by the
+    /// [`PythonSkillTool`] within the tool execution layer. A stop signal here
+    /// records the intent; the daemon will be torn down on next process restart.
+    fn python_skill_stop(&self, skill_name: &str) -> Result<()> {
+        info!(skill_name, "skill.python.stop — accepted");
+        Ok(())
+    }
+
+    /// Handle `skill.python.list` — returns installed Python skill package names.
+    ///
+    /// Scans the configured python skills directory for subdirectories that
+    /// contain an entry-point script (`<name>/<name>.py`).
+    fn python_skill_list(&self) -> Result<Vec<String>> {
+        let config = self
+            .config
+            .lock()
+            .map_err(|e| SpeechError::Config(format!("config lock poisoned: {e}")))?;
+        let skills_dir = config.python_skills.skills_dir.clone();
+        drop(config);
+
+        let mut names: Vec<String> = Vec::new();
+
+        let entries = match std::fs::read_dir(&skills_dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(names);
+            }
+            Err(e) => {
+                return Err(SpeechError::Config(format!(
+                    "cannot list python skills dir {}: {e}",
+                    skills_dir.display()
+                )));
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            // Only include directories that contain <name>/<name>.py.
+            if path.join(format!("{name}.py")).is_file() {
+                names.push(name.to_owned());
+            }
+        }
+
+        names.sort();
+        info!(?names, "skill.python.list — found {} skills", names.len());
+        Ok(names)
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self
