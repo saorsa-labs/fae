@@ -34,16 +34,27 @@ const MAX_TOKENS: usize = 256;
 
 /// Sentence embedding engine backed by `all-MiniLM-L6-v2`.
 ///
-/// Thread-safe: the ONNX session supports concurrent `run()` calls.
+/// Not thread-safe: `embed` and `embed_batch` require `&mut self` because
+/// `tokenizers::Tokenizer` requires exclusive mutable access during encoding.
+/// For shared concurrent use, wrap in `Mutex<EmbeddingEngine>`.
 pub struct EmbeddingEngine {
     session: Session,
     tokenizer: tokenizers::Tokenizer,
 }
 
+impl std::fmt::Debug for EmbeddingEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingEngine")
+            .field("dim", &EMBEDDING_DIM)
+            .finish_non_exhaustive()
+    }
+}
+
 impl EmbeddingEngine {
     /// Load an embedding engine from pre-downloaded model files.
     ///
-    /// `model_dir` must contain `model.onnx` and `tokenizer.json`.
+    /// `model_path` must point to the ONNX model file (e.g. `model.onnx`).
+    /// `tokenizer_path` must point to the tokenizer config file (`tokenizer.json`).
     ///
     /// # Errors
     ///
@@ -125,7 +136,7 @@ impl EmbeddingEngine {
             .map_err(|e| SpeechError::Memory(format!("failed to extract output tensor: {e}")))?;
 
         // Mean-pool with attention mask weighting.
-        let pooled = mean_pool(data, &attention_mask, seq_len, EMBEDDING_DIM);
+        let pooled = mean_pool(data, &attention_mask, EMBEDDING_DIM);
 
         Ok(l2_normalize(&pooled))
     }
@@ -155,11 +166,12 @@ impl EmbeddingEngine {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // SAFETY: encodings is non-empty (guarded by texts.is_empty() check above).
         let max_len = encodings
             .iter()
             .map(|e| e.get_ids().len())
             .max()
-            .unwrap_or(0);
+            .unwrap_or_else(|| unreachable!("encodings is non-empty"));
         let batch_size = texts.len();
 
         let mut all_ids = vec![0i64; batch_size * max_len];
@@ -208,7 +220,7 @@ impl EmbeddingEngine {
             let end = start + max_len * EMBEDDING_DIM;
             let slice = &flat[start..end];
             let mask_slice = &all_mask[i * max_len..(i + 1) * max_len];
-            let pooled = mean_pool(slice, mask_slice, max_len, EMBEDDING_DIM);
+            let pooled = mean_pool(slice, mask_slice, EMBEDDING_DIM);
             results.push(l2_normalize(&pooled));
         }
 
@@ -241,7 +253,7 @@ impl EmbeddingEngine {
             "embedding model ready: {}",
             model_path
                 .parent()
-                .map_or("?", |p| p.to_str().unwrap_or("?"))
+                .map_or_else(|| "?".into(), |p| p.to_string_lossy().into_owned())
         );
         Ok((model_path, tokenizer_path))
     }
@@ -266,13 +278,13 @@ impl EmbeddingEngine {
 
 /// Mean-pool token embeddings using attention mask.
 ///
-/// `flat` is shape `[seq_len, dim]` stored row-major.
+/// `flat` is shape `[mask.len(), dim]` stored row-major.
 /// `mask` is `[seq_len]` with 1 for real tokens, 0 for padding.
-fn mean_pool(flat: &[f32], mask: &[i64], seq_len: usize, dim: usize) -> Vec<f32> {
+fn mean_pool(flat: &[f32], mask: &[i64], dim: usize) -> Vec<f32> {
     let mut pooled = vec![0.0f32; dim];
     let mut count = 0.0f32;
 
-    for (t, &m) in mask.iter().enumerate().take(seq_len) {
+    for (t, &m) in mask.iter().enumerate() {
         if m != 0 {
             let offset = t * dim;
             for (p, &f) in pooled.iter_mut().zip(&flat[offset..offset + dim]) {
@@ -352,7 +364,7 @@ mod tests {
         // 2 tokens, dim=3, both active.
         let flat = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let mask = vec![1i64, 1];
-        let pooled = mean_pool(&flat, &mask, 2, 3);
+        let pooled = mean_pool(&flat, &mask, 3);
         assert_eq!(pooled, vec![2.5, 3.5, 4.5]);
     }
 
@@ -361,8 +373,17 @@ mod tests {
         // 3 tokens, dim=2, only first 2 active.
         let flat = vec![1.0, 2.0, 3.0, 4.0, 99.0, 99.0];
         let mask = vec![1i64, 1, 0];
-        let pooled = mean_pool(&flat, &mask, 3, 2);
+        let pooled = mean_pool(&flat, &mask, 2);
         assert_eq!(pooled, vec![2.0, 3.0]);
+    }
+
+    #[test]
+    fn mean_pool_all_masked() {
+        // All tokens are padding — result should be all-zero (no division by zero).
+        let flat = vec![1.0, 2.0, 3.0, 4.0];
+        let mask = vec![0i64, 0];
+        let pooled = mean_pool(&flat, &mask, 2);
+        assert_eq!(pooled, vec![0.0, 0.0]);
     }
 
     #[test]
@@ -463,12 +484,5 @@ mod tests {
         let mut engine = EmbeddingEngine::download_and_load().expect("engine");
         let vec = engine.embed("").expect("embed empty");
         assert_eq!(vec.len(), EMBEDDING_DIM);
-    }
-
-    #[test]
-    fn embed_batch_empty_input() {
-        // This test doesn't need model — empty input returns immediately.
-        // We only test the early-return path.
-        // (Constructing a real engine would need downloaded files.)
     }
 }

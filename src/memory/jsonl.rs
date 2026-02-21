@@ -817,6 +817,7 @@ impl MemoryRepository {
 pub struct MemoryOrchestrator {
     repo: super::sqlite::SqliteMemoryRepository,
     config: MemoryConfig,
+    embedding_engine: Option<std::sync::Arc<Mutex<super::embedding::EmbeddingEngine>>>,
 }
 
 impl MemoryOrchestrator {
@@ -841,7 +842,82 @@ impl MemoryOrchestrator {
         Ok(Self {
             repo,
             config: config.clone(),
+            embedding_engine: None,
         })
+    }
+
+    /// Attach an embedding engine for automatic vector embedding of new records.
+    ///
+    /// When set, every inserted record is embedded and stored in the
+    /// `vec_embeddings` table.  If embedding fails for a record, a warning
+    /// is logged but the insert itself is not rolled back.
+    pub fn set_embedding_engine(
+        &mut self,
+        engine: std::sync::Arc<Mutex<super::embedding::EmbeddingEngine>>,
+    ) {
+        self.embedding_engine = Some(engine);
+    }
+
+    /// Embed a record and store its vector, if an engine is available.
+    ///
+    /// Logs a warning on failure but never propagates the error — embedding
+    /// is best-effort so it never blocks the primary insert path.
+    fn try_embed_record(&self, record: &MemoryRecord) {
+        let Some(engine_arc) = &self.embedding_engine else {
+            return;
+        };
+        let Ok(mut engine) = engine_arc.lock() else {
+            tracing::warn!("embedding engine lock poisoned, skipping embed");
+            return;
+        };
+        match engine.embed(&record.text) {
+            Ok(embedding) => {
+                if let Err(e) = self.repo.store_embedding(&record.id, &embedding) {
+                    tracing::warn!(record_id = %record.id, error = %e, "failed to store embedding");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(record_id = %record.id, error = %e, "failed to embed record text");
+            }
+        }
+    }
+
+    /// Insert a record and embed it (best-effort).
+    fn insert_and_embed(
+        &self,
+        kind: MemoryKind,
+        text: &str,
+        confidence: f32,
+        source_turn_id: Option<&str>,
+        tags: &[String],
+    ) -> Result<MemoryRecord> {
+        let record = self
+            .repo
+            .insert_record(kind, text, confidence, source_turn_id, tags)?;
+        self.try_embed_record(&record);
+        Ok(record)
+    }
+
+    /// Supersede a record and embed the replacement (best-effort).
+    fn supersede_and_embed(
+        &self,
+        existing_id: &str,
+        new_text: &str,
+        confidence: f32,
+        source_turn_id: Option<&str>,
+        tags: &[String],
+        note: &str,
+    ) -> Result<MemoryRecord> {
+        let record = self.repo.supersede_record_by_id(
+            existing_id,
+            new_text,
+            confidence,
+            source_turn_id,
+            tags,
+            note,
+        )?;
+        self.try_embed_record(&record);
+        Ok(record)
     }
 
     pub fn ensure_ready(&self) -> Result<()> {
@@ -1065,7 +1141,7 @@ checklist:\n\
         };
         let episode_text = truncate_record_text(&episode_text);
 
-        let episode = self.repo.insert_record(
+        let episode = self.insert_and_embed(
             MemoryKind::Episode,
             &episode_text,
             0.55,
@@ -1098,7 +1174,7 @@ checklist:\n\
                 && self.meets_profile_threshold(FACT_REMEMBER_CONFIDENCE)
                 && !self.is_duplicate_memory(&remember)?
             {
-                let record = self.repo.insert_record(
+                let record = self.insert_and_embed(
                     MemoryKind::Fact,
                     &remember,
                     FACT_REMEMBER_CONFIDENCE,
@@ -1124,7 +1200,7 @@ checklist:\n\
                 let existing = self.repo.find_active_by_tag("name")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
-                        let new_record = self.repo.supersede_record_by_id(
+                        let new_record = self.supersede_and_embed(
                             &previous.id,
                             &profile,
                             PROFILE_NAME_CONFIDENCE,
@@ -1144,7 +1220,7 @@ checklist:\n\
                         });
                     }
                 } else {
-                    let new_record = self.repo.insert_record(
+                    let new_record = self.insert_and_embed(
                         MemoryKind::Profile,
                         &profile,
                         PROFILE_NAME_CONFIDENCE,
@@ -1170,7 +1246,7 @@ checklist:\n\
                 let existing = self.repo.find_active_by_tag("preference")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
-                        let new_record = self.repo.supersede_record_by_id(
+                        let new_record = self.supersede_and_embed(
                             &previous.id,
                             &profile,
                             PROFILE_PREFERENCE_CONFIDENCE,
@@ -1190,7 +1266,7 @@ checklist:\n\
                         });
                     }
                 } else if !self.is_duplicate_memory(&profile)? {
-                    let new_record = self.repo.insert_record(
+                    let new_record = self.insert_and_embed(
                         MemoryKind::Profile,
                         &profile,
                         PROFILE_PREFERENCE_CONFIDENCE,
@@ -1213,7 +1289,7 @@ checklist:\n\
                 .repo
                 .find_active_by_tag("coding_assistant_permission_pending")?;
             if pending.is_empty() {
-                let pending_marker = self.repo.insert_record(
+                let pending_marker = self.insert_and_embed(
                     MemoryKind::Profile,
                     "Awaiting user decision on local Claude/Codex use for coding tasks.",
                     CODING_ASSISTANT_PERMISSION_PENDING_CONFIDENCE,
@@ -1251,7 +1327,7 @@ checklist:\n\
                 .find_active_by_tag("coding_assistant_permission")?;
             if let Some(previous) = existing.first() {
                 if !previous.text.eq_ignore_ascii_case(profile) {
-                    let new_record = self.repo.supersede_record_by_id(
+                    let new_record = self.supersede_and_embed(
                         &previous.id,
                         profile,
                         CODING_ASSISTANT_PERMISSION_CONFIDENCE,
@@ -1271,7 +1347,7 @@ checklist:\n\
                     });
                 }
             } else {
-                let new_record = self.repo.insert_record(
+                let new_record = self.insert_and_embed(
                     MemoryKind::Profile,
                     profile,
                     CODING_ASSISTANT_PERMISSION_CONFIDENCE,
@@ -1306,7 +1382,7 @@ checklist:\n\
                 let existing = self.repo.find_active_by_tag("onboarding:job")?;
                 if let Some(previous) = existing.first() {
                     if !previous.text.eq_ignore_ascii_case(&profile) {
-                        let new_record = self.repo.supersede_record_by_id(
+                        let new_record = self.supersede_and_embed(
                             &previous.id,
                             &profile,
                             FACT_CONVERSATIONAL_CONFIDENCE,
@@ -1326,7 +1402,7 @@ checklist:\n\
                         });
                     }
                 } else if !self.is_duplicate_memory(&profile)? {
-                    let new_record = self.repo.insert_record(
+                    let new_record = self.insert_and_embed(
                         MemoryKind::Profile,
                         &profile,
                         FACT_CONVERSATIONAL_CONFIDENCE,
@@ -1356,7 +1432,7 @@ checklist:\n\
                         tags.push(onboarding_tag);
                     }
                 }
-                let record = self.repo.insert_record(
+                let record = self.insert_and_embed(
                     MemoryKind::Fact,
                     &fact,
                     FACT_CONVERSATIONAL_CONFIDENCE,
@@ -1431,7 +1507,7 @@ checklist:\n\
             }
         }
 
-        let record = self.repo.insert_record(
+        let record = self.insert_and_embed(
             MemoryKind::Profile,
             "Onboarding checklist is complete.",
             ONBOARDING_COMPLETION_CONFIDENCE,
