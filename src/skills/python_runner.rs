@@ -628,6 +628,20 @@ pub struct SkillProcessConfig {
     pub request_timeout: Duration,
     /// Fae version string sent in the handshake.
     pub fae_version: String,
+    /// Additional environment variables injected into the subprocess.
+    ///
+    /// These are merged with the inherited environment after all other
+    /// configuration is applied. Credential values from [`CredentialCollection`]
+    /// are injected here via [`CredentialCollection::inject_into`].
+    ///
+    /// # Security
+    ///
+    /// Values in this map are passed directly as environment variables to the
+    /// Python subprocess. They must not be logged. Never populate this map
+    /// with raw Keychain data — use the credential mediation layer instead.
+    ///
+    /// [`CredentialCollection`]: super::credential_mediation::CredentialCollection
+    pub env_overrides: std::collections::HashMap<String, String>,
 }
 
 impl SkillProcessConfig {
@@ -650,6 +664,7 @@ impl SkillProcessConfig {
             handshake_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             fae_version: env!("CARGO_PKG_VERSION").to_owned(),
+            env_overrides: std::collections::HashMap::new(),
         }
     }
 
@@ -908,6 +923,13 @@ impl PythonSkillRunner {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
+
+        // Inject credential env vars. Each entry overwrites any inherited
+        // value with the same name, ensuring skills always receive the
+        // current Keychain-backed secret.
+        for (key, value) in &self.config.env_overrides {
+            cmd.env(key, value);
+        }
 
         let mut child = cmd.spawn().map_err(PythonSkillError::SpawnFailed)?;
 
@@ -1606,6 +1628,39 @@ done
         assert_eq!(cfg.max_restarts, 5);
         assert_eq!(cfg.handshake_timeout, Duration::from_secs(10));
         assert_eq!(cfg.request_timeout, Duration::from_secs(30));
+        // env_overrides defaults to empty.
+        assert!(cfg.env_overrides.is_empty());
+    }
+
+    #[test]
+    fn env_overrides_can_be_set_on_config() {
+        let mut cfg =
+            SkillProcessConfig::new("discord-bot", std::path::PathBuf::from("/tmp/skill.py"));
+        cfg.env_overrides
+            .insert("DISCORD_BOT_TOKEN".to_owned(), "xoxb-secret".to_owned());
+        cfg.env_overrides
+            .insert("DISCORD_GUILD_ID".to_owned(), "12345".to_owned());
+
+        assert_eq!(cfg.env_overrides.len(), 2);
+        assert_eq!(
+            cfg.env_overrides
+                .get("DISCORD_BOT_TOKEN")
+                .map(String::as_str),
+            Some("xoxb-secret")
+        );
+        assert_eq!(
+            cfg.env_overrides
+                .get("DISCORD_GUILD_ID")
+                .map(String::as_str),
+            Some("12345")
+        );
+    }
+
+    #[test]
+    fn env_overrides_default_empty_and_can_inject() {
+        let cfg = SkillProcessConfig::new("skill", std::path::PathBuf::from("/tmp/skill.py"));
+        // env_overrides starts empty — no credentials injected by default.
+        assert!(cfg.env_overrides.is_empty());
     }
 
     #[test]

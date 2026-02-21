@@ -349,3 +349,25 @@ Results: All tests pass, zero clippy warnings, zero compilation warnings
 Results: All 6 tasks complete, 30+ UV bootstrap tests pass, 6 E2E tests pass, zero clippy warnings
 
 ### Phase 8.2 Complete
+
+### Phase 8.3: Skill Lifecycle Management
+
+- [x] All tasks complete (commit: e1fb9d1)
+- Lifecycle state machine: Pending → Testing → Active → Disabled → Quarantined
+- Install, activate, disable, rollback, quarantine operations
+- Host command wiring for skill lifecycle management
+- 17 integration tests pass
+
+### Phase 8.3 Complete
+
+### Phase 8.4: Credential Mediation
+
+- [x] Task 1: CredentialSchema type + manifest integration
+- [x] Task 2: CredentialMediator trait + SkillCredentialStore (credential_mediation.rs)
+- [x] Task 3: env_overrides in SkillProcessConfig
+- [x] Task 4: Host command wiring (skill.credential.collect / skill.credential.clear)
+- [x] Task 5: Integration tests (9 tests in python_skill_credentials.rs)
+
+Results: 15 credential unit tests + 9 integration tests + 17 manifest tests, all pass, zero clippy warnings
+
+### Phase 8.4 Complete

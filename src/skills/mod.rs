@@ -11,6 +11,7 @@
 //!    the same directory with state tracked in `.state/registry.json`.
 
 pub mod builtins;
+pub mod credential_mediation;
 pub mod error;
 pub mod manifest;
 pub mod pep723;
@@ -21,9 +22,13 @@ pub mod trait_def;
 pub mod uv_bootstrap;
 
 // Re-export core Python runner types for external use.
+pub use credential_mediation::{
+    CredentialCollection, CredentialMediationError, CredentialStatus, FAE_SKILLS_KEYCHAIN_SERVICE,
+    check_stored_credentials, clear_skill_credentials, collect_skill_credentials,
+    credential_account, retrieve_skill_credentials,
+};
 pub use error::PythonSkillError;
-pub use manifest::PythonSkillManifest;
-pub use pep723::ScriptMetadata;
+pub use manifest::{CredentialSchema, PythonSkillManifest};
 pub use python_lifecycle::{
     PythonSkillInfo, PythonSkillStatus, activate_python_skill, advance_python_skill_status,
     disable_python_skill, install_python_skill, list_python_skills, quarantine_python_skill,

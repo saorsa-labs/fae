@@ -207,7 +207,6 @@ impl PythonSkillRegistry {
     pub fn get(&self, id: &str) -> Option<&PythonSkillRecord> {
         self.skills.iter().find(|e| e.id == id)
     }
-
 }
 
 // ── Disk I/O helpers ──────────────────────────────────────────────────────────
@@ -253,11 +252,10 @@ pub(crate) fn save_python_registry(
         reason: format!("cannot create state dirs: {e}"),
     })?;
     let path = python_registry_path(paths);
-    let json = serde_json::to_string_pretty(registry).map_err(|e| {
-        PythonSkillError::BootstrapFailed {
+    let json =
+        serde_json::to_string_pretty(registry).map_err(|e| PythonSkillError::BootstrapFailed {
             reason: format!("cannot serialize python registry: {e}"),
-        }
-    })?;
+        })?;
     std::fs::write(&path, json).map_err(|e| PythonSkillError::BootstrapFailed {
         reason: format!("cannot write python registry {}: {e}", path.display()),
     })
@@ -330,9 +328,7 @@ pub(crate) fn snapshot_python_skill(
         reason: format!("cannot create state dirs: {e}"),
     })?;
     let stamp = now_secs();
-    let snapshot = paths
-        .snapshots_dir
-        .join(format!("{id}-{stamp}.py"));
+    let snapshot = paths.snapshots_dir.join(format!("{id}-{stamp}.py"));
     std::fs::copy(active_path, &snapshot).map_err(|e| PythonSkillError::BootstrapFailed {
         reason: format!(
             "cannot snapshot python skill `{id}` → {}: {e}",
@@ -385,9 +381,7 @@ fn move_script(from: &Path, to: &Path) -> Result<(), PythonSkillError> {
 /// # Errors
 ///
 /// Returns [`PythonSkillError::BootstrapFailed`] if any step fails.
-pub fn install_python_skill(
-    package_dir: &Path,
-) -> Result<PythonSkillInfo, PythonSkillError> {
+pub fn install_python_skill(package_dir: &Path) -> Result<PythonSkillInfo, PythonSkillError> {
     install_python_skill_at(&super::default_paths(), package_dir)
 }
 
@@ -409,11 +403,10 @@ pub fn install_python_skill_at(
         });
     }
 
-    let script_content = std::fs::read_to_string(&entry_path).map_err(|e| {
-        PythonSkillError::BootstrapFailed {
+    let script_content =
+        std::fs::read_to_string(&entry_path).map_err(|e| PythonSkillError::BootstrapFailed {
             reason: format!("cannot read {}: {e}", entry_path.display()),
-        }
-    })?;
+        })?;
 
     super::ensure_state_dirs(paths).map_err(|e| PythonSkillError::BootstrapFailed {
         reason: format!("cannot create state dirs: {e}"),
@@ -628,9 +621,7 @@ pub fn activate_python_skill_at(
             }
         } else {
             return Err(PythonSkillError::BootstrapFailed {
-                reason: format!(
-                    "python skill `{id}` has no active, disabled, or snapshot content"
-                ),
+                reason: format!("python skill `{id}` has no active, disabled, or snapshot content"),
             });
         }
     }
@@ -793,8 +784,7 @@ mod tests {
             PythonSkillStatus::Quarantined,
         ] {
             let json = serde_json::to_string(&status).expect("serialize");
-            let restored: PythonSkillStatus =
-                serde_json::from_str(&json).expect("deserialize");
+            let restored: PythonSkillStatus = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(status, restored, "round-trip failed for {status}");
         }
     }
@@ -830,8 +820,14 @@ mod tests {
         reg.upsert(make_record("beta", PythonSkillStatus::Pending));
 
         assert_eq!(reg.skills.len(), 2);
-        assert_eq!(reg.get("alpha").map(|r| r.status), Some(PythonSkillStatus::Active));
-        assert_eq!(reg.get("beta").map(|r| r.status), Some(PythonSkillStatus::Pending));
+        assert_eq!(
+            reg.get("alpha").map(|r| r.status),
+            Some(PythonSkillStatus::Active)
+        );
+        assert_eq!(
+            reg.get("beta").map(|r| r.status),
+            Some(PythonSkillStatus::Pending)
+        );
         assert!(reg.get("gamma").is_none());
     }
 
@@ -842,7 +838,10 @@ mod tests {
         reg.upsert(make_record("alpha", PythonSkillStatus::Active));
 
         assert_eq!(reg.skills.len(), 1);
-        assert_eq!(reg.get("alpha").map(|r| r.status), Some(PythonSkillStatus::Active));
+        assert_eq!(
+            reg.get("alpha").map(|r| r.status),
+            Some(PythonSkillStatus::Active)
+        );
     }
 
     #[test]

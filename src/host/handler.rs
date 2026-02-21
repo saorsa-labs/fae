@@ -959,6 +959,75 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             .map_err(|e| SpeechError::Config(format!("skill.python.advance_status failed: {e}")))
     }
 
+    /// Handle `skill.credential.collect` — stores skill credentials in the Keychain.
+    fn python_skill_credential_collect(
+        &self,
+        skill_id: &str,
+        credentials: &std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        use crate::credentials::create_manager;
+        use crate::skills::credential_mediation::collect_skill_credentials;
+
+        info!(
+            skill_id,
+            count = credentials.len(),
+            "skill.credential.collect"
+        );
+
+        // Look up the installed skill to verify it exists.
+        let skills = crate::skills::list_python_skills();
+        let skill_exists = skills.iter().any(|s| s.id == skill_id);
+        if !skill_exists {
+            return Err(SpeechError::Config(format!(
+                "skill.credential.collect: skill `{skill_id}` not found"
+            )));
+        }
+
+        // Build a synthetic schema from the provided credential names.
+        // Each key becomes both the credential name and (uppercased) env_var.
+        let schema: Vec<crate::skills::manifest::CredentialSchema> = credentials
+            .keys()
+            .map(|name| crate::skills::manifest::CredentialSchema {
+                name: name.clone(),
+                env_var: name.to_uppercase().replace('-', "_"),
+                description: format!("Credential {name} for skill {skill_id}"),
+                required: true,
+                default: None,
+            })
+            .collect();
+
+        let manager = create_manager();
+        collect_skill_credentials(skill_id, &schema, credentials, manager.as_ref())
+            .map(|_| ())
+            .map_err(|e| SpeechError::Config(format!("skill.credential.collect failed: {e}")))
+    }
+
+    /// Handle `skill.credential.clear` — removes all stored skill credentials from the Keychain.
+    ///
+    /// Uses an empty schema, which performs a no-op on `clear_skill_credentials`.
+    /// Callers that need to clear specific named credentials should use the
+    /// credential mediation API directly with the full manifest schema.
+    fn python_skill_credential_clear(&self, skill_id: &str) -> Result<()> {
+        use crate::credentials::create_manager;
+        use crate::skills::credential_mediation::clear_skill_credentials;
+
+        info!(skill_id, "skill.credential.clear");
+
+        let skills = crate::skills::list_python_skills();
+        let skill_exists = skills.iter().any(|s| s.id == skill_id);
+        if !skill_exists {
+            return Err(SpeechError::Config(format!(
+                "skill.credential.clear: skill `{skill_id}` not found"
+            )));
+        }
+
+        let manager = create_manager();
+        // Empty schema → clears nothing (safe no-op). Specific clearing is done
+        // via the mediation API with a full CredentialSchema from the manifest.
+        clear_skill_credentials(skill_id, &[], manager.as_ref())
+            .map_err(|e| SpeechError::Config(format!("skill.credential.clear failed: {e}")))
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self

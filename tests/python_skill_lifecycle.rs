@@ -14,12 +14,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use fae::skills::SkillPaths;
 use fae::skills::python_lifecycle::{
     PythonSkillStatus, activate_python_skill_at, advance_python_skill_status_at,
     disable_python_skill_at, install_python_skill_at, list_python_skills_at,
     quarantine_python_skill_at, rollback_python_skill_at,
 };
-use fae::skills::SkillPaths;
 use std::io::Write;
 use std::path::Path;
 
@@ -39,12 +39,12 @@ fn write_package(dir: &Path, id: &str, version: &str, script_content: &str) {
     let manifest = format!(
         "id = \"{id}\"\nname = \"{id}\"\nversion = \"{version}\"\nentry_file = \"skill.py\"\n"
     );
-    let mut f =
-        std::fs::File::create(dir.join("manifest.toml")).expect("create manifest.toml");
+    let mut f = std::fs::File::create(dir.join("manifest.toml")).expect("create manifest.toml");
     f.write_all(manifest.as_bytes()).expect("write manifest");
 
     let mut s = std::fs::File::create(dir.join("skill.py")).expect("create skill.py");
-    s.write_all(script_content.as_bytes()).expect("write skill.py");
+    s.write_all(script_content.as_bytes())
+        .expect("write skill.py");
 }
 
 // ── Install ───────────────────────────────────────────────────────────────────
@@ -165,8 +165,7 @@ fn advance_invalid_transition_returns_error() {
     install_python_skill_at(&paths, &pkg).expect("install");
 
     // Cannot skip Pending → Active
-    let result =
-        advance_python_skill_status_at(&paths, "bad-skill", PythonSkillStatus::Active);
+    let result = advance_python_skill_status_at(&paths, "bad-skill", PythonSkillStatus::Active);
     assert!(result.is_err(), "should reject invalid transition");
 
     let _ = std::fs::remove_dir_all(&paths.root);
@@ -223,10 +222,8 @@ fn activate_restores_disabled_script() {
     write_package(&pkg, "mail", "1.0.0", "# mail skill");
 
     install_python_skill_at(&paths, &pkg).expect("install");
-    advance_python_skill_status_at(&paths, "mail", PythonSkillStatus::Testing)
-        .expect("→ Testing");
-    advance_python_skill_status_at(&paths, "mail", PythonSkillStatus::Active)
-        .expect("→ Active");
+    advance_python_skill_status_at(&paths, "mail", PythonSkillStatus::Testing).expect("→ Testing");
+    advance_python_skill_status_at(&paths, "mail", PythonSkillStatus::Active).expect("→ Active");
     disable_python_skill_at(&paths, "mail").expect("disable");
 
     // Verify disabled.
@@ -261,10 +258,10 @@ fn quarantine_records_error_and_moves_script() {
     install_python_skill_at(&paths, &pkg).expect("install");
     advance_python_skill_status_at(&paths, "discord", PythonSkillStatus::Testing)
         .expect("→ Testing");
-    advance_python_skill_status_at(&paths, "discord", PythonSkillStatus::Active)
-        .expect("→ Active");
+    advance_python_skill_status_at(&paths, "discord", PythonSkillStatus::Active).expect("→ Active");
 
-    quarantine_python_skill_at(&paths, "discord", "rate limited by Discord API").expect("quarantine");
+    quarantine_python_skill_at(&paths, "discord", "rate limited by Discord API")
+        .expect("quarantine");
 
     assert!(!paths.root.join("discord.py").is_file());
 
@@ -311,10 +308,7 @@ fn rollback_restores_previous_script_content() {
 
     let skills = list_python_skills_at(&paths).expect("list");
     assert_eq!(
-        skills
-            .iter()
-            .find(|s| s.id == "contacts")
-            .map(|s| s.status),
+        skills.iter().find(|s| s.id == "contacts").map(|s| s.status),
         Some(PythonSkillStatus::Active)
     );
 

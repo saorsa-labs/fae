@@ -103,6 +103,16 @@ pub enum CommandName {
     /// Advance a Python skill to the next lifecycle status.
     #[serde(rename = "skill.python.advance_status")]
     SkillPythonAdvanceStatus,
+    /// Collect and store credentials for a Python skill.
+    ///
+    /// Payload: `{ "skill_id": "...", "credentials": { "name": "value", ... } }`
+    #[serde(rename = "skill.credential.collect")]
+    SkillCredentialCollect,
+    /// Clear all stored credentials for a Python skill.
+    ///
+    /// Payload: `{ "skill_id": "..." }`
+    #[serde(rename = "skill.credential.clear")]
+    SkillCredentialClear,
 }
 
 impl CommandName {
@@ -153,6 +163,8 @@ impl CommandName {
             Self::SkillPythonQuarantine => "skill.python.quarantine",
             Self::SkillPythonRollback => "skill.python.rollback",
             Self::SkillPythonAdvanceStatus => "skill.python.advance_status",
+            Self::SkillCredentialCollect => "skill.credential.collect",
+            Self::SkillCredentialClear => "skill.credential.clear",
         }
     }
 
@@ -203,6 +215,8 @@ impl CommandName {
             "skill.python.quarantine" => Some(Self::SkillPythonQuarantine),
             "skill.python.rollback" => Some(Self::SkillPythonRollback),
             "skill.python.advance_status" => Some(Self::SkillPythonAdvanceStatus),
+            "skill.credential.collect" => Some(Self::SkillCredentialCollect),
+            "skill.credential.clear" => Some(Self::SkillCredentialClear),
             _ => None,
         }
     }

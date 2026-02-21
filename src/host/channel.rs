@@ -190,6 +190,22 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     ) -> Result<()> {
         Ok(())
     }
+    /// Collect and store credentials for a Python skill.
+    ///
+    /// `credentials` maps credential `name` (from `manifest.toml`) to the
+    /// user-provided secret value. Values are stored in the platform Keychain
+    /// under `com.saorsalabs.fae.skills / {skill_id}.{name}`.
+    fn python_skill_credential_collect(
+        &self,
+        _skill_id: &str,
+        _credentials: &std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    /// Clear all stored credentials for a Python skill from the Keychain.
+    fn python_skill_credential_clear(&self, _skill_id: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -343,6 +359,8 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::SkillPythonAdvanceStatus => {
                 self.handle_skill_python_advance_status(envelope)
             }
+            CommandName::SkillCredentialCollect => self.handle_skill_credential_collect(envelope),
+            CommandName::SkillCredentialClear => self.handle_skill_credential_clear(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -769,10 +787,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         ))
     }
 
-    fn handle_skill_python_install(
-        &self,
-        envelope: &CommandEnvelope,
-    ) -> Result<ResponseEnvelope> {
+    fn handle_skill_python_install(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         let package_dir = envelope
             .payload
             .get("package_dir")
@@ -792,10 +807,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(envelope.request_id.clone(), payload))
     }
 
-    fn handle_skill_python_disable(
-        &self,
-        envelope: &CommandEnvelope,
-    ) -> Result<ResponseEnvelope> {
+    fn handle_skill_python_disable(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         let skill_id = envelope
             .payload
             .get("skill_id")
@@ -816,10 +828,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         ))
     }
 
-    fn handle_skill_python_activate(
-        &self,
-        envelope: &CommandEnvelope,
-    ) -> Result<ResponseEnvelope> {
+    fn handle_skill_python_activate(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         let skill_id = envelope
             .payload
             .get("skill_id")
@@ -870,10 +879,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         ))
     }
 
-    fn handle_skill_python_rollback(
-        &self,
-        envelope: &CommandEnvelope,
-    ) -> Result<ResponseEnvelope> {
+    fn handle_skill_python_rollback(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         let skill_id = envelope
             .payload
             .get("skill_id")
@@ -916,20 +922,80 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let status: crate::skills::PythonSkillStatus =
-            serde_json::from_value(serde_json::Value::String(status_str.to_owned()))
-                .map_err(|_| {
-                    crate::SpeechError::Config(format!(
-                        "skill.python.advance_status: invalid status `{status_str}`"
-                    ))
-                })?;
+        let status: crate::skills::PythonSkillStatus = serde_json::from_value(
+            serde_json::Value::String(status_str.to_owned()),
+        )
+        .map_err(|_| {
+            crate::SpeechError::Config(format!(
+                "skill.python.advance_status: invalid status `{status_str}`"
+            ))
+        })?;
 
-        self.handler
-            .python_skill_advance_status(skill_id, status)?;
+        self.handler.python_skill_advance_status(skill_id, status)?;
 
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true, "skill_id": skill_id, "status": status_str}),
+        ))
+    }
+
+    fn handle_skill_credential_collect(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.credential.collect: missing skill_id".to_owned(),
+            ));
+        }
+
+        // Parse the `credentials` object as a flat map of name → value.
+        let credentials: std::collections::HashMap<String, String> = envelope
+            .payload
+            .get("credentials")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        self.handler
+            .python_skill_credential_collect(skill_id, &credentials)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({
+                "accepted": true,
+                "skill_id": skill_id,
+                "count": credentials.len()
+            }),
+        ))
+    }
+
+    fn handle_skill_credential_clear(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.credential.clear: missing skill_id".to_owned(),
+            ));
+        }
+
+        self.handler.python_skill_credential_clear(skill_id)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_id": skill_id}),
         ))
     }
 
