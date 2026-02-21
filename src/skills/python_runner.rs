@@ -9,12 +9,27 @@
 //!   delimited responses from stdout with timeout and output-size bounds.
 
 use super::error::PythonSkillError;
-use super::python_protocol::{JsonRpcRequest, SkillMessage};
+use super::python_protocol::{
+    HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, SkillMessage,
+    METHOD_HANDSHAKE, METHOD_HEALTH,
+};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::time::timeout;
+
+/// Global monotonic request ID counter shared across all comm instances.
+///
+/// Using a global counter avoids id collisions if multiple `JsonRpcComm`
+/// instances are alive simultaneously (e.g. during restarts).
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Returns the next unique request id, incrementing the global counter.
+fn next_id() -> u64 {
+    NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Maximum number of bytes accepted per response line (100 KB).
 const MAX_LINE_BYTES: usize = 100 * 1024;
@@ -317,6 +332,124 @@ impl JsonRpcComm {
             .map_err(|_| PythonSkillError::Timeout {
                 timeout_secs: deadline.as_secs(),
             })?
+    }
+
+    // ── Handshake & health ────────────────────────────────────────────────────
+
+    /// Performs the initial handshake with the skill process.
+    ///
+    /// Sends a `skill.handshake` request with `expected_name` and `fae_version`.
+    /// The skill must respond with its name (which must match `expected_name`) and
+    /// a version string.
+    ///
+    /// # Errors
+    ///
+    /// - [`PythonSkillError::Timeout`] — no response within `deadline`.
+    /// - [`PythonSkillError::HandshakeFailed`] — skill returned an error response,
+    ///   or the reported name did not match `expected_name`.
+    /// - Other `PythonSkillError` variants on I/O or protocol violations.
+    pub async fn perform_handshake(
+        &mut self,
+        expected_name: &str,
+        fae_version: &str,
+        deadline: Duration,
+    ) -> Result<HandshakeResult, PythonSkillError> {
+        let params = HandshakeParams {
+            expected_name: expected_name.to_owned(),
+            fae_version: fae_version.to_owned(),
+        };
+        let params_value = serde_json::to_value(&params)?;
+        let req = JsonRpcRequest::new(METHOD_HANDSHAKE, Some(params_value), next_id());
+
+        tracing::debug!(
+            skill = %self.skill_name,
+            expected_name,
+            fae_version,
+            "performing handshake"
+        );
+
+        let outcome = self.send_request(&req, deadline).await?;
+
+        match outcome.message {
+            SkillMessage::Response(resp) => {
+                let result: HandshakeResult =
+                    serde_json::from_value(resp.result).map_err(|e| {
+                        PythonSkillError::HandshakeFailed {
+                            reason: format!("cannot parse handshake result: {e}"),
+                        }
+                    })?;
+
+                if !result.name_matches(expected_name) {
+                    return Err(PythonSkillError::HandshakeFailed {
+                        reason: format!(
+                            "skill name mismatch: expected \"{expected_name}\", got \"{}\"",
+                            result.name
+                        ),
+                    });
+                }
+
+                tracing::info!(
+                    skill = %self.skill_name,
+                    version = %result.version,
+                    "handshake successful"
+                );
+                Ok(result)
+            }
+            SkillMessage::Error(err) => Err(PythonSkillError::HandshakeFailed {
+                reason: format!(
+                    "skill returned error {}: {}",
+                    err.error.code, err.error.message
+                ),
+            }),
+            SkillMessage::Notification(_) => Err(PythonSkillError::HandshakeFailed {
+                reason: "unexpected notification instead of handshake response".to_owned(),
+            }),
+        }
+    }
+
+    /// Sends a `skill.health` request and returns the skill's health status.
+    ///
+    /// # Errors
+    ///
+    /// - [`PythonSkillError::Timeout`] — no response within `deadline`.
+    /// - [`PythonSkillError::ProtocolError`] — response could not be parsed.
+    /// - Other `PythonSkillError` variants on I/O failures.
+    pub async fn perform_health_check(
+        &mut self,
+        deadline: Duration,
+    ) -> Result<HealthResult, PythonSkillError> {
+        let req = JsonRpcRequest::new(METHOD_HEALTH, None, next_id());
+
+        tracing::debug!(skill = %self.skill_name, "sending health check");
+
+        let outcome = self.send_request(&req, deadline).await?;
+
+        match outcome.message {
+            SkillMessage::Response(resp) => {
+                let result: HealthResult =
+                    serde_json::from_value(resp.result).map_err(|e| {
+                        PythonSkillError::ProtocolError {
+                            message: format!("cannot parse health result: {e}"),
+                        }
+                    })?;
+
+                tracing::debug!(
+                    skill = %self.skill_name,
+                    status = %result.status,
+                    "health check response"
+                );
+                Ok(result)
+            }
+            SkillMessage::Error(err) => Err(PythonSkillError::ProtocolError {
+                message: format!(
+                    "skill health check error {}: {}",
+                    err.error.code, err.error.message
+                ),
+            }),
+            SkillMessage::Notification(_) => Err(PythonSkillError::ProtocolError {
+                message: "unexpected notification instead of health check response".to_owned(),
+            }),
+        }
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
@@ -889,5 +1022,195 @@ done
         fn assert_send<T: Send>() {}
         assert_send::<JsonRpcComm>();
         assert_send::<RpcOutcome>();
+    }
+
+    // ── Handshake & health check tests ──
+
+    /// Spawn a skill that handles skill.handshake correctly.
+    fn spawn_handshake_skill(name: &str) -> Child {
+        let name = name.to_owned();
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                r#"IFS= read -r line; id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/'); printf '{{"jsonrpc":"2.0","result":{{"name":"{name}","version":"1.0.0"}},"id":%s}}\n' "$id""#
+            ))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn handshake skill")
+    }
+
+    /// Spawn a skill that echoes requests back, supporting both handshake and health.
+    fn spawn_full_protocol_skill() -> Child {
+        // Reads lines, for handshake returns name+version, for health returns ok.
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(
+                r#"
+while IFS= read -r line; do
+    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+    if echo "$line" | grep -q '"skill.handshake"'; then
+        printf '{"jsonrpc":"2.0","result":{"name":"test-skill","version":"2.0.0"},"id":%s}\n' "$id"
+    elif echo "$line" | grep -q '"skill.health"'; then
+        printf '{"jsonrpc":"2.0","result":{"status":"ok"},"id":%s}\n' "$id"
+    else
+        printf '{"jsonrpc":"2.0","result":"ok","id":%s}\n' "$id"
+    fi
+done
+"#,
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn full protocol skill")
+    }
+
+    #[tokio::test]
+    async fn handshake_succeeds_with_matching_name() {
+        let mut child = spawn_handshake_skill("my-skill");
+        let mut comm = JsonRpcComm::from_child(&mut child, "my-skill").expect("from_child");
+
+        let result = comm
+            .perform_handshake("my-skill", "0.8.1", Duration::from_secs(5))
+            .await
+            .expect("handshake");
+
+        assert_eq!(result.name, "my-skill");
+        assert_eq!(result.version, "1.0.0");
+
+        let _ = child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn handshake_fails_name_mismatch() {
+        let mut child = spawn_handshake_skill("wrong-name");
+        let mut comm = JsonRpcComm::from_child(&mut child, "expected-name").expect("from_child");
+
+        let result = comm
+            .perform_handshake("expected-name", "0.8.1", Duration::from_secs(5))
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PythonSkillError::HandshakeFailed { reason } => {
+                assert!(reason.contains("name mismatch"), "reason: {reason}");
+            }
+            other => panic!("expected HandshakeFailed, got {other:?}"),
+        }
+
+        let _ = child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn handshake_timeout() {
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+
+        let mut comm = JsonRpcComm::from_child(&mut child, "slow-skill").expect("from_child");
+
+        let result = comm
+            .perform_handshake("slow-skill", "0.8.1", Duration::from_millis(100))
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PythonSkillError::Timeout { .. } => {}
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+
+        let _ = child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn handshake_error_response() {
+        // Skill returns an error response instead of a result.
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(
+                r#"IFS= read -r line; id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/'); printf '{"jsonrpc":"2.0","error":{"code":-1,"message":"not supported"},"id":%s}\n' "$id""#,
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn error skill");
+
+        let mut comm = JsonRpcComm::from_child(&mut child, "error-skill").expect("from_child");
+
+        let result = comm
+            .perform_handshake("error-skill", "0.8.1", Duration::from_secs(5))
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PythonSkillError::HandshakeFailed { reason } => {
+                assert!(reason.contains("not supported"), "reason: {reason}");
+            }
+            other => panic!("expected HandshakeFailed, got {other:?}"),
+        }
+
+        let _ = child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn health_check_ok() {
+        let mut child = spawn_full_protocol_skill();
+        let mut comm = JsonRpcComm::from_child(&mut child, "test-skill").expect("from_child");
+
+        // First do handshake to consume the first read
+        comm.perform_handshake("test-skill", "0.8.1", Duration::from_secs(5))
+            .await
+            .expect("handshake");
+
+        let health = comm
+            .perform_health_check(Duration::from_secs(5))
+            .await
+            .expect("health check");
+
+        assert!(health.is_ok());
+        assert_eq!(health.status, "ok");
+
+        let _ = child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn health_check_timeout() {
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+
+        let mut comm = JsonRpcComm::from_child(&mut child, "slow-skill").expect("from_child");
+
+        let result = comm
+            .perform_health_check(Duration::from_millis(100))
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PythonSkillError::Timeout { .. } => {}
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+
+        let _ = child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn next_id_is_monotonically_increasing() {
+        let a = next_id();
+        let b = next_id();
+        let c = next_id();
+        assert!(a < b);
+        assert!(b < c);
     }
 }
