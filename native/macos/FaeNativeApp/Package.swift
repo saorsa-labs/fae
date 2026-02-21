@@ -31,6 +31,12 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/FaeNativeApp",
+            exclude: [
+                // Metal source is pre-compiled to Resources/default.metallib
+                // via: xcrun metal -c FogCloudOrb.metal -o /tmp/FogCloudOrb.air
+                //      xcrun metallib /tmp/FogCloudOrb.air -o Resources/default.metallib
+                "FogCloudOrb.metal",
+            ],
             resources: [
                 .process("Resources"),
             ],

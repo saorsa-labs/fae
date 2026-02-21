@@ -19,49 +19,8 @@ private final class OnboardingWindowDelegate: NSObject, NSWindowDelegate {
     }
 }
 
-// MARK: - OnboardingContentView
-
-/// Internal SwiftUI wrapper that observes ``OnboardingController`` and renders
-/// the onboarding web view. SwiftUI's observation system ensures the web view
-/// refreshes when `userName` or `permissionStates` change.
-private struct OnboardingContentView: View {
-    @ObservedObject var onboarding: OnboardingController
-    var onPermissionHelp: (String) -> Void
-
-    var body: some View {
-        OnboardingWebView(
-            onLoad: { },
-            onRequestPermission: { permission in
-                switch permission {
-                case "microphone":
-                    onboarding.requestMicrophone()
-                case "contacts":
-                    onboarding.requestContacts()
-                case "calendar":
-                    onboarding.requestCalendar()
-                case "mail":
-                    onboarding.requestMail()
-                default:
-                    NSLog("OnboardingContentView: unknown permission: %@", permission)
-                }
-            },
-            onPermissionHelp: onPermissionHelp,
-            onComplete: {
-                // Only mark complete here. FaeNativeApp's .onChange(of: onboarding.isComplete)
-                // handles closing the onboarding window and transitioning to main UI.
-                // Previously, calling close() here set isVisible = false before the
-                // onChange handler fired, causing it to skip the transition entirely.
-                onboarding.complete()
-            },
-            onAdvance: {
-                onboarding.advance()
-            },
-            userName: onboarding.userName,
-            permissionStates: onboarding.permissionStates,
-            initialPhase: onboarding.initialPhase
-        )
-    }
-}
+// NOTE: OnboardingContentView (which wrapped OnboardingWebView) has been replaced
+// by OnboardingNativeView (Phase 3 of native migration). See configure() below.
 
 // MARK: - OnboardingWindowController
 
@@ -154,11 +113,11 @@ final class OnboardingWindowController: ObservableObject {
 
     // MARK: - Configuration
 
-    /// Embeds the onboarding web view inside the glassmorphic window.
+    /// Embeds the native onboarding view inside the glassmorphic window.
     ///
-    /// This wires all permission request callbacks, TTS help, and completion
-    /// handling. The web view renders with a transparent background so the
-    /// `NSVisualEffectView` blur shows through.
+    /// This wires permission request callbacks, TTS help, and completion
+    /// handling. The native view uses a Metal orb background that auto-cycles
+    /// Scottish palettes.
     ///
     /// Call this once before calling ``show()``.
     ///
@@ -168,7 +127,7 @@ final class OnboardingWindowController: ObservableObject {
         let tts = OnboardingTTSHelper()
         self.ttsHelper = tts
 
-        let contentView = OnboardingContentView(
+        let contentView = OnboardingNativeView(
             onboarding: onboarding,
             onPermissionHelp: { permission in
                 tts.speak(permission: permission)
