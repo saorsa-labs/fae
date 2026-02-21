@@ -12,6 +12,7 @@
 
 pub mod builtins;
 pub mod error;
+pub mod pep723;
 pub mod python_protocol;
 pub mod python_runner;
 pub mod trait_def;
@@ -27,6 +28,7 @@ pub use python_runner::{
     JsonRpcComm, PythonProcessState, PythonSkillProcess, PythonSkillRunner, RpcOutcome, RunMode,
     SkillProcessConfig, backoff_for_attempt,
 };
+pub use pep723::ScriptMetadata;
 pub use uv_bootstrap::{UvBootstrap, UvInfo};
 
 use serde::{Deserialize, Serialize};
