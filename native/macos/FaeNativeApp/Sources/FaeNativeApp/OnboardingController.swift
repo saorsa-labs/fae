@@ -4,11 +4,28 @@ import AVFoundation
 import EventKit
 import Foundation
 
+/// Typed onboarding phase, replacing string-based phase identifiers.
+enum OnboardingPhase: String, CaseIterable {
+    case welcome
+    case permissions
+    case ready
+
+    /// Next phase in the flow, or `nil` if this is the final phase.
+    var next: OnboardingPhase? {
+        switch self {
+        case .welcome: return .permissions
+        case .permissions: return .ready
+        case .ready: return nil
+        }
+    }
+}
+
 /// Manages onboarding state and native system permission requests.
 ///
-/// `OnboardingController` bridges the onboarding HTML/JS screens to the macOS
-/// permission system. It requests microphone and contacts access on behalf of
-/// the user, persists the results, and notifies the web layer to update its UI.
+/// `OnboardingController` drives the native onboarding screens and bridges
+/// to the macOS permission system. It requests microphone, contacts, calendar,
+/// and mail access on behalf of the user, persists the results, and updates
+/// the native UI.
 @MainActor
 final class OnboardingController: ObservableObject {
 
@@ -19,6 +36,16 @@ final class OnboardingController: ObservableObject {
 
     /// Whether onboarding has been completed by the user.
     @Published var isComplete: Bool = false
+
+    /// The onboarding phase to start from when resuming a partially-completed
+    /// onboarding flow. Set by `restoreOnboardingState` before the window appears.
+    /// Values: "welcome" | "permissions" | "ready"
+    @Published var initialPhase: String = "welcome"
+
+    /// Typed initial phase derived from `initialPhase` string.
+    var typedInitialPhase: OnboardingPhase {
+        OnboardingPhase(rawValue: initialPhase) ?? .welcome
+    }
 
     /// First name extracted from the user's "Me" contacts card, if available.
     @Published var userName: String? = nil

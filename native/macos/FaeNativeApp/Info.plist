@@ -73,6 +73,6 @@
   <key>SUPublicEDKey</key>
   <string>l2A5ko2QgGdXdquhdnTZius7+Ig92xJJhIkCoDsB7yg=</string>
   <key>SUFeedURL</key>
-  <string>https://github.com/saorsa-labs/fae/releases/latest/download/appcast.xml</string>
+  <string>__APPCAST_URL__</string>
 </dict>
 </plist>

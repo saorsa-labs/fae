@@ -1,25 +1,20 @@
 import Foundation
-import WebKit
 
-/// Bridges backend pipeline events to the `ConversationWebView` JavaScript API.
+/// Bridges backend pipeline events to native SwiftUI state controllers.
 ///
 /// Observes typed `NotificationCenter` notifications posted by `BackendEventRouter`
-/// and calls the corresponding JavaScript functions on the conversation WebView:
+/// and drives ``SubtitleStateController`` for overlay display and
+/// ``ConversationController`` for the native message store.
 ///
-/// | Notification | JavaScript call |
-/// |---|---|
-/// | `.faeTranscription` | `window.addMessage('user', text)` (is_final only) |
-/// | `.faeAssistantMessage` | `window.addMessage('assistant', text)` |
-/// | `.faeAssistantGenerating` | `window.showTypingIndicator(active)` |
-/// | `.faeToolExecution` | `window.addMessage('tool', ...)` |
-///
-/// The `webView` property is set by `ConversationWebView` once its `WKWebView`
-/// finishes loading. All JavaScript calls are dispatched on the main queue.
+/// This replaces the previous implementation that injected JavaScript into a
+/// `WKWebView`. All state is now driven through `@Published` properties with
+/// full type safety.
 @MainActor
 final class ConversationBridgeController: ObservableObject {
-    /// Weak reference to the conversation WebView for JS injection.
-    /// Set by `ConversationWebView.Coordinator` once the page has loaded.
-    weak var webView: WKWebView?
+
+    /// Native subtitle state for the overlay bubbles.
+    /// Set by `FaeNativeApp` during wiring.
+    weak var subtitleState: SubtitleStateController?
 
     /// Native message store for the SwiftUI conversation window.
     /// Set by `FaeNativeApp` during wiring.
@@ -138,14 +133,11 @@ final class ConversationBridgeController: ObservableObject {
     // MARK: - Handlers
 
     private func handlePartialTranscription(text: String) {
-        let escaped = escapeForJS(text)
-        evaluateJS("window.setSubtitlePartial && window.setSubtitlePartial('\(escaped)');")
+        subtitleState?.showPartialTranscription(text)
     }
 
     private func handleUserTranscription(text: String) {
-        let escaped = escapeForJS(text)
-        evaluateJS("window.addMessage && window.addMessage('user', '\(escaped)');")
-        // Dual-write: push to native message store.
+        subtitleState?.showUserMessage(text)
         conversationController?.appendMessage(role: .user, content: text)
     }
 
@@ -158,39 +150,33 @@ final class ConversationBridgeController: ObservableObject {
         if isFinal {
             let fullText = streamingAssistantText
             streamingAssistantText = ""
-            let escaped = escapeForJS(fullText)
-            // Finalize streaming bubble and show final message
-            evaluateJS("window.finalizeStreamingBubble && window.finalizeStreamingBubble('\(escaped)');")
-            // Dual-write: push completed message to native store.
+            subtitleState?.finalizeAssistantMessage(fullText)
             conversationController?.appendMessage(role: .assistant, content: fullText)
         } else {
-            // Stream partial sentence to the orb subtitle
-            let escaped = escapeForJS(text)
-            evaluateJS("window.appendStreamingBubble && window.appendStreamingBubble('\(escaped)');")
+            subtitleState?.appendStreamingSentence(text)
         }
     }
 
     private func handleGenerating(active: Bool) {
-        let jsArg = active ? "true" : "false"
-        evaluateJS("window.showTypingIndicator && window.showTypingIndicator(\(jsArg));")
-        // Dual-write: update native generating state.
+        // Native generating state — the ConversationWindowView observes this directly.
         conversationController?.isGenerating = active
     }
 
     private func handleToolExecution(userInfo: [AnyHashable: Any]) {
         let type_ = userInfo["type"] as? String ?? "executing"
-        let name = escapeForJS(userInfo["name"] as? String ?? "")
-        let rawName = userInfo["name"] as? String ?? ""
+        let name = userInfo["name"] as? String ?? ""
 
         switch type_ {
         case "executing":
-            evaluateJS("window.addMessage && window.addMessage('tool', '⚙ Using \(name)…');")
-            conversationController?.appendMessage(role: .tool, content: "⚙ Using \(rawName)…")
+            let message = "⚙ Using \(name)…"
+            subtitleState?.showToolMessage(message)
+            conversationController?.appendMessage(role: .tool, content: message)
         case "result":
             let success = userInfo["success"] as? Bool ?? false
             let icon = success ? "✓" : "✗"
-            evaluateJS("window.addMessage && window.addMessage('tool', '\(icon) \(name)');")
-            conversationController?.appendMessage(role: .tool, content: "\(icon) \(rawName)")
+            let message = "\(icon) \(name)"
+            subtitleState?.showToolMessage(message)
+            conversationController?.appendMessage(role: .tool, content: message)
         default:
             break
         }
@@ -202,24 +188,63 @@ final class ConversationBridgeController: ObservableObject {
         let stage = userInfo["stage"] as? String ?? ""
 
         switch stage {
+        case "download_plan_ready":
+            let fileCount = userInfo["file_count"] as? Int ?? 0
+            let totalBytes = userInfo["total_bytes"] as? Int ?? 0
+            let needsDownload = userInfo["needs_download"] as? Bool ?? false
+            if needsDownload {
+                let sizeMB = totalBytes / (1024 * 1024)
+                appendStatusMessage("Preparing to download \(fileCount) model files (\(sizeMB) MB)…")
+            }
+
         case "download_started":
-            let model = userInfo["model_name"] as? String ?? "models"
-            appendStatusMessage("Downloading \(model)...")
+            let repoId = userInfo["repo_id"] as? String ?? ""
+            let filename = userInfo["filename"] as? String ?? "model"
+            let label = repoId.split(separator: "/").last.map(String.init) ?? filename
+            appendStatusMessage("Downloading \(label)…")
+
+        case "download_progress":
+            let bytesDownloaded = userInfo["bytes_downloaded"] as? Int ?? 0
+            let totalBytes = userInfo["total_bytes"] as? Int ?? 0
+            if totalBytes > 0 {
+                let pct = Int(100.0 * Double(bytesDownloaded) / Double(totalBytes))
+                let filename = userInfo["filename"] as? String ?? "model"
+                let shortName = String(filename.split(separator: "/").last ?? Substring(filename))
+                subtitleState?.showProgress(label: "Downloading \(shortName)…", percent: pct)
+            }
+
         case "aggregate_progress":
+            let bytesDownloaded = userInfo["bytes_downloaded"] as? Int ?? 0
+            let totalBytes = userInfo["total_bytes"] as? Int ?? 0
             let filesComplete = userInfo["files_complete"] as? Int ?? 0
             let filesTotal = userInfo["files_total"] as? Int ?? 0
-            let message = userInfo["message"] as? String ?? "Loading…"
-            let pct = filesTotal > 0 ? Int(100.0 * Double(filesComplete) / Double(filesTotal)) : 0
-            let escaped = escapeForJS(message)
-            evaluateJS("window.showProgress && window.showProgress('download', '\(escaped)', \(pct));")
+            let pct: Int
+            if totalBytes > 0 {
+                pct = Int(100.0 * Double(bytesDownloaded) / Double(totalBytes))
+            } else if filesTotal > 0 {
+                pct = Int(100.0 * Double(filesComplete) / Double(filesTotal))
+            } else {
+                pct = 0
+            }
+            let sizeMB = bytesDownloaded / (1024 * 1024)
+            let totalMB = totalBytes / (1024 * 1024)
+            let message = "Downloading models… \(sizeMB)/\(totalMB) MB (\(filesComplete)/\(filesTotal) files)"
+            subtitleState?.showProgress(label: message, percent: pct)
+
+        case "download_complete", "cached":
+            break
+
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
-            appendStatusMessage("Loading \(model)...")
+            appendStatusMessage("Loading \(model)…")
+
         case "load_complete":
             appendStatusMessage("Models loaded.")
+
         case "error":
             let message = userInfo["message"] as? String ?? "unknown error"
             appendStatusMessage("Model loading failed: \(message)")
+
         default:
             break
         }
@@ -228,7 +253,7 @@ final class ConversationBridgeController: ObservableObject {
     private func handleRuntimeState(event: String, userInfo: [AnyHashable: Any]) {
         switch event {
         case "runtime.started":
-            evaluateJS("window.hideProgress && window.hideProgress();")
+            subtitleState?.hideProgress()
             appendStatusMessage("Ready to talk!")
         case "runtime.error":
             let payload = userInfo["payload"] as? [String: Any] ?? [:]
@@ -239,32 +264,9 @@ final class ConversationBridgeController: ObservableObject {
         }
     }
 
-    /// Append a system status message to both the WebView and the native message store.
+    /// Append a system status message to both the subtitle overlay and the native message store.
     private func appendStatusMessage(_ text: String) {
-        let escaped = escapeForJS(text)
-        evaluateJS("window.addMessage && window.addMessage('tool', '\(escaped)');")
+        subtitleState?.showToolMessage(text)
         conversationController?.appendMessage(role: .tool, content: text)
-    }
-
-    // MARK: - JS Evaluation
-
-    private func evaluateJS(_ js: String) {
-        guard let webView else { return }
-        webView.evaluateJavaScript(js) { _, error in
-            if let error {
-                NSLog("ConversationBridgeController JS error: %@", error.localizedDescription)
-            }
-        }
-    }
-
-    // MARK: - Helpers
-
-    /// Escapes a string for safe embedding inside a single-quoted JS string literal.
-    private func escapeForJS(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
     }
 }

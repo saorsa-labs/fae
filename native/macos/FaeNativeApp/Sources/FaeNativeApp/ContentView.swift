@@ -3,9 +3,11 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var orbState: OrbStateController
+    @EnvironmentObject private var orbAnimation: OrbAnimationState
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var conversationBridge: ConversationBridgeController
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
+    @EnvironmentObject private var subtitles: SubtitleStateController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
@@ -21,7 +23,7 @@ struct ContentView: View {
                 // The main window is hidden during onboarding anyway.
                 Color.black
             } else {
-                conversationView
+                nativeConversationView
                     .transition(.opacity)
             }
         }
@@ -59,12 +61,9 @@ struct ContentView: View {
         menu.addItem(.separator())
 
         // Reset Conversation
-        let resetHandler = MenuActionHandler { [conversation, conversationBridge] in
+        let resetHandler = MenuActionHandler { [conversation, subtitles] in
             conversation.clearMessages()
-            conversationBridge.webView?.evaluateJavaScript(
-                "window.clearMessages && window.clearMessages();",
-                completionHandler: nil
-            )
+            subtitles.clearAll()
         }
         let resetItem = NSMenuItem(
             title: "Reset Conversation",
@@ -108,33 +107,21 @@ struct ContentView: View {
         menu.popUp(positioning: nil, at: mouseLocation, in: contentView)
     }
 
-    // MARK: - Conversation View
+    // MARK: - Native Conversation View
 
-    private var conversationView: some View {
+    /// Fully native layered UI:
+    /// - Layer 0: Metal orb animation (GPU-rendered fog-cloud orb)
+    /// - Layer 1: Progress bar overlay
+    /// - Layer 2: Subtitle bubbles (assistant, user, tool)
+    /// - Layer 3: Input bar (mic toggle, text field, send button, action pills)
+    private var nativeConversationView: some View {
         ZStack {
-            ConversationWebView(
-                mode: orbState.mode,
-                palette: orbState.palette,
-                feeling: orbState.feeling,
-                isListening: conversation.isListening,
+            // Layer 0: Metal orb animation (replaces WKWebView)
+            NativeOrbView(
+                orbAnimation: orbAnimation,
+                audioRMS: pipelineAux.audioRMS,
                 windowMode: windowState.mode.rawValue,
                 onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
-                onWebViewReady: { webView in
-                    conversationBridge.webView = webView
-                    pipelineAux.webView = webView
-                },
-                onUserMessage: { text in
-                    conversation.handleUserSent(text)
-                    windowState.noteActivity()
-                },
-                onToggleListening: {
-                    conversation.toggleListening()
-                    windowState.noteActivity()
-                },
-                onLinkDetected: { url in conversation.handleLinkDetected(url) },
-                onOpenConversationWindow: { auxiliaryWindows.toggleConversation() },
-                onOpenCanvasWindow: { auxiliaryWindows.toggleCanvas() },
-                onUserInteraction: { windowState.noteActivity() },
                 onOrbClicked: {
                     if windowState.mode == .collapsed {
                         windowState.transitionToCompact()
@@ -145,19 +132,21 @@ struct ContentView: View {
                 }
             )
             .opacity(viewLoaded ? 1 : 0)
-            .onChange(of: auxiliaryWindows.isConversationVisible) { _, visible in
-                conversationBridge.webView?.evaluateJavaScript(
-                    "window.setPanelVisibility && window.setPanelVisibility('conversation', \(visible));",
-                    completionHandler: nil
-                )
-            }
-            .onChange(of: auxiliaryWindows.isCanvasVisible) { _, visible in
-                conversationBridge.webView?.evaluateJavaScript(
-                    "window.setPanelVisibility && window.setPanelVisibility('canvas', \(visible));",
-                    completionHandler: nil
-                )
+
+            // Only show overlays in compact mode (not collapsed 80×80 orb)
+            if windowState.mode == .compact {
+                // Layer 1: Progress bar
+                ProgressOverlayView()
+
+                // Layer 2: Subtitle overlay (above input bar)
+                SubtitleOverlayView()
+                    .padding(.bottom, 80) // make room for input bar
+
+                // Layer 3: Input bar
+                InputBarView()
             }
 
+            // Loading placeholder
             if !viewLoaded {
                 Circle()
                     .fill(Color.white.opacity(0.05))

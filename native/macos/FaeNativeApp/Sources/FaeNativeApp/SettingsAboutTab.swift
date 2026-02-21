@@ -56,7 +56,7 @@ struct SettingsAboutTab: View {
                     ))
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
 
-                    Text("Fae checks for updates every 6 hours and installs them automatically.")
+                    Text("Fae checks for updates every 6 hours and notifies you when one is available.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -153,6 +153,13 @@ struct SettingsAboutTab: View {
             payload: ["key": "onboarded", "value": false]
         )
         onboarding.isComplete = false
-        onboarding.isStateRestored = true
+        // Toggle isStateRestored off then back on so SwiftUI's
+        // .onChange(of: isStateRestored) fires even if it was already true.
+        // Without this, the onboarding window never re-appears and the user
+        // sees a blank black screen.
+        onboarding.isStateRestored = false
+        DispatchQueue.main.async {
+            onboarding.isStateRestored = true
+        }
     }
 }

@@ -49,10 +49,12 @@ final class OrbStateController: ObservableObject {
 struct FaeNativeApp: App {
     @StateObject private var handoff = DeviceHandoffController()
     @StateObject private var orbState = OrbStateController()
+    @StateObject private var orbAnimation = OrbAnimationState()
     @StateObject private var orbBridge = OrbStateBridgeController()
     @StateObject private var conversation = ConversationController()
     @StateObject private var conversationBridge = ConversationBridgeController()
     @StateObject private var pipelineAux = PipelineAuxBridgeController()
+    @StateObject private var subtitles = SubtitleStateController()
     @StateObject private var hostBridge = HostCommandBridge()
     @StateObject private var dockIcon = DockIconAnimator()
     @StateObject private var windowState = WindowStateController()
@@ -108,9 +110,11 @@ struct FaeNativeApp: App {
             ContentView()
                 .environmentObject(handoff)
                 .environmentObject(orbState)
+                .environmentObject(orbAnimation)
                 .environmentObject(conversation)
                 .environmentObject(conversationBridge)
                 .environmentObject(pipelineAux)
+                .environmentObject(subtitles)
                 .environmentObject(windowState)
                 .environmentObject(onboarding)
                 .environmentObject(auxiliaryWindows)
@@ -120,7 +124,11 @@ struct FaeNativeApp: App {
                     // Wire the orb bridge to the shared OrbStateController so it
                     // can update mode/palette/feeling from pipeline events.
                     orbBridge.orbState = orbState
-                    // Wire conversation bridge to the native message store.
+                    // Bind the animation state engine to the orb state controller
+                    // so spring transitions fire automatically on mode/palette/feeling changes.
+                    orbAnimation.bind(to: orbState)
+                    // Wire conversation bridge to the native subtitle overlay and message store.
+                    conversationBridge.subtitleState = subtitles
                     conversationBridge.conversationController = conversation
                     // Wire pipeline aux to the canvas controller and auxiliary window manager.
                     pipelineAux.canvasController = canvasController
@@ -180,7 +188,6 @@ struct FaeNativeApp: App {
                             }
                         }
                     }
-                    // pipelineAux.webView is set via ContentView's onWebViewReady callback.
                     if let sender = commandSender {
                         hostBridge.sender = sender
                         restoreOnboardingState(sender: sender)
@@ -428,6 +435,20 @@ struct FaeNativeApp: App {
             if payload["onboarded"] as? Bool == true {
                 onboarding.isComplete = true
                 NSLog("FaeNativeApp: restored onboarding state — already complete")
+            } else {
+                // Restore partial onboarding progress (phase + granted permissions).
+                if let phase = payload["phase"] as? String, phase != "welcome" {
+                    onboarding.initialPhase = phase
+                    NSLog("FaeNativeApp: restoring onboarding at phase: %@", phase)
+                }
+                if let granted = payload["granted_permissions"] as? [String] {
+                    for perm in granted {
+                        onboarding.permissionStates[perm] = "granted"
+                    }
+                    if !granted.isEmpty {
+                        NSLog("FaeNativeApp: restored %d granted permissions", granted.count)
+                    }
+                }
             }
         }
     }

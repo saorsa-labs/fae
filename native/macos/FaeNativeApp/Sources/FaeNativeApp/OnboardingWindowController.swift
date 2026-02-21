@@ -19,46 +19,8 @@ private final class OnboardingWindowDelegate: NSObject, NSWindowDelegate {
     }
 }
 
-// MARK: - OnboardingContentView
-
-/// Internal SwiftUI wrapper that observes ``OnboardingController`` and renders
-/// the onboarding web view. SwiftUI's observation system ensures the web view
-/// refreshes when `userName` or `permissionStates` change.
-private struct OnboardingContentView: View {
-    @ObservedObject var onboarding: OnboardingController
-    var onPermissionHelp: (String) -> Void
-    var onClose: () -> Void
-
-    var body: some View {
-        OnboardingWebView(
-            onLoad: { },
-            onRequestPermission: { permission in
-                switch permission {
-                case "microphone":
-                    onboarding.requestMicrophone()
-                case "contacts":
-                    onboarding.requestContacts()
-                case "calendar":
-                    onboarding.requestCalendar()
-                case "mail":
-                    onboarding.requestMail()
-                default:
-                    NSLog("OnboardingContentView: unknown permission: %@", permission)
-                }
-            },
-            onPermissionHelp: onPermissionHelp,
-            onComplete: {
-                onboarding.complete()
-                onClose()
-            },
-            onAdvance: {
-                onboarding.advance()
-            },
-            userName: onboarding.userName,
-            permissionStates: onboarding.permissionStates
-        )
-    }
-}
+// NOTE: OnboardingContentView (which wrapped OnboardingWebView) has been replaced
+// by OnboardingNativeView (Phase 3 of native migration). See configure() below.
 
 // MARK: - OnboardingWindowController
 
@@ -127,6 +89,9 @@ final class OnboardingWindowController: ObservableObject {
         win.backgroundColor = .clear
         win.minSize = Layout.minSize
         win.maxSize = Layout.maxSize
+        // Disable state restoration so macOS doesn't place the window off-screen
+        // based on a previous session's position.
+        win.isRestorable = false
 
         // Glassmorphic blur background.
         // NSWindow automatically sizes its contentView to fill the content area,
@@ -148,11 +113,11 @@ final class OnboardingWindowController: ObservableObject {
 
     // MARK: - Configuration
 
-    /// Embeds the onboarding web view inside the glassmorphic window.
+    /// Embeds the native onboarding view inside the glassmorphic window.
     ///
-    /// This wires all permission request callbacks, TTS help, and completion
-    /// handling. The web view renders with a transparent background so the
-    /// `NSVisualEffectView` blur shows through.
+    /// This wires permission request callbacks, TTS help, and completion
+    /// handling. The native view uses a Metal orb background that auto-cycles
+    /// Scottish palettes.
     ///
     /// Call this once before calling ``show()``.
     ///
@@ -162,13 +127,10 @@ final class OnboardingWindowController: ObservableObject {
         let tts = OnboardingTTSHelper()
         self.ttsHelper = tts
 
-        let contentView = OnboardingContentView(
+        let contentView = OnboardingNativeView(
             onboarding: onboarding,
             onPermissionHelp: { permission in
                 tts.speak(permission: permission)
-            },
-            onClose: { [weak self] in
-                self?.close()
             }
         )
 
@@ -200,9 +162,34 @@ final class OnboardingWindowController: ObservableObject {
     /// If the window is already visible this call is a no-op.
     func show() {
         guard !isVisible else { return }
-        window.center()
         window.makeKeyAndOrderFront(nil)
+        // Explicitly center on the main screen (the one with the menu bar)
+        // AFTER makeKeyAndOrderFront, because macOS may apply saved state
+        // during ordering that overrides earlier frame changes.
+        centerOnMainScreen()
+        // Activate the app so macOS routes mouse events to this window.
+        // Without this, the launching app (Terminal/Finder) retains activation
+        // and the WKWebView inside the onboarding window ignores clicks.
+        NSApp.activate()
         isVisible = true
+    }
+
+    // MARK: - Helpers
+
+    /// Centers the window on the primary screen (the one with the menu bar).
+    /// `NSScreen.screens.first` is always the menu-bar screen.
+    /// `NSScreen.main` is NOT reliable here — it returns the screen with
+    /// keyboard focus, which may be a secondary monitor.
+    private func centerOnMainScreen() {
+        guard let screen = NSScreen.screens.first else {
+            window.center()
+            return
+        }
+        let visible = screen.visibleFrame
+        let size = window.frame.size
+        let x = visible.midX - size.width / 2
+        let y = visible.midY - size.height / 2
+        window.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     /// Programmatically closes the onboarding window and updates ``isVisible``.
