@@ -1,7 +1,7 @@
 {
   "version": 4,
   "project": "fae-memory-v2",
-  "active": true,
+  "active": false,
   "milestone": {
     "number": 7,
     "name": "Memory Architecture v2 — SQLite + Semantic Retrieval"
@@ -21,6 +21,6 @@
     "status": "passed",
     "iteration": 1
   },
-  "status": "complete",
-  "last_updated": "2026-02-21T03:20:00Z"
+  "status": "milestone_complete",
+  "last_updated": "2026-02-21T05:30:00Z"
 }
