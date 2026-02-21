@@ -64,10 +64,7 @@ impl PythonSkillTool {
     /// Create a tool using defaults (python skills dir from [`fae_dirs`] and
     /// `"uv"` for PATH lookup).
     pub fn with_default_dir() -> Self {
-        Self::new(
-            crate::fae_dirs::python_skills_dir(),
-            PathBuf::from("uv"),
-        )
+        Self::new(crate::fae_dirs::python_skills_dir(), PathBuf::from("uv"))
     }
 }
 
@@ -223,14 +220,20 @@ mod tests {
 
     #[test]
     fn tool_name_and_description() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         assert_eq!(tool.name(), "python_skill");
         assert!(!tool.description().is_empty());
     }
 
     #[test]
     fn schema_has_required_fields() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         let schema = tool.schema();
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["skill_name"].is_object());
@@ -242,14 +245,20 @@ mod tests {
 
     #[test]
     fn only_allowed_in_full_mode() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         assert!(!tool.allowed_in_mode(ToolMode::ReadOnly));
         assert!(tool.allowed_in_mode(ToolMode::Full));
     }
 
     #[test]
     fn missing_skill_name_returns_validation_error() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         let args = serde_json::json!({"method": "ping"});
         let err = tool.execute(args).unwrap_err();
         assert!(err.to_string().contains("skill_name"));
@@ -257,7 +266,10 @@ mod tests {
 
     #[test]
     fn missing_method_returns_validation_error() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         let args = serde_json::json!({"skill_name": "discord-bot"});
         let err = tool.execute(args).unwrap_err();
         assert!(err.to_string().contains("method"));
@@ -265,7 +277,10 @@ mod tests {
 
     #[test]
     fn empty_skill_name_returns_validation_error() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         let args = serde_json::json!({"skill_name": "", "method": "ping"});
         let err = tool.execute(args).unwrap_err();
         assert!(err.to_string().contains("skill_name"));
@@ -273,7 +288,10 @@ mod tests {
 
     #[test]
     fn invalid_skill_name_chars_rejected() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         let args = serde_json::json!({"skill_name": "../etc/passwd", "method": "ping"});
         let err = tool.execute(args).unwrap_err();
         assert!(err.to_string().contains("invalid skill_name"));
@@ -281,7 +299,10 @@ mod tests {
 
     #[test]
     fn nonexistent_skill_returns_failure_not_error() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/nonexistent-skills-dir"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/nonexistent-skills-dir"),
+            std::path::PathBuf::from("uv"),
+        );
         let args = serde_json::json!({"skill_name": "my-skill", "method": "ping"});
         // Should return Ok(ToolResult::failure(...)), not Err
         let result = tool.execute(args).unwrap();
@@ -297,7 +318,10 @@ mod tests {
 
     #[test]
     fn debug_format() {
-        let tool = PythonSkillTool::new(std::path::PathBuf::from("/tmp/skills"), std::path::PathBuf::from("uv"));
+        let tool = PythonSkillTool::new(
+            std::path::PathBuf::from("/tmp/skills"),
+            std::path::PathBuf::from("uv"),
+        );
         let dbg = format!("{tool:?}");
         assert!(dbg.contains("PythonSkillTool"));
     }

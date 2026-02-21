@@ -172,10 +172,7 @@ impl UvBootstrap {
             .stderr(std::process::Stdio::piped())
             .output()
             .map_err(|e| PythonSkillError::BootstrapFailed {
-                reason: format!(
-                    "failed to run pre-warm for {}: {e}",
-                    script_path.display()
-                ),
+                reason: format!("failed to run pre-warm for {}: {e}", script_path.display()),
             })?;
 
         // Non-zero exit is acceptable — the script may not support --help.

@@ -8,8 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use fae::skills::{
-    PythonEnvironmentInfo, SkillProcessConfig, UvBootstrap, UvInfo,
-    bootstrap_python_environment,
+    PythonEnvironmentInfo, SkillProcessConfig, UvBootstrap, UvInfo, bootstrap_python_environment,
 };
 
 /// Skip helper: returns `true` if `uv` is not available.
@@ -81,8 +80,8 @@ fn pre_warm_then_spawn_succeeds() {
     UvBootstrap::pre_warm(&env_info.uv.path, &script_path).expect("pre-warm");
 
     // 3. Verify that a SkillProcessConfig can be built with the resolved UV path.
-    let config = SkillProcessConfig::new("e2e-test", script_path)
-        .with_uv_path(env_info.uv.path.clone());
+    let config =
+        SkillProcessConfig::new("e2e-test", script_path).with_uv_path(env_info.uv.path.clone());
 
     assert_eq!(config.uv_path, env_info.uv.path);
     assert_eq!(config.skill_name, "e2e-test");
@@ -127,8 +126,7 @@ fn full_pipeline_with_pep723_script() {
     UvBootstrap::pre_warm(&env_info.uv.path, &script_path).expect("pre-warm");
 
     // 4. Build runner config
-    let config = SkillProcessConfig::new("greeter", script_path)
-        .with_uv_path(env_info.uv.path);
+    let config = SkillProcessConfig::new("greeter", script_path).with_uv_path(env_info.uv.path);
 
     assert_eq!(config.skill_name, "greeter");
 }

@@ -1,23 +1,29 @@
 # Quality Patterns Review
 **Date**: 2026-02-21
-**Phase**: 7.5 - Backup, Recovery & Hardening
+**Mode**: gsd (task diff)
 
 ## Good Patterns Found
 
-- [OK] SqliteMemoryError::Corrupt(String) follows existing thiserror pattern — new variant integrates cleanly.
-- [OK] thiserror used for error types throughout (Cargo.toml confirmed).
-- [OK] backup_database and rotate_backups return Result<T, SqliteMemoryError> — consistent with rest of memory module.
-- [OK] From<SqliteMemoryError> for crate::SpeechError impl exists (unchanged) — error propagation chain intact.
-- [OK] Constants defined for BACKUP_PREFIX, BACKUP_EXT, DB_FILENAME — no magic strings.
-- [OK] Named constants EPISODE_THRESHOLD_HYBRID and EPISODE_THRESHOLD_LEXICAL replace inline magic values 0.4 and 0.6.
-- [OK] run_memory_backup_for_root early-returns on missing DB file — defensive guard.
-- [OK] tracing::warn! used for non-fatal failures (rotation file deletion, integrity check during reindex).
-- [OK] Backup rotation sorts by filename descending — correct because timestamp prefix makes lexicographic order equal chronological order.
-- [OK] #[derive(Debug)] and standard traits maintained on error enum.
+- `thiserror` used for `PythonSkillError` and other error types — idiomatic Rust
+- `anyhow` used for platform/bookmark code — appropriate for application-level errors
+- Proper `#[derive(Debug, Clone)]` on `UvInfo` — observable and cloneable
+- `PythonSkillError::BootstrapFailed { reason: String }` — structured error with context
+- `map_err` used for error conversion — no raw `.unwrap()` in production error paths
+- Validation tests cover: empty names, path traversal (`../etc/passwd`), missing fields
+- E2E tests use shell mock skills (no real uv/python required for unit tests)
 
 ## Anti-Patterns Found
 
-- [LOW] src/scheduler/tasks.rs:860 - `MemoryConfig::default().backup_keep_count` — reads from a freshly constructed default config rather than the active runtime config. This is a subtle anti-pattern: config values are effectively hardcoded to defaults at runtime.
-- [LOW] src/memory/backup.rs:64 — Same IO-to-string error conversion pattern as prior finding. Loses error kind.
+- [LOW] `src/pipeline/coordinator.rs:191` — `#[allow(dead_code)]` with TODO comment; acceptable for planned features
+- [LOW] `src/intelligence/mod.rs:106` — `#[allow(dead_code)]` without explanatory comment
 
-## Grade: A-
+## Phase 8.2 Specific
+
+- [OK] `UvBootstrap::discover()` returns typed `UvInfo` not raw strings
+- [OK] Version comparison uses structured semver parsing, not string comparison
+- [OK] `bootstrap_python_environment()` follows single-responsibility principle
+- [OK] `pre_warm` treats non-zero exit as non-fatal (correct: `--help` may not be supported)
+
+## Grade: A
+
+Strong use of Rust idioms. Error types are well-structured. Test coverage uses appropriate isolation patterns.

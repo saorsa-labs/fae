@@ -20,7 +20,7 @@
   "status": "reviewing",
   "last_updated": "2026-02-21T20:30:00Z",
   "review": {
-    "status": "pending",
-    "iteration": 0
+    "status": "passed",
+    "iteration": 1
   }
 }

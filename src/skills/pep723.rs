@@ -124,11 +124,7 @@ fn parse_toml_metadata(toml_str: &str) -> ScriptMetadata {
     let tool_sections = table
         .get("tool")
         .and_then(|v| v.as_table())
-        .map(|t| {
-            t.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
+        .map(|t| t.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
     ScriptMetadata {

@@ -1,20 +1,26 @@
 # Code Quality Review
 **Date**: 2026-02-21
-**Phase**: 7.5 - Backup, Recovery & Hardening
-**Scope**: src/memory/backup.rs, src/memory/sqlite.rs, src/memory/types.rs, src/scheduler/tasks.rs, src/scheduler/runner.rs, src/config.rs
+**Mode**: gsd (task diff)
 
 ## Findings
 
-- [OK] No TODO/FIXME/HACK/XXX comments in any changed file.
-- [OK] No #[allow(clippy::*)] suppressions in changed files.
-- [OK] cargo clippy passes with -D warnings.
-- [OK] cargo fmt passes; formatting is consistent.
-- [OK] Constants BACKUP_PREFIX, BACKUP_EXT, DB_FILENAME are properly named and scoped.
-- [OK] TASK_MEMORY_BACKUP constant follows existing naming convention.
-- [OK] Public functions in backup.rs have doc comments including # Errors sections.
-- [LOW] src/scheduler/tasks.rs:860 - backup_keep_count is read from MemoryConfig::default() inside the task function rather than being passed from the runtime config. This means it always uses the default value (7) and ignores any user config override. Should read from actual runtime config or pass via task payload.
-- [LOW] src/memory/backup.rs:44 - Local time for timestamps (chrono::Local::now()). UTC preferred for consistency with rest of codebase (which uses epoch seconds).
-- [OK] run_memory_backup_for_root follows the same pattern as other builtin task runners.
-- [OK] Kimi K2 review confirmed: "Solid implementation with proper backup/rotation logic."
+### Changed Files (Phase 8.2, Task 6)
+- [OK] `src/fae_llm/tools/python_skill.rs` — formatting refactor, all test helpers now use multi-line constructor calls which is idiomatic Rust
+- [OK] `src/skills/pep723.rs:124-130` — closure chain condensed to single line; readable
+- [OK] `src/skills/uv_bootstrap.rs:172-179` — `format!` macro condensed; readable
+- [OK] `tests/python_skill_runner_e2e.rs` — formatting normalization, multi-line destructuring added where struct field names aid readability
 
-## Grade: A-
+### Background Scan (Existing Code)
+- [LOW] `src/pipeline/coordinator.rs:191` — `#[allow(dead_code)]` on `ScheduledTask` variant with comment explaining future use; acceptable but should be addressed eventually
+- [LOW] `src/pipeline/coordinator.rs:206` — `#[allow(dead_code)]` for future telemetry; same as above
+- [LOW] `src/intelligence/mod.rs:106` — `#[allow(dead_code)]` without explanation comment
+- [LOW] `src/canvas/remote.rs:25,53,98,130` — multiple `#[allow(dead_code)]` for protocol variants; documented pattern
+
+### Positive Observations
+- Test constructors reformatted to trailing-comma style — more consistent and reviewable
+- `RpcOutcome { message, notifications }` destructuring made explicit across tests — good clarity
+- `spawn_mock_skill` signature cleaned up to single-line — appropriate for short function
+
+## Grade: A
+
+All changes improve readability and consistency. No new technical debt introduced.

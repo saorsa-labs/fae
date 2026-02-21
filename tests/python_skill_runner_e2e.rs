@@ -78,10 +78,7 @@ done
 "#;
 
 /// Spawns a shell-based mock skill and returns `(PythonSkillProcess, JsonRpcComm)`.
-async fn spawn_mock_skill(
-    script: &str,
-    skill_name: &str,
-) -> (PythonSkillProcess, JsonRpcComm) {
+async fn spawn_mock_skill(script: &str, skill_name: &str) -> (PythonSkillProcess, JsonRpcComm) {
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -96,7 +93,8 @@ async fn spawn_mock_skill(
         .expect("child process must have piped stdin/stdout");
 
     let mut proc = PythonSkillProcess::new(skill_name);
-    proc.attach(child).expect("attach must succeed for a fresh process");
+    proc.attach(child)
+        .expect("attach must succeed for a fresh process");
 
     (proc, comm)
 }
@@ -129,7 +127,10 @@ async fn full_lifecycle_spawn_handshake_request_response_stop() {
 
     // Send a custom request.
     let req = JsonRpcRequest::new("do_something", Some(serde_json::json!({"input": 42})), 100);
-    let RpcOutcome { message, notifications } = comm
+    let RpcOutcome {
+        message,
+        notifications,
+    } = comm
         .send_request(&req, Duration::from_secs(5))
         .await
         .expect("request must succeed");
@@ -187,8 +188,7 @@ async fn health_check_returns_ok() {
 /// `RpcOutcome::notifications` and that the final response is still returned.
 #[tokio::test]
 async fn notifications_collected_before_response() {
-    let (mut proc, mut comm) =
-        spawn_mock_skill(NOTIFYING_SKILL_SH, "notifying-skill").await;
+    let (mut proc, mut comm) = spawn_mock_skill(NOTIFYING_SKILL_SH, "notifying-skill").await;
 
     comm.perform_handshake("notifying-skill", "0.8.1", Duration::from_secs(5))
         .await
@@ -196,7 +196,10 @@ async fn notifications_collected_before_response() {
     proc.transition(PythonProcessState::Running).unwrap();
 
     let req = JsonRpcRequest::new("compute", None, 200);
-    let RpcOutcome { message, notifications } = comm
+    let RpcOutcome {
+        message,
+        notifications,
+    } = comm
         .send_request(&req, Duration::from_secs(5))
         .await
         .expect("request must succeed");
@@ -241,7 +244,10 @@ async fn multiple_requests_reuse_process() {
     proc.transition(PythonProcessState::Running).unwrap();
 
     for i in 1_u64..=3 {
-        assert!(proc.is_alive(), "process must still be alive before request {i}");
+        assert!(
+            proc.is_alive(),
+            "process must still be alive before request {i}"
+        );
 
         let req = JsonRpcRequest::new("ping", Some(serde_json::json!({"seq": i})), i * 10);
         let RpcOutcome { message, .. } = comm
@@ -382,9 +388,7 @@ async fn process_exited_detected_on_send() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let req = JsonRpcRequest::new("after_death", None, 1);
-    let result = comm
-        .send_request(&req, Duration::from_secs(5))
-        .await;
+    let result = comm.send_request(&req, Duration::from_secs(5)).await;
 
     // After the process is dead, either a BrokenPipe on write or an EOF on
     // read will surface as ProcessExited or ProtocolError.
@@ -480,8 +484,8 @@ fn backoff_schedule_is_correct() {
         (3, 8),
         (4, 16),
         (5, 32),
-        (6, 60), // capped
-        (7, 60), // still capped
+        (6, 60),   // capped
+        (7, 60),   // still capped
         (100, 60), // way beyond cap
     ];
 
