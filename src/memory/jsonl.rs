@@ -882,6 +882,27 @@ impl MemoryOrchestrator {
         }
     }
 
+    /// Embed a query string and return the vector, if the engine is available.
+    ///
+    /// Returns `None` if no engine is attached or if embedding fails.
+    fn try_embed_query(&self, text: &str) -> Option<Vec<f32>> {
+        let engine_arc = self.embedding_engine.as_ref()?;
+        let mut engine = match engine_arc.lock() {
+            Ok(e) => e,
+            Err(_) => {
+                tracing::warn!("embedding engine lock poisoned, falling back to lexical");
+                return None;
+            }
+        };
+        match engine.embed(text) {
+            Ok(vec) => Some(vec),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to embed query, falling back to lexical");
+                None
+            }
+        }
+    }
+
     /// Insert a record and embed it (best-effort).
     fn insert_and_embed(
         &self,
@@ -1048,18 +1069,32 @@ checklist:\n\
         }
 
         self.ensure_ready()?;
-        let hits = self
-            .repo
-            .search(query, self.config.recall_max_items.max(1), false)?;
+        let limit = self.config.recall_max_items.max(1);
+
+        // Try hybrid search (semantic + structural) when embedding engine is
+        // available; fall back to lexical-only search otherwise.
+        let (hits, is_hybrid) = match self.try_embed_query(query) {
+            Some(query_vec) => {
+                let h = self.repo.hybrid_search(&query_vec, query, limit)?;
+                (h, true)
+            }
+            None => {
+                let h = self.repo.search(query, limit, false)?;
+                (h, false)
+            }
+        };
         let min_confidence = self.min_profile_confidence();
 
         // Separate durable records (profile/fact) from episodes.
+        // Hybrid scores top out around 1.0 (vs ~1.3 for lexical), so the
+        // episode relevance threshold is lower when using hybrid search.
+        let episode_threshold = if is_hybrid { 0.4 } else { 0.6 };
         let mut durable_hits = Vec::new();
         let mut episode_hits = Vec::new();
         for h in hits {
             if h.record.kind != MemoryKind::Episode && h.record.confidence >= min_confidence {
                 durable_hits.push(h);
-            } else if h.record.kind == MemoryKind::Episode && h.score >= 0.6 {
+            } else if h.record.kind == MemoryKind::Episode && h.score >= episode_threshold {
                 // Include high-relevance episodes as supplemental context.
                 episode_hits.push(h);
             }
