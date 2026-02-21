@@ -35,6 +35,39 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+/// Bootstrap result containing the resolved UV binary and optional metadata.
+#[derive(Debug, Clone)]
+pub struct PythonEnvironmentInfo {
+    /// Discovered (or installed) UV binary info.
+    pub uv: UvInfo,
+}
+
+/// Single entry point for bootstrapping the Python skill environment.
+///
+/// 1. Discovers or auto-installs `uv` via [`UvBootstrap::ensure_available`].
+/// 2. Caches the resolved [`UvInfo`] and returns it wrapped in
+///    [`PythonEnvironmentInfo`].
+///
+/// Callers should store the returned `uv.path` in their
+/// [`SkillProcessConfig`] so that all subsequent subprocess spawns use
+/// the verified binary.
+///
+/// # Errors
+///
+/// Propagates any error from [`UvBootstrap::ensure_available`] (binary
+/// not found, version too old, install failed).
+pub fn bootstrap_python_environment(
+    explicit_uv_path: Option<&Path>,
+) -> Result<PythonEnvironmentInfo, PythonSkillError> {
+    let uv = UvBootstrap::ensure_available(explicit_uv_path)?;
+    tracing::info!(
+        uv_path = %uv.path.display(),
+        uv_version = %uv.version,
+        "Python environment bootstrapped"
+    );
+    Ok(PythonEnvironmentInfo { uv })
+}
+
 /// The built-in canvas skill, compiled from `Skills/canvas.md`.
 pub const CANVAS_SKILL: &str = include_str!("../../Skills/canvas.md");
 /// Built-in skill for external LLM setup and operations.
