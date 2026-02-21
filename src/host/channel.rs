@@ -157,6 +157,39 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn python_skill_list(&self) -> Result<Vec<String>> {
         Ok(Vec::new())
     }
+    /// Install a Python skill package from a local directory.
+    fn python_skill_install(
+        &self,
+        _package_dir: &std::path::Path,
+    ) -> Result<crate::skills::PythonSkillInfo> {
+        Err(crate::SpeechError::Config(
+            "python_skill_install: not implemented".to_owned(),
+        ))
+    }
+    /// Disable a Python skill (moves to disabled state).
+    fn python_skill_disable(&self, _skill_id: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Activate (or reactivate) a Python skill.
+    fn python_skill_activate(&self, _skill_id: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Quarantine a Python skill with an error reason.
+    fn python_skill_quarantine(&self, _skill_id: &str, _reason: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Roll a Python skill back to its last-known-good snapshot.
+    fn python_skill_rollback(&self, _skill_id: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Advance a Python skill to the next lifecycle status.
+    fn python_skill_advance_status(
+        &self,
+        _skill_id: &str,
+        _status: crate::skills::PythonSkillStatus,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -302,6 +335,14 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::SkillPythonStart => self.handle_skill_python_start(envelope),
             CommandName::SkillPythonStop => self.handle_skill_python_stop(envelope),
             CommandName::SkillPythonList => self.handle_skill_python_list(envelope),
+            CommandName::SkillPythonInstall => self.handle_skill_python_install(envelope),
+            CommandName::SkillPythonDisable => self.handle_skill_python_disable(envelope),
+            CommandName::SkillPythonActivate => self.handle_skill_python_activate(envelope),
+            CommandName::SkillPythonQuarantine => self.handle_skill_python_quarantine(envelope),
+            CommandName::SkillPythonRollback => self.handle_skill_python_rollback(envelope),
+            CommandName::SkillPythonAdvanceStatus => {
+                self.handle_skill_python_advance_status(envelope)
+            }
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -725,6 +766,170 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"skills": skills}),
+        ))
+    }
+
+    fn handle_skill_python_install(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let package_dir = envelope
+            .payload
+            .get("package_dir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if package_dir.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.install: missing package_dir".to_owned(),
+            ));
+        }
+
+        let path = std::path::Path::new(package_dir);
+        let info = self.handler.python_skill_install(path)?;
+        let payload = serde_json::to_value(&info).unwrap_or(serde_json::Value::Null);
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), payload))
+    }
+
+    fn handle_skill_python_disable(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.disable: missing skill_id".to_owned(),
+            ));
+        }
+
+        self.handler.python_skill_disable(skill_id)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_id": skill_id}),
+        ))
+    }
+
+    fn handle_skill_python_activate(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.activate: missing skill_id".to_owned(),
+            ));
+        }
+
+        self.handler.python_skill_activate(skill_id)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_id": skill_id}),
+        ))
+    }
+
+    fn handle_skill_python_quarantine(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.quarantine: missing skill_id".to_owned(),
+            ));
+        }
+
+        let reason = envelope
+            .payload
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("quarantined by host command");
+
+        self.handler.python_skill_quarantine(skill_id, reason)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_id": skill_id}),
+        ))
+    }
+
+    fn handle_skill_python_rollback(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.rollback: missing skill_id".to_owned(),
+            ));
+        }
+
+        self.handler.python_skill_rollback(skill_id)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_id": skill_id}),
+        ))
+    }
+
+    fn handle_skill_python_advance_status(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let skill_id = envelope
+            .payload
+            .get("skill_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if skill_id.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.python.advance_status: missing skill_id".to_owned(),
+            ));
+        }
+
+        let status_str = envelope
+            .payload
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let status: crate::skills::PythonSkillStatus =
+            serde_json::from_value(serde_json::Value::String(status_str.to_owned()))
+                .map_err(|_| {
+                    crate::SpeechError::Config(format!(
+                        "skill.python.advance_status: invalid status `{status_str}`"
+                    ))
+                })?;
+
+        self.handler
+            .python_skill_advance_status(skill_id, status)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true, "skill_id": skill_id, "status": status_str}),
         ))
     }
 

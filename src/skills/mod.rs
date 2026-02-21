@@ -12,7 +12,9 @@
 
 pub mod builtins;
 pub mod error;
+pub mod manifest;
 pub mod pep723;
+pub mod python_lifecycle;
 pub mod python_protocol;
 pub mod python_runner;
 pub mod trait_def;
@@ -20,7 +22,13 @@ pub mod uv_bootstrap;
 
 // Re-export core Python runner types for external use.
 pub use error::PythonSkillError;
+pub use manifest::PythonSkillManifest;
 pub use pep723::ScriptMetadata;
+pub use python_lifecycle::{
+    PythonSkillInfo, PythonSkillStatus, activate_python_skill, advance_python_skill_status,
+    disable_python_skill, install_python_skill, list_python_skills, quarantine_python_skill,
+    rollback_python_skill,
+};
 pub use python_protocol::{
     HandshakeParams, HandshakeResult, HealthResult, JsonRpcRequest, METHOD_HANDSHAKE,
     METHOD_HEALTH, SkillMessage,
@@ -187,17 +195,33 @@ impl SkillRegistry {
     }
 }
 
+/// Directory layout for skills storage.
+///
+/// Used by lifecycle functions to locate skill scripts, the registry file,
+/// the disabled directory, and the snapshot directory.
 #[derive(Debug, Clone)]
-struct SkillPaths {
-    root: PathBuf,
-    state_dir: PathBuf,
-    registry_file: PathBuf,
-    disabled_dir: PathBuf,
-    snapshots_dir: PathBuf,
+pub struct SkillPaths {
+    /// Root directory where active `.md` and `.py` skill files live.
+    pub root: PathBuf,
+    /// `.state/` directory containing the registry and subdirectories.
+    pub state_dir: PathBuf,
+    /// Path to the main `registry.json` file.
+    pub registry_file: PathBuf,
+    /// Path to the `disabled/` subdirectory.
+    pub disabled_dir: PathBuf,
+    /// Path to the `snapshots/` subdirectory.
+    pub snapshots_dir: PathBuf,
 }
 
 impl SkillPaths {
-    fn for_root(root: PathBuf) -> Self {
+    /// Creates a `SkillPaths` rooted at `root`.
+    ///
+    /// All sub-paths are derived from `root`:
+    /// - `{root}/.state/` — state directory
+    /// - `{root}/.state/registry.json` — skill registry
+    /// - `{root}/.state/disabled/` — disabled skill files
+    /// - `{root}/.state/snapshots/` — rollback snapshots
+    pub fn for_root(root: PathBuf) -> Self {
         let state_dir = root.join(".state");
         Self {
             registry_file: state_dir.join("registry.json"),
@@ -227,11 +251,12 @@ pub fn skills_dir() -> PathBuf {
     crate::fae_dirs::skills_dir()
 }
 
-fn default_paths() -> SkillPaths {
+/// Returns the default `SkillPaths` based on the runtime skills directory.
+pub fn default_paths() -> SkillPaths {
     SkillPaths::for_root(skills_dir())
 }
 
-fn ensure_state_dirs(paths: &SkillPaths) -> crate::Result<()> {
+pub fn ensure_state_dirs(paths: &SkillPaths) -> crate::Result<()> {
     std::fs::create_dir_all(&paths.root)?;
     std::fs::create_dir_all(&paths.state_dir)?;
     std::fs::create_dir_all(&paths.disabled_dir)?;

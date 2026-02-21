@@ -908,6 +908,57 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(names)
     }
 
+    /// Handle `skill.python.install` — installs a Python skill package from a local directory.
+    ///
+    /// Returns `PythonSkillInfo` on success.
+    fn python_skill_install(
+        &self,
+        package_dir: &std::path::Path,
+    ) -> Result<crate::skills::PythonSkillInfo> {
+        info!(package_dir = %package_dir.display(), "skill.python.install");
+        crate::skills::install_python_skill(package_dir)
+            .map_err(|e| SpeechError::Config(format!("skill.python.install failed: {e}")))
+    }
+
+    /// Handle `skill.python.disable` — moves a skill to the Disabled state.
+    fn python_skill_disable(&self, skill_id: &str) -> Result<()> {
+        info!(skill_id, "skill.python.disable");
+        crate::skills::disable_python_skill(skill_id)
+            .map_err(|e| SpeechError::Config(format!("skill.python.disable failed: {e}")))
+    }
+
+    /// Handle `skill.python.activate` — restores a disabled or quarantined skill.
+    fn python_skill_activate(&self, skill_id: &str) -> Result<()> {
+        info!(skill_id, "skill.python.activate");
+        crate::skills::activate_python_skill(skill_id)
+            .map_err(|e| SpeechError::Config(format!("skill.python.activate failed: {e}")))
+    }
+
+    /// Handle `skill.python.quarantine` — quarantines a skill with an error reason.
+    fn python_skill_quarantine(&self, skill_id: &str, reason: &str) -> Result<()> {
+        info!(skill_id, reason, "skill.python.quarantine");
+        crate::skills::quarantine_python_skill(skill_id, reason)
+            .map_err(|e| SpeechError::Config(format!("skill.python.quarantine failed: {e}")))
+    }
+
+    /// Handle `skill.python.rollback` — rolls a skill back to its last known good snapshot.
+    fn python_skill_rollback(&self, skill_id: &str) -> Result<()> {
+        info!(skill_id, "skill.python.rollback");
+        crate::skills::rollback_python_skill(skill_id)
+            .map_err(|e| SpeechError::Config(format!("skill.python.rollback failed: {e}")))
+    }
+
+    /// Handle `skill.python.advance_status` — advances a skill to the next lifecycle status.
+    fn python_skill_advance_status(
+        &self,
+        skill_id: &str,
+        status: crate::skills::PythonSkillStatus,
+    ) -> Result<()> {
+        info!(skill_id, %status, "skill.python.advance_status");
+        crate::skills::advance_python_skill_status(skill_id, status)
+            .map_err(|e| SpeechError::Config(format!("skill.python.advance_status failed: {e}")))
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self

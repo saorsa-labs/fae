@@ -85,6 +85,24 @@ pub enum CommandName {
     /// List installed Python skill packages and their status.
     #[serde(rename = "skill.python.list")]
     SkillPythonList,
+    /// Install a Python skill package from a local directory.
+    #[serde(rename = "skill.python.install")]
+    SkillPythonInstall,
+    /// Disable a Python skill (moves to disabled state).
+    #[serde(rename = "skill.python.disable")]
+    SkillPythonDisable,
+    /// Activate (or reactivate) a Python skill.
+    #[serde(rename = "skill.python.activate")]
+    SkillPythonActivate,
+    /// Quarantine a Python skill with an error reason.
+    #[serde(rename = "skill.python.quarantine")]
+    SkillPythonQuarantine,
+    /// Roll a Python skill back to its last-known-good snapshot.
+    #[serde(rename = "skill.python.rollback")]
+    SkillPythonRollback,
+    /// Advance a Python skill to the next lifecycle status.
+    #[serde(rename = "skill.python.advance_status")]
+    SkillPythonAdvanceStatus,
 }
 
 impl CommandName {
@@ -129,6 +147,12 @@ impl CommandName {
             Self::SkillPythonStart => "skill.python.start",
             Self::SkillPythonStop => "skill.python.stop",
             Self::SkillPythonList => "skill.python.list",
+            Self::SkillPythonInstall => "skill.python.install",
+            Self::SkillPythonDisable => "skill.python.disable",
+            Self::SkillPythonActivate => "skill.python.activate",
+            Self::SkillPythonQuarantine => "skill.python.quarantine",
+            Self::SkillPythonRollback => "skill.python.rollback",
+            Self::SkillPythonAdvanceStatus => "skill.python.advance_status",
         }
     }
 
@@ -173,6 +197,12 @@ impl CommandName {
             "skill.python.start" => Some(Self::SkillPythonStart),
             "skill.python.stop" => Some(Self::SkillPythonStop),
             "skill.python.list" => Some(Self::SkillPythonList),
+            "skill.python.install" => Some(Self::SkillPythonInstall),
+            "skill.python.disable" => Some(Self::SkillPythonDisable),
+            "skill.python.activate" => Some(Self::SkillPythonActivate),
+            "skill.python.quarantine" => Some(Self::SkillPythonQuarantine),
+            "skill.python.rollback" => Some(Self::SkillPythonRollback),
+            "skill.python.advance_status" => Some(Self::SkillPythonAdvanceStatus),
             _ => None,
         }
     }
