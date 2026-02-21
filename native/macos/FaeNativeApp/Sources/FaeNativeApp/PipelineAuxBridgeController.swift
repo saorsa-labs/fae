@@ -1,16 +1,15 @@
 import Foundation
-import WebKit
 
-/// Bridges auxiliary pipeline events to the conversation WebView and exposes
-/// pipeline diagnostic state for the settings UI.
+/// Bridges auxiliary pipeline events to native state and exposes pipeline
+/// diagnostic state for the settings UI.
 ///
 /// Handles events not covered by `ConversationBridgeController` or
 /// `OrbStateBridgeController`:
 ///
 /// | Notification / Event | Action |
 /// |---|---|
-/// | `.faePipelineState` (`pipeline.canvas_visibility`) | `window.showCanvasPanel()` / `window.hideCanvasPanel()` |
-/// | `.faeAudioLevel` | Inject RMS into orb animation via `window.setAudioLevel(rms)` if available |
+/// | `.faePipelineState` (`pipeline.canvas_visibility`) | Toggle auxiliary windows |
+/// | `.faeAudioLevel` | Update `@Published var audioRMS` (read by `NativeOrbView` via SwiftUI binding) |
 /// | `.faePipelineState` (control/model/error events) | Update `@Published var status` |
 ///
 /// `status` is shown in `SettingsView` under a "Pipeline" diagnostics section.
@@ -20,10 +19,8 @@ final class PipelineAuxBridgeController: ObservableObject {
     @Published var status: String = "Not started"
 
     /// Last audio RMS level received from the pipeline (0.0–1.0).
+    /// Read directly by `NativeOrbView` via SwiftUI property binding.
     @Published var audioRMS: Double = 0.0
-
-    /// Weak reference to the conversation WebView for JS injection.
-    weak var webView: WKWebView?
 
     /// Native canvas store for the SwiftUI canvas window.
     /// Set by `FaeNativeApp` during wiring.
@@ -155,19 +152,5 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     private func handleAudioLevel(rms: Double) {
         audioRMS = rms
-        // Inject into WebView if the conversation HTML supports it.
-        // The orb animation layer can respond to window.setAudioLevel(rms).
-        evaluateJS("window.setAudioLevel && window.setAudioLevel(\(rms));")
-    }
-
-    // MARK: - JS Evaluation
-
-    private func evaluateJS(_ js: String) {
-        guard let webView else { return }
-        webView.evaluateJavaScript(js) { _, error in
-            if let error {
-                NSLog("PipelineAuxBridgeController JS error: %@", error.localizedDescription)
-            }
-        }
     }
 }
