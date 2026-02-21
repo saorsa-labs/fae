@@ -82,6 +82,14 @@ pub enum PythonSkillError {
         /// Why the bootstrap process failed.
         reason: String,
     },
+
+    /// SQLite database error during skill discovery or storage.
+    #[error("skill database error: {0}")]
+    DatabaseError(String),
+
+    /// I/O error during skill operations.
+    #[error("skill I/O error: {0}")]
+    IoError(#[source] std::io::Error),
 }
 
 impl From<serde_json::Error> for PythonSkillError {
@@ -195,6 +203,20 @@ mod tests {
         };
         assert!(err.to_string().contains("bootstrap failed"));
         assert!(err.to_string().contains("installer script"));
+    }
+
+    #[test]
+    fn display_database_error() {
+        let err = PythonSkillError::DatabaseError("table not found".to_owned());
+        assert!(err.to_string().contains("skill database error"));
+        assert!(err.to_string().contains("table not found"));
+    }
+
+    #[test]
+    fn display_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let err = PythonSkillError::IoError(io_err);
+        assert!(err.to_string().contains("skill I/O error"));
     }
 
     #[test]

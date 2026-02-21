@@ -206,6 +206,14 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn python_skill_credential_clear(&self, _skill_id: &str) -> Result<()> {
         Ok(())
     }
+    /// Search for skills matching a natural-language query.
+    fn skill_discovery_search(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<crate::skills::discovery::SkillSearchResult>> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -361,6 +369,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             }
             CommandName::SkillCredentialCollect => self.handle_skill_credential_collect(envelope),
             CommandName::SkillCredentialClear => self.handle_skill_credential_clear(envelope),
+            CommandName::SkillDiscoverySearch => self.handle_skill_discovery_search(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -996,6 +1005,50 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         Ok(ResponseEnvelope::ok(
             envelope.request_id.clone(),
             serde_json::json!({"accepted": true, "skill_id": skill_id}),
+        ))
+    }
+
+    fn handle_skill_discovery_search(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let query = envelope
+            .payload
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let limit = envelope
+            .payload
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5) as usize;
+
+        if query.trim().is_empty() {
+            return Ok(ResponseEnvelope::ok(
+                envelope.request_id.clone(),
+                serde_json::json!({"results": []}),
+            ));
+        }
+
+        let results = self.handler.skill_discovery_search(query, limit)?;
+
+        let results_json: Vec<serde_json::Value> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "skill_id": r.skill_id,
+                    "name": r.name,
+                    "description": r.description,
+                    "source": r.source,
+                    "score": r.score,
+                })
+            })
+            .collect();
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"results": results_json}),
         ))
     }
 

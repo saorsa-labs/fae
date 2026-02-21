@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 13,
   "project": "fae-python-skill-runtime",
   "active": true,
   "milestone": {
@@ -7,9 +7,9 @@
     "name": "Python Skill Runtime (v0.8.1)"
   },
   "phase": {
-    "number": "8.4",
-    "name": "Credential Mediation",
-    "plan": ".planning/PLAN-phase-8.4.md",
+    "number": "8.5",
+    "name": "Semantic Skill Discovery",
+    "plan": ".planning/PLAN-phase-8.5.md",
     "status": "complete"
   },
   "progress": {
@@ -18,9 +18,9 @@
     "current_task": 5
   },
   "status": "task_complete",
-  "last_updated": "2026-02-22T07:15:00Z",
+  "last_updated": "2026-02-22T08:00:00Z",
   "review": {
     "status": "passed",
-    "iteration": 1
+    "iteration": 0
   }
 }

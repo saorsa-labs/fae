@@ -1028,6 +1028,21 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             .map_err(|e| SpeechError::Config(format!("skill.credential.clear failed: {e}")))
     }
 
+    fn skill_discovery_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::skills::discovery::SkillSearchResult>> {
+        info!(query, limit, "skill.discovery.search");
+
+        // Discovery search requires the embedding engine and a discovery index.
+        // For now, return empty results — full wiring will happen when the
+        // runtime owns a SkillDiscoveryIndex instance (Phase 8.7+).
+        // The handler infrastructure and command routing are in place.
+        let _ = (query, limit);
+        Ok(Vec::new())
+    }
+
     fn request_conversation_inject_text(&self, text: &str) -> Result<()> {
         info!(text, "conversation.inject_text requested");
         let guard = self

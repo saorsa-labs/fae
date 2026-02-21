@@ -371,3 +371,15 @@ Results: All 6 tasks complete, 30+ UV bootstrap tests pass, 6 E2E tests pass, ze
 Results: 15 credential unit tests + 9 integration tests + 17 manifest tests, all pass, zero clippy warnings
 
 ### Phase 8.4 Complete
+
+### Phase 8.5: Semantic Skill Discovery
+
+- [x] Task 1: SkillDiscoveryIndex + SQLite schema (skill_metadata table + skill_embeddings vec0 virtual table)
+- [x] Task 2: Text extraction helpers (extract_python_skill_text, extract_markdown_skill_text, extract_builtin_skill_text)
+- [x] Task 3: rebuild_skill_index for full reindex across Python, markdown, and builtin skills
+- [x] Task 4: Host command wiring (skill.discovery.search in contract/channel/handler)
+- [x] Task 5: Integration tests (9 tests in tests/python_skill_discovery.rs)
+
+Results: 17 discovery unit tests + 9 integration tests + 16 error tests, all pass, zero clippy warnings
+
+### Phase 8.5 Complete

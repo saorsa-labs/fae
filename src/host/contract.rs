@@ -113,6 +113,11 @@ pub enum CommandName {
     /// Payload: `{ "skill_id": "..." }`
     #[serde(rename = "skill.credential.clear")]
     SkillCredentialClear,
+    /// Search for skills matching a natural-language query.
+    ///
+    /// Payload: `{ "query": "...", "limit": 5 }`
+    #[serde(rename = "skill.discovery.search")]
+    SkillDiscoverySearch,
 }
 
 impl CommandName {
@@ -165,6 +170,7 @@ impl CommandName {
             Self::SkillPythonAdvanceStatus => "skill.python.advance_status",
             Self::SkillCredentialCollect => "skill.credential.collect",
             Self::SkillCredentialClear => "skill.credential.clear",
+            Self::SkillDiscoverySearch => "skill.discovery.search",
         }
     }
 
@@ -217,6 +223,7 @@ impl CommandName {
             "skill.python.advance_status" => Some(Self::SkillPythonAdvanceStatus),
             "skill.credential.collect" => Some(Self::SkillCredentialCollect),
             "skill.credential.clear" => Some(Self::SkillCredentialClear),
+            "skill.discovery.search" => Some(Self::SkillDiscoverySearch),
             _ => None,
         }
     }
