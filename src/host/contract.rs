@@ -68,6 +68,12 @@ pub enum CommandName {
     ConfigGet,
     #[serde(rename = "config.patch")]
     ConfigPatch,
+    #[serde(rename = "onboarding.set_contact_info")]
+    OnboardingSetContactInfo,
+    #[serde(rename = "onboarding.set_family_info")]
+    OnboardingSetFamilyInfo,
+    #[serde(rename = "skills.reload")]
+    SkillsReload,
     #[serde(rename = "data.delete_all")]
     DataDeleteAll,
 }
@@ -107,6 +113,9 @@ impl CommandName {
             Self::ConversationLinkDetected => "conversation.link_detected",
             Self::ConfigGet => "config.get",
             Self::ConfigPatch => "config.patch",
+            Self::OnboardingSetContactInfo => "onboarding.set_contact_info",
+            Self::OnboardingSetFamilyInfo => "onboarding.set_family_info",
+            Self::SkillsReload => "skills.reload",
             Self::DataDeleteAll => "data.delete_all",
         }
     }
@@ -145,6 +154,9 @@ impl CommandName {
             "conversation.link_detected" => Some(Self::ConversationLinkDetected),
             "config.get" => Some(Self::ConfigGet),
             "config.patch" => Some(Self::ConfigPatch),
+            "onboarding.set_contact_info" => Some(Self::OnboardingSetContactInfo),
+            "onboarding.set_family_info" => Some(Self::OnboardingSetFamilyInfo),
+            "skills.reload" => Some(Self::SkillsReload),
             "data.delete_all" => Some(Self::DataDeleteAll),
             _ => None,
         }

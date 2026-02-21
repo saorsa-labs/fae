@@ -68,5 +68,11 @@
   <string>Fae needs calendar access to help manage your schedule when you ask.</string>
   <key>NSRemindersUsageDescription</key>
   <string>Fae needs reminders access to help manage your tasks when you ask.</string>
+
+  <!-- Sparkle auto-update -->
+  <key>SUPublicEDKey</key>
+  <string>l2A5ko2QgGdXdquhdnTZius7+Ig92xJJhIkCoDsB7yg=</string>
+  <key>SUFeedURL</key>
+  <string>https://github.com/saorsa-labs/fae/releases/latest/download/appcast.xml</string>
 </dict>
 </plist>

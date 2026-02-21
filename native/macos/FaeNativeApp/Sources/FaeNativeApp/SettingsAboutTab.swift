@@ -1,11 +1,12 @@
 import SwiftUI
 
-/// About settings tab: version info, onboarding reset, handoff settings.
+/// About settings tab: version info, updates, onboarding reset, handoff settings.
 struct SettingsAboutTab: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var onboarding: OnboardingController
     @State private var showResetConfirmation = false
     let commandSender: HostCommandSender?
+    let sparkleUpdater: SparkleUpdaterController?
 
     var body: some View {
         Form {
@@ -29,6 +30,36 @@ struct SettingsAboutTab: View {
                 Text("by Saorsa Labs")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            if let updater = sparkleUpdater, updater.isConfigured {
+                Section("Updates") {
+                    HStack {
+                        Button("Check for Updates") {
+                            updater.checkForUpdates()
+                        }
+                        .disabled(!updater.canCheckForUpdates)
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+
+                        if let lastCheck = updater.lastUpdateCheck {
+                            Text("Last checked \(lastCheck, style: .relative) ago")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Toggle("Automatic Updates", isOn: Binding(
+                        get: { updater.automaticallyChecksForUpdates },
+                        set: { updater.automaticallyChecksForUpdates = $0 }
+                    ))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+
+                    Text("Fae checks for updates every 6 hours and installs them automatically.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Onboarding") {
@@ -101,7 +132,7 @@ struct SettingsAboutTab: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.6.2"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.7.0"
     }
 
     private var appBuild: String {

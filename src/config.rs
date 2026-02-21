@@ -45,6 +45,16 @@ pub struct SpeechConfig {
     /// Injected into the system prompt so the LLM can address the user by name.
     #[serde(default)]
     pub user_name: Option<String>,
+    /// User's email address, captured from Contacts Me Card during onboarding.
+    #[serde(default)]
+    pub user_email: Option<String>,
+    /// User's phone number, captured from Contacts Me Card during onboarding.
+    #[serde(default)]
+    pub user_phone: Option<String>,
+    /// Family relationships from the user's Me Card.
+    /// Each tuple is (relationship label, person name).
+    #[serde(default)]
+    pub family_relationships: Vec<(String, String)>,
     /// Whether the user has completed the onboarding flow.
     /// Defaults to `false` — existing users who never onboarded will see the flow.
     #[serde(default)]

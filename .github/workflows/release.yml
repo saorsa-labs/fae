@@ -278,6 +278,31 @@ jobs:
             --wait
           xcrun stapler staple "$INSTALLER_DMG"
 
+      - name: Generate Sparkle EdDSA signature for DMG
+        env:
+          SPARKLE_KEY: ${{ secrets.SPARKLE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_KEY" ]; then
+            echo "::warning::SPARKLE_KEY not set — skipping Sparkle signature"
+            echo "SPARKLE_SIGNATURE=" >> "$GITHUB_ENV"
+          else
+            # Sparkle's sign_update is bundled in the SPM checkout.
+            SIGN_UPDATE="$(find native/macos/FaeNativeApp/.build -path '*/Sparkle/bin/sign_update' -type f 2>/dev/null | head -n 1)"
+            if [ -z "$SIGN_UPDATE" ] || [ ! -x "$SIGN_UPDATE" ]; then
+              # Fall back to downloading Sparkle CLI tools.
+              curl -sL "https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz" \
+                | tar xJ -C "$RUNNER_TEMP" bin/sign_update
+              SIGN_UPDATE="$RUNNER_TEMP/bin/sign_update"
+              chmod +x "$SIGN_UPDATE"
+            fi
+
+            DMG_SIZE=$(stat -f%z "$INSTALLER_DMG" 2>/dev/null || stat --format=%s "$INSTALLER_DMG")
+            SIGNATURE=$("$SIGN_UPDATE" "$INSTALLER_DMG" --ed-key-file <(echo "$SPARKLE_KEY") 2>/dev/null || echo "")
+            echo "SPARKLE_SIGNATURE=$SIGNATURE" >> "$GITHUB_ENV"
+            echo "DMG_SIZE=$DMG_SIZE" >> "$GITHUB_ENV"
+            echo "Sparkle signature generated (${#SIGNATURE} chars)"
+          fi
+
       - name: Stage release artifacts
         run: |
           ARTIFACTS_DIR="$RUNNER_TEMP/release-artifacts"
@@ -287,6 +312,39 @@ jobs:
           cp "$ARCHIVE" "$ARTIFACTS_DIR/"
           cp "$INSTALLER_DMG" "$ARTIFACTS_DIR/"
           cp "$UPDATE_ASSET" "$ARTIFACTS_DIR/"
+
+          # Generate Sparkle appcast.xml if signature available.
+          if [ -n "$SPARKLE_SIGNATURE" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            DMG_FILENAME="fae-${VERSION}-macos-arm64.dmg"
+            REPO="${GITHUB_REPOSITORY}"
+            DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${DMG_FILENAME}"
+
+            cat > "$ARTIFACTS_DIR/appcast.xml" << APPCAST_EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <channel>
+              <title>Fae Updates</title>
+              <link>https://github.com/${REPO}/releases</link>
+              <description>Fae automatic updates</description>
+              <language>en</language>
+              <item>
+                <title>Version ${VERSION}</title>
+                <sparkle:version>${VERSION}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <pubDate>$(date -R)</pubDate>
+                <enclosure
+                  url="${DOWNLOAD_URL}"
+                  sparkle:edSignature="${SPARKLE_SIGNATURE}"
+                  length="${DMG_SIZE}"
+                  type="application/octet-stream" />
+              </item>
+            </channel>
+          </rss>
+          APPCAST_EOF
+            echo "Generated appcast.xml for v${VERSION}"
+          fi
 
           echo "ARTIFACTS_DIR=$ARTIFACTS_DIR" >> "$GITHUB_ENV"
 
@@ -486,6 +544,7 @@ jobs:
             artifacts/**/fae-darwin-aarch64
             artifacts/**/fae-linux-x86_64
             artifacts/**/fae-windows-x86_64.exe
+            artifacts/**/appcast.xml
             artifacts/SHA256SUMS.txt
             artifacts/SHA256SUMS.txt.asc
             artifacts/FAE_UPDATE_SIGNING_KEY.asc

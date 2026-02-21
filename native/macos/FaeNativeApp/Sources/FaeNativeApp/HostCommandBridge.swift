@@ -90,6 +90,38 @@ final class HostCommandBridge: ObservableObject {
         )
         observations.append(
             center.addObserver(
+                forName: .faeOnboardingSetContactInfo,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                var payload: [String: Any] = [:]
+                if let email = notification.userInfo?["email"] as? String {
+                    payload["email"] = email
+                }
+                if let phone = notification.userInfo?["phone"] as? String {
+                    payload["phone"] = phone
+                }
+                Task { @MainActor in
+                    self?.dispatch("onboarding.set_contact_info", payload: payload)
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
+                forName: .faeOnboardingSetFamilyInfo,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let relations = notification.userInfo?["relations"] as? [[String: String]] else {
+                    return
+                }
+                Task { @MainActor in
+                    self?.dispatch("onboarding.set_family_info", payload: ["relations": relations])
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
                 forName: .faeCapabilityGranted,
                 object: nil,
                 queue: .main

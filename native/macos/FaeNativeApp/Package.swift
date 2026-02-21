@@ -12,6 +12,8 @@ let package = Package(
     dependencies: [
         // Shared Handoff contract types: FaeHandoffContract, ConversationSnapshot, etc.
         .package(path: "../../apple/FaeHandoffKit"),
+        // Sparkle 2 auto-update framework (EdDSA signature verification).
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
     targets: [
         // C module exposing the libfae FFI header to Swift.
@@ -26,6 +28,7 @@ let package = Package(
             dependencies: [
                 "CLibFae",
                 .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/FaeNativeApp",
             resources: [
