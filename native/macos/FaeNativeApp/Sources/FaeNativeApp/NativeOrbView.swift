@@ -29,8 +29,8 @@ struct NativeOrbView: View {
     var onOrbClicked: (() -> Void)?
     var onOrbContextMenu: (() -> Void)?
 
-    /// Metal shader library loaded from Bundle.module (pre-compiled metallib).
-    private static let shaderLib: ShaderLibrary = .bundle(Bundle.module)
+    /// Metal shader library loaded from the Fae resource bundle (pre-compiled metallib).
+    private static let shaderLib: ShaderLibrary = .bundle(Bundle.faeResources)
 
     @State private var startDate = Date()
     @State private var hasNotifiedLoad = false
@@ -82,7 +82,7 @@ struct NativeOrbView: View {
         let pInfluence: Float = isHovering ? 1.0 : 0.0
 
         Rectangle()
-            .fill(.clear)
+            .fill(Color.black)
             .colorEffect(
                 Self.shaderLib.fogCloudOrb(
                     // Time & geometry

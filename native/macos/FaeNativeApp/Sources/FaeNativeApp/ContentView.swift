@@ -18,10 +18,11 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             if !onboarding.isStateRestored || !onboarding.isComplete {
-                // Show a blank black screen while onboarding state is being
+                // Show a blank dark surface while onboarding state is being
                 // restored or while the separate onboarding window is active.
                 // The main window is hidden during onboarding anyway.
-                Color.black
+                Color.black.opacity(0.6)
+                    .ignoresSafeArea()
             } else {
                 nativeConversationView
                     .transition(.opacity)
@@ -30,15 +31,76 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
         .background(
-            Group {
-                Color.black
-                NSWindowAccessor { window in
-                    windowState.window = window
-                }
+            NSWindowAccessor { window in
+                windowState.window = window
+                // Install frosted-glass at the AppKit level so it fills
+                // the entire window including behind the transparent title bar.
+                installFrostedGlassBackground(on: window)
+                // Ensure the window appears on the primary (menu-bar) screen,
+                // not a secondary monitor via macOS state restoration.
+                centerWindowOnPrimaryScreen(window)
             }
         )
         .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
+    }
+
+    // MARK: - Window Positioning
+
+    /// Centers the window on the primary (menu-bar) screen if its current
+    /// position is off that screen. `NSScreen.screens.first` is always the
+    /// menu-bar screen — unlike `NSScreen.main` which tracks keyboard focus.
+    private func centerWindowOnPrimaryScreen(_ window: NSWindow) {
+        guard let primaryScreen = NSScreen.screens.first else { return }
+        let visible = primaryScreen.visibleFrame
+        let frame = window.frame
+
+        // Only reposition if the window centre is outside the primary screen's
+        // visible area (e.g. macOS state restoration placed it on a secondary).
+        let center = NSPoint(x: frame.midX, y: frame.midY)
+        if !visible.contains(center) {
+            let x = visible.midX - frame.width / 2
+            let y = visible.midY - frame.height / 2
+            window.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+    }
+
+    // MARK: - Frosted Glass Background
+
+    /// Wraps the SwiftUI hosting view inside an `NSVisualEffectView` so the
+    /// frosted-glass blur fills the entire window — including behind the
+    /// transparent title bar. SwiftUI's safe-area system prevents an
+    /// NSViewRepresentable from reaching the title bar, so we must re-parent
+    /// at the AppKit level (the same pattern `OnboardingWindowController` uses).
+    private func installFrostedGlassBackground(on window: NSWindow) {
+        // Only do this once. After re-parenting, the contentView IS the effect view.
+        if window.contentView is NSVisualEffectView { return }
+
+        guard let hostingView = window.contentView else { return }
+
+        let effectView = NSVisualEffectView()
+        effectView.material = .hudWindow
+        effectView.blendingMode = .behindWindow
+        effectView.state = .active
+
+        // Replace the window's contentView with the effect view,
+        // then re-add the SwiftUI hosting view on top of it.
+        window.contentView = effectView
+
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        // Make the hosting view transparent so the blur shows through
+        // any transparent SwiftUI regions (title bar gap, edges, etc.).
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+
+        effectView.addSubview(hostingView)
+
+        NSLayoutConstraint.activate([
+            hostingView.topAnchor.constraint(equalTo: effectView.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+            hostingView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+        ])
     }
 
     // MARK: - Context Menu
@@ -131,6 +193,9 @@ struct ContentView: View {
                     showOrbContextMenu()
                 }
             )
+            // Inset the orb below the title bar so the frosted-glass
+            // background shows through the transparent title bar region.
+            .padding(.top, 28)
             .opacity(viewLoaded ? 1 : 0)
 
             // Only show overlays in compact mode (not collapsed 80×80 orb)

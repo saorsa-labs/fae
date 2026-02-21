@@ -333,11 +333,21 @@ struct FaeNativeApp: App {
     }
 
     /// Makes the main conversation window key and visible after onboarding
-    /// completes.
+    /// completes. Centers on the primary screen (menu-bar screen) so it
+    /// doesn't appear on a secondary monitor.
     private func showMainWindow() {
-        if let mainWindow = windowState.window {
-            mainWindow.makeKeyAndOrderFront(nil)
+        guard let mainWindow = windowState.window else { return }
+        // Center on the primary (menu-bar) screen, not NSScreen.main which
+        // tracks keyboard focus and may point to a secondary display.
+        if let screen = NSScreen.screens.first {
+            let visible = screen.visibleFrame
+            let size = mainWindow.frame.size
+            let x = visible.midX - size.width / 2
+            let y = visible.midY - size.height / 2
+            mainWindow.setFrameOrigin(NSPoint(x: x, y: y))
         }
+        mainWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate()
     }
 
     /// Sends `runtime.start` to the Rust backend so the voice pipeline begins

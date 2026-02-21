@@ -40,12 +40,17 @@ struct OnboardingNativeView: View {
 
     var body: some View {
         ZStack {
-            // Orb background — fills the entire window.
+            // Orb background — shifted upward so the bright core sits
+            // in the upper third, above the speech bubble and CTA.
+            // Hit testing disabled so the OrbClickTarget overlay doesn't
+            // consume mouse events meant for phase-screen buttons.
             NativeOrbView(
                 orbAnimation: orbAnimation,
                 audioRMS: 0,
                 windowMode: "compact"
             )
+            .allowsHitTesting(false)
+            .offset(y: -70)
             .ignoresSafeArea()
 
             // Phase content.
