@@ -9,6 +9,7 @@
 //! - `schema`: SQLite DDL definitions.
 //! - `sqlite`: SQLite-backed `SqliteMemoryRepository`.
 
+pub mod embedding;
 pub mod jsonl;
 pub(crate) mod migrate;
 pub(crate) mod schema;

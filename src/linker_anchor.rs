@@ -110,6 +110,10 @@ pub extern "C" fn fae_keep_alive() {
         );
         let _aec_new = crate::audio::aec::AecProcessor::new;
         black_box(_aec_new);
+
+        // ── Embedding engine (all-MiniLM-L6-v2) ──────────────────────────
+        black_box(crate::memory::embedding::EMBEDDING_DIM);
+        black_box(crate::memory::embedding::cosine_similarity as fn(&[f32], &[f32]) -> f32);
     }
 }
 
