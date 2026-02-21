@@ -818,6 +818,14 @@ pub struct MemoryConfig {
     pub retention_days: u32,
     /// Whether schema migrations should run automatically on startup.
     pub schema_auto_migrate: bool,
+    /// Use hybrid (semantic + structural) search for recall when an embedding
+    /// engine is available.  When `false`, recall always uses lexical search.
+    pub use_hybrid_search: bool,
+    /// Weight of semantic similarity in hybrid scoring (0.0–1.0).
+    ///
+    /// The remaining weight is distributed across confidence, freshness, and
+    /// kind bonuses.  Only used when `use_hybrid_search` is `true`.
+    pub semantic_weight: f32,
 }
 
 impl Default for MemoryConfig {
@@ -832,6 +840,8 @@ impl Default for MemoryConfig {
             min_profile_confidence: 0.70,
             retention_days: 365,
             schema_auto_migrate: true,
+            use_hybrid_search: true,
+            semantic_weight: 0.60,
         }
     }
 }

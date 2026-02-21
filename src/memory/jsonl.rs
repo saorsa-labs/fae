@@ -1071,17 +1071,22 @@ checklist:\n\
         self.ensure_ready()?;
         let limit = self.config.recall_max_items.max(1);
 
-        // Try hybrid search (semantic + structural) when embedding engine is
-        // available; fall back to lexical-only search otherwise.
-        let (hits, is_hybrid) = match self.try_embed_query(query) {
-            Some(query_vec) => {
-                let h = self.repo.hybrid_search(&query_vec, query, limit)?;
-                (h, true)
+        // Try hybrid search (semantic + structural) when enabled and an
+        // embedding engine is available; fall back to lexical-only otherwise.
+        let (hits, is_hybrid) = if self.config.use_hybrid_search {
+            match self.try_embed_query(query) {
+                Some(query_vec) => {
+                    let h = self.repo.hybrid_search(&query_vec, query, limit)?;
+                    (h, true)
+                }
+                None => {
+                    let h = self.repo.search(query, limit, false)?;
+                    (h, false)
+                }
             }
-            None => {
-                let h = self.repo.search(query, limit, false)?;
-                (h, false)
-            }
+        } else {
+            let h = self.repo.search(query, limit, false)?;
+            (h, false)
         };
         let min_confidence = self.min_profile_confidence();
 
