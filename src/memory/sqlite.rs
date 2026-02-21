@@ -744,7 +744,7 @@ impl SqliteMemoryRepository {
         let conn = self.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, text FROM memory_record
+                "SELECT id, text FROM memory_records
                  WHERE status = 'active' AND id NOT IN (SELECT record_id FROM vec_embeddings)
                  ORDER BY created_at DESC LIMIT 1000",
             )
@@ -1539,6 +1539,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires network + model download (~23 MB)
     fn batch_embed_missing_embeds_all() {
         use crate::memory::embedding::EmbeddingEngine;
 
@@ -1561,44 +1562,27 @@ mod tests {
             .insert_record(MemoryKind::Profile, "user likes coding", 0.9, None, &[])
             .expect("insert r5");
 
-        // Verify no embeddings exist yet.
         assert_eq!(repo.count_embeddings().expect("count"), 0);
 
-        // Create a mock engine that returns constant embeddings for testing.
-        let model_path = std::path::PathBuf::from(
-            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/onnx/model.onnx",
-        );
-        let tokenizer_path = std::path::PathBuf::from(
-            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/tokenizer.json",
-        );
+        let mut engine = EmbeddingEngine::download_and_load().expect("engine");
+        let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
 
-        if model_path.exists() && tokenizer_path.exists() {
-            let mut engine = EmbeddingEngine::new(&model_path, &tokenizer_path)
-                .expect("create embedding engine");
-
-            // Batch embed.
-            let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
-
-            // All 5 records should be embedded.
-            assert_eq!(embedded_count, 5);
-            assert_eq!(repo.count_embeddings().expect("count"), 5);
-
-            // Verify all records have embeddings.
-            assert!(repo.has_embedding(&r1.id).expect("has r1"));
-            assert!(repo.has_embedding(&r2.id).expect("has r2"));
-            assert!(repo.has_embedding(&r3.id).expect("has r3"));
-            assert!(repo.has_embedding(&r4.id).expect("has r4"));
-            assert!(repo.has_embedding(&r5.id).expect("has r5"));
-        }
+        assert_eq!(embedded_count, 5);
+        assert_eq!(repo.count_embeddings().expect("count"), 5);
+        assert!(repo.has_embedding(&r1.id).expect("has r1"));
+        assert!(repo.has_embedding(&r2.id).expect("has r2"));
+        assert!(repo.has_embedding(&r3.id).expect("has r3"));
+        assert!(repo.has_embedding(&r4.id).expect("has r4"));
+        assert!(repo.has_embedding(&r5.id).expect("has r5"));
     }
 
     #[test]
+    #[ignore] // Requires network + model download (~23 MB)
     fn batch_embed_skips_already_embedded() {
         use crate::memory::embedding::EmbeddingEngine;
 
         let (_dir, repo) = test_repo();
 
-        // Insert 3 records.
         let r1 = repo
             .insert_record(MemoryKind::Fact, "hello world", 0.8, None, &[])
             .expect("insert r1");
@@ -1613,31 +1597,15 @@ mod tests {
         let mut e1 = vec![0.0_f32; super::EMBEDDING_DIM];
         e1[0] = 1.0;
         repo.store_embedding(&r1.id, &e1).expect("store e1");
-
         assert_eq!(repo.count_embeddings().expect("count"), 1);
 
-        let model_path = std::path::PathBuf::from(
-            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/onnx/model.onnx",
-        );
-        let tokenizer_path = std::path::PathBuf::from(
-            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/tokenizer.json",
-        );
+        let mut engine = EmbeddingEngine::download_and_load().expect("engine");
+        let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
 
-        if model_path.exists() && tokenizer_path.exists() {
-            let mut engine = EmbeddingEngine::new(&model_path, &tokenizer_path)
-                .expect("create embedding engine");
-
-            // Batch embed — should skip r1, embed r2 and r3.
-            let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
-
-            // Only 2 new embeddings should be added.
-            assert_eq!(embedded_count, 2);
-            assert_eq!(repo.count_embeddings().expect("count"), 3);
-
-            // All should have embeddings now.
-            assert!(repo.has_embedding(&r1.id).expect("has r1"));
-            assert!(repo.has_embedding(&r2.id).expect("has r2"));
-            assert!(repo.has_embedding(&r3.id).expect("has r3"));
-        }
+        assert_eq!(embedded_count, 2);
+        assert_eq!(repo.count_embeddings().expect("count"), 3);
+        assert!(repo.has_embedding(&r1.id).expect("has r1"));
+        assert!(repo.has_embedding(&r2.id).expect("has r2"));
+        assert!(repo.has_embedding(&r3.id).expect("has r3"));
     }
 }
