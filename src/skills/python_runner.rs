@@ -567,6 +567,372 @@ fn map_write_error(e: std::io::Error, skill_name: &str) -> PythonSkillError {
     }
 }
 
+// ── Daemon / one-shot mode ────────────────────────────────────────────────────
+
+/// How a [`PythonSkillRunner`] manages the subprocess lifetime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunMode {
+    /// The subprocess is spawned once on first use and kept alive between
+    /// requests. On process exit the runner attempts to restart it, subject
+    /// to the configured backoff and restart cap.
+    Daemon,
+    /// A fresh subprocess is spawned for every request and killed immediately
+    /// after the response is received. No restart logic applies.
+    OneShot,
+}
+
+impl fmt::Display for RunMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Daemon => f.write_str("daemon"),
+            Self::OneShot => f.write_str("one-shot"),
+        }
+    }
+}
+
+/// Backoff delays used between restart attempts: 1 s, 2 s, 4 s, … capped at 60 s.
+const BACKOFF_INITIAL_SECS: u64 = 1;
+const BACKOFF_MAX_SECS: u64 = 60;
+
+/// Returns the backoff duration for `attempt` (0-indexed), doubling up to the max.
+///
+/// - attempt 0 → 1 s
+/// - attempt 1 → 2 s
+/// - attempt 2 → 4 s
+/// - attempt 3 → 8 s
+/// - …
+/// - attempt ≥ 6 → 60 s (capped)
+pub fn backoff_for_attempt(attempt: u32) -> Duration {
+    // Saturating left-shift: double the initial delay for each attempt.
+    let secs = BACKOFF_INITIAL_SECS
+        .checked_shl(attempt)
+        .unwrap_or(BACKOFF_MAX_SECS)
+        .min(BACKOFF_MAX_SECS);
+    Duration::from_secs(secs)
+}
+
+/// Configuration for a Python skill subprocess.
+#[derive(Debug, Clone)]
+pub struct SkillProcessConfig {
+    /// The skill name (used for logging and handshake verification).
+    pub skill_name: String,
+    /// Path to the Python entry-point script.
+    pub script_path: std::path::PathBuf,
+    /// Working directory for the subprocess.
+    pub work_dir: std::path::PathBuf,
+    /// Run mode: daemon or one-shot.
+    pub mode: RunMode,
+    /// Maximum number of restart attempts before giving up (daemon mode only).
+    pub max_restarts: u32,
+    /// Timeout for the initial handshake.
+    pub handshake_timeout: Duration,
+    /// Timeout for individual JSON-RPC requests.
+    pub request_timeout: Duration,
+    /// Fae version string sent in the handshake.
+    pub fae_version: String,
+}
+
+impl SkillProcessConfig {
+    /// Creates a config with sensible defaults.
+    pub fn new(skill_name: &str, script_path: std::path::PathBuf) -> Self {
+        Self {
+            skill_name: skill_name.to_owned(),
+            script_path: script_path.clone(),
+            work_dir: script_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf(),
+            mode: RunMode::Daemon,
+            max_restarts: 5,
+            handshake_timeout: Duration::from_secs(10),
+            request_timeout: Duration::from_secs(30),
+            fae_version: env!("CARGO_PKG_VERSION").to_owned(),
+        }
+    }
+}
+
+/// High-level Python skill subprocess manager.
+///
+/// Wraps [`PythonSkillProcess`] + [`JsonRpcComm`] with automatic restart in
+/// daemon mode and per-request spawning in one-shot mode.
+///
+/// # Daemon mode
+///
+/// The subprocess is started on first [`send`](PythonSkillRunner::send) call
+/// (or explicitly via [`start`](PythonSkillRunner::start)). If the process
+/// exits unexpectedly the runner restarts it with exponential backoff (1 s →
+/// 2 s → 4 s → … → 60 s), up to [`SkillProcessConfig::max_restarts`].
+///
+/// # One-shot mode
+///
+/// A fresh subprocess is spawned for every `send` call and killed after the
+/// response is received.
+pub struct PythonSkillRunner {
+    config: SkillProcessConfig,
+    /// Live process handle in daemon mode; always `None` in one-shot mode.
+    process: Option<PythonSkillProcess>,
+    /// Live comm handle; always `None` in one-shot mode (rebuilt per request).
+    comm: Option<JsonRpcComm>,
+    /// Number of restarts attempted so far (daemon mode only).
+    restart_count: u32,
+}
+
+impl fmt::Debug for PythonSkillRunner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PythonSkillRunner")
+            .field("skill_name", &self.config.skill_name)
+            .field("mode", &self.config.mode)
+            .field("restart_count", &self.restart_count)
+            .field("has_process", &self.process.is_some())
+            .finish()
+    }
+}
+
+impl PythonSkillRunner {
+    /// Creates a new runner. The subprocess is not started yet.
+    pub fn new(config: SkillProcessConfig) -> Self {
+        Self {
+            config,
+            process: None,
+            comm: None,
+            restart_count: 0,
+        }
+    }
+
+    /// Returns the configured run mode.
+    pub fn mode(&self) -> RunMode {
+        self.config.mode
+    }
+
+    /// Returns the number of restarts attempted (daemon mode only).
+    pub fn restart_count(&self) -> u32 {
+        self.restart_count
+    }
+
+    /// Returns `true` if the daemon subprocess is currently alive.
+    pub fn is_running(&mut self) -> bool {
+        self.process
+            .as_mut()
+            .is_some_and(|p| p.state() == PythonProcessState::Running && p.is_alive())
+    }
+
+    /// Starts the subprocess and performs the handshake.
+    ///
+    /// In daemon mode this must be called before [`send`](PythonSkillRunner::send).
+    /// Calling `start` when already running is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if spawning or handshake fails.
+    pub async fn start(&mut self) -> Result<(), PythonSkillError> {
+        if self.is_running() {
+            return Ok(());
+        }
+        self.spawn_and_handshake().await
+    }
+
+    /// Stops the daemon subprocess gracefully.
+    pub async fn stop(&mut self) {
+        if let Some(mut proc) = self.process.take() {
+            proc.kill().await;
+        }
+        self.comm = None;
+    }
+
+    /// Sends a JSON-RPC request and returns the response.
+    ///
+    /// - **Daemon mode**: reuses the live process. If the process has exited,
+    ///   attempts to restart (up to `max_restarts`) before giving up.
+    /// - **One-shot mode**: spawns a fresh process, performs handshake, sends
+    ///   the request, kills the process, returns the response.
+    ///
+    /// # Errors
+    ///
+    /// [`PythonSkillError::MaxRestartsExceeded`] if daemon restart limit is hit.
+    /// Other variants on spawn, handshake, or I/O failures.
+    pub async fn send(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, PythonSkillError> {
+        match self.config.mode {
+            RunMode::Daemon => self.send_daemon(method, params).await,
+            RunMode::OneShot => self.send_one_shot(method, params).await,
+        }
+    }
+
+    // ── private ───────────────────────────────────────────────────────────────
+
+    /// Daemon-mode send: ensure the process is running, then send.
+    async fn send_daemon(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, PythonSkillError> {
+        // Ensure we have a live process.
+        if !self.is_running() {
+            self.ensure_alive().await?;
+        }
+
+        let req = JsonRpcRequest::new(method, params, next_id());
+        let comm = self.comm.as_mut().ok_or_else(|| PythonSkillError::ProtocolError {
+            message: "comm handle missing in daemon mode".to_owned(),
+        })?;
+
+        match comm.send_request(&req, self.config.request_timeout).await {
+            Ok(outcome) => extract_result(outcome.message),
+            Err(e) => {
+                // Mark process as failed so next call restarts.
+                if let Some(proc) = self.process.as_mut() {
+                    let _ = proc.transition(PythonProcessState::Failed);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// One-shot send: spawn → handshake → request → kill.
+    async fn send_one_shot(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, PythonSkillError> {
+        let (mut proc, mut comm) = self.spawn_child().await?;
+
+        match comm
+            .perform_handshake(
+                &self.config.skill_name,
+                &self.config.fae_version,
+                self.config.handshake_timeout,
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                proc.kill().await;
+                return Err(e);
+            }
+        }
+
+        proc.transition(PythonProcessState::Running)?;
+
+        let req = JsonRpcRequest::new(method, params, next_id());
+        let outcome = comm
+            .send_request(&req, self.config.request_timeout)
+            .await;
+
+        proc.kill().await;
+
+        extract_result(outcome?.message)
+    }
+
+    /// Ensures the daemon process is running, restarting if needed.
+    async fn ensure_alive(&mut self) -> Result<(), PythonSkillError> {
+        if self.is_running() {
+            return Ok(());
+        }
+
+        if self.restart_count >= self.config.max_restarts {
+            return Err(PythonSkillError::MaxRestartsExceeded {
+                count: self.restart_count,
+            });
+        }
+
+        // Apply backoff (skip on first start: restart_count == 0 only if we
+        // have previously had a process).
+        if self.process.is_some() || self.restart_count > 0 {
+            let delay = backoff_for_attempt(self.restart_count);
+            tracing::warn!(
+                skill = %self.config.skill_name,
+                attempt = self.restart_count,
+                delay_secs = delay.as_secs(),
+                "restarting skill process with backoff"
+            );
+            tokio::time::sleep(delay).await;
+            self.restart_count += 1;
+        }
+
+        // Clean up old handles.
+        if let Some(mut old_proc) = self.process.take() {
+            old_proc.kill().await;
+        }
+        self.comm = None;
+
+        self.spawn_and_handshake().await
+    }
+
+    /// Spawns the child and performs the handshake, storing both handles.
+    async fn spawn_and_handshake(&mut self) -> Result<(), PythonSkillError> {
+        let (mut proc, mut comm) = self.spawn_child().await?;
+
+        let result = comm
+            .perform_handshake(
+                &self.config.skill_name,
+                &self.config.fae_version,
+                self.config.handshake_timeout,
+            )
+            .await;
+
+        match result {
+            Ok(_) => {
+                proc.transition(PythonProcessState::Running)?;
+                self.process = Some(proc);
+                self.comm = Some(comm);
+                Ok(())
+            }
+            Err(e) => {
+                proc.kill().await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Spawns the raw child process and returns a `(PythonSkillProcess, JsonRpcComm)` pair.
+    async fn spawn_child(
+        &self,
+    ) -> Result<(PythonSkillProcess, JsonRpcComm), PythonSkillError> {
+        let mut cmd = tokio::process::Command::new("uv");
+        cmd.arg("run")
+            .arg(&self.config.script_path)
+            .current_dir(&self.config.work_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+
+        let mut child = cmd
+            .spawn()
+            .map_err(PythonSkillError::SpawnFailed)?;
+
+        let comm = JsonRpcComm::from_child(&mut child, &self.config.skill_name)
+            .ok_or_else(|| PythonSkillError::ProtocolError {
+                message: "child process missing piped stdin/stdout".to_owned(),
+            })?;
+
+        let mut proc = PythonSkillProcess::new(&self.config.skill_name);
+        proc.attach(child)?;
+
+        Ok((proc, comm))
+    }
+}
+
+/// Extracts the `result` value from a `SkillMessage::Response`, or maps
+/// `SkillMessage::Error` to `PythonSkillError::ProtocolError`.
+fn extract_result(message: SkillMessage) -> Result<serde_json::Value, PythonSkillError> {
+    match message {
+        SkillMessage::Response(resp) => Ok(resp.result),
+        SkillMessage::Error(err) => Err(PythonSkillError::ProtocolError {
+            message: format!(
+                "skill error {}: {}",
+                err.error.code, err.error.message
+            ),
+        }),
+        SkillMessage::Notification(_) => Err(PythonSkillError::ProtocolError {
+            message: "unexpected notification where response was expected".to_owned(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -1212,5 +1578,183 @@ done
         let c = next_id();
         assert!(a < b);
         assert!(b < c);
+    }
+
+    // ── RunMode / backoff / config tests ──
+
+    #[test]
+    fn run_mode_display() {
+        assert_eq!(RunMode::Daemon.to_string(), "daemon");
+        assert_eq!(RunMode::OneShot.to_string(), "one-shot");
+    }
+
+    #[test]
+    fn backoff_for_attempt_values() {
+        assert_eq!(backoff_for_attempt(0), Duration::from_secs(1));
+        assert_eq!(backoff_for_attempt(1), Duration::from_secs(2));
+        assert_eq!(backoff_for_attempt(2), Duration::from_secs(4));
+        assert_eq!(backoff_for_attempt(3), Duration::from_secs(8));
+        assert_eq!(backoff_for_attempt(4), Duration::from_secs(16));
+        assert_eq!(backoff_for_attempt(5), Duration::from_secs(32));
+        assert_eq!(backoff_for_attempt(6), Duration::from_secs(60)); // capped
+        assert_eq!(backoff_for_attempt(10), Duration::from_secs(60)); // still capped
+        assert_eq!(backoff_for_attempt(63), Duration::from_secs(60)); // overflow safe
+    }
+
+    #[test]
+    fn skill_process_config_defaults() {
+        let cfg = SkillProcessConfig::new("my-skill", std::path::PathBuf::from("/tmp/skill.py"));
+        assert_eq!(cfg.skill_name, "my-skill");
+        assert_eq!(cfg.mode, RunMode::Daemon);
+        assert_eq!(cfg.max_restarts, 5);
+        assert_eq!(cfg.handshake_timeout, Duration::from_secs(10));
+        assert_eq!(cfg.request_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn python_skill_runner_new() {
+        let cfg = SkillProcessConfig::new("test", std::path::PathBuf::from("/tmp/t.py"));
+        let runner = PythonSkillRunner::new(cfg);
+        assert_eq!(runner.mode(), RunMode::Daemon);
+        assert_eq!(runner.restart_count(), 0);
+    }
+
+    #[test]
+    fn python_skill_runner_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<PythonSkillRunner>();
+        assert_send::<RunMode>();
+        assert_send::<SkillProcessConfig>();
+    }
+
+    #[test]
+    fn extract_result_response() {
+        use crate::skills::python_protocol::JsonRpcResponse;
+        let msg = SkillMessage::Response(JsonRpcResponse {
+            jsonrpc: "2.0".to_owned(),
+            result: serde_json::json!({"answer": 42}),
+            id: 1,
+        });
+        let val = extract_result(msg).unwrap();
+        assert_eq!(val["answer"], 42);
+    }
+
+    #[test]
+    fn extract_result_error_maps_to_protocol_error() {
+        use crate::skills::python_protocol::{JsonRpcError, JsonRpcErrorResponse};
+        let msg = SkillMessage::Error(JsonRpcErrorResponse {
+            jsonrpc: "2.0".to_owned(),
+            error: JsonRpcError {
+                code: -1,
+                message: "oops".to_owned(),
+                data: None,
+            },
+            id: 1,
+        });
+        let err = extract_result(msg).unwrap_err();
+        match err {
+            PythonSkillError::ProtocolError { message } => {
+                assert!(message.contains("oops"));
+            }
+            other => panic!("expected ProtocolError, got {other:?}"),
+        }
+    }
+
+    /// Spawn a one-shot skill using `sh` instead of `uv run` for testing.
+    ///
+    /// We bypass PythonSkillRunner.send() and directly exercise the spawn+
+    /// handshake+request cycle with shell processes.
+    #[tokio::test]
+    async fn one_shot_send_round_trip() {
+        // Manually exercise the one-shot pattern without going through uv.
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(
+                r#"
+while IFS= read -r line; do
+    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+    if echo "$line" | grep -q '"skill.handshake"'; then
+        printf '{"jsonrpc":"2.0","result":{"name":"echo","version":"1.0"},"id":%s}\n' "$id"
+    else
+        printf '{"jsonrpc":"2.0","result":{"reply":"pong"},"id":%s}\n' "$id"
+    fi
+done
+"#,
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn");
+
+        let mut proc = PythonSkillProcess::new("echo");
+        let mut comm = JsonRpcComm::from_child(&mut child, "echo").expect("from_child");
+
+        proc.attach(child).unwrap();
+
+        comm.perform_handshake("echo", "0.8.1", Duration::from_secs(5))
+            .await
+            .expect("handshake");
+        proc.transition(PythonProcessState::Running).unwrap();
+
+        let req = JsonRpcRequest::new("ping", None, next_id());
+        let outcome = comm
+            .send_request(&req, Duration::from_secs(5))
+            .await
+            .expect("send_request");
+
+        match outcome.message {
+            SkillMessage::Response(resp) => assert_eq!(resp.result["reply"], "pong"),
+            other => panic!("expected Response, got {other:?}"),
+        }
+
+        proc.kill().await;
+        assert_eq!(proc.state(), PythonProcessState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn daemon_mode_reuses_process() {
+        // Verify that in daemon mode a process handle is kept across requests.
+        // We simulate daemon behaviour manually (PythonSkillRunner.send requires uv).
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(
+                r#"
+while IFS= read -r line; do
+    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+    if echo "$line" | grep -q '"skill.handshake"'; then
+        printf '{"jsonrpc":"2.0","result":{"name":"daemon","version":"1.0"},"id":%s}\n' "$id"
+    else
+        printf '{"jsonrpc":"2.0","result":"ok","id":%s}\n' "$id"
+    fi
+done
+"#,
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn daemon");
+
+        let mut proc = PythonSkillProcess::new("daemon");
+        let mut comm = JsonRpcComm::from_child(&mut child, "daemon").expect("from_child");
+        proc.attach(child).unwrap();
+
+        comm.perform_handshake("daemon", "0.8.1", Duration::from_secs(5))
+            .await
+            .expect("handshake");
+        proc.transition(PythonProcessState::Running).unwrap();
+        assert!(proc.is_alive());
+
+        // Send multiple requests through the same process.
+        for i in 1_u64..=3 {
+            let req = JsonRpcRequest::new("work", None, i + 1000);
+            comm.send_request(&req, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("request {i} failed: {e}"));
+            assert!(proc.is_alive(), "process died after request {i}");
+        }
+
+        proc.kill().await;
     }
 }
