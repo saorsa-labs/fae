@@ -14,7 +14,7 @@ use super::schema::{EMBEDDING_DIM, apply_schema, apply_vec_schema, read_schema_v
 /// Register the sqlite-vec extension globally (once).
 ///
 /// Must be called before any `Connection::open()` that needs vec0 support.
-fn ensure_sqlite_vec_loaded() {
+pub(crate) fn ensure_sqlite_vec_loaded() {
     use std::sync::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {

@@ -156,10 +156,18 @@ impl Scheduler {
         );
         gc_task.kind = TaskKind::Builtin;
 
+        let mut backup_task = ScheduledTask::new(
+            "memory_backup",
+            "Daily memory database backup",
+            Schedule::Daily { hour: 2, min: 0 },
+        );
+        backup_task.kind = TaskKind::Builtin;
+
         self.add_task_if_missing(migrate_task);
         self.add_task_if_missing(reflect_task);
         self.add_task_if_missing(reindex_task);
         self.add_task_if_missing(gc_task);
+        self.add_task_if_missing(backup_task);
     }
 
     /// Register built-in intelligence maintenance tasks.

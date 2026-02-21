@@ -1623,8 +1623,15 @@ pub fn run_memory_reflection(root_dir: &Path) -> Result<String> {
 pub fn run_memory_reindex(root_dir: &Path) -> Result<String> {
     let repo = super::sqlite::SqliteMemoryRepository::new(root_dir)?;
     let records = repo.list_records()?;
+    let integrity = match repo.integrity_check() {
+        Ok(()) => "ok",
+        Err(e) => {
+            tracing::warn!(error = %e, "integrity check failed during reindex");
+            "FAILED"
+        }
+    };
     Ok(format!(
-        "memory reindex completed; {} records scanned",
+        "memory reindex completed; {} records scanned, integrity: {integrity}",
         records.len()
     ))
 }

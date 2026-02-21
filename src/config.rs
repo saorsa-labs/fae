@@ -828,6 +828,8 @@ pub struct MemoryConfig {
     pub semantic_weight: f32,
     /// Run a PRAGMA quick_check on startup to detect database corruption.
     pub integrity_check_on_startup: bool,
+    /// Number of daily backup files to retain (rotated).
+    pub backup_keep_count: usize,
 }
 
 impl Default for MemoryConfig {
@@ -845,6 +847,7 @@ impl Default for MemoryConfig {
             use_hybrid_search: true,
             semantic_weight: crate::memory::types::HYBRID_SEMANTIC_WEIGHT,
             integrity_check_on_startup: true,
+            backup_keep_count: 7,
         }
     }
 }

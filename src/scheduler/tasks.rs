@@ -599,6 +599,8 @@ pub const TASK_MEMORY_REINDEX: &str = "memory_reindex";
 pub const TASK_MEMORY_GC: &str = "memory_gc";
 /// Well-known task ID for memory schema migration checks.
 pub const TASK_MEMORY_MIGRATE: &str = "memory_migrate";
+/// Well-known task ID for daily memory database backup.
+pub const TASK_MEMORY_BACKUP: &str = "memory_backup";
 /// Well-known task ID for the daily noise budget reset.
 pub const TASK_NOISE_BUDGET_RESET: &str = "noise_budget_reset";
 /// Well-known task ID for checking stale relationships.
@@ -633,6 +635,7 @@ pub fn execute_builtin_with_memory_root(
         TASK_MEMORY_REINDEX => run_memory_reindex_for_root(memory_root),
         TASK_MEMORY_GC => run_memory_gc_for_root(memory_root, retention_days),
         TASK_MEMORY_MIGRATE => run_memory_migrate_for_root(memory_root),
+        TASK_MEMORY_BACKUP => run_memory_backup_for_root(memory_root),
         TASK_NOISE_BUDGET_RESET => run_noise_budget_reset(),
         TASK_STALE_RELATIONSHIPS => run_stale_relationship_check(memory_root),
         TASK_MORNING_BRIEFING => run_morning_briefing_check(memory_root),
@@ -845,6 +848,30 @@ fn run_memory_migrate_for_root(root: &Path) -> TaskResult {
                 },
             })
         }
+    }
+}
+
+fn run_memory_backup_for_root(root: &Path) -> TaskResult {
+    let db = crate::memory::backup::db_path(root);
+    if !db.exists() {
+        return TaskResult::Success("backup skipped: no database file".into());
+    }
+    let backup_dir = root.join("backups");
+    let keep_count = crate::config::MemoryConfig::default().backup_keep_count;
+
+    match crate::memory::backup::backup_database(&db, &backup_dir) {
+        Ok(path) => {
+            let rotated = crate::memory::backup::rotate_backups(&backup_dir, keep_count)
+                .unwrap_or(0);
+            let name = path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            TaskResult::Success(format!(
+                "backup created: {name}, rotated {rotated} old backup(s)"
+            ))
+        }
+        Err(e) => TaskResult::Error(format!("memory backup failed: {e}")),
     }
 }
 
