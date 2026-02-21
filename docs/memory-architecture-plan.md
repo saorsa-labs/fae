@@ -9,16 +9,20 @@ Build a production-grade conversational memory system that is:
 - robust across upgrades and schema evolution
 - strong under real-world noisy language and long sessions
 
-## Current baseline (implemented)
+## Current baseline (implemented — Milestone 7 complete)
 
 ### Data model and storage
 
-- versioned manifest (`manifest.toml`)
-- append-style record store (`records.jsonl`)
-- append audit log (`audit.jsonl`)
-- typed records: `profile`, `fact`, `episode`
+- SQLite database (`~/.fae/memory/fae.db`, WAL mode) with sqlite-vec extension
+- Tables: `memory_records`, `memory_audit`, `vec_embeddings` (384-dim), `schema_meta`
+- 7 memory kinds: `profile`, `fact`, `episode`, `event`, `person`, `interest`, `commitment`
 - typed status: `active`, `superseded`, `invalidated`, `forgotten`
-- backward-compatible markdown identity files (`primary_user.md`, `people.md`)
+- embedding: all-MiniLM-L6-v2 (ONNX, 384-dim float32) via ort
+- hybrid retrieval: semantic similarity (0.6) + confidence (0.2) + freshness (0.1) + kind bonus (0.1)
+- lexical fallback when embedding engine unavailable
+- PRAGMA quick_check integrity verification on startup
+- daily VACUUM INTO atomic backups with 7-file rotation
+- one-time JSONL → SQLite migration on upgrade (legacy files preserved as backup)
 
 ### Lifecycle automation
 
@@ -35,9 +39,10 @@ Build a production-grade conversational memory system that is:
 
 ## Gaps to close for world-class behavior
 
-1. Retrieval quality
-- current ranking is lexical + heuristics only
-- no semantic embedding index yet
+1. ~~Retrieval quality~~ **DONE (Milestone 7)**
+- ~~current ranking is lexical + heuristics only~~
+- ~~no semantic embedding index yet~~
+- Implemented: hybrid semantic + structural scoring via sqlite-vec KNN
 
 2. Extraction breadth
 - capture currently relies on deterministic parsing patterns
@@ -136,17 +141,17 @@ Recommended quality gates:
 
 ## Delivery roadmap
 
-### Phase 1 (hardening)
+### Phase 1 (hardening) — COMPLETE
 
-- strengthen extraction precision for names/preferences
-- enforce confidence gating for durable promotion/recall
-- improve oversized-turn resilience
+- ✅ strengthen extraction precision for names/preferences
+- ✅ enforce confidence gating for durable promotion/recall
+- ✅ improve oversized-turn resilience
 
-### Phase 2 (retrieval quality)
+### Phase 2 (retrieval quality) — COMPLETE (Milestone 7)
 
-- add embedding index and hybrid ranker
-- add dedupe by semantic near-duplicate, not only exact text
-- add recall observability dashboards (budget hit ratio, precision proxies)
+- ✅ add embedding index and hybrid ranker (sqlite-vec + all-MiniLM-L6-v2)
+- ✅ add dedupe by semantic near-duplicate, not only exact text
+- recall observability dashboards (budget hit ratio, precision proxies) — future work
 
 ### Phase 3 (governance)
 

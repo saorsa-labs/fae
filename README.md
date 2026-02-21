@@ -33,7 +33,7 @@ Fae has a durable memory system that learns about you over time — your name, p
 - **Explicit control** — ask Fae to remember or forget anything. All operations are auditable.
 - **Background maintenance** — Fae periodically consolidates, reindexes, and cleans up memories to keep them useful and bounded.
 
-Storage: `~/.fae/memory/` (JSONL records, TOML manifest, audit log)
+Storage: `~/.fae/memory/fae.db` (SQLite, WAL mode, sqlite-vec for semantic search)
 
 ### Proactive Intelligence
 
@@ -88,6 +88,7 @@ Built-in scheduled tasks:
 | `memory_reflect` | Every 6 hours | Consolidate duplicate memories |
 | `memory_reindex` | Every 3 hours | Memory health and reindexing |
 | `memory_gc` | Daily at 03:30 | Retention cleanup |
+| `memory_backup` | Daily at 02:00 | Atomic database backup with rotation |
 | `noise_budget_reset` | Daily at midnight | Reset proactive delivery budget |
 | `stale_relationships` | Weekly | Detect relationships needing check-in |
 | `morning_briefing` | Daily at 08:00 | Prepare morning briefing data |
@@ -185,8 +186,6 @@ Fae always runs through the internal agent loop (tool calling + sandboxing). The
 | Backend | Config | Inference | Notes |
 |---|---|---|---|
 | Local | `backend = "local"` | On-device via mistralrs (Metal on Mac, CUDA on Linux) | Private, no network needed |
-| API | `backend = "api"` | Remote (OpenAI, Anthropic, or any OpenAI-compatible endpoint) | More capable models |
-| Agent | `backend = "agent"` | Auto (local when no creds, API otherwise) | Backward compatibility |
 
 ### Local Model Selection
 
@@ -199,7 +198,7 @@ Fae automatically selects the best local model based on your system RAM:
 
 Both models support vision (camera/image understanding) and are loaded via VisionModelBuilder with ISQ Q4K quantization. If a vision model fails to load, Fae falls back to Qwen3-4B text-only (GGUF).
 
-Local fallback: when `enable_local_fallback = true`, Fae falls back to the local model if the remote API is unreachable.
+Fae runs exclusively on local models — no API keys or remote servers required.
 
 ## Security
 
@@ -244,6 +243,10 @@ auto_recall = true
 recall_max_items = 6
 recall_max_chars = 1200
 retention_days = 365
+use_hybrid_search = true
+semantic_weight = 0.60
+integrity_check_on_startup = true
+backup_keep_count = 7
 
 [intelligence]
 enabled = false          # Enable proactive intelligence

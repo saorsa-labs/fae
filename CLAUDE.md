@@ -34,7 +34,7 @@ Implementation touchpoints (not behavioral truth):
 
 - `src/memory/sqlite.rs` — SQLite repository
 - `src/memory/types.rs` — types, hybrid scoring
-- `src/memory/jsonl.rs` — orchestrator, recall/capture
+- `src/memory/jsonl.rs` — MemoryOrchestrator (recall/capture), JSONL migration support
 - `src/memory/embedding.rs` — all-MiniLM-L6-v2 ONNX engine
 - `src/memory/backup.rs` — VACUUM INTO backup + rotation
 - `src/memory/schema.rs` — DDL, vec_embeddings virtual table
@@ -273,3 +273,9 @@ When changing memory logic, add tests first (TDD), then implementation.
   - Phase 6.3: UX feedback — download progress bar, partial STT, streaming assistant text, orb audio level, right-click context menu
   - Phase 6.4: Settings expansion — tool mode tab, channel config tab, CameraSkill removal
   - Phase 6.5: Integration validation — full Rust/Swift build verification, all 11 dogfood findings confirmed resolved
+- **Milestone 7: Memory Architecture v2 — SQLite + Semantic Retrieval:**
+  - Phase 7.1: SQLite foundation (rusqlite + sqlite-vec, schema, SqliteMemoryRepository)
+  - Phase 7.2: JSONL → SQLite migration (automatic on startup, backup preserved)
+  - Phase 7.3: Embedding engine (all-MiniLM-L6-v2, 384-dim vectors via ort)
+  - Phase 7.4: Hybrid retrieval (semantic 0.6 + confidence 0.2 + freshness 0.1 + kind bonus 0.1)
+  - Phase 7.5: Backup, recovery & hardening (integrity check, VACUUM INTO backups, rotation)

@@ -8,10 +8,11 @@
 - Milestone 4: Onboarding Redesign
 - Milestone 5: Handoff & Production Polish
 - Milestone 6: Dogfood Readiness (v0.7.0)
+- Milestone 7: Memory Architecture v2 — SQLite + Semantic Retrieval
 
 ---
 
-## Milestone 7: Memory Architecture v2 — SQLite + Semantic Retrieval
+## Milestone 7: Memory Architecture v2 — SQLite + Semantic Retrieval (COMPLETE)
 
 **Goal:** Migrate Fae's memory from JSONL flat files to SQLite + sqlite-vec with semantic embedding-based retrieval. Production-ready: fully tested, documented, zero warnings.
 
