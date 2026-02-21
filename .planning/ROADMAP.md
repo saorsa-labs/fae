@@ -9,6 +9,111 @@
 - Milestone 5: Handoff & Production Polish
 - Milestone 6: Dogfood Readiness (v0.7.0)
 - Milestone 7: Memory Architecture v2 — SQLite + Semantic Retrieval
+- Milestone 8: Python Skill Runtime (v0.8.1) ← ACTIVE
+
+---
+
+## Milestone 8: Python Skill Runtime (v0.8.1)
+
+**Goal**: Transform Fae into a self-extending agent. She generates, tests, runs, and self-heals Python skills to connect to any service. Non-technical users say what they want in plain English; Fae writes the code, tests it, and manages it autonomously. Existing Discord/WhatsApp channels migrated to generated Python skills.
+
+**Problems Solved:**
+1. **Integration gap** — Fae can't connect to services without hardcoded Rust code
+2. **Self-extension** — Fae becomes able to create integrations for ANY service on demand
+3. **Technical debt** — ~6000 lines of hardcoded channel code replaced by dynamic skills
+
+**Architecture:** Python via UV (PEP 723 inline deps), JSON-RPC 2.0 over stdio, macOS Keychain for credentials, semantic retrieval for skill discovery (sqlite-vec), LATM tool-making pattern for generation.
+
+---
+
+### Phase 8.1: Core Python Skill Runner
+
+- **Focus**: `PythonSkillRunner` — subprocess manager that spawns Python skills via `uv run`, communicates via JSON-RPC 2.0 over stdin/stdout, handles lifecycle (spawn → handshake → running → health → shutdown)
+- **Deliverables**: Working runner with daemon + one-shot modes, integrated into ToolRegistry
+- **Dependencies**: None (additive)
+- **Estimated Tasks**: 6-8
+- **Key files**: new `src/skills/python_runner.rs`, `src/skills/python_protocol.rs`, `src/skills/mod.rs`, `src/config.rs`
+
+### Phase 8.2: UV Bootstrap & Environment Management
+
+- **Focus**: Auto-detect or install UV binary, PEP 723 metadata parsing from Rust, environment pre-warming, Python version management, lockfile generation
+- **Deliverables**: Zero-config Python environment that bootstraps itself on first use
+- **Dependencies**: Phase 8.1
+- **Estimated Tasks**: 5-6
+- **Key files**: new `src/skills/uv_bootstrap.rs`, `src/fae_dirs.rs`
+
+### Phase 8.3: Skill Lifecycle Management
+
+- **Focus**: `PythonSkill` type with states (Pending → Testing → Active → Disabled → Quarantined), SKILL.md metadata, manifest.toml, versioning with history, rollback support
+- **Deliverables**: Full lifecycle management for Python skills alongside existing managed skills
+- **Dependencies**: Phase 8.2
+- **Estimated Tasks**: 5-7
+- **Key files**: new `src/skills/python_lifecycle.rs`, `src/skills/manifest.rs`, `src/skills/mod.rs`
+
+### Phase 8.4: Credential Mediation
+
+- **Focus**: Keychain-mediated credential injection, credential schema in manifests, interactive collection flow, secure environment variable passing
+- **Deliverables**: Skills never see raw Keychain storage, credentials collected in plain English
+- **Dependencies**: Phase 8.3
+- **Estimated Tasks**: 4-5
+- **Key files**: `src/credentials/mod.rs`, new `src/skills/credential_mediation.rs`
+
+### Phase 8.5: Semantic Skill Discovery
+
+- **Focus**: Embed SKILL.md descriptions using all-MiniLM-L6-v2, store in sqlite-vec, semantic search for matching skills before generation
+- **Deliverables**: User requests match existing skills by meaning, not keywords
+- **Dependencies**: Phase 8.3 (skills exist to search), Milestone 7 (embedding engine)
+- **Estimated Tasks**: 4-5
+- **Key files**: new `src/skills/discovery.rs`, `src/memory/embedding.rs`
+
+### Phase 8.6: Skill Generator Pipeline
+
+- **Focus**: LLM-driven skill generation (LATM pattern), API discovery, PEP 723 script generation, iterative testing (4 rounds), intent preview for user approval, self-verification
+- **Deliverables**: Fae can generate a working Python skill for any API from a plain English request
+- **Dependencies**: Phase 8.4 + 8.5
+- **Estimated Tasks**: 7-9
+- **Key files**: new `src/intelligence/skill_generator.rs`, `src/intelligence/skill_proposals.rs`
+
+### Phase 8.7: Self-Healing & Health Monitoring
+
+- **Focus**: Health checks, auto-restart with backoff, error capture + LLM repair, memory-backed fix patterns, quarantine on repeated failure
+- **Deliverables**: Skills self-heal when APIs change, users notified in plain English
+- **Dependencies**: Phase 8.6
+- **Estimated Tasks**: 5-6
+- **Key files**: new `src/skills/health_monitor.rs`, `src/skills/self_healing.rs`
+
+### Phase 8.8: Channel Migration
+
+- **Focus**: Generate Python equivalents of Discord/WhatsApp, side-by-side testing, remove ~6000 lines of hardcoded channel code, generic skill settings UI
+- **Deliverables**: Existing channel functionality preserved via Python skills, codebase significantly smaller
+- **Dependencies**: Phase 8.7
+- **Estimated Tasks**: 6-8
+- **Key files**: `src/channels/` (removed), `SettingsChannelsTab.swift` (removed), new generic settings
+
+---
+
+### Risks & Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| UV not installed on user's machine | Auto-install UV on first skill use (~15MB download) |
+| Python skill crashes Fae | Subprocess isolation — kill_on_drop, process boundary |
+| LLM generates broken code | Iterative testing (4 rounds), quarantine on failure |
+| API credentials leaked | Keychain-only storage, env var injection, never in source |
+| UV cache lock contention | Sequential pre-warming, per-skill cache dirs if needed |
+| App Store sandbox restrictions | UV/Python run within inherited sandbox, no new entitlements needed |
+| Non-technical users confused | Intent preview (plain English), progressive disclosure (3 layers) |
+
+### Success Criteria
+
+- [ ] `just check` passes with zero warnings
+- [ ] All existing tests pass + comprehensive new tests
+- [ ] Non-technical user can say "connect to Discord" and Fae handles everything
+- [ ] Fae generates skills for 3+ arbitrary APIs (demonstrated)
+- [ ] Existing Discord/WhatsApp functionality preserved via Python skills
+- [ ] Credentials in macOS Keychain, never in source
+- [ ] Skills self-heal when APIs change
+- [ ] Semantic discovery finds existing skills before generating new ones
 
 ---
 

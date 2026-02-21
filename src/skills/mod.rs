@@ -11,6 +11,8 @@
 //!    the same directory with state tracked in `.state/registry.json`.
 
 pub mod builtins;
+pub mod error;
+pub mod python_protocol;
 pub mod trait_def;
 
 use serde::{Deserialize, Serialize};

@@ -1,26 +1,22 @@
 {
-  "version": 4,
-  "project": "fae-memory-v2",
-  "active": false,
+  "version": 5,
+  "project": "fae-python-skill-runtime",
+  "active": true,
   "milestone": {
-    "number": 7,
-    "name": "Memory Architecture v2 — SQLite + Semantic Retrieval"
+    "number": 8,
+    "name": "Python Skill Runtime (v0.8.1)"
   },
   "phase": {
-    "number": "7.5",
-    "name": "Backup, Recovery & Hardening",
-    "plan": ".planning/PLAN-phase-7.5.md",
-    "status": "complete"
+    "number": "8.1",
+    "name": "Core Python Skill Runner",
+    "plan": ".planning/PLAN-phase-8.1.md",
+    "status": "executing"
   },
   "progress": {
-    "total_tasks": 4,
-    "completed_tasks": 4,
-    "current_task": 4
+    "total_tasks": 9,
+    "completed_tasks": 1,
+    "current_task": 2
   },
-  "review": {
-    "status": "passed",
-    "iteration": 1
-  },
-  "status": "milestone_complete",
-  "last_updated": "2026-02-21T05:30:00Z"
+  "status": "executing",
+  "last_updated": "2026-02-21T12:15:00Z"
 }
