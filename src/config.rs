@@ -841,7 +841,7 @@ impl Default for MemoryConfig {
             retention_days: 365,
             schema_auto_migrate: true,
             use_hybrid_search: true,
-            semantic_weight: 0.60,
+            semantic_weight: crate::memory::types::HYBRID_SEMANTIC_WEIGHT,
         }
     }
 }

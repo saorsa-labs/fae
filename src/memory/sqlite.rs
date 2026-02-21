@@ -3,6 +3,7 @@
 //! Implements the same public API as `MemoryRepository` (JSONL backend),
 //! backed by a single SQLite database file at `{root_dir}/fae.db`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -570,7 +571,10 @@ impl SqliteMemoryRepository {
             return Ok(Vec::new());
         }
         let conn = self.lock()?;
-        let placeholders: String = (1..=ids.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+        let placeholders: String = (1..=ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!(
             "SELECT id, kind, status, text, confidence, source_turn_id, tags, \
              supersedes, created_at, updated_at, importance_score, stale_after_secs, \
@@ -578,8 +582,10 @@ impl SqliteMemoryRepository {
              WHERE status = 'active' AND id IN ({placeholders})"
         );
         let mut stmt = conn.prepare(&sql).map_err(SqliteMemoryError::Sqlite)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
         let rows = stmt
             .query_map(params.as_slice(), row_to_record)
             .map_err(SqliteMemoryError::Sqlite)?;
@@ -601,9 +607,8 @@ impl SqliteMemoryRepository {
         query_vec: &[f32],
         query: &str,
         limit: usize,
+        semantic_weight: f32,
     ) -> Result<Vec<MemorySearchHit>, SqliteMemoryError> {
-        use std::collections::HashMap;
-
         // Fetch an oversized candidate set from vector search.
         let candidates = self.search_by_vector(query_vec, limit.saturating_mul(3).max(20))?;
 
@@ -624,7 +629,7 @@ impl SqliteMemoryRepository {
             .into_iter()
             .filter_map(|record| {
                 let distance = distance_map.get(&record.id).copied()?;
-                let score = hybrid_score(&record, distance);
+                let score = hybrid_score(&record, distance, semantic_weight);
                 Some(MemorySearchHit { record, score })
             })
             .collect();
@@ -1071,7 +1076,7 @@ fn str_to_audit_op(s: &str) -> MemoryAuditOp {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::CURRENT_SCHEMA_VERSION;
+    use super::super::types::{CURRENT_SCHEMA_VERSION, HYBRID_SEMANTIC_WEIGHT};
     use super::*;
 
     fn test_repo() -> (tempfile::TempDir, SqliteMemoryRepository) {
@@ -1625,7 +1630,13 @@ mod tests {
             .insert_record(MemoryKind::Fact, "sky is blue", 0.8, None, &[])
             .expect("r2");
         let r3 = repo
-            .insert_record(MemoryKind::Episode, "had coffee this morning", 0.5, None, &[])
+            .insert_record(
+                MemoryKind::Episode,
+                "had coffee this morning",
+                0.5,
+                None,
+                &[],
+            )
             .expect("r3");
 
         // Store mock embeddings (384-dim, L2-normalized).
@@ -1650,7 +1661,7 @@ mod tests {
         let mut query = vec![0.0f32; dim];
         query[0] = 1.0;
         let results = repo
-            .hybrid_search(&query, "dark mode", 10)
+            .hybrid_search(&query, "dark mode", 10, HYBRID_SEMANTIC_WEIGHT)
             .expect("hybrid search");
 
         assert!(!results.is_empty(), "should return results");
@@ -1693,7 +1704,7 @@ mod tests {
         let mut query = vec![0.0f32; super::EMBEDDING_DIM];
         query[0] = 1.0;
         let results = repo
-            .hybrid_search(&query, "record", 10)
+            .hybrid_search(&query, "record", 10, HYBRID_SEMANTIC_WEIGHT)
             .expect("hybrid search");
 
         // Only r1 should appear (r2 is inactive).
@@ -1713,7 +1724,7 @@ mod tests {
 
         let query_vec = vec![0.0f32; super::EMBEDDING_DIM];
         let results = repo
-            .hybrid_search(&query_vec, "cats", 10)
+            .hybrid_search(&query_vec, "cats", 10, HYBRID_SEMANTIC_WEIGHT)
             .expect("hybrid search");
 
         // Should fall back to lexical and find "cats are cool".

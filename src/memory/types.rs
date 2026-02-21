@@ -65,6 +65,11 @@ pub(crate) const HYBRID_FRESHNESS_WEIGHT: f32 = 0.10;
 pub(crate) const HYBRID_KIND_BONUS_PROFILE: f32 = 0.10;
 pub(crate) const HYBRID_KIND_BONUS_FACT: f32 = 0.06;
 
+/// Episode relevance threshold when using hybrid (semantic) search.
+pub(crate) const EPISODE_THRESHOLD_HYBRID: f32 = 0.4;
+/// Episode relevance threshold when using lexical-only search.
+pub(crate) const EPISODE_THRESHOLD_LEXICAL: f32 = 0.6;
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
@@ -286,10 +291,15 @@ pub(crate) fn score_record(record: &MemoryRecord, query_tokens: &[String]) -> f3
 ///
 /// `distance` is the L2 distance from sqlite-vec (range 0.0..2.0 for
 /// L2-normalized vectors). Converts to similarity as `1.0 - distance / 2.0`.
-pub(crate) fn hybrid_score(record: &MemoryRecord, distance: f64) -> f32 {
+///
+/// `semantic_weight` controls the blend — pass [`HYBRID_SEMANTIC_WEIGHT`] for
+/// the default, or a config-driven value.
+pub(crate) fn hybrid_score(record: &MemoryRecord, distance: f64, semantic_weight: f32) -> f32 {
+    let semantic_weight = semantic_weight.clamp(0.0, 1.0);
+
     // Semantic similarity from L2 distance (normalized vecs: max L2 distance = 2.0)
     let semantic_sim = (1.0 - distance as f32 / 2.0).clamp(0.0, 1.0);
-    let mut score = HYBRID_SEMANTIC_WEIGHT * semantic_sim;
+    let mut score = semantic_weight * semantic_sim;
 
     // Confidence contribution
     score += HYBRID_CONFIDENCE_WEIGHT * record.confidence.clamp(0.0, 1.0);
@@ -385,7 +395,7 @@ mod tests {
     fn hybrid_score_perfect_match_high_confidence() {
         let record = make_record(MemoryKind::Profile, 0.95, 0);
         // Distance 0.0 = identical vector → semantic_sim = 1.0
-        let score = hybrid_score(&record, 0.0);
+        let score = hybrid_score(&record, 0.0, HYBRID_SEMANTIC_WEIGHT);
         // Expected: 0.6*1.0 + 0.2*0.95 + 0.1*~1.0 + 0.10 ≈ 1.0
         assert!(
             score > 0.95,
@@ -397,7 +407,7 @@ mod tests {
     fn hybrid_score_distant_match_low_confidence() {
         let record = make_record(MemoryKind::Episode, 0.3, 86_400 * 30);
         // Distance 1.5 → semantic_sim = 0.25
-        let score = hybrid_score(&record, 1.5);
+        let score = hybrid_score(&record, 1.5, HYBRID_SEMANTIC_WEIGHT);
         // Expected: 0.6*0.25 + 0.2*0.3 + 0.1*small + 0.0 ≈ 0.21
         assert!(
             score < 0.35,
@@ -408,31 +418,25 @@ mod tests {
     #[test]
     fn hybrid_score_zero_distance_gives_max_semantic() {
         let record = make_record(MemoryKind::Fact, 0.0, 86_400 * 365 * 10);
-        let score = hybrid_score(&record, 0.0);
+        let score = hybrid_score(&record, 0.0, HYBRID_SEMANTIC_WEIGHT);
         // 0.6*1.0 + 0.2*0.0 + 0.1*tiny + 0.06 ≈ 0.66
-        assert!(
-            (score - 0.66).abs() < 0.02,
-            "expected ~0.66, got {score}"
-        );
+        assert!((score - 0.66).abs() < 0.02, "expected ~0.66, got {score}");
     }
 
     #[test]
     fn hybrid_score_max_distance_gives_zero_semantic() {
         let record = make_record(MemoryKind::Fact, 0.0, 86_400 * 365 * 10);
-        let score = hybrid_score(&record, 2.0);
+        let score = hybrid_score(&record, 2.0, HYBRID_SEMANTIC_WEIGHT);
         // 0.6*0.0 + 0.2*0.0 + 0.1*tiny + 0.06 ≈ 0.06
-        assert!(
-            (score - 0.06).abs() < 0.02,
-            "expected ~0.06, got {score}"
-        );
+        assert!((score - 0.06).abs() < 0.02, "expected ~0.06, got {score}");
     }
 
     #[test]
     fn hybrid_score_kind_bonuses_differ() {
         let profile = make_record(MemoryKind::Profile, 0.5, 0);
         let episode = make_record(MemoryKind::Episode, 0.5, 0);
-        let s_profile = hybrid_score(&profile, 0.5);
-        let s_episode = hybrid_score(&episode, 0.5);
+        let s_profile = hybrid_score(&profile, 0.5, HYBRID_SEMANTIC_WEIGHT);
+        let s_episode = hybrid_score(&episode, 0.5, HYBRID_SEMANTIC_WEIGHT);
         assert!(
             s_profile > s_episode,
             "profile ({s_profile}) should outscore episode ({s_episode})"
@@ -448,8 +452,8 @@ mod tests {
     fn hybrid_score_freshness_decays() {
         let fresh = make_record(MemoryKind::Fact, 0.5, 0);
         let stale = make_record(MemoryKind::Fact, 0.5, 86_400 * 30);
-        let s_fresh = hybrid_score(&fresh, 0.5);
-        let s_stale = hybrid_score(&stale, 0.5);
+        let s_fresh = hybrid_score(&fresh, 0.5, HYBRID_SEMANTIC_WEIGHT);
+        let s_stale = hybrid_score(&stale, 0.5, HYBRID_SEMANTIC_WEIGHT);
         assert!(
             s_fresh > s_stale,
             "fresh ({s_fresh}) should outscore stale ({s_stale})"

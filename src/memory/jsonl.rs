@@ -1076,7 +1076,12 @@ checklist:\n\
         let (hits, is_hybrid) = if self.config.use_hybrid_search {
             match self.try_embed_query(query) {
                 Some(query_vec) => {
-                    let h = self.repo.hybrid_search(&query_vec, query, limit)?;
+                    let h = self.repo.hybrid_search(
+                        &query_vec,
+                        query,
+                        limit,
+                        self.config.semantic_weight,
+                    )?;
                     (h, true)
                 }
                 None => {
@@ -1093,7 +1098,11 @@ checklist:\n\
         // Separate durable records (profile/fact) from episodes.
         // Hybrid scores top out around 1.0 (vs ~1.3 for lexical), so the
         // episode relevance threshold is lower when using hybrid search.
-        let episode_threshold = if is_hybrid { 0.4 } else { 0.6 };
+        let episode_threshold = if is_hybrid {
+            super::types::EPISODE_THRESHOLD_HYBRID
+        } else {
+            super::types::EPISODE_THRESHOLD_LEXICAL
+        };
         let mut durable_hits = Vec::new();
         let mut episode_hits = Vec::new();
         for h in hits {
