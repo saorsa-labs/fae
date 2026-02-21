@@ -13,6 +13,7 @@
 pub mod builtins;
 pub mod error;
 pub mod python_protocol;
+pub mod python_runner;
 pub mod trait_def;
 
 use serde::{Deserialize, Serialize};
