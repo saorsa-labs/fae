@@ -932,6 +932,12 @@ impl MemoryOrchestrator {
             self.repo.migrate_if_needed(CURRENT_SCHEMA_VERSION)?;
             let after = self.repo.schema_version()?;
             if after > before {
+                // After migration, batch embed any records that lack embeddings.
+                if let Some(engine_arc) = &self.embedding_engine
+                    && let Ok(mut engine) = engine_arc.lock()
+                {
+                    let _ = self.repo.batch_embed_missing(&mut engine);
+                }
                 return Ok(Some((before, after)));
             }
         }

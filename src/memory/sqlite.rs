@@ -721,6 +721,91 @@ impl SqliteMemoryRepository {
         Ok(count as usize)
     }
 
+    /// Batch embed all active records that don't have embeddings yet.
+    ///
+    /// Fetches records without embeddings, batches them (~32 per batch),
+    /// embeds them using the provided engine, and stores their vectors.
+    ///
+    /// Returns the count of newly embedded records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database queries fail. Embedding failures for
+    /// individual records are logged but don't stop the batch process.
+    pub fn batch_embed_missing(
+        &self,
+        engine: &mut super::embedding::EmbeddingEngine,
+    ) -> Result<usize, SqliteMemoryError> {
+        use tracing::info;
+
+        const BATCH_SIZE: usize = 32;
+
+        // Fetch all active records without embeddings.
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, text FROM memory_record
+                 WHERE status = 'active' AND id NOT IN (SELECT record_id FROM vec_embeddings)
+                 ORDER BY created_at DESC LIMIT 1000",
+            )
+            .map_err(SqliteMemoryError::Sqlite)?;
+
+        let records: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(SqliteMemoryError::Sqlite)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(SqliteMemoryError::Sqlite)?;
+        drop(stmt);
+        drop(conn);
+
+        if records.is_empty() {
+            info!("batch_embed_missing: no records to embed");
+            return Ok(0);
+        }
+
+        info!(
+            "batch_embed_missing: embedding {} active records",
+            records.len()
+        );
+
+        let mut embedded_count = 0;
+
+        // Process in batches.
+        for chunk in records.chunks(BATCH_SIZE) {
+            let ids: Vec<&str> = chunk.iter().map(|(id, _)| id.as_str()).collect();
+            let texts: Vec<&str> = chunk.iter().map(|(_, text)| text.as_str()).collect();
+
+            // Embed the batch.
+            match engine.embed_batch(&texts) {
+                Ok(embeddings) => {
+                    // Store each embedding.
+                    for (record_id, embedding) in ids.iter().zip(&embeddings) {
+                        if let Err(e) = self.store_embedding(record_id, embedding) {
+                            tracing::warn!(
+                                record_id = %record_id,
+                                error = %e,
+                                "failed to store embedding for record"
+                            );
+                        } else {
+                            embedded_count += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        batch_size = chunk.len(),
+                        error = %e,
+                        "batch embedding failed, skipping batch"
+                    );
+                }
+            }
+        }
+
+        info!("batch_embed_missing: embedded {} records", embedded_count);
+
+        Ok(embedded_count)
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -1451,5 +1536,108 @@ mod tests {
     fn schema_version_is_3_with_vec() {
         let (_dir, repo) = test_repo();
         assert_eq!(repo.schema_version().expect("version"), 3);
+    }
+
+    #[test]
+    fn batch_embed_missing_embeds_all() {
+        use crate::memory::embedding::EmbeddingEngine;
+
+        let (_dir, repo) = test_repo();
+
+        // Insert 5 records without embeddings.
+        let r1 = repo
+            .insert_record(MemoryKind::Fact, "hello world", 0.8, None, &[])
+            .expect("insert r1");
+        let r2 = repo
+            .insert_record(MemoryKind::Fact, "goodbye world", 0.8, None, &[])
+            .expect("insert r2");
+        let r3 = repo
+            .insert_record(MemoryKind::Fact, "hello again", 0.8, None, &[])
+            .expect("insert r3");
+        let r4 = repo
+            .insert_record(MemoryKind::Profile, "user lives in Berlin", 0.9, None, &[])
+            .expect("insert r4");
+        let r5 = repo
+            .insert_record(MemoryKind::Profile, "user likes coding", 0.9, None, &[])
+            .expect("insert r5");
+
+        // Verify no embeddings exist yet.
+        assert_eq!(repo.count_embeddings().expect("count"), 0);
+
+        // Create a mock engine that returns constant embeddings for testing.
+        let model_path = std::path::PathBuf::from(
+            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/onnx/model.onnx",
+        );
+        let tokenizer_path = std::path::PathBuf::from(
+            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/tokenizer.json",
+        );
+
+        if model_path.exists() && tokenizer_path.exists() {
+            let mut engine = EmbeddingEngine::new(&model_path, &tokenizer_path)
+                .expect("create embedding engine");
+
+            // Batch embed.
+            let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
+
+            // All 5 records should be embedded.
+            assert_eq!(embedded_count, 5);
+            assert_eq!(repo.count_embeddings().expect("count"), 5);
+
+            // Verify all records have embeddings.
+            assert!(repo.has_embedding(&r1.id).expect("has r1"));
+            assert!(repo.has_embedding(&r2.id).expect("has r2"));
+            assert!(repo.has_embedding(&r3.id).expect("has r3"));
+            assert!(repo.has_embedding(&r4.id).expect("has r4"));
+            assert!(repo.has_embedding(&r5.id).expect("has r5"));
+        }
+    }
+
+    #[test]
+    fn batch_embed_skips_already_embedded() {
+        use crate::memory::embedding::EmbeddingEngine;
+
+        let (_dir, repo) = test_repo();
+
+        // Insert 3 records.
+        let r1 = repo
+            .insert_record(MemoryKind::Fact, "hello world", 0.8, None, &[])
+            .expect("insert r1");
+        let r2 = repo
+            .insert_record(MemoryKind::Fact, "goodbye world", 0.8, None, &[])
+            .expect("insert r2");
+        let r3 = repo
+            .insert_record(MemoryKind::Fact, "hello again", 0.8, None, &[])
+            .expect("insert r3");
+
+        // Manually embed r1.
+        let mut e1 = vec![0.0_f32; super::EMBEDDING_DIM];
+        e1[0] = 1.0;
+        repo.store_embedding(&r1.id, &e1).expect("store e1");
+
+        assert_eq!(repo.count_embeddings().expect("count"), 1);
+
+        let model_path = std::path::PathBuf::from(
+            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/onnx/model.onnx",
+        );
+        let tokenizer_path = std::path::PathBuf::from(
+            "/Users/davidirvine/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/4c3139745b66b6aaaa9fbfc21feb49852515ef1a/tokenizer.json",
+        );
+
+        if model_path.exists() && tokenizer_path.exists() {
+            let mut engine = EmbeddingEngine::new(&model_path, &tokenizer_path)
+                .expect("create embedding engine");
+
+            // Batch embed — should skip r1, embed r2 and r3.
+            let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
+
+            // Only 2 new embeddings should be added.
+            assert_eq!(embedded_count, 2);
+            assert_eq!(repo.count_embeddings().expect("count"), 3);
+
+            // All should have embeddings now.
+            assert!(repo.has_embedding(&r1.id).expect("has r1"));
+            assert!(repo.has_embedding(&r2.id).expect("has r2"));
+            assert!(repo.has_embedding(&r3.id).expect("has r3"));
+        }
     }
 }
