@@ -1,44 +1,22 @@
 # Code Simplification Review
-**Date**: 2026-02-20
+**Date**: 2026-02-21
 **Mode**: gsd-task
-**Scope**: src/host/handler.rs, native/macos/*.swift
+**Phase**: 7.5 - Backup, Recovery & Hardening
 
 ## Findings
 
-- [LOW] src/host/handler.rs:231-310 — The 7 match arms in `patch_channel_config` each call `get_or_insert_with(DiscordChannelConfig::default)` or `get_or_insert_with(WhatsAppChannelConfig::default)` independently. A minor simplification: acquire the Discord or WhatsApp sub-guard once at the top of each group, then set fields. However, the current approach is readable and the repetition is structurally clear in a config patching context.
-
-- [LOW] src/host/handler.rs:1502-1504 — The `serde_json::from_value::<AgentToolMode>(serde_json::Value::String(s.to_owned()))` construction is slightly verbose. Could write `s.parse::<AgentToolMode>()` if `AgentToolMode` implements `FromStr`, or could use `serde_json::from_str::<AgentToolMode>(&format!(r#"\"{}\"", s))`. The current form is explicit and correct.
-
-- [OK] native/.../SettingsToolsTab.swift — Very clean, minimal. No simplification opportunities.
-
-- [OK] native/.../SettingsChannelsTab.swift — Clear section separation. The two save functions are similar but concise. Could be generalized to a generic `sendPatch(key:value:ifNonEmpty:)` helper, but current form is readable.
-
-- [OK] CameraSkill removal: clean — no remnants, no dead code.
+- [LOW] src/memory/backup.rs:44 - `now.format("%Y%m%d-%H%M%S").to_string()` could be simplified by using `format!` directly since Display is implemented for chrono format items. Minor.
+- [OK] backup_database() - Clean linear flow with early directory creation guard. No simplification needed.
+- [OK] rotate_backups() - filter_map + collect + sort + skip pattern is idiomatic Rust. No simplification needed.
+- [LOW] src/scheduler/tasks.rs:854-876 - run_memory_backup_for_root() creates backup_dir by joining "backups" to root but backup.rs::backup_database already handles creating the directory. The early-return guard for missing DB is good defensive programming, not unnecessary complexity.
+- [OK] src/memory/sqlite.rs:integrity_check() - 14-line function is concise and clear. No simplification needed.
+- [OK] EPISODE_THRESHOLD_HYBRID and EPISODE_THRESHOLD_LEXICAL named constants replacing inline magic numbers — this is a positive simplification from prior code.
+- [OK] hybrid_score(record, distance, semantic_weight) — additional parameter is necessary for config-driven blending. No alternative is simpler while maintaining flexibility.
 
 ## Simplification Opportunities
 
-### Opportunity 1: Shared Discord/WhatsApp guard in `patch_channel_config`
+1. **backup.rs:44** — Cosmetic: the `format!("{BACKUP_PREFIX}{}{BACKUP_EXT}", now.format(...))` could use `format!("{BACKUP_PREFIX}{}{BACKUP_EXT}", now.format("%Y%m%d-%H%M%S"))` directly without the intermediate `to_string()`. The current version also works; this is a 1-character simplification.
 
-Before (current):
-```rust
-"channels.discord.bot_token" => {
-    if let Some(s) = value.as_str() {
-        let dc = guard.channels.discord.get_or_insert_with(DiscordChannelConfig::default);
-        dc.bot_token = CredentialRef::Plaintext(s.to_owned());
-    }
-}
-"channels.discord.guild_id" => {
-    if let Some(s) = value.as_str() {
-        let dc = guard.channels.discord.get_or_insert_with(DiscordChannelConfig::default);
-        // ...
-    }
-}
-```
-
-Alternative (still readable, not necessarily simpler):
-```rust
-// Acquire discord ref once per key, set field based on suffix
-```
-This would add indirection without clear benefit. Current form preferred.
+No substantial simplification opportunities identified.
 
 ## Grade: A

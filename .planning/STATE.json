@@ -7,16 +7,20 @@
     "name": "Memory Architecture v2 — SQLite + Semantic Retrieval"
   },
   "phase": {
-    "number": "7.3",
-    "name": "Embedding Engine",
-    "plan": ".planning/PLAN-phase-7.3.md",
+    "number": "7.5",
+    "name": "Backup, Recovery & Hardening",
+    "plan": ".planning/PLAN-phase-7.5.md",
     "status": "complete"
   },
   "progress": {
-    "total_tasks": 5,
-    "completed_tasks": 5,
-    "current_task": null
+    "total_tasks": 4,
+    "completed_tasks": 4,
+    "current_task": 4
   },
-  "status": "phase_complete",
-  "last_updated": "2026-02-21T01:20:00Z"
+  "review": {
+    "status": "passed",
+    "iteration": 1
+  },
+  "status": "complete",
+  "last_updated": "2026-02-21T03:20:00Z"
 }

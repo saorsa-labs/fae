@@ -1,18 +1,18 @@
 # Type Safety Review
-**Date**: 2026-02-20
-**Mode**: gsd-task
-**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/.../SettingsToolsTab.swift, native/macos/.../SettingsChannelsTab.swift
+**Date**: 2026-02-21
+**Phase**: 7.5 - Backup, Recovery & Hardening
+**Scope**: src/memory/backup.rs, src/memory/sqlite.rs, src/memory/types.rs, src/config.rs
 
 ## Findings
 
-- [OK] src/host/handler.rs:1502-1504 - `AgentToolMode` is deserialized via `serde_json::from_value::<AgentToolMode>()` — fully typed, no string comparison against raw literals.
-- [OK] src/host/handler.rs:238/273/291 - `CredentialRef::Plaintext(s.to_owned())` — typed assignment to a `CredentialRef` field, no type coercion issues.
-- [OK] `get_or_insert_with(DiscordChannelConfig::default)` returns `&mut DiscordChannelConfig` — mutable reference correctly used to update fields.
-- [OK] `get_or_insert_with(WhatsAppChannelConfig::default)` — same, for `&mut WhatsAppChannelConfig`.
-- [OK] Swift: `@AppStorage("toolMode") private var toolMode: String` — typed storage. The value set is always from the `toolModes` array, so type safety is maintained at the UI level.
-- [OK] Swift: `@AppStorage("channelsEnabled") private var channelsEnabled: Bool` — correctly typed as Bool, matched with `channels.enabled` patch which passes a bool value.
-- [LOW] native/.../SettingsChannelsTab.swift:118 - `payload: ["key": "channels.discord.allowed_channel_ids", "value": channelIds]` — `channelIds` is `[String]`, passed as `Any` in the `[String: Any]` dictionary. Type safety depends on the `sendCommand` implementation correctly serializing arrays. This is consistent with existing usage in the codebase.
-- [OK] No use of `as!` forced casts in changed Swift code.
-- [OK] No `Any` coercions that could cause runtime type panics.
+- [OK] src/memory/types.rs - hybrid_score now takes semantic_weight: f32 parameter; value clamped via .clamp(0.0, 1.0) before use — no unchecked floating point.
+- [OK] src/memory/types.rs - EPISODE_THRESHOLD_HYBRID and EPISODE_THRESHOLD_LEXICAL are typed f32 constants; no implicit conversions.
+- [OK] src/memory/sqlite.rs - hybrid_search signature updated to include semantic_weight: f32; all call sites updated correctly.
+- [OK] src/memory/backup.rs - No as-casts, no transmute in backup.rs.
+- [OK] src/memory/sqlite.rs - Existing unsafe transmute is unchanged (pre-existing, has SAFETY comment).
+- [OK] src/config.rs - integrity_check_on_startup: bool, backup_keep_count: usize are both correct types for their semantic meaning.
+- [OK] SqliteMemoryError::Corrupt(String) — String is the appropriate type for the PRAGMA result description.
+- [OK] PathBuf returned from backup_database — correct owned path type.
+- [LOW] src/memory/backup.rs:30 — `now.format("%Y%m%d-%H%M%S").to_string()` relies on chrono::Local which may produce ambiguous times at DST boundaries. Types are correct but semantic precision is reduced. Prefer chrono::Utc.
 
 ## Grade: A

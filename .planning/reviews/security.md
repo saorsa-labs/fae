@@ -1,24 +1,20 @@
 # Security Review
-**Date**: 2026-02-20
-**Mode**: gsd-task
-**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/.../SettingsChannelsTab.swift, native/macos/.../SettingsToolsTab.swift
+**Date**: 2026-02-21
+**Phase**: 7.5 - Backup, Recovery & Hardening
+**Scope**: src/memory/backup.rs, src/memory/sqlite.rs, src/scheduler/tasks.rs
 
 ## Findings
 
-- [MEDIUM] src/host/handler.rs:238 - `CredentialRef::Plaintext(s.to_owned())` stores Discord bot_token as plaintext in config. This is an accepted design decision (user is warned in UI: "stored in your local config only"), but secrets are not encrypted at rest. This is pre-existing design per `CredentialRef` type design — not a regression introduced by this task.
-- [MEDIUM] src/host/handler.rs:273/291 - Same plaintext credential storage for WhatsApp access_token and verify_token.
-- [LOW] native/macos/.../SettingsChannelsTab.swift:48 - `SecureField` used for Discord bot token — correct. Tokens will not appear in UI.
-- [LOW] native/macos/.../SettingsChannelsTab.swift:73/77 - `SecureField` used for WhatsApp access token and verify token — correct.
-- [OK] native/macos/.../SettingsChannelsTab.swift:63 - Footnote warns user that tokens are "stored in your local config only" — appropriate disclosure.
-- [OK] No hardcoded credentials found in any changed file.
-- [OK] No new `unsafe` blocks introduced.
-- [OK] No HTTP URLs introduced (no network calls in this diff).
-- [OK] No command injection vectors (no `Command::new` in changed code).
-- [OK] Tool mode values are validated via `serde_json::from_value::<AgentToolMode>` — no injection possible.
-- [OK] CameraSkill removal has no security impact (reduces attack surface slightly).
-- [OK] `PermissionKind::Camera` remains in permissions.rs for future use — not a security issue.
+- [MEDIUM] src/memory/backup.rs:52 - VACUUM INTO uses string formatting with single-quote escaping (`replace('\'', "''")`) for the backup path. While VACUUM INTO does not support parameterized binding and the path is internally generated (not user-supplied), the escaping pattern is fragile. If path generation ever becomes user-influenced, this is a SQL injection vector. Consider validating path characters or using std::fs::canonicalize.
+- [OK] src/memory/sqlite.rs:21-39 - Existing unsafe block for sqlite-vec extension loading is unchanged from prior review; SAFETY comment present and documented.
+- [OK] src/memory/backup.rs - No hardcoded credentials, tokens, or secrets.
+- [OK] src/memory/backup.rs - No http:// URLs; no network calls.
+- [OK] src/memory/backup.rs - Backup directory is created via std::fs::create_dir_all; no path traversal risk as path is derived from config root.
+- [OK] src/scheduler/tasks.rs:860 - backup_keep_count read from MemoryConfig::default(); default is 7. This is not user-input-controlled directly.
+- [OK] No Command::new or shell invocations in changed files.
+- [LOW] src/memory/backup.rs:44 - Local time used for backup filenames via chrono::Local::now(). Could cause DST ambiguity (duplicate or skipped timestamps). Use Utc::now() for deterministic ordering.
 
 ## Summary
-No new security vulnerabilities. The plaintext credential storage is a known pre-existing design tradeoff documented in the UI footnotes. `SecureField` is correctly used for all sensitive inputs.
+The VACUUM INTO path escaping (MEDIUM) is the only notable finding. The path is internally generated so practical risk is low, but the pattern should be documented. All other security posture is clean.
 
-## Grade: B+
+## Grade: A-

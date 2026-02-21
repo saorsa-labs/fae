@@ -1,20 +1,26 @@
 # Error Handling Review
-**Date**: 2026-02-20
+**Date**: 2026-02-21
 **Mode**: gsd-task
-**Scope**: src/host/handler.rs, src/personality.rs, src/skills/builtins.rs, native/macos/.../SettingsView.swift
+**Phase**: 7.5 - Backup, Recovery & Hardening
+**Scope**: src/memory/backup.rs, src/memory/sqlite.rs, src/scheduler/tasks.rs, src/memory/types.rs, src/memory/jsonl.rs
 
 ## Findings
 
-- [OK] src/host/handler.rs:224-317 - `patch_channel_config`: no `.unwrap()` or `.expect()`. All operations use `?` and `if let Some(...)`.
-- [OK] src/host/handler.rs:1500-1516 - `tool_mode` patch: `Err(_)` branch logs warning and continues cleanly — no panic.
-- [OK] src/host/handler.rs:307-310 - Unknown channel key returns `Ok(())` after warning — silent-ignore is appropriate for unknown patch keys, consistent with existing pattern.
-- [LOW] src/host/handler.rs:1512 - `Err(_)` silently discards the deserialization error detail. Could log `Err(e)` for better observability but not a regression — same pattern as the rest of the file.
-- [OK] src/skills/builtins.rs - Removal of `CameraSkill` has no error handling impact. No error types changed.
-- [OK] src/personality.rs - Comment-only change. No error handling impact.
-- [OK] All `.unwrap()` occurrences in handler.rs (lines 193, 656, 690, 724, 1050, 1062, 1096) are pre-existing, not part of this diff, and are in non-critical paths (`.unwrap_or()` or `.unwrap_or_default()` variants).
-- [OK] Test-only `.unwrap()` uses inside `#[cfg(test)]` block are acceptable per project policy.
+- [OK] src/memory/backup.rs - No .unwrap() or .expect() in production code (test block only)
+- [OK] src/memory/backup.rs - backup_database uses proper ? propagation
+- [OK] src/memory/backup.rs - rotate_backups uses proper ? propagation
+- [LOW] src/memory/backup.rs:39 - IO error converted to string via `e.to_string()` loses error kind for inspection
+- [LOW] src/memory/backup.rs:64 - IO error converted to string via `e.to_string()` - same pattern
+- [LOW] src/memory/backup.rs:97 - File deletion failures logged but swallowed; callers cannot distinguish partial failures
+- [OK] src/scheduler/tasks.rs:865 - `.unwrap_or(0)` on rotate_backups result is appropriate (rotation failure is non-fatal)
+- [OK] src/scheduler/tasks.rs:869 - `.unwrap_or_default()` on filename extraction is appropriate (fallback to empty string)
+- [OK] src/memory/sqlite.rs - integrity_check() returns proper Result<(), SqliteMemoryError::Corrupt>
+- [OK] src/memory/sqlite.rs - SqliteMemoryError::Corrupt variant added with Display implementation
+- [OK] src/memory/jsonl.rs - run_memory_reindex now logs integrity failures via tracing::warn without panicking
+- [OK] src/memory/types.rs - hybrid_score clamps semantic_weight via .clamp(0.0, 1.0) for safety
+- [OK] Tests in backup.rs correctly use .expect() (allowed in test code per project policy)
 
 ## Summary
-No new error handling regressions introduced. The `patch_channel_config` method correctly uses `?` propagation, `if let Some(...)` for optional values, and `get_or_insert_with` for Option<Config> initialization. Consistent with existing codebase error patterns.
+Production code error handling is clean. The IO-error-to-string conversion pattern (lines 39 and 64 in backup.rs) is a minor stylistic issue that causes loss of error kind information but does not affect correctness. Rotation error swallowing (line 97) is intentional by design but limits observability.
 
-## Grade: A
+## Grade: A-

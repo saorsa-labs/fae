@@ -1,25 +1,23 @@
 # Quality Patterns Review
-**Date**: 2026-02-20
-**Mode**: gsd-task
-**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/*.swift
+**Date**: 2026-02-21
+**Phase**: 7.5 - Backup, Recovery & Hardening
 
 ## Good Patterns Found
 
-- Uses `thiserror`/`anyhow` error propagation via `?` consistently throughout new code.
-- `get_or_insert_with(T::default)` is idiomatic Rust for optional config initialization.
-- `CredentialRef::Plaintext` wraps tokens in a typed credential enum rather than raw `String`.
-- `@AppStorage` used for persistent UI state — correct SwiftUI pattern.
-- `SecureField` for sensitive inputs — correct security-conscious UI pattern.
-- Conditional rendering (`if channelsEnabled`) to hide irrelevant sections — good UX pattern.
-- `MARK: -` comments in Swift separating Discord/WhatsApp sections — good code organization.
-- Test counts updated atomically with implementation changes — no drift.
+- [OK] SqliteMemoryError::Corrupt(String) follows existing thiserror pattern — new variant integrates cleanly.
+- [OK] thiserror used for error types throughout (Cargo.toml confirmed).
+- [OK] backup_database and rotate_backups return Result<T, SqliteMemoryError> — consistent with rest of memory module.
+- [OK] From<SqliteMemoryError> for crate::SpeechError impl exists (unchanged) — error propagation chain intact.
+- [OK] Constants defined for BACKUP_PREFIX, BACKUP_EXT, DB_FILENAME — no magic strings.
+- [OK] Named constants EPISODE_THRESHOLD_HYBRID and EPISODE_THRESHOLD_LEXICAL replace inline magic values 0.4 and 0.6.
+- [OK] run_memory_backup_for_root early-returns on missing DB file — defensive guard.
+- [OK] tracing::warn! used for non-fatal failures (rotation file deletion, integrity check during reindex).
+- [OK] Backup rotation sorts by filename descending — correct because timestamp prefix makes lexicographic order equal chronological order.
+- [OK] #[derive(Debug)] and standard traits maintained on error enum.
 
 ## Anti-Patterns Found
 
-- [LOW] The `Err(_)` at handler.rs:1512 discards error context. Minor — could use `Err(e)` with `warn!(error = ?e, ...)` for better observability.
-- [LOW] `saveDiscordSettings()` and `saveWhatsAppSettings()` skip empty strings but cannot clear previously set values. This is a UX limitation, not a code quality anti-pattern per se, but worth noting.
-- [OK] No string error types introduced.
-- [OK] No new `impl Error` without proper `thiserror` usage.
-- [OK] No raw `HashMap<String, String>` for config — proper typed structs used throughout.
+- [LOW] src/scheduler/tasks.rs:860 - `MemoryConfig::default().backup_keep_count` — reads from a freshly constructed default config rather than the active runtime config. This is a subtle anti-pattern: config values are effectively hardcoded to defaults at runtime.
+- [LOW] src/memory/backup.rs:64 — Same IO-to-string error conversion pattern as prior finding. Loses error kind.
 
-## Grade: A
+## Grade: A-

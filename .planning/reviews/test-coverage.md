@@ -1,20 +1,37 @@
 # Test Coverage Review
-**Date**: 2026-02-20
-**Mode**: gsd-task
-**Scope**: src/host/handler.rs, src/skills/builtins.rs, src/personality.rs
+**Date**: 2026-02-21
+**Phase**: 7.5 - Backup, Recovery & Hardening
+
+## Statistics
+- Test files changed: 3 (backup.rs, sqlite.rs, tasks.rs)
+- New test functions in backup.rs: 4
+- New test functions in sqlite.rs: 2 (integrity_check_passes_on_fresh_db, corrupt_error_variant_displays_message)
+- Total tests in memory/: 91
+- Total tests in scheduler/: 53
+- All 2234 tests pass: YES
+- Skipped tests: 10 (pre-existing skips, not related to phase 7.5)
+
+## Coverage of Phase 7.5 Additions
+
+### backup.rs (4 tests)
+- [OK] backup_creates_valid_sqlite_file - verifies VACUUM INTO creates readable SQLite DB with correct data
+- [OK] rotate_keeps_correct_count - verifies rotation keeps newest 3 of 5 files
+- [OK] rotate_on_nonexistent_dir_returns_zero - edge case handled
+- [OK] rotate_ignores_non_backup_files - verifies non-backup files are not deleted
+
+### sqlite.rs (2 tests)
+- [OK] integrity_check_passes_on_fresh_db - verifies PRAGMA quick_check returns ok on fresh database
+- [OK] corrupt_error_variant_displays_message - verifies error Display implementation
+
+### scheduler/tasks.rs
+- [LOW] No test for run_memory_backup_for_root or TASK_MEMORY_BACKUP dispatch. Codex review noted this gap. The execute_builtin_with_memory_root dispatch test covers GC but not BACKUP.
+
+### scheduler/runner.rs
+- [OK] with_memory_maintenance test verifies memory_backup task is registered (deduplication check present at lines 685-696)
 
 ## Findings
+- [LOW] src/scheduler/tasks.rs - No unit test for execute_builtin_with_memory_root dispatching TASK_MEMORY_BACKUP. Existing test only checks TASK_MEMORY_GC. Pattern follows prior tasks (reflect, reindex, migrate also lack individual dispatch tests) so this is consistent with the codebase.
+- [OK] Backup functional test covers the full backup-then-open-and-verify cycle.
+- [OK] Rotation test covers normal path, edge cases (nonexistent dir, non-backup files).
 
-- [OK] src/skills/builtins.rs - Tests updated atomically with implementation: `assert_eq!(set.len(), 9)` → `assert_eq!(set.len(), 8)` and `assert_eq!(set.available(&store).len(), 9)` → `assert_eq!(set.available(&store).len(), 8)`. `all_builtins_have_nonempty_fields` and `available_skills_with_all_permissions` tests updated correctly.
-- [OK] src/personality.rs - Test comment and skill list updated: `camera` removed from the list of 8 skills verified as unavailable. Test remains structurally correct.
-- [MEDIUM] src/host/handler.rs - No new unit tests added for `patch_channel_config` or the `tool_mode` / `channels.enabled` patch arms. These are new code paths with no test coverage.
-- [LOW] `patch_channel_config` handles 7 distinct match arms — none covered by tests. Discovery of bugs requires manual testing or integration testing.
-- [OK] The existing test module (`#[cfg(test)]`) at handler.rs:1538 covers `grant_capability`, `deny_capability`, `onboarding`, and `config_get` — pre-existing tests unaffected.
-
-## Summary
-Test updates for CameraSkill removal and personality.rs are correct and comprehensive. New Rust config.patch handlers (`tool_mode`, `channels.*`) lack unit tests — this is a gap but consistent with the existing test pattern for config.patch handlers in the file (most patch arms are not individually unit tested).
-
-## Recommendation
-Add a `patch_tool_mode` and `patch_channel_config_discord` test in handler.rs tests module to verify the new code paths.
-
-## Grade: B
+## Grade: A-

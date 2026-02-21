@@ -1,22 +1,20 @@
 # Code Quality Review
-**Date**: 2026-02-20
-**Mode**: gsd-task
-**Scope**: src/host/handler.rs, src/skills/builtins.rs, native/macos/.../SettingsToolsTab.swift, native/macos/.../SettingsChannelsTab.swift, native/macos/.../SettingsView.swift
+**Date**: 2026-02-21
+**Phase**: 7.5 - Backup, Recovery & Hardening
+**Scope**: src/memory/backup.rs, src/memory/sqlite.rs, src/memory/types.rs, src/scheduler/tasks.rs, src/scheduler/runner.rs, src/config.rs
 
 ## Findings
 
-- [LOW] src/host/handler.rs:224-317 - `patch_channel_config` has notable repetition: the `get_or_insert_with(DiscordChannelConfig::default)` call appears 3 times for Discord and 4 times for WhatsApp. Could extract a helper, but this is idiomatic Rust for this pattern and the repetition is clear.
-- [OK] No TODO/FIXME/HACK comments introduced.
-- [OK] No `#[allow(clippy::*)]` suppressions added.
-- [OK] No unused imports or variables.
-- [OK] `AgentToolMode` import added to handler.rs is used — no dead import.
-- [OK] Swift files follow consistent patterns from existing tabs (SettingsGeneralTab, SettingsAboutTab patterns).
-- [OK] `@AppStorage` used correctly for persisted UI state (toolMode, channelsEnabled).
-- [OK] `@State` used correctly for transient form fields (Discord/WhatsApp token strings).
-- [LOW] native/.../SettingsChannelsTab.swift:99-120, 123-151 — `saveDiscordSettings()` and `saveWhatsAppSettings()` only send config.patch if fields are non-empty. Empty string for guild_id is not sent — means clearing a guild_id after setting it is not possible through the UI without additional "clear" functionality.
-- [LOW] native/.../SettingsChannelsTab.swift — No validation of Discord bot token format or WhatsApp phone number ID format. Could be a UX improvement but not a functional bug.
-- [OK] Tab ordering in SettingsView: General, Models, Tools, Channels, About, (Developer) — matches spec.
-- [OK] CameraSkill removal is clean — macro, registration, and tests all updated consistently.
-- [OK] `src/personality.rs` test comment updated accurately to reflect 8 skills (was 9).
+- [OK] No TODO/FIXME/HACK/XXX comments in any changed file.
+- [OK] No #[allow(clippy::*)] suppressions in changed files.
+- [OK] cargo clippy passes with -D warnings.
+- [OK] cargo fmt passes; formatting is consistent.
+- [OK] Constants BACKUP_PREFIX, BACKUP_EXT, DB_FILENAME are properly named and scoped.
+- [OK] TASK_MEMORY_BACKUP constant follows existing naming convention.
+- [OK] Public functions in backup.rs have doc comments including # Errors sections.
+- [LOW] src/scheduler/tasks.rs:860 - backup_keep_count is read from MemoryConfig::default() inside the task function rather than being passed from the runtime config. This means it always uses the default value (7) and ignores any user config override. Should read from actual runtime config or pass via task payload.
+- [LOW] src/memory/backup.rs:44 - Local time for timestamps (chrono::Local::now()). UTC preferred for consistency with rest of codebase (which uses epoch seconds).
+- [OK] run_memory_backup_for_root follows the same pattern as other builtin task runners.
+- [OK] Kimi K2 review confirmed: "Solid implementation with proper backup/rotation logic."
 
 ## Grade: A-

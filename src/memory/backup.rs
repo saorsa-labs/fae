@@ -29,8 +29,8 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Sql
     // Ensure the backup directory exists.
     std::fs::create_dir_all(backup_dir).map_err(|e| SqliteMemoryError::Io(e.to_string()))?;
 
-    // Generate timestamped filename.
-    let now = chrono::Local::now();
+    // Generate timestamped filename using UTC to avoid DST ambiguity.
+    let now = chrono::Utc::now();
     let filename = format!("{BACKUP_PREFIX}{}{BACKUP_EXT}", now.format("%Y%m%d-%H%M%S"));
     let backup_path = backup_dir.join(&filename);
 

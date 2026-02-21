@@ -615,9 +615,14 @@ pub const TASK_SKILL_PROPOSALS: &str = "skill_proposals";
 /// Returns [`TaskResult`] for any known built-in task, or
 /// [`TaskResult::Error`] for unknown task IDs.
 pub fn execute_builtin(task_id: &str) -> TaskResult {
+    let defaults = crate::config::MemoryConfig::default();
     let root = crate::memory::default_memory_root_dir();
-    let retention_days = crate::config::MemoryConfig::default().retention_days;
-    execute_builtin_with_memory_root(task_id, &root, retention_days)
+    execute_builtin_with_memory_root(
+        task_id,
+        &root,
+        defaults.retention_days,
+        defaults.backup_keep_count,
+    )
 }
 
 /// Execute a built-in scheduled task by ID using an explicit memory root.
@@ -628,6 +633,7 @@ pub fn execute_builtin_with_memory_root(
     task_id: &str,
     memory_root: &Path,
     retention_days: u32,
+    backup_keep_count: usize,
 ) -> TaskResult {
     match task_id {
         TASK_CHECK_FAE_UPDATE => check_fae_update(),
@@ -635,7 +641,7 @@ pub fn execute_builtin_with_memory_root(
         TASK_MEMORY_REINDEX => run_memory_reindex_for_root(memory_root),
         TASK_MEMORY_GC => run_memory_gc_for_root(memory_root, retention_days),
         TASK_MEMORY_MIGRATE => run_memory_migrate_for_root(memory_root),
-        TASK_MEMORY_BACKUP => run_memory_backup_for_root(memory_root),
+        TASK_MEMORY_BACKUP => run_memory_backup_for_root(memory_root, backup_keep_count),
         TASK_NOISE_BUDGET_RESET => run_noise_budget_reset(),
         TASK_STALE_RELATIONSHIPS => run_stale_relationship_check(memory_root),
         TASK_MORNING_BRIEFING => run_morning_briefing_check(memory_root),
@@ -851,13 +857,12 @@ fn run_memory_migrate_for_root(root: &Path) -> TaskResult {
     }
 }
 
-fn run_memory_backup_for_root(root: &Path) -> TaskResult {
+fn run_memory_backup_for_root(root: &Path, keep_count: usize) -> TaskResult {
     let db = crate::memory::backup::db_path(root);
     if !db.exists() {
         return TaskResult::Success("backup skipped: no database file".into());
     }
     let backup_dir = root.join("backups");
-    let keep_count = crate::config::MemoryConfig::default().backup_keep_count;
 
     match crate::memory::backup::backup_database(&db, &backup_dir) {
         Ok(path) => {
@@ -1081,8 +1086,12 @@ mod tests {
         let root = temp_root("custom-retention");
         seed_old_episode_record(&root, "episode-custom-retention");
 
-        let result =
-            execute_builtin_with_memory_root(TASK_MEMORY_GC, &root, /* retention_days */ 0);
+        let result = execute_builtin_with_memory_root(
+            TASK_MEMORY_GC,
+            &root,
+            /* retention_days */ 0,
+            /* backup_keep_count */ 7,
+        );
         assert!(matches!(result, TaskResult::Telemetry(_)));
 
         let repo = crate::memory::SqliteMemoryRepository::new(&root).expect("sqlite repo");

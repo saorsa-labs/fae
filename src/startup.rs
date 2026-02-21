@@ -827,6 +827,7 @@ pub fn start_scheduler_with_config(
     scheduler.with_memory_maintenance();
     let memory_root = config.memory.root_dir.clone();
     let retention_days = config.memory.retention_days;
+    let backup_keep_count = config.memory.backup_keep_count;
     let scheduler_config = config.clone();
 
     // Wrap the bridge executor to also handle built-in tasks
@@ -838,7 +839,7 @@ pub fn start_scheduler_with_config(
         }
 
         // Built-in tasks use the existing executor
-        execute_scheduler_task(task, &memory_root, retention_days)
+        execute_scheduler_task(task, &memory_root, retention_days, backup_keep_count)
     }));
 
     info!(
@@ -931,12 +932,14 @@ fn execute_scheduler_task(
     task: &crate::scheduler::ScheduledTask,
     memory_root: &Path,
     retention_days: u32,
+    backup_keep_count: usize,
 ) -> crate::scheduler::tasks::TaskResult {
     if task.kind == crate::scheduler::tasks::TaskKind::Builtin {
         return crate::scheduler::tasks::execute_builtin_with_memory_root(
             &task.id,
             memory_root,
             retention_days,
+            backup_keep_count,
         );
     }
 
@@ -1128,7 +1131,7 @@ mod tests {
             "message": "Time to take a short break."
         }));
 
-        let result = execute_scheduler_task(&task, Path::new("/tmp"), 30);
+        let result = execute_scheduler_task(&task, Path::new("/tmp"), 30, 7);
         match result {
             crate::scheduler::tasks::TaskResult::NeedsUserAction(prompt) => {
                 assert_eq!(prompt.title, "Stand up");
@@ -1147,7 +1150,7 @@ mod tests {
             crate::scheduler::Schedule::Interval { secs: 3600 },
         );
 
-        let result = execute_scheduler_task(&task, Path::new("/tmp"), 30);
+        let result = execute_scheduler_task(&task, Path::new("/tmp"), 30, 7);
         match result {
             crate::scheduler::tasks::TaskResult::NeedsUserAction(prompt) => {
                 assert!(prompt.title.contains("Reminder"));
