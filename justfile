@@ -55,9 +55,9 @@ build:
 build-release:
     cargo build --release
 
-# Build with warnings as errors
+# Build with warnings as errors (uses clippy instead of RUSTFLAGS to avoid cache invalidation)
 build-strict:
-    RUSTFLAGS="-D warnings" cargo build
+    cargo clippy --all-targets -- -D warnings
 
 # Run all tests
 test:
@@ -125,7 +125,9 @@ build-native-and-check: build-staticlib check-binary-size build-native-swift
     @echo "Native build pipeline complete."
 
 # Full validation (CI equivalent)
-check: fmt-check lint build-strict test doc panic-scan
+# Note: lint (clippy) already compiles + checks warnings, so build-strict is not needed here.
+# Keeping the pipeline to: format → lint → test → doc → panic-scan (single compilation cache).
+check: fmt-check lint test doc panic-scan
 
 # Quick check (format + lint + test only)
 quick-check: fmt-check lint test

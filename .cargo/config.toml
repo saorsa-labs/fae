@@ -1,5 +1,7 @@
 [build]
-jobs = 12
+# Cap parallel jobs to avoid OOM with heavy crates (mistralrs, ort, parakeet-rs).
+# Each rustc can use 4-8GB; 6 jobs ≈ 48GB peak on a 96GB machine.
+jobs = 6
 
 # Mold linker for fast local linking (set via environment or ~/.cargo/config.toml).
 # Removed from repo config because /opt/zerobrew/prefix/bin/mold doesn't exist on CI.

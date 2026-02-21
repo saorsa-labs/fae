@@ -318,3 +318,21 @@ Summary of Milestone 4:
 - Phase 4.1: Glassmorphic Design & Separate Window (NSWindow, glassmorphic blur, warm palette, slide transitions, animated orb)
 - Phase 4.2: Permission Cards with Help (calendar/mail cards, privacy banner, TTS help, OnboardingController wiring)
 - Phase 4.3: App Integration & Release (config tests, TOML round-trip tests, operator/developer docs, API audit, release validation)
+
+## Milestone 8: Python Skill Runtime (v0.8.1)
+
+### Phase 8.1: Core Python Skill Runner — COMPLETE
+
+- [x] Task 1: Error Types & Protocol Definitions (commit: 6f2e9ac)
+- [x] Task 2: Process Lifecycle State Machine (commit: 85f0313)
+- [x] Task 3: JSON-RPC 2.0 Communication Layer (commit: 1fa539b)
+- [x] Task 4: Handshake & Health Check Protocol (commit: 20a3a37)
+- [x] Task 5: Daemon vs One-Shot Mode (commit: f8ca441)
+- [x] Task 6: Config Types & Directory Paths (commit: c1ac82f)
+- [x] Task 7: ToolRegistry Integration (commit: 3c21254)
+- [x] Task 8: Host Commands & Module Wiring (commit: 49e38b2)
+- [x] Task 9: End-to-End Integration Tests (13 tests pass)
+
+Results: All tests pass, zero clippy warnings, zero compilation warnings
+
+### Phase 8.1 Complete — 2026-02-21
