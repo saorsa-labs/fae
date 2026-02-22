@@ -962,6 +962,10 @@ fn map_runtime_event(event: &RuntimeEvent) -> (String, serde_json::Value) {
             "orb.state_changed".to_owned(),
             serde_json::json!({"feeling": feeling, "palette": palette}),
         ),
+        RuntimeEvent::PipelineTiming { stage, duration_ms } => (
+            "pipeline.timing".to_owned(),
+            serde_json::json!({"stage": stage, "duration_ms": duration_ms}),
+        ),
     }
 }
 

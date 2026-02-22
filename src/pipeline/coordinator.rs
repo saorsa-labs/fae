@@ -32,6 +32,8 @@ const SYNTH_CHANNEL_SIZE: usize = 16;
 /// Commands sent to the playback stage (e.g., barge-in stop).
 enum PlaybackCommand {
     Stop,
+    /// Play a brief thinking acknowledgment tone so the user knows Fae heard them.
+    ThinkingTone,
 }
 
 /// Commands sent to the LLM stage for queue control.
@@ -1226,7 +1228,18 @@ async fn run_vad_stage(
                                     // Clear the tail once we accept a real segment.
                                     suppress_until = None;
 
-                                    info!("speech segment detected: {duration_s:.1}s");
+                                    let vad_duration_ms = segment.started_at.elapsed().as_millis() as u64;
+                                    info!(
+                                        vad_ms = vad_duration_ms,
+                                        duration_s,
+                                        "pipeline_timing: VAD segment complete ({duration_s:.1}s)"
+                                    );
+                                    if let Some(rt) = &state.runtime_tx {
+                                        let _ = rt.send(RuntimeEvent::PipelineTiming {
+                                            stage: "vad".to_owned(),
+                                            duration_ms: vad_duration_ms,
+                                        });
+                                    }
 
                                     if let Some(tap) = &onboarding_tx {
                                         // Best-effort: don't block the pipeline if the tap is slow.
@@ -1275,8 +1288,23 @@ async fn run_stt_stage(
             segment = rx.recv() => {
                 match segment {
                     Some(segment) => {
+                        let stt_start = Instant::now();
                         match stt.transcribe(&segment) {
                             Ok(transcription) => {
+                                let stt_duration = stt_start.elapsed();
+                                let vad_to_stt_ms = segment.started_at.elapsed().as_millis() as u64;
+                                info!(
+                                    stt_ms = stt_duration.as_millis() as u64,
+                                    vad_to_stt_ms,
+                                    "pipeline_timing: STT completed"
+                                );
+                                if let Some(rt) = &runtime_tx {
+                                    let _ = rt.send(RuntimeEvent::PipelineTiming {
+                                        stage: "stt".to_owned(),
+                                        duration_ms: stt_duration.as_millis() as u64,
+                                    });
+                                }
+
                                 let mut transcription = transcription;
                                 if let Some(fixed) = canonicalize_wake_word_transcription(
                                     &config.conversation.wake_word,
@@ -2048,10 +2076,14 @@ async fn run_llm_stage(
             llm_input = format!("{local_coding_ctx}\n\n{llm_input}");
         }
 
+        let llm_start = Instant::now();
         assistant_generating.store(true, Ordering::Relaxed);
         if let Some(rt) = &runtime_tx {
             let _ = rt.send(RuntimeEvent::AssistantGenerating { active: true });
         }
+        // Send a brief thinking tone so the user gets audio feedback that Fae
+        // heard them and is processing their request.
+        let _ = playback_cmd_tx.send(PlaybackCommand::ThinkingTone);
         // Proxy channel captures assistant text for memory while forwarding to TTS.
         let (proxy_tx, mut proxy_rx) = mpsc::channel::<SentenceChunk>(SENTENCE_CHANNEL_SIZE);
         let final_tx = tx.clone();
@@ -2210,6 +2242,17 @@ async fn run_llm_stage(
 
         match gen_result {
             Ok(interrupted) => {
+                let llm_duration = llm_start.elapsed();
+                info!(
+                    llm_ms = llm_duration.as_millis() as u64,
+                    interrupted, "pipeline_timing: LLM generation completed"
+                );
+                if let Some(rt) = &runtime_tx {
+                    let _ = rt.send(RuntimeEvent::PipelineTiming {
+                        stage: "llm".to_owned(),
+                        duration_ms: llm_duration.as_millis() as u64,
+                    });
+                }
                 if console_output {
                     println!();
                 }
@@ -2545,7 +2588,7 @@ async fn run_tts_stage(
     tx: mpsc::Sender<SynthesizedAudio>,
     interrupt: Arc<AtomicBool>,
     cancel: CancellationToken,
-    _runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
 ) {
     let mut engine = match config.tts.backend {
         crate::config::TtsBackend::Kokoro => {
@@ -2613,8 +2656,21 @@ async fn run_tts_stage(
                             }
                             continue;
                         }
+                        let tts_start = Instant::now();
                         match engine.synthesize(&sentence.text).await {
                             Ok(audio) => {
+                                let tts_duration = tts_start.elapsed();
+                                info!(
+                                    tts_ms = tts_duration.as_millis() as u64,
+                                    chars = sentence.text.len(),
+                                    "pipeline_timing: TTS synthesis completed"
+                                );
+                                if let Some(rt) = &runtime_tx {
+                                    let _ = rt.send(RuntimeEvent::PipelineTiming {
+                                        stage: "tts".to_owned(),
+                                        duration_ms: tts_duration.as_millis() as u64,
+                                    });
+                                }
                                 if interrupt.load(Ordering::Relaxed) {
                                     // Interrupted while synthesizing; drop audio.
                                     if sentence.is_final {
@@ -2699,6 +2755,35 @@ async fn run_playback_stage(
                         }
                         let _ = control_tx.send(ControlEvent::AssistantSpeechEnd { interrupted: true });
                     }
+                    Some(PlaybackCommand::ThinkingTone) => {
+                        // Generate a brief 150ms acknowledgment tone (soft sine wave)
+                        // so the user knows Fae is processing their request.
+                        let tone_sample_rate = config.output_sample_rate;
+                        let duration_secs = 0.15_f32;
+                        let n_samples = (tone_sample_rate as f32 * duration_secs) as usize;
+                        let freq = 440.0_f32; // A4, gentle
+                        let volume = 0.08_f32; // Very quiet
+                        let tone: Vec<f32> = (0..n_samples)
+                            .map(|i| {
+                                let t = i as f32 / tone_sample_rate as f32;
+                                // Apply a smooth fade-in/fade-out envelope
+                                let env = {
+                                    let fade_samples = n_samples / 4;
+                                    if i < fade_samples {
+                                        i as f32 / fade_samples as f32
+                                    } else if i > n_samples - fade_samples {
+                                        (n_samples - i) as f32 / fade_samples as f32
+                                    } else {
+                                        1.0
+                                    }
+                                };
+                                volume * env * (2.0 * std::f32::consts::PI * freq * t).sin()
+                            })
+                            .collect();
+                        if let Err(e) = playback.enqueue(&tone, tone_sample_rate, true) {
+                            error!("thinking tone playback error: {e}");
+                        }
+                    }
                     None => break,
                 }
             }
@@ -2742,6 +2827,12 @@ async fn run_playback_stage(
                             if !assistant_speaking.load(Ordering::Relaxed) {
                                 assistant_speaking.store(true, Ordering::Relaxed);
                                 let _ = control_tx.send(ControlEvent::AssistantSpeechStart);
+                                if let Some(rt) = &runtime_tx {
+                                    let _ = rt.send(RuntimeEvent::PipelineTiming {
+                                        stage: "playback_start".to_owned(),
+                                        duration_ms: 0,
+                                    });
+                                }
                             }
                             received_final_chunk = audio.is_final;
                             // Push audio to the AEC reference buffer so the

@@ -198,4 +198,15 @@ pub enum RuntimeEvent {
         /// Optional palette override (e.g. `"autumn-bracken"`).
         palette: Option<String>,
     },
+    /// Pipeline stage timing measurement for latency analysis.
+    ///
+    /// Emitted at each pipeline stage boundary with the stage name and
+    /// elapsed duration in milliseconds. Use these events to identify
+    /// where the latency bottleneck lives.
+    PipelineTiming {
+        /// Pipeline stage that completed (e.g. `"vad"`, `"stt"`, `"llm_first_token"`).
+        stage: String,
+        /// Duration in milliseconds for this stage.
+        duration_ms: u64,
+    },
 }

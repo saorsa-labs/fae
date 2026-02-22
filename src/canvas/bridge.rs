@@ -221,7 +221,8 @@ impl CanvasBridge {
             | RuntimeEvent::RelationshipUpdate { .. }
             | RuntimeEvent::SkillProposal { .. }
             | RuntimeEvent::NoiseBudgetUpdate { .. }
-            | RuntimeEvent::OrbMoodUpdate { .. } => {}
+            | RuntimeEvent::OrbMoodUpdate { .. }
+            | RuntimeEvent::PipelineTiming { .. } => {}
         }
     }
 

@@ -163,7 +163,7 @@ The Rust core runs in-process — no subprocess for the primary path.
 
 | File | Role |
 |------|------|
-| `native/macos/.../FaeNativeApp.swift` | App entry, environment wiring, embedded core init |
+| `native/macos/.../FaeApp.swift` | App entry, environment wiring, embedded core init |
 | `native/macos/.../EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
 | `native/macos/.../ContentView.swift` | Main view, window state, orb context menu |
 | `native/macos/.../ConversationWebView.swift` | WKWebView bridge (orb animation + input bar) |
@@ -300,6 +300,73 @@ New integration tests go as modules in `tests/integration/`, NOT as new top-leve
 ### CI memory cap
 
 CI runners (7-14GB) use `CARGO_BUILD_JOBS=2` to cap parallel rustc processes. Locally, `just test-ci` does the same.
+
+## Testing Fae with Chatterbox TTS
+
+Chatterbox is a local TTS server used for voice-testing Fae's pipeline and for Claude Code notification hooks.
+
+### Chatterbox location and startup
+
+```bash
+# Server lives at:
+/Users/davidirvine/Desktop/Devel/projects/chatterbox/
+
+# Start the service (default port 8000):
+cd /Users/davidirvine/Desktop/Devel/projects/chatterbox
+./start_service.sh
+# Or directly:
+python3 tts_service.py --host 127.0.0.1 --port 8000
+
+# Health check:
+curl -s http://127.0.0.1:8000/health
+```
+
+### Speaking to Fae via Chatterbox
+
+Use the `/speak` endpoint with `play: true` — Chatterbox synthesizes speech AND plays it through system speakers. Fae hears it via the built-in mic.
+
+```bash
+# Speak to Fae (plays through speakers → mic → Fae pipeline):
+curl -s -X POST http://127.0.0.1:8000/speak \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Fae, what time is it?", "voice": "jarvis", "play": true}'
+
+# Response: {"status": "playing", "message": "Audio is being played", "text": "..."}
+```
+
+Key parameters:
+- `text`: What to say
+- `voice`: Voice name (default: "jarvis")
+- `play`: Must be `true` to play through speakers (otherwise just synthesizes)
+
+### Claude Code hooks integration
+
+Chatterbox is wired into Claude Code via notification hooks (`~/.claude/settings.json`):
+- **Notification hook**: `~/.claude/hooks/notify_chatterbox.py` — speaks when Claude needs user input
+- **Stop hook**: `~/.claude/hooks/stop_chatterbox.py` — speaks on GSD milestone completion
+- Environment: `CHATTERBOX_URL=http://127.0.0.1:8000`, `USE_CHATTERBOX=true`
+
+### Launching Fae with log capture for testing
+
+```bash
+# Launch Fae as macOS app with stdout/stderr captured:
+FAE_APP="native/macos/Fae/.build/arm64-apple-macosx/debug/Fae.app"
+open "$FAE_APP" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+
+# Monitor pipeline timing:
+tail -f /tmp/fae-test.log | grep -E "pipeline_timing|dropping|transcrib"
+```
+
+### Pipeline timing events in logs
+
+The pipeline emits `pipeline_timing` events at each stage boundary:
+- `pipeline_timing: VAD segment complete` — `vad_ms`, `duration_s`
+- `pipeline_timing: STT completed` — `stt_ms`, `vad_to_stt_ms`
+- `pipeline_timing: LLM generation completed` — `llm_ms`, `interrupted`
+- `pipeline_timing: TTS synthesis completed` — `tts_ms`, `chars`
+- `pipeline_timing: playback completed` — `playback_ms`
+
+Echo suppression logs: `dropping N.Ns speech segment (echo suppression)` — these are correctly filtered.
 
 ## Completed milestones
 

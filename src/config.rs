@@ -186,12 +186,13 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             threshold: 0.01,
-            // 1000ms balances responsiveness vs natural speech pauses.
-            // - Too low (500-600ms): fragments mid-sentence pauses
-            // - Too high (1400ms+): adds noticeable delay before Fae responds
-            // - 1000ms: covers most inter-word pauses while keeping response
-            //   latency under ~1s from when the user stops speaking.
-            min_silence_duration_ms: 1000,
+            // 800ms balances responsiveness vs natural speech pauses.
+            // - Too low (500ms): fragments mid-sentence pauses
+            // - Too high (1200ms+): adds noticeable delay before Fae responds
+            // - 800ms: covers most inter-word pauses (typically 200-600ms) while
+            //   keeping response latency under ~1s from when the user stops speaking.
+            //   Reduced from 1000ms to shave 200ms off end-of-utterance latency.
+            min_silence_duration_ms: 800,
             speech_pad_ms: 30,
             min_speech_duration_ms: 300,
         }
