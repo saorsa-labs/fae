@@ -90,6 +90,10 @@ struct FaeNativeApp: App {
         // Force the router to be initialized (retained for app lifetime).
         _ = Self.backendEventRouter
 
+        // Ensure the app gets a regular menu bar and dock icon, even when
+        // launched as a bare binary from the terminal (debug builds).
+        NSApplication.shared.setActivationPolicy(.regular)
+
         // Render an initial orb icon immediately so the dock never shows
         // the generic app icon. DockIconAnimator takes over in .onAppear.
         NSApplication.shared.applicationIconImage = Self.renderStaticOrb()
