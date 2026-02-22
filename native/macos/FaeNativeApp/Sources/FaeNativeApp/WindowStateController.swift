@@ -16,9 +16,11 @@ import Combine
 /// generating), the window automatically expands back to compact mode and
 /// comes to the front so the user can see the response.
 ///
-/// The frosted-glass (`NSVisualEffectView`) background is owned by this
-/// controller and re-installed after any `styleMask` change that may cause
-/// AppKit to detach the existing view hierarchy.
+/// **Important**: The window's `styleMask` is set ONCE on initial attach and
+/// never changed again. Changing `styleMask` causes AppKit to destroy and
+/// recreate the contentView hierarchy, which detaches the `NSVisualEffectView`
+/// (frosted glass) and the SwiftUI hosting view. Instead, we vary only the
+/// window level, size, and visual properties between modes.
 @MainActor
 final class WindowStateController: ObservableObject {
 
@@ -57,6 +59,19 @@ final class WindowStateController: ObservableObject {
     weak var window: NSWindow? {
         didSet {
             guard let window else { return }
+
+            // Set the styleMask ONCE and never change it again. With
+            // fullSizeContentView + transparent titlebar the window is
+            // visually borderless while preserving the contentView hierarchy.
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.backgroundColor = .clear
+            window.isOpaque = false
+            window.hasShadow = true
+            setWindowButtonsHidden(true)
+
             // Enforce compact size on initial attach — macOS state restoration
             // may have saved a different (larger) frame from a previous session.
             let screen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
@@ -65,13 +80,12 @@ final class WindowStateController: ObservableObject {
             let x = visible.midX - size.width / 2
             let y = visible.midY - size.height / 2
             window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: false)
+
             // Set min/max so the user can't resize beyond reasonable bounds.
             window.minSize = NSSize(width: 280, height: 400)
             window.maxSize = NSSize(width: 500, height: 700)
-            applyModeToWindow()
-            // Frosted glass and title-bar tracker are installed AFTER
-            // applyModeToWindow sets the styleMask, so the contentView
-            // hierarchy is stable before we re-parent it.
+
+            // Install frosted glass AFTER styleMask is set and stable.
             ensureFrostedGlass()
             installTitleBarTracker()
         }
@@ -116,21 +130,17 @@ final class WindowStateController: ObservableObject {
         let targetSize = NSSize(width: collapsedSize, height: collapsedSize)
 
         // Dock to top-left of the screen, just below the menu bar.
-        // visibleFrame.maxY is the bottom of the menu bar in macOS coordinates
-        // (origin at bottom-left), so we subtract the orb height to sit just below it.
         let originX = visibleFrame.minX + collapsedEdgePadding
         let originY = visibleFrame.maxY - targetSize.height - collapsedEdgePadding
         let targetFrame = NSRect(origin: NSPoint(x: originX, y: originY), size: targetSize)
 
-        window.styleMask = [.borderless]
-        window.isMovableByWindowBackground = true
+        // Float above other windows when collapsed. No styleMask change.
         window.level = .floating
-        window.hasShadow = true
-        window.backgroundColor = .clear
-        window.isOpaque = false
+        setWindowButtonsHidden(true)
 
-        // Re-install frosted glass — styleMask change may have detached it.
-        ensureFrostedGlass()
+        // Temporarily allow the window to go below its minSize for the
+        // collapsed orb (80×80 is smaller than the 280×400 minimum).
+        window.minSize = NSSize(width: collapsedSize, height: collapsedSize)
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.5
@@ -147,17 +157,12 @@ final class WindowStateController: ObservableObject {
 
         guard let window else { return }
 
+        // Restore normal window level and min size.
+        window.level = .normal
+        window.minSize = NSSize(width: 280, height: 400)
+        setWindowButtonsHidden(true)
+
         if wasCollapsed {
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.isMovableByWindowBackground = true
-            window.level = .normal
-            window.backgroundColor = .clear
-            window.isOpaque = false
-            setWindowButtonsHidden(true)
-            // Re-install frosted glass — styleMask change may have detached it.
-            ensureFrostedGlass()
             installTitleBarTracker()
         }
 
@@ -284,12 +289,11 @@ final class WindowStateController: ObservableObject {
 
     // MARK: - Frosted Glass
 
-    /// Installs (or re-installs) the frosted-glass `NSVisualEffectView` as the
-    /// window's content view, wrapping the SwiftUI hosting view inside it.
+    /// Installs the frosted-glass `NSVisualEffectView` as the window's
+    /// content view, wrapping the SwiftUI hosting view inside it.
     ///
     /// Safe to call multiple times — skips if the glass is already in place.
-    /// Must be called after any `styleMask` change because AppKit may detach
-    /// or recreate the content-view hierarchy when the window chrome changes.
+    /// Because we never change `styleMask`, this should only need to run once.
     func ensureFrostedGlass() {
         guard let window else { return }
 
@@ -321,27 +325,6 @@ final class WindowStateController: ObservableObject {
             hostingView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
             hostingView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
         ])
-    }
-
-    // MARK: - Helpers
-
-    private func applyModeToWindow() {
-        guard let window else { return }
-        switch mode {
-        case .collapsed:
-            window.styleMask = [.borderless]
-            window.isMovableByWindowBackground = true
-            window.level = .floating
-        case .compact:
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.isMovableByWindowBackground = true
-            window.level = .normal
-            window.backgroundColor = .clear
-            window.isOpaque = false
-            setWindowButtonsHidden(true)
-        }
     }
 
     // MARK: - Title Bar Hover (show/hide window buttons)
