@@ -301,19 +301,19 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                     mistralrs::Response::Chunk(chunk) => {
                         if let Some(choice) = chunk.choices.first() {
                             // Forward text content delta immediately
-                            if let Some(ref content) = choice.delta.content {
-                                if !content.is_empty() {
-                                    event_count += 1;
-                                    if tx
-                                        .send(LlmEvent::TextDelta {
-                                            text: content.clone(),
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        tracing::debug!("stream consumer dropped, stopping");
-                                        return;
-                                    }
+                            if let Some(ref content) = choice.delta.content
+                                && !content.is_empty()
+                            {
+                                event_count += 1;
+                                if tx
+                                    .send(LlmEvent::TextDelta {
+                                        text: content.clone(),
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    tracing::debug!("stream consumer dropped, stopping");
+                                    return;
                                 }
                             }
 
@@ -401,19 +401,19 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                                 }
                             }
                             // Handle text content from Done response
-                            if let Some(ref content) = choice.message.content {
-                                if !content.is_empty() {
-                                    tracing::debug!(
-                                        content = %content,
-                                        "Done response content"
-                                    );
-                                    event_count += 1;
-                                    let _ = tx
-                                        .send(LlmEvent::TextDelta {
-                                            text: content.clone(),
-                                        })
-                                        .await;
-                                }
+                            if let Some(ref content) = choice.message.content
+                                && !content.is_empty()
+                            {
+                                tracing::debug!(
+                                    content = %content,
+                                    "Done response content"
+                                );
+                                event_count += 1;
+                                let _ = tx
+                                    .send(LlmEvent::TextDelta {
+                                        text: content.clone(),
+                                    })
+                                    .await;
                             }
                             if choice.finish_reason == "tool_calls" {
                                 has_tool_calls = true;
