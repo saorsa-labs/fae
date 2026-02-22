@@ -145,6 +145,10 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn request_config_patch(&self, _key: &str, _value: &serde_json::Value) -> Result<()> {
         Ok(())
     }
+    /// Whether host command routing should enforce rescue-mode command restrictions.
+    fn rescue_mode_active(&self) -> bool {
+        false
+    }
     /// Signal that a Python skill daemon should be started (or restarted).
     fn python_skill_start(&self, _skill_name: &str) -> Result<()> {
         Ok(())
@@ -349,6 +353,13 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
 
     /// Route a command envelope to the appropriate handler.
     pub fn route(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        if self.handler.rescue_mode_active() && !command_allowed_in_rescue_mode(envelope.command) {
+            return Err(SpeechError::Pipeline(format!(
+                "command `{}` is blocked in rescue mode",
+                envelope.command.as_str()
+            )));
+        }
+
         match envelope.command {
             CommandName::HostPing => Ok(ResponseEnvelope::ok(
                 envelope.request_id.clone(),
@@ -1384,6 +1395,35 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
     }
 }
 
+fn command_allowed_in_rescue_mode(command: CommandName) -> bool {
+    matches!(
+        command,
+        CommandName::HostPing
+            | CommandName::HostVersion
+            | CommandName::ConversationInjectText
+            | CommandName::RuntimeStart
+            | CommandName::RuntimeStop
+            | CommandName::RuntimeStatus
+            | CommandName::ApprovalRespond
+            | CommandName::SchedulerList
+            | CommandName::SchedulerTriggerNow
+            | CommandName::ConfigGet
+            | CommandName::ConfigPatch
+            | CommandName::SkillsReload
+            | CommandName::SkillPythonList
+            | CommandName::SkillPythonInstall
+            | CommandName::SkillPythonDisable
+            | CommandName::SkillPythonActivate
+            | CommandName::SkillPythonQuarantine
+            | CommandName::SkillPythonRollback
+            | CommandName::SkillDiscoverySearch
+            | CommandName::SkillGenerate
+            | CommandName::SkillGenerateStatus
+            | CommandName::SkillHealthCheck
+            | CommandName::SkillHealthStatusCmd
+    )
+}
+
 fn parse_device_target(payload: &serde_json::Value) -> Result<DeviceTarget> {
     let Some(raw_target) = payload.get("target").and_then(serde_json::Value::as_str) else {
         return Err(SpeechError::Pipeline(
@@ -1692,6 +1732,7 @@ mod tests {
     struct TestHandler {
         inject_called: Arc<AtomicBool>,
         gate_called: Arc<AtomicBool>,
+        rescue_mode: bool,
     }
 
     impl TestHandler {
@@ -1699,6 +1740,15 @@ mod tests {
             Self {
                 inject_called: Arc::new(AtomicBool::new(false)),
                 gate_called: Arc::new(AtomicBool::new(false)),
+                rescue_mode: false,
+            }
+        }
+
+        fn new_rescue_mode() -> Self {
+            Self {
+                inject_called: Arc::new(AtomicBool::new(false)),
+                gate_called: Arc::new(AtomicBool::new(false)),
+                rescue_mode: true,
             }
         }
     }
@@ -1718,10 +1768,31 @@ mod tests {
             self.gate_called.store(true, Ordering::SeqCst);
             Ok(())
         }
+        fn python_skill_install(
+            &self,
+            _package_dir: &std::path::Path,
+        ) -> Result<crate::skills::PythonSkillInfo> {
+            Ok(crate::skills::PythonSkillInfo {
+                id: "dummy".to_owned(),
+                name: "Dummy".to_owned(),
+                version: "0.1.0".to_owned(),
+                status: crate::skills::PythonSkillStatus::Active,
+                last_error: None,
+            })
+        }
+        fn rescue_mode_active(&self) -> bool {
+            self.rescue_mode
+        }
     }
 
     fn make_server() -> HostCommandServer<TestHandler> {
         let handler = TestHandler::new();
+        let (_client, server) = command_channel(8, 8, handler);
+        server
+    }
+
+    fn make_rescue_server() -> HostCommandServer<TestHandler> {
+        let handler = TestHandler::new_rescue_mode();
         let (_client, server) = command_channel(8, 8, handler);
         server
     }
@@ -1835,5 +1906,140 @@ mod tests {
         );
         let resp = server.route(&envelope);
         assert!(resp.is_err());
+    }
+
+    #[test]
+    fn rescue_mode_blocks_non_allowlisted_command() {
+        let server = make_rescue_server();
+        let envelope = make_envelope(
+            CommandName::ConversationGateSet,
+            serde_json::json!({"active": true}),
+        );
+        let resp = server.route(&envelope);
+        assert!(
+            resp.is_err(),
+            "conversation.gate_set should be blocked in rescue mode"
+        );
+    }
+
+    #[test]
+    fn rescue_mode_allows_recovery_safe_command() {
+        let server = make_rescue_server();
+        let envelope = make_envelope(CommandName::HostPing, serde_json::json!({}));
+        let resp = server
+            .route(&envelope)
+            .expect("host.ping should be allowed");
+        assert!(resp.ok);
+        assert_eq!(resp.payload["pong"], true);
+    }
+
+    #[test]
+    fn rescue_mode_allows_expected_recovery_commands() {
+        let server = make_rescue_server();
+        let commands = [
+            (CommandName::HostPing, serde_json::json!({})),
+            (CommandName::HostVersion, serde_json::json!({})),
+            (
+                CommandName::ConversationInjectText,
+                serde_json::json!({"text": "recover from last update"}),
+            ),
+            (CommandName::RuntimeStart, serde_json::json!({})),
+            (CommandName::RuntimeStop, serde_json::json!({})),
+            (CommandName::RuntimeStatus, serde_json::json!({})),
+            (
+                CommandName::ApprovalRespond,
+                serde_json::json!({"request_id": "1", "approved": true}),
+            ),
+            (CommandName::SchedulerList, serde_json::json!({})),
+            (
+                CommandName::SchedulerTriggerNow,
+                serde_json::json!({"id": "task-1"}),
+            ),
+            (CommandName::ConfigGet, serde_json::json!({})),
+            (
+                CommandName::ConfigPatch,
+                serde_json::json!({"key": "runtime.profile", "value": "standard"}),
+            ),
+            (CommandName::SkillsReload, serde_json::json!({})),
+            (CommandName::SkillPythonList, serde_json::json!({})),
+            (
+                CommandName::SkillPythonInstall,
+                serde_json::json!({"package_dir": "/tmp/skill"}),
+            ),
+            (
+                CommandName::SkillPythonDisable,
+                serde_json::json!({"skill_id": "s1"}),
+            ),
+            (
+                CommandName::SkillPythonActivate,
+                serde_json::json!({"skill_id": "s1"}),
+            ),
+            (
+                CommandName::SkillPythonQuarantine,
+                serde_json::json!({"skill_id": "s1", "reason": "bad"}),
+            ),
+            (
+                CommandName::SkillPythonRollback,
+                serde_json::json!({"skill_id": "s1"}),
+            ),
+            (
+                CommandName::SkillDiscoverySearch,
+                serde_json::json!({"query": "discord", "limit": 5}),
+            ),
+            (
+                CommandName::SkillGenerate,
+                serde_json::json!({"intent": "create backup skill", "confirm": false}),
+            ),
+            (
+                CommandName::SkillGenerateStatus,
+                serde_json::json!({"skill_id": "s1"}),
+            ),
+            (CommandName::SkillHealthCheck, serde_json::json!({})),
+            (CommandName::SkillHealthStatusCmd, serde_json::json!({})),
+        ];
+
+        for (command, payload) in commands {
+            let envelope = make_envelope(command, payload);
+            let response = server.route(&envelope);
+            assert!(
+                response.is_ok(),
+                "command {} should be allowed in rescue mode",
+                command.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn rescue_mode_blocks_non_recovery_commands() {
+        let server = make_rescue_server();
+        let blocked = [
+            (
+                CommandName::ConversationGateSet,
+                serde_json::json!({"active": true}),
+            ),
+            (
+                CommandName::SkillPythonStart,
+                serde_json::json!({"skill_name": "s1"}),
+            ),
+            (
+                CommandName::SkillPythonStop,
+                serde_json::json!({"skill_name": "s1"}),
+            ),
+            (
+                CommandName::SkillPythonAdvanceStatus,
+                serde_json::json!({"skill_id": "s1", "status": "active"}),
+            ),
+            (CommandName::DeviceGoHome, serde_json::json!({})),
+        ];
+
+        for (command, payload) in blocked {
+            let envelope = make_envelope(command, payload);
+            let response = server.route(&envelope);
+            assert!(
+                response.is_err(),
+                "command {} should be blocked in rescue mode",
+                command.as_str()
+            );
+        }
     }
 }

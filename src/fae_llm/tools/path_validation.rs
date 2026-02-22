@@ -4,7 +4,7 @@
 //! sensitive system directories.
 
 use crate::fae_llm::error::FaeLlmError;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// System directories that tools must never write to.
 ///
@@ -24,6 +24,38 @@ const SYSTEM_DIRS: &[&str] = &[
     "/sys",
     "/dev",
     "/boot",
+];
+
+/// Workspace-relative core paths that must remain immutable to tool writes.
+///
+/// These files implement the runtime kernel / safety boundary. Allowing tools
+/// to mutate them can break Fae's ability to recover from self-inflicted damage.
+const PROTECTED_KERNEL_FILES: &[&str] = &[
+    "src/config.rs",
+    "src/runtime.rs",
+    "src/ffi.rs",
+    "src/permissions.rs",
+    "src/approval.rs",
+    "src/error.rs",
+    "src/llm/mod.rs",
+    "src/fae_dirs.rs",
+    "src/agent/approval_tool.rs",
+    "src/startup.rs",
+    "src/model_integrity.rs",
+    "src/models/mod.rs",
+    "src/scheduler/runner.rs",
+    "src/scheduler/authority.rs",
+    "src/update/applier.rs",
+];
+
+/// Workspace-relative directory prefixes that are treated as protected kernel.
+const PROTECTED_KERNEL_PREFIXES: &[&str] = &[
+    "src/pipeline/",
+    "src/host/",
+    "src/memory/",
+    "src/credentials/",
+    "src/platform/",
+    "src/bin/",
 ];
 
 /// Sanitize a path for inclusion in user-facing error messages.
@@ -62,6 +94,37 @@ pub fn is_system_path(path: &Path) -> bool {
     SYSTEM_DIRS
         .iter()
         .any(|dir| path_str.starts_with(dir) || path_str == *dir)
+}
+
+/// Convert an absolute path within `workspace_root` to a normalized
+/// slash-separated workspace-relative form.
+fn normalize_workspace_relative_path(path: &Path, workspace_root: &Path) -> Option<String> {
+    let relative = path.strip_prefix(workspace_root).ok()?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+/// Return true when `path` points to a protected runtime-kernel target.
+fn is_protected_kernel_path(path: &Path, workspace_root: &Path) -> bool {
+    let Some(relative) = normalize_workspace_relative_path(path, workspace_root) else {
+        return false;
+    };
+
+    PROTECTED_KERNEL_FILES.iter().any(|p| *p == relative)
+        || PROTECTED_KERNEL_PREFIXES
+            .iter()
+            .any(|prefix| relative.starts_with(prefix))
 }
 
 /// Resolve and canonicalize the current workspace root.
@@ -179,12 +242,27 @@ pub fn validate_write_path_in_workspace(
         ));
     }
 
+    if is_protected_kernel_path(&absolute, &root) {
+        let safe_path = sanitize_path_for_error(&absolute, &root);
+        return Err(FaeLlmError::ToolValidationError(format!(
+            "cannot write to protected kernel path: {safe_path}"
+        )));
+    }
+
     if let Some(existing_target) = canonical_if_exists(&absolute)?
-        && !existing_target.starts_with(&root)
+        && (!existing_target.starts_with(&root)
+            || is_protected_kernel_path(&existing_target, &root))
     {
+        if !existing_target.starts_with(&root) {
+            let safe_path = sanitize_path_for_error(&existing_target, &root);
+            return Err(FaeLlmError::ToolValidationError(format!(
+                "path escapes workspace boundary: {safe_path}"
+            )));
+        }
+
         let safe_path = sanitize_path_for_error(&existing_target, &root);
         return Err(FaeLlmError::ToolValidationError(format!(
-            "path escapes workspace boundary: {safe_path}"
+            "cannot write to protected kernel path: {safe_path}"
         )));
     }
 
@@ -351,5 +429,83 @@ mod tests {
             workspace.path(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_path_rejects_protected_kernel_targets() {
+        let workspace = setup_workspace();
+        let protected = workspace.path().join("src/pipeline/coordinator.rs");
+        let parent = protected.parent().unwrap_or_else(|| unreachable!("parent"));
+        std::fs::create_dir_all(parent).unwrap_or_else(|_| unreachable!("mkdir should succeed"));
+        write_file(&protected, "kernel");
+
+        let result =
+            validate_write_path_in_workspace(protected.to_str().unwrap_or(""), workspace.path());
+        assert!(result.is_err(), "protected kernel path should be rejected");
+    }
+
+    #[test]
+    fn write_path_rejects_full_protected_kernel_surface() {
+        let workspace = setup_workspace();
+        let protected_rel_paths = [
+            "src/ffi.rs",
+            "src/permissions.rs",
+            "src/approval.rs",
+            "src/error.rs",
+            "src/llm/mod.rs",
+            "src/fae_dirs.rs",
+            "src/agent/approval_tool.rs",
+            "src/runtime.rs",
+            "src/config.rs",
+            "src/startup.rs",
+            "src/model_integrity.rs",
+            "src/models/mod.rs",
+            "src/scheduler/runner.rs",
+            "src/scheduler/authority.rs",
+            "src/update/applier.rs",
+            "src/memory/sqlite.rs",
+            "src/credentials/manager.rs",
+            "src/platform/macos.rs",
+            "src/bin/host_bridge.rs",
+        ];
+
+        for rel in protected_rel_paths {
+            let path = workspace.path().join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .unwrap_or_else(|_| unreachable!("mkdir should succeed"));
+            }
+            write_file(&path, "kernel");
+
+            let result =
+                validate_write_path_in_workspace(path.to_str().unwrap_or(""), workspace.path());
+            assert!(
+                result.is_err(),
+                "expected protected path to be rejected: {rel}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_path_rejects_parent_dir_traversal_into_protected_kernel() {
+        let workspace = setup_workspace();
+        let via_parent = "src/other/../pipeline/new.rs";
+        let result = validate_write_path_in_workspace(via_parent, workspace.path());
+        assert!(
+            result.is_err(),
+            "path with parent-dir traversal should be rejected"
+        );
+    }
+
+    #[test]
+    fn write_path_rejects_absolute_parent_dir_traversal() {
+        let workspace = setup_workspace();
+        let absolute = workspace.path().join("src/other/../pipeline/new.rs");
+        let result =
+            validate_write_path_in_workspace(absolute.to_str().unwrap_or(""), workspace.path());
+        assert!(
+            result.is_err(),
+            "absolute path with parent-dir traversal should be rejected"
+        );
     }
 }

@@ -19,7 +19,7 @@ use crate::fae_llm::providers::local::{LocalMistralrsAdapter, LocalMistralrsConf
 use crate::fae_llm::providers::message::{Message, Role};
 
 use crate::fae_llm::tools::{
-    BashTool, EditTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool,
+    BashTool, EditTool, PythonSkillTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool,
 };
 use crate::fae_llm::types::RequestOptions;
 use crate::llm::LocalLlm;
@@ -402,6 +402,11 @@ fn build_registry(
                 tool_approval_tx.clone(),
                 APPROVAL_TIMEOUT,
             )));
+            registry.register(Arc::new(ApprovalTool::new(
+                Arc::new(PythonSkillTool::with_default_dir()),
+                tool_approval_tx.clone(),
+                APPROVAL_TIMEOUT,
+            )));
             // Desktop automation (Full mode, with approval).
             if let Some(desktop_tool) = crate::fae_llm::tools::DesktopTool::try_new() {
                 registry.register(Arc::new(ApprovalTool::new(
@@ -417,6 +422,7 @@ fn build_registry(
             registry.register(Arc::new(ReadTool::new()));
             registry.register(Arc::new(WriteTool::new()));
             registry.register(Arc::new(EditTool::new()));
+            registry.register(Arc::new(PythonSkillTool::with_default_dir()));
             // Desktop automation (no approval).
             if let Some(desktop_tool) = crate::fae_llm::tools::DesktopTool::try_new() {
                 registry.register(Arc::new(desktop_tool));
@@ -728,5 +734,17 @@ mod tests {
             .send(&[Message::user("hello")], &RequestOptions::new(), &[])
             .await;
         assert!(matches!(result, Err(FaeLlmError::ConfigValidationError(_))));
+    }
+
+    #[test]
+    fn full_mode_registers_python_skill_tool() {
+        let mut config = LlmConfig::default();
+        config.tool_mode = AgentToolMode::Full;
+
+        let registry = build_registry(&config, None, None, None);
+        assert!(
+            registry.exists("python_skill"),
+            "python_skill tool should be registered in full mode"
+        );
     }
 }
