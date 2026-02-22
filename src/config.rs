@@ -183,9 +183,9 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             threshold: 0.01,
-            min_silence_duration_ms: 800,
+            min_silence_duration_ms: 400,
             speech_pad_ms: 30,
-            min_speech_duration_ms: 500,
+            min_speech_duration_ms: 300,
         }
     }
 }

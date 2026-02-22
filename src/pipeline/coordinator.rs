@@ -3290,13 +3290,16 @@ async fn forward_sentences(
     }
 
     /// How many characters of preamble to buffer before deciding this is
-    /// normal speech (not JSON). Covers "aaa json ```json" and similar.
-    const DECIDE_THRESHOLD: usize = 48;
+    /// normal speech (not JSON). Lowered from 48 to 16 — if the response
+    /// starts with `{` we detect JSON on the first character; otherwise
+    /// 16 chars is plenty to tell speech from code/JSON preambles.
+    const DECIDE_THRESHOLD: usize = 16;
     /// Maximum time to wait before forwarding normal speech while deciding.
     ///
-    /// This avoids long "dead air" when the assistant starts speaking text
-    /// but no JSON object is present.
-    const DECIDE_MAX_WAIT: Duration = Duration::from_millis(700);
+    /// Kept short (150ms) to minimise dead air before the first sentence
+    /// reaches TTS. The previous 700ms caused noticeable "dead zone" between
+    /// the user finishing their question and hearing any audio response.
+    const DECIDE_MAX_WAIT: Duration = Duration::from_millis(150);
 
     #[derive(PartialEq)]
     enum Mode {

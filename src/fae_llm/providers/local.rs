@@ -2,9 +2,15 @@
 //!
 //! Provides a fae_llm ProviderAdapter implementation for local GGUF model inference
 //! via mistralrs. This enables the Agent backend to use local Qwen3 models.
+//!
+//! **Streaming**: Events are yielded in real-time as tokens arrive from
+//! mistralrs, enabling TTS to begin speaking the first sentence while the
+//! model is still generating. This is critical for perceived latency.
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::fae_llm::LlmEventStream;
 use crate::fae_llm::error::FaeLlmError;
@@ -63,6 +69,10 @@ impl LocalMistralrsConfig {
 ///
 /// Wraps a mistralrs Model and implements the ProviderAdapter trait
 /// so it can be used by the fae_llm agent loop.
+///
+/// Events are streamed in real-time via a tokio channel so downstream
+/// consumers (TTS, UI) receive tokens as they are generated rather than
+/// waiting for the entire response to complete.
 pub struct LocalMistralrsAdapter {
     config: LocalMistralrsConfig,
 }
@@ -229,7 +239,6 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                     .map(|t| &t.function.name)
                     .collect::<Vec<_>>()
             );
-            // Log full tool definitions for debugging
             for tool in &mistral_tools {
                 tracing::debug!(
                     tool_name = %tool.function.name,
@@ -245,178 +254,225 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             tracing::warn!("no tools being passed to mistralrs!");
         }
 
-        // Start streaming
+        // Create a channel-backed stream so events are yielded in real-time
+        // as tokens arrive from mistralrs, rather than collecting everything
+        // into a Vec first (which would block TTS until generation completes).
         let model = Arc::clone(&self.config.model);
         let model_id = self.config.model_id.clone();
+        let (tx, rx) = mpsc::channel::<LlmEvent>(64);
 
-        let mut stream = model
-            .stream_chat_request(request)
-            .await
-            .map_err(|e| FaeLlmError::RequestError(format!("mistralrs stream failed: {e}")))?;
+        // Spawn a background task that starts the mistralrs stream and
+        // forwards events through the channel. Both the model reference
+        // and the stream live inside this task to satisfy lifetime bounds.
+        tokio::spawn(async move {
+            // Start the mistralrs stream inside the spawned task so the
+            // model Arc and the stream it borrows share the same lifetime.
+            let mut mistral_stream = match model.stream_chat_request(request).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx
+                        .send(LlmEvent::StreamError {
+                            error: format!("mistralrs stream failed: {e}"),
+                        })
+                        .await;
+                    return;
+                }
+            };
 
-        let mut all_events = vec![LlmEvent::StreamStart {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            model: ModelRef::new(&model_id),
-        }];
+            // Emit StreamStart so consumers know generation has begun.
+            let request_id = uuid::Uuid::new_v4().to_string();
+            if tx
+                .send(LlmEvent::StreamStart {
+                    request_id,
+                    model: ModelRef::new(&model_id),
+                })
+                .await
+                .is_err()
+            {
+                return;
+            }
 
-        // Track whether the model requested tool calls
-        let mut has_tool_calls = false;
-        let mut last_finish_reason: Option<String> = None;
+            let mut has_tool_calls = false;
+            let mut last_finish_reason: Option<String> = None;
+            let mut event_count: usize = 1; // StreamStart already sent
 
-        // Collect all responses, handling both text and tool call chunks
-        while let Some(response) = stream.next().await {
-            match response {
-                mistralrs::Response::Chunk(chunk) => {
-                    if let Some(choice) = chunk.choices.first() {
-                        // Handle text content delta
-                        if let Some(ref content) = choice.delta.content
-                            && !content.is_empty()
-                        {
-                            all_events.push(LlmEvent::TextDelta {
-                                text: content.clone(),
-                            });
-                        }
-
-                        // Handle tool call deltas
-                        if let Some(ref tool_calls) = choice.delta.tool_calls {
-                            for tc in tool_calls {
-                                has_tool_calls = true;
-                                all_events.push(LlmEvent::ToolCallStart {
-                                    call_id: tc.id.clone(),
-                                    function_name: tc.function.name.clone(),
-                                });
-                                if !tc.function.arguments.is_empty() {
-                                    all_events.push(LlmEvent::ToolCallArgsDelta {
-                                        call_id: tc.id.clone(),
-                                        args_fragment: tc.function.arguments.clone(),
-                                    });
+            while let Some(response) = mistral_stream.next().await {
+                match response {
+                    mistralrs::Response::Chunk(chunk) => {
+                        if let Some(choice) = chunk.choices.first() {
+                            // Forward text content delta immediately
+                            if let Some(ref content) = choice.delta.content {
+                                if !content.is_empty() {
+                                    event_count += 1;
+                                    if tx
+                                        .send(LlmEvent::TextDelta {
+                                            text: content.clone(),
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        tracing::debug!("stream consumer dropped, stopping");
+                                        return;
+                                    }
                                 }
-                                all_events.push(LlmEvent::ToolCallEnd {
-                                    call_id: tc.id.clone(),
-                                });
                             }
-                        }
 
-                        // Track finish reason from the chunk
-                        if let Some(ref reason) = choice.finish_reason {
-                            last_finish_reason = Some(reason.clone());
+                            // Forward tool call deltas immediately
+                            if let Some(ref tool_calls) = choice.delta.tool_calls {
+                                for tc in tool_calls {
+                                    has_tool_calls = true;
+                                    let events = [
+                                        LlmEvent::ToolCallStart {
+                                            call_id: tc.id.clone(),
+                                            function_name: tc.function.name.clone(),
+                                        },
+                                        LlmEvent::ToolCallArgsDelta {
+                                            call_id: tc.id.clone(),
+                                            args_fragment: tc.function.arguments.clone(),
+                                        },
+                                        LlmEvent::ToolCallEnd {
+                                            call_id: tc.id.clone(),
+                                        },
+                                    ];
+                                    for event in events {
+                                        // Skip empty arg deltas
+                                        if matches!(&event, LlmEvent::ToolCallArgsDelta { args_fragment, .. } if args_fragment.is_empty())
+                                        {
+                                            continue;
+                                        }
+                                        event_count += 1;
+                                        if tx.send(event).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(ref reason) = choice.finish_reason {
+                                last_finish_reason = Some(reason.clone());
+                            }
                         }
                     }
-                }
-                mistralrs::Response::Done(completion) => {
-                    // Check the completion response for tool calls too (non-streaming path)
-                    if let Some(choice) = completion.choices.first() {
-                        tracing::debug!(
-                            finish_reason = %choice.finish_reason,
-                            has_tool_calls = ?choice.message.tool_calls.is_some(),
-                            content_len = ?choice.message.content.as_ref().map(|c| c.len()),
-                            "mistralrs Done response"
-                        );
-                        if let Some(ref tool_calls) = choice.message.tool_calls {
-                            tracing::info!(
-                                num_tool_calls = tool_calls.len(),
-                                "model returned tool calls"
-                            );
-                            for tc in tool_calls {
-                                tracing::debug!(
-                                    tool_id = %tc.id,
-                                    tool_name = %tc.function.name,
-                                    tool_args = %tc.function.arguments,
-                                    "tool call from model"
-                                );
-                                has_tool_calls = true;
-                                all_events.push(LlmEvent::ToolCallStart {
-                                    call_id: tc.id.clone(),
-                                    function_name: tc.function.name.clone(),
-                                });
-                                if !tc.function.arguments.is_empty() {
-                                    all_events.push(LlmEvent::ToolCallArgsDelta {
-                                        call_id: tc.id.clone(),
-                                        args_fragment: tc.function.arguments.clone(),
-                                    });
-                                }
-                                all_events.push(LlmEvent::ToolCallEnd {
-                                    call_id: tc.id.clone(),
-                                });
-                            }
-                        }
-                        // Also check text content in Done response
-                        if let Some(ref content) = choice.message.content
-                            && !content.is_empty()
-                        {
+                    mistralrs::Response::Done(completion) => {
+                        if let Some(choice) = completion.choices.first() {
                             tracing::debug!(
-                                content = %content,
-                                "Done response content"
+                                finish_reason = %choice.finish_reason,
+                                has_tool_calls = ?choice.message.tool_calls.is_some(),
+                                content_len = ?choice.message.content.as_ref().map(|c| c.len()),
+                                "mistralrs Done response"
                             );
-                            all_events.push(LlmEvent::TextDelta {
-                                text: content.clone(),
-                            });
+                            // Handle tool calls from Done response (non-streaming path)
+                            if let Some(ref tool_calls) = choice.message.tool_calls {
+                                tracing::info!(
+                                    num_tool_calls = tool_calls.len(),
+                                    "model returned tool calls"
+                                );
+                                for tc in tool_calls {
+                                    tracing::debug!(
+                                        tool_id = %tc.id,
+                                        tool_name = %tc.function.name,
+                                        tool_args = %tc.function.arguments,
+                                        "tool call from model"
+                                    );
+                                    has_tool_calls = true;
+                                    let events = [
+                                        LlmEvent::ToolCallStart {
+                                            call_id: tc.id.clone(),
+                                            function_name: tc.function.name.clone(),
+                                        },
+                                        LlmEvent::ToolCallArgsDelta {
+                                            call_id: tc.id.clone(),
+                                            args_fragment: tc.function.arguments.clone(),
+                                        },
+                                        LlmEvent::ToolCallEnd {
+                                            call_id: tc.id.clone(),
+                                        },
+                                    ];
+                                    for event in events {
+                                        if matches!(&event, LlmEvent::ToolCallArgsDelta { args_fragment, .. } if args_fragment.is_empty())
+                                        {
+                                            continue;
+                                        }
+                                        event_count += 1;
+                                        if tx.send(event).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                            // Handle text content from Done response
+                            if let Some(ref content) = choice.message.content {
+                                if !content.is_empty() {
+                                    tracing::debug!(
+                                        content = %content,
+                                        "Done response content"
+                                    );
+                                    event_count += 1;
+                                    let _ = tx
+                                        .send(LlmEvent::TextDelta {
+                                            text: content.clone(),
+                                        })
+                                        .await;
+                                }
+                            }
+                            if choice.finish_reason == "tool_calls" {
+                                has_tool_calls = true;
+                            }
+                            last_finish_reason = Some(choice.finish_reason.clone());
                         }
-                        // Use finish_reason from the completed response
-                        if choice.finish_reason == "tool_calls" {
-                            has_tool_calls = true;
-                        }
-                        last_finish_reason = Some(choice.finish_reason.clone());
+                        break;
                     }
-                    break;
+                    mistralrs::Response::ModelError(msg, _) => {
+                        event_count += 1;
+                        let _ = tx.send(LlmEvent::StreamError { error: msg }).await;
+                        break;
+                    }
+                    mistralrs::Response::InternalError(e) => {
+                        event_count += 1;
+                        let _ = tx
+                            .send(LlmEvent::StreamError {
+                                error: e.to_string(),
+                            })
+                            .await;
+                        break;
+                    }
+                    mistralrs::Response::ValidationError(e) => {
+                        event_count += 1;
+                        let _ = tx
+                            .send(LlmEvent::StreamError {
+                                error: e.to_string(),
+                            })
+                            .await;
+                        break;
+                    }
+                    _ => continue,
                 }
-                mistralrs::Response::ModelError(msg, _) => {
-                    all_events.push(LlmEvent::StreamError { error: msg });
-                    break;
-                }
-                mistralrs::Response::InternalError(e) => {
-                    all_events.push(LlmEvent::StreamError {
-                        error: e.to_string(),
-                    });
-                    break;
-                }
-                mistralrs::Response::ValidationError(e) => {
-                    all_events.push(LlmEvent::StreamError {
-                        error: e.to_string(),
-                    });
-                    break;
-                }
-                _ => continue,
             }
-        }
 
-        // Determine the correct finish reason
-        let finish_reason = if has_tool_calls {
-            FinishReason::ToolCalls
-        } else {
-            match last_finish_reason.as_deref() {
-                Some("tool_calls") => FinishReason::ToolCalls,
-                Some("length") => FinishReason::Length,
-                Some("content_filter") => FinishReason::ContentFilter,
-                _ => FinishReason::Stop,
-            }
-        };
-
-        // Collect text content for debugging
-        let text_content: String = all_events
-            .iter()
-            .filter_map(|e| {
-                if let LlmEvent::TextDelta { text } = e {
-                    Some(text.as_str())
-                } else {
-                    None
+            // Determine the correct finish reason
+            let finish_reason = if has_tool_calls {
+                FinishReason::ToolCalls
+            } else {
+                match last_finish_reason.as_deref() {
+                    Some("tool_calls") => FinishReason::ToolCalls,
+                    Some("length") => FinishReason::Length,
+                    Some("content_filter") => FinishReason::ContentFilter,
+                    _ => FinishReason::Stop,
                 }
-            })
-            .collect();
+            };
 
-        tracing::info!(
-            "mistralrs response: {} events, finish_reason={}, has_tool_calls={}",
-            all_events.len(),
-            finish_reason,
-            has_tool_calls,
-        );
-        tracing::debug!(
-            response_text = %text_content,
-            "full response text from model"
-        );
+            tracing::info!(
+                "mistralrs response complete: {} events, finish_reason={}, has_tool_calls={}",
+                event_count,
+                finish_reason,
+                has_tool_calls,
+            );
 
-        all_events.push(LlmEvent::StreamEnd { finish_reason });
+            let _ = tx.send(LlmEvent::StreamEnd { finish_reason }).await;
+        });
 
-        Ok(Box::pin(futures_util::stream::iter(all_events)))
+        // Return a real streaming adapter backed by the channel receiver.
+        // Each event is yielded as soon as the background task produces it.
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 }
