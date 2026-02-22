@@ -15,6 +15,10 @@ import Combine
 /// of the screen (below the menu bar). When Fae starts speaking (assistant
 /// generating), the window automatically expands back to compact mode and
 /// comes to the front so the user can see the response.
+///
+/// The frosted-glass (`NSVisualEffectView`) background is owned by this
+/// controller and re-installed after any `styleMask` change that may cause
+/// AppKit to detach the existing view hierarchy.
 @MainActor
 final class WindowStateController: ObservableObject {
 
@@ -52,7 +56,23 @@ final class WindowStateController: ObservableObject {
 
     weak var window: NSWindow? {
         didSet {
+            guard let window else { return }
+            // Enforce compact size on initial attach — macOS state restoration
+            // may have saved a different (larger) frame from a previous session.
+            let screen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
+            let visible = screen.visibleFrame
+            let size = NSSize(width: compactWidth, height: compactHeight)
+            let x = visible.midX - size.width / 2
+            let y = visible.midY - size.height / 2
+            window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: false)
+            // Set min/max so the user can't resize beyond reasonable bounds.
+            window.minSize = NSSize(width: 280, height: 400)
+            window.maxSize = NSSize(width: 500, height: 700)
             applyModeToWindow()
+            // Frosted glass and title-bar tracker are installed AFTER
+            // applyModeToWindow sets the styleMask, so the contentView
+            // hierarchy is stable before we re-parent it.
+            ensureFrostedGlass()
             installTitleBarTracker()
         }
     }
@@ -109,6 +129,9 @@ final class WindowStateController: ObservableObject {
         window.backgroundColor = .clear
         window.isOpaque = false
 
+        // Re-install frosted glass — styleMask change may have detached it.
+        ensureFrostedGlass()
+
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.5
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -133,6 +156,8 @@ final class WindowStateController: ObservableObject {
             window.backgroundColor = .clear
             window.isOpaque = false
             setWindowButtonsHidden(true)
+            // Re-install frosted glass — styleMask change may have detached it.
+            ensureFrostedGlass()
             installTitleBarTracker()
         }
 
@@ -255,6 +280,47 @@ final class WindowStateController: ObservableObject {
     func showWindow() {
         window?.makeKeyAndOrderFront(nil)
         startInactivityTimer()
+    }
+
+    // MARK: - Frosted Glass
+
+    /// Installs (or re-installs) the frosted-glass `NSVisualEffectView` as the
+    /// window's content view, wrapping the SwiftUI hosting view inside it.
+    ///
+    /// Safe to call multiple times — skips if the glass is already in place.
+    /// Must be called after any `styleMask` change because AppKit may detach
+    /// or recreate the content-view hierarchy when the window chrome changes.
+    func ensureFrostedGlass() {
+        guard let window else { return }
+
+        // Already installed — the contentView IS the effect view.
+        if window.contentView is NSVisualEffectView { return }
+
+        guard let hostingView = window.contentView else { return }
+
+        let effectView = NSVisualEffectView()
+        effectView.material = .hudWindow
+        effectView.blendingMode = .behindWindow
+        effectView.state = .active
+
+        // Replace the window's contentView with the effect view,
+        // then re-add the SwiftUI hosting view on top of it.
+        window.contentView = effectView
+
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        // Make the hosting view transparent so the blur shows through
+        // any transparent SwiftUI regions (title bar gap, edges, etc.).
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+
+        effectView.addSubview(hostingView)
+
+        NSLayoutConstraint.activate([
+            hostingView.topAnchor.constraint(equalTo: effectView.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+            hostingView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+        ])
     }
 
     // MARK: - Helpers
