@@ -16,11 +16,11 @@ run:
 
 # Run the native macOS SwiftUI shell.
 run-native-swift:
-    cd native/macos/FaeNativeApp && swift run
+    cd native/macos/Fae && swift run
 
 # Build the native macOS SwiftUI shell.
 build-native-swift:
-    cd native/macos/FaeNativeApp && swift build
+    cd native/macos/Fae && swift build
 
 # Install the packaged native-device-handoff skill.
 install-native-handoff-skill:
@@ -93,7 +93,7 @@ clean:
 
 # Clean native Swift build artifacts (prevents stale code/artifacts)
 clean-native:
-    rm -rf native/macos/FaeNativeApp/.build
+    rm -rf native/macos/Fae/.build
 
 # Build libfae static library for macOS arm64 (for Swift embedding)
 build-staticlib:
@@ -147,8 +147,8 @@ quick-check: fmt-check lint test
 # ── macOS Code Signing & Bundle ──────────────────────────────────────────────
 
 # Directory paths
-_build_dir := "native/macos/FaeNativeApp/.build/arm64-apple-macosx/debug"
-_app_bundle := _build_dir / "FaeNativeApp.app"
+_build_dir := "native/macos/Fae/.build/arm64-apple-macosx/debug"
+_app_bundle := _build_dir / "Fae.app"
 _entitlements := "Entitlements-debug.plist"
 
 # Set up the signing keychain (idempotent — safe to run multiple times).
@@ -212,11 +212,11 @@ _bundle-app:
     BUNDLE="{{_app_bundle}}"
     rm -rf "$BUNDLE"
     mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Frameworks" "$BUNDLE/Contents/Resources"
-    cp "$BUILD/FaeNativeApp" "$BUNDLE/Contents/MacOS/FaeNativeApp"
+    cp "$BUILD/Fae" "$BUNDLE/Contents/MacOS/Fae"
     cp -R "$BUILD/Sparkle.framework" "$BUNDLE/Contents/Frameworks/"
     # Copy SPM resource bundle (contains Metal shaders, icons, help HTML).
     # Without this, the frosted-glass orb shader fails to load and the window is solid black.
-    RESOURCE_BUNDLE="$BUILD/FaeNativeApp_FaeNativeApp.bundle"
+    RESOURCE_BUNDLE="$BUILD/Fae_Fae.bundle"
     if [ -d "$RESOURCE_BUNDLE" ]; then
         cp -R "$RESOURCE_BUNDLE" "$BUNDLE/Contents/Resources/"
         echo "  → Copied resource bundle (metallib, icons, help)"
@@ -225,7 +225,7 @@ _bundle-app:
         echo "         Metal shaders will not load — window will be black."
     fi
     install_name_tool -add_rpath "@executable_path/../Frameworks" \
-        "$BUNDLE/Contents/MacOS/FaeNativeApp" 2>/dev/null || true
+        "$BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
     cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -239,7 +239,7 @@ _bundle-app:
         <key>CFBundleDisplayName</key>
         <string>Fae</string>
         <key>CFBundleExecutable</key>
-        <string>FaeNativeApp</string>
+        <string>Fae</string>
         <key>CFBundlePackageType</key>
         <string>APPL</string>
         <key>CFBundleVersion</key>
@@ -294,14 +294,14 @@ _verify-bundle:
     ERRORS=0
     echo "Verifying bundle integrity…"
     # 1. Executable exists
-    if [ ! -f "$BUNDLE/Contents/MacOS/FaeNativeApp" ]; then
+    if [ ! -f "$BUNDLE/Contents/MacOS/Fae" ]; then
         echo "  ✗ FAIL: Missing executable"
         ERRORS=$((ERRORS+1))
     else
         echo "  ✓ Executable present"
     fi
     # 2. Resource bundle with Metal shader
-    METALLIB="$BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle/default.metallib"
+    METALLIB="$BUNDLE/Contents/Resources/Fae_Fae.bundle/default.metallib"
     if [ ! -f "$METALLIB" ]; then
         echo "  ✗ FAIL: Missing Metal shader (default.metallib)"
         echo "         Window will show solid black without this."
@@ -310,7 +310,7 @@ _verify-bundle:
         echo "  ✓ Metal shader present ($(du -h "$METALLIB" | cut -f1))"
     fi
     # 3. App icon
-    ICON="$BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle/AppIconFace.jpg"
+    ICON="$BUNDLE/Contents/Resources/Fae_Fae.bundle/AppIconFace.jpg"
     if [ ! -f "$ICON" ]; then
         echo "  ⚠ WARNING: Missing app icon (AppIconFace.jpg)"
     else

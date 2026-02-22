@@ -163,7 +163,7 @@ Swift-side:
 
 | File | Role |
 |------|------|
-| `native/macos/.../FaeNativeApp.swift` | App entry, environment wiring, embedded core init |
+| `native/macos/.../FaeApp.swift` | App entry, environment wiring, embedded core init |
 | `native/macos/.../EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
 | `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
 | `native/macos/.../WindowStateController.swift` | Adaptive window modes (collapsed/compact) |

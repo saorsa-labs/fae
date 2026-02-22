@@ -150,7 +150,7 @@ The Swift Package Manager build script compiles the Rust static library and link
 // Package.swift (conceptual)
 .systemLibrary(name: "libfae", pkgConfig: nil, providers: []),
 .executableTarget(
-    name: "FaeNativeApp",
+    name: "Fae",
     dependencies: ["libfae"],
     linkerSettings: [
         .unsafeFlags(["-L", "../../../target/release"]),
@@ -221,7 +221,7 @@ it's talking to a subprocess or an embedded library.
 
 - Add C header to Swift package
 - Create `EmbeddedCoreSender` implementing `HostCommandSender`
-- Wire into `FaeNativeApp.swift` (replace `ProcessCommandSender`)
+- Wire into `FaeApp.swift` (replace `ProcessCommandSender`)
 - Verify all existing functionality works identically
 - Remove `fae-host` binary from app bundle
 
@@ -236,7 +236,7 @@ it's talking to a subprocess or an embedded library.
 
 - Remove `ProcessCommandSender.swift`
 - Remove `src/bin/host_bridge.rs` (or repurpose as standalone `faed` daemon)
-- Remove subprocess-related logic from `FaeNativeApp.swift`
+- Remove subprocess-related logic from `FaeApp.swift`
 - `src/host/stdio.rs` becomes the IPC transport for Mode B only
 
 ## Threading Model

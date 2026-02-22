@@ -4,7 +4,7 @@ import XCTest
 // MARK: - DeviceCommandParser (copied for isolated testing)
 
 /// Mirrors the production `DeviceCommandParser` in
-/// `Sources/FaeNativeApp/DeviceHandoff.swift`.
+/// `Sources/Fae/DeviceHandoff.swift`.
 ///
 /// This is a verbatim copy of the parsing logic so tests can run without
 /// linking libfae.a. If you change the production parser, update this copy
@@ -466,7 +466,7 @@ final class FaeDeviceTargetTests: XCTestCase {
 //
 // 11. INCOMING HANDOFF:
 //     - On a second Mac (or simulator), publish NSUserActivity with snapshot
-//     - Verify FaeNativeApp receives via onContinueUserActivity
+//     - Verify FaeApp receives via onContinueUserActivity
 //     - Verify ConversationController.restoredSnapshot is set
 //     - Verify orb flashes .listening/.rowanBerry for 2s
 //     - Verify orb mode/feeling restored from snapshot

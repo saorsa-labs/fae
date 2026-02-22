@@ -81,19 +81,19 @@ jobs:
 
       - name: Build native Swift shell (links against libfae.a)
         run: |
-          pushd native/macos/FaeNativeApp
+          pushd native/macos/Fae
           swift build -c release
-          SWIFT_BIN_REL="$(find .build -type f -perm -111 -name FaeNativeApp | head -n 1)"
+          SWIFT_BIN_REL="$(find .build -type f -perm -111 -name Fae | head -n 1)"
           if [ -z "$SWIFT_BIN_REL" ]; then
-            echo "::error::Could not locate built FaeNativeApp binary under native/macos/FaeNativeApp/.build"
+            echo "::error::Could not locate built Fae binary under native/macos/Fae/.build"
             exit 1
           fi
           SWIFT_BIN_ABS="$(cd "$(dirname "$SWIFT_BIN_REL")" && pwd)/$(basename "$SWIFT_BIN_REL")"
           echo "SWIFT_APP_BINARY=$SWIFT_BIN_ABS" >> "$GITHUB_ENV"
 
-          SWIFT_RES_REL="$(find .build -type d -name 'FaeNativeApp_FaeNativeApp.bundle' | head -n 1)"
+          SWIFT_RES_REL="$(find .build -type d -name 'Fae_Fae.bundle' | head -n 1)"
           if [ -z "$SWIFT_RES_REL" ]; then
-            echo "::error::Could not locate FaeNativeApp_FaeNativeApp.bundle resource bundle"
+            echo "::error::Could not locate Fae_Fae.bundle resource bundle"
             exit 1
           fi
           SWIFT_RES_ABS="$(cd "$SWIFT_RES_REL" && pwd)"
@@ -189,13 +189,13 @@ jobs:
           chmod +x "$UPDATE_ASSET"
 
           # Build native macOS app bundle (single binary — Rust core is statically linked).
-          cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
+          cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/Fae"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
           cp -R "$SWIFT_RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
-          chmod +x "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
+          chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
 
           # Use checked-in Info.plist with version substitution.
-          cp native/macos/FaeNativeApp/Info.plist "$APP_BUNDLE/Contents/Info.plist"
+          cp native/macos/Fae/Info.plist "$APP_BUNDLE/Contents/Info.plist"
           sed -i '' "s/__VERSION__/${VERSION}/g" "$APP_BUNDLE/Contents/Info.plist"
 
           # Archive includes native app bundle.
@@ -225,7 +225,7 @@ jobs:
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
-            "$APP_BUNDLE/Contents/MacOS/FaeNativeApp"
+            "$APP_BUNDLE/Contents/MacOS/Fae"
 
           # 3. Sign the standalone update binary (not in a bundle).
           codesign --force --options runtime \
@@ -287,7 +287,7 @@ jobs:
             echo "SPARKLE_SIGNATURE=" >> "$GITHUB_ENV"
           else
             # Sparkle's sign_update is bundled in the SPM checkout.
-            SIGN_UPDATE="$(find native/macos/FaeNativeApp/.build -path '*/Sparkle/bin/sign_update' -type f 2>/dev/null | head -n 1)"
+            SIGN_UPDATE="$(find native/macos/Fae/.build -path '*/Sparkle/bin/sign_update' -type f 2>/dev/null | head -n 1)"
             if [ -z "$SIGN_UPDATE" ] || [ ! -x "$SIGN_UPDATE" ]; then
               # Fall back to downloading Sparkle CLI tools.
               curl -sL "https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz" \

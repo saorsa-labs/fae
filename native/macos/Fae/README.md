@@ -1,4 +1,4 @@
-# FaeNativeApp (macOS SwiftUI)
+# Fae (macOS SwiftUI)
 
 Native Swift app shell for Fae with an orb-first visual system and cross-device handoff controls.
 
@@ -24,7 +24,7 @@ Native Swift app shell for Fae with an orb-first visual system and cross-device 
 From repository root:
 
 ```bash
-cd native/macos/FaeNativeApp
+cd native/macos/Fae
 swift run
 ```
 

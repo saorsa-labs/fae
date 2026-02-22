@@ -13,11 +13,11 @@ import Foundation
 final class ConversationBridgeController: ObservableObject {
 
     /// Native subtitle state for the overlay bubbles.
-    /// Set by `FaeNativeApp` during wiring.
+    /// Set by `FaeApp` during wiring.
     weak var subtitleState: SubtitleStateController?
 
     /// Native message store for the SwiftUI conversation window.
-    /// Set by `FaeNativeApp` during wiring.
+    /// Set by `FaeApp` during wiring.
     weak var conversationController: ConversationController?
 
     private var observations: [NSObjectProtocol] = []

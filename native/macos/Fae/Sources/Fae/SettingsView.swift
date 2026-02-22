@@ -8,7 +8,7 @@ struct SettingsView: View {
     @EnvironmentObject private var onboarding: OnboardingController
 
     /// Command sender for issuing backend commands (e.g. config.patch).
-    /// Injected via the environment from FaeNativeApp.
+    /// Injected via the environment from FaeApp.
     var commandSender: HostCommandSender?
 
     /// Sparkle auto-update controller for "Check for Updates" UI.

@@ -93,4 +93,4 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: '14.0'
 
       - name: Build native Swift app (release)
-        run: swift build -c release --package-path native/macos/FaeNativeApp
+        run: swift build -c release --package-path native/macos/Fae

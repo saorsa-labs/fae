@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "FaeNativeApp",
+    name: "Fae",
     platforms: [
         .macOS(.v14),
     ],
     products: [
-        .executable(name: "FaeNativeApp", targets: ["FaeNativeApp"]),
+        .executable(name: "Fae", targets: ["Fae"]),
     ],
     dependencies: [
         // Shared Handoff contract types: FaeHandoffContract, ConversationSnapshot, etc.
@@ -24,13 +24,13 @@ let package = Package(
         ),
 
         .executableTarget(
-            name: "FaeNativeApp",
+            name: "Fae",
             dependencies: [
                 "CLibFae",
                 .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
-            path: "Sources/FaeNativeApp",
+            path: "Sources/Fae",
             exclude: [
                 // Metal source is pre-compiled to Resources/default.metallib
                 // via: xcrun metal -c FogCloudOrb.metal -o /tmp/FogCloudOrb.air

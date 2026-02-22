@@ -27,16 +27,16 @@ final class PipelineAuxBridgeController: ObservableObject {
     @Published var audioRMS: Double = 0.0
 
     /// Native canvas store for the SwiftUI canvas window.
-    /// Set by `FaeNativeApp` during wiring.
+    /// Set by `FaeApp` during wiring.
     weak var canvasController: CanvasController?
 
     /// Auxiliary window manager for showing/hiding conversation and canvas panels.
-    /// Set by `FaeNativeApp` during wiring.
+    /// Set by `FaeApp` during wiring.
     weak var auxiliaryWindows: AuxiliaryWindowManager?
 
     /// Subtitle/progress bar controller — used to hide the progress bar
     /// once all models have finished loading.
-    /// Set by `FaeNativeApp` during wiring.
+    /// Set by `FaeApp` during wiring.
     weak var subtitleState: SubtitleStateController?
 
     /// Tracks how many `load_complete` progress events we have received.

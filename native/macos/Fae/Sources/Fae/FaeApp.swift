@@ -46,7 +46,7 @@ final class OrbStateController: ObservableObject {
 }
 
 @main
-struct FaeNativeApp: App {
+struct FaeApp: App {
     @StateObject private var handoff = DeviceHandoffController()
     @StateObject private var orbState = OrbStateController()
     @StateObject private var orbAnimation = OrbAnimationState()
@@ -95,7 +95,7 @@ struct FaeNativeApp: App {
         NSApplication.shared.setActivationPolicy(.regular)
 
         // Override the process name so the menu bar shows "Fae" instead of
-        // the SPM executable name "FaeNativeApp". macOS uses processName for
+        // the SPM executable name. macOS uses processName for
         // the bold application menu title.
         ProcessInfo.processInfo.processName = "Fae"
 
@@ -109,7 +109,7 @@ struct FaeNativeApp: App {
             try sender.start()
             commandSender = sender
         } catch {
-            NSLog("FaeNativeApp: failed to start embedded core: %@", error.localizedDescription)
+            NSLog("Fae: failed to start embedded core: %@", error.localizedDescription)
             commandSender = nil
         }
     }
@@ -378,7 +378,7 @@ struct FaeNativeApp: App {
     /// logged and ignored.
     private func handleIncomingHandoff(_ activity: NSUserActivity) {
         guard let info = activity.userInfo else {
-            NSLog("FaeNativeApp: received handoff with no userInfo")
+            NSLog("Fae: received handoff with no userInfo")
             return
         }
 
@@ -386,7 +386,7 @@ struct FaeNativeApp: App {
 
         guard let jsonString = info["conversationSnapshot"] as? String,
               let data = jsonString.data(using: .utf8) else {
-            NSLog("FaeNativeApp: handoff missing conversationSnapshot")
+            NSLog("Fae: handoff missing conversationSnapshot")
             return
         }
 
@@ -394,7 +394,7 @@ struct FaeNativeApp: App {
         decoder.dateDecodingStrategy = .iso8601
 
         guard let snapshot = try? decoder.decode(ConversationSnapshot.self, from: data) else {
-            NSLog("FaeNativeApp: failed to decode handoff snapshot")
+            NSLog("Fae: failed to decode handoff snapshot")
             return
         }
 
@@ -411,7 +411,7 @@ struct FaeNativeApp: App {
         // Pulse the orb to signal "conversation arrived".
         orbState.flash(mode: .listening, palette: .rowanBerry, duration: 2.0)
 
-        NSLog("FaeNativeApp: restored handoff from %@ (%d entries)",
+        NSLog("Fae: restored handoff from %@ (%d entries)",
               device, snapshot.entries.count)
     }
 
@@ -421,7 +421,7 @@ struct FaeNativeApp: App {
         if let snapshot = HandoffKVStore.load() {
             conversation.restore(from: snapshot, device: "iCloud")
             HandoffKVStore.clear()
-            NSLog("FaeNativeApp: restored handoff from iCloud KV store")
+            NSLog("Fae: restored handoff from iCloud KV store")
         }
     }
 
@@ -454,19 +454,19 @@ struct FaeNativeApp: App {
             let payload = response["payload"] as? [String: Any] ?? response
             if payload["onboarded"] as? Bool == true {
                 onboarding.isComplete = true
-                NSLog("FaeNativeApp: restored onboarding state — already complete")
+                NSLog("Fae: restored onboarding state — already complete")
             } else {
                 // Restore partial onboarding progress (phase + granted permissions).
                 if let phase = payload["phase"] as? String, phase != "welcome" {
                     onboarding.initialPhase = phase
-                    NSLog("FaeNativeApp: restoring onboarding at phase: %@", phase)
+                    NSLog("Fae: restoring onboarding at phase: %@", phase)
                 }
                 if let granted = payload["granted_permissions"] as? [String] {
                     for perm in granted {
                         onboarding.permissionStates[perm] = "granted"
                     }
                     if !granted.isEmpty {
-                        NSLog("FaeNativeApp: restored %d granted permissions", granted.count)
+                        NSLog("Fae: restored %d granted permissions", granted.count)
                     }
                 }
             }

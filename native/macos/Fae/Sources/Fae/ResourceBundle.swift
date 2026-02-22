@@ -13,7 +13,7 @@ private class _FaeBundleFinder {}
 
 extension Bundle {
     static let faeResources: Bundle = {
-        let bundleName = "FaeNativeApp_FaeNativeApp"
+        let bundleName = "Fae_Fae"
 
         let candidates: [URL?] = [
             // 1. Standard .app bundle location: Contents/Resources/
@@ -35,7 +35,7 @@ extension Bundle {
 
         // Graceful fallback — return main bundle so url(forResource:) still
         // has a chance to find loose resources in Contents/Resources/.
-        NSLog("FaeNativeApp: WARNING — could not find resource bundle '%@', falling back to main bundle", bundleName)
+        NSLog("Fae: WARNING — could not find resource bundle '%@', falling back to main bundle", bundleName)
         return Bundle.main
     }()
 }

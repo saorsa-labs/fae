@@ -127,7 +127,7 @@ similar = "2"
 indicatif = "0.17"
 
 # GUI: Dioxus desktop frontend archived to `dioxus-gui` branch.
-# Native macOS UI is Swift (native/macos/FaeNativeApp).
+# Native macOS UI is Swift (native/macos/Fae).
 
 # Canvas visual output (saorsa-canvas scene graph)
 canvas-core = "0.2"

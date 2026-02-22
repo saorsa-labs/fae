@@ -302,7 +302,7 @@ Runtime system prompt assembly:
 - [Memory Architecture Plan](docs/memory-architecture-plan.md)
 - [Personalization and Proactive Plan](docs/personalization-interviews-and-proactive-plan.md)
 - [Channel Setup Guide](docs/channels-setup.md)
-- [Native macOS Swift App Shell](native/macos/FaeNativeApp/README.md)
+- [Native macOS Swift App Shell](native/macos/Fae/README.md)
 - [Apple Companion Receiver Templates](native/apple/FaeCompanion/README.md)
 - [Native App Architecture v0](docs/architecture/native-app-v0.md)
 - [Native App Latency Validation Plan](docs/architecture/native-app-latency-plan.md)
