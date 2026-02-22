@@ -130,9 +130,10 @@ struct FaeNativeApp: App {
                     // Wire conversation bridge to the native subtitle overlay and message store.
                     conversationBridge.subtitleState = subtitles
                     conversationBridge.conversationController = conversation
-                    // Wire pipeline aux to the canvas controller and auxiliary window manager.
+                    // Wire pipeline aux to the canvas controller, subtitle state, and auxiliary window manager.
                     pipelineAux.canvasController = canvasController
                     pipelineAux.auxiliaryWindows = auxiliaryWindows
+                    pipelineAux.subtitleState = subtitles
                     // Wire auxiliary window manager to its dependencies.
                     auxiliaryWindows.windowState = windowState
                     auxiliaryWindows.conversationController = conversation

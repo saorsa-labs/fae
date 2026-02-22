@@ -14,7 +14,7 @@ struct CanvasWindowView: View {
             panelHeader
             contentArea
         }
-        .background(Color(red: 0.06, green: 0.063, blue: 0.075))
+        .background(Color.clear)
     }
 
     // MARK: - Header
@@ -82,6 +82,8 @@ struct CanvasHTMLView: NSViewRepresentable {
 
         let view = WKWebView(frame: .zero, configuration: config)
         view.underPageBackgroundColor = .clear
+        // Make WebView fully transparent so glassmorphic panel background shows through
+        view.setValue(false, forKey: "drawsBackground")
 
         loadHTML(in: view)
         return view

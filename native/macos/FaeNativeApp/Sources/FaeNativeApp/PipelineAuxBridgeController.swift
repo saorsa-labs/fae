@@ -34,10 +34,19 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Set by `FaeNativeApp` during wiring.
     weak var auxiliaryWindows: AuxiliaryWindowManager?
 
+    /// Subtitle/progress bar controller — used to hide the progress bar
+    /// once all models have finished loading.
+    /// Set by `FaeNativeApp` during wiring.
+    weak var subtitleState: SubtitleStateController?
+
     /// Tracks how many `load_complete` progress events we have received.
     /// The pipeline loads 3 models: STT, LLM, TTS. After all 3 complete,
     /// `isPipelineReady` is set to `true`.
     private var loadCompleteCount: Int = 0
+
+    /// Whether the loading canvas (Star Wars crawl + info) has been shown.
+    /// Set once on the first loading event to avoid re-showing on restarts.
+    private var hasShownLoadingCanvas: Bool = false
 
     private var observations: [NSObjectProtocol] = []
 
@@ -122,6 +131,7 @@ final class PipelineAuxBridgeController: ObservableObject {
         case "runtime.stopped", "runtime.error":
             isPipelineReady = false
             loadCompleteCount = 0
+            hasShownLoadingCanvas = false
         default:
             break
         }
@@ -131,6 +141,13 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     private func handleRuntimeProgress(userInfo: [AnyHashable: Any]) {
         let stage = userInfo["stage"] as? String ?? ""
+
+        // Show the loading canvas on the first progress event so users see
+        // the Star Wars-style informational crawl while models download/load.
+        if !hasShownLoadingCanvas {
+            hasShownLoadingCanvas = true
+            showLoadingCanvas()
+        }
 
         switch stage {
         case "load_started":
@@ -148,6 +165,10 @@ final class PipelineAuxBridgeController: ObservableObject {
             if loadCompleteCount >= 3 && !isPipelineReady {
                 isPipelineReady = true
                 status = "Running"
+                subtitleState?.hideProgress()
+                // Transition canvas from the Star Wars crawl to the clean
+                // interactive FAQ page after a brief pause.
+                transitionToReadyCanvas()
             }
 
         case "download_started", "download_progress", "download_complete", "cached":
@@ -157,9 +178,11 @@ final class PipelineAuxBridgeController: ObservableObject {
                 status = "Downloading models…"
             }
 
-        case "aggregate":
-            let progress = userInfo["progress"] as? Double ?? 0
-            status = "Downloading… \(Int(progress * 100))%"
+        case "aggregate_progress":
+            let bytesDownloaded = userInfo["bytes_downloaded"] as? Int ?? 0
+            let totalBytes = userInfo["total_bytes"] as? Int ?? 0
+            let pct = totalBytes > 0 ? Int(100 * bytesDownloaded / totalBytes) : 0
+            status = "Downloading… \(pct)%"
 
         case "error":
             let message = userInfo["message"] as? String ?? "unknown"
@@ -167,6 +190,25 @@ final class PipelineAuxBridgeController: ObservableObject {
 
         default:
             break
+        }
+    }
+
+    // MARK: - Loading Canvas
+
+    /// Push the Star Wars-style informational canvas and show it.
+    /// This gives non-technical users an engaging, honest overview of
+    /// what's happening while Fae loads her models.
+    private func showLoadingCanvas() {
+        canvasController?.setContent(LoadingCanvasContent.crawlExperience())
+        auxiliaryWindows?.showCanvas()
+    }
+
+    /// Clear the crawl and replace with the interactive "Fae is Ready" FAQ page.
+    /// Uses a brief delay so the transition doesn't feel abrupt.
+    private func transitionToReadyCanvas() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            guard let self, self.hasShownLoadingCanvas else { return }
+            self.canvasController?.setContent(LoadingCanvasContent.readyExperience())
         }
     }
 
@@ -224,6 +266,8 @@ final class PipelineAuxBridgeController: ObservableObject {
             if !isPipelineReady {
                 isPipelineReady = true
                 status = "Running"
+                subtitleState?.hideProgress()
+                transitionToReadyCanvas()
             } else {
                 status = "Mic: \(active ? "active" : "inactive")"
             }

@@ -29,6 +29,15 @@ final class EmbeddedCoreSender: HostCommandSender, @unchecked Sendable {
     /// Also serialises `requestCounter` access.
     private let commandQueue = DispatchQueue(label: "com.saorsalabs.fae.command-sender")
 
+    /// Timer that polls for asynchronous events from the Rust runtime.
+    ///
+    /// The event callback registered via `fae_core_set_event_callback` is only
+    /// invoked synchronously during `fae_core_send_command`. Events emitted
+    /// asynchronously (e.g. model download/load progress) would otherwise be
+    /// queued in the broadcast channel and never delivered until the next
+    /// command. This timer drains them at 100ms intervals.
+    private var eventPollTimer: DispatchSourceTimer?
+
     /// Initialize the Rust runtime with a JSON configuration string.
     ///
     /// - Parameter configJSON: Configuration JSON (e.g. `"{}"`).
@@ -57,7 +66,11 @@ final class EmbeddedCoreSender: HostCommandSender, @unchecked Sendable {
         // Register the event callback so Rust events reach the Swift UI.
         fae_core_set_event_callback(handle, faeEventCallback, nil)
 
-        NSLog("EmbeddedCoreSender: runtime started with event callback")
+        // Start polling for async events (progress, pipeline state, etc.)
+        // that arrive between explicit command calls.
+        startEventPolling(handle: handle)
+
+        NSLog("EmbeddedCoreSender: runtime started with event callback + polling")
     }
 
     /// Send a fire-and-forget command to the Rust backend on a background queue.
@@ -126,6 +139,8 @@ final class EmbeddedCoreSender: HostCommandSender, @unchecked Sendable {
     /// the underlying pointer is freed.
     func stop() {
         guard let handle else { return }
+        // Stop the event poll timer before tearing down the runtime.
+        stopEventPolling()
         // Nil the handle first so no new work is enqueued.
         self.handle = nil
         // Drain any in-flight commands that captured the old handle value.
@@ -137,6 +152,50 @@ final class EmbeddedCoreSender: HostCommandSender, @unchecked Sendable {
 
     deinit {
         stop()
+    }
+
+    // MARK: - Event polling
+
+    /// Start a repeating timer that polls `fae_core_poll_event` to deliver
+    /// asynchronous events (model progress, pipeline state) that arrive
+    /// between explicit command calls.
+    private func startEventPolling(handle: FaeCoreHandle) {
+        let timer = DispatchSource.makeTimerSource(queue: commandQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(100))
+        let sendable = SendableHandle(raw: handle)
+        timer.setEventHandler { [weak self] in
+            guard self != nil else { return }
+            Self.pollEvents(sendable.raw)
+        }
+        timer.resume()
+        eventPollTimer = timer
+    }
+
+    /// Cancel the event polling timer.
+    private func stopEventPolling() {
+        eventPollTimer?.cancel()
+        eventPollTimer = nil
+    }
+
+    /// Drain all pending events via `fae_core_poll_event` and post each
+    /// to NotificationCenter on the main thread.
+    private static func pollEvents(_ handle: FaeCoreHandle) {
+        while let ptr = fae_core_poll_event(handle) {
+            let jsonString = String(cString: ptr)
+            fae_string_free(ptr)
+
+            guard let data = jsonString.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .faeBackendEvent,
+                    object: nil,
+                    userInfo: parsed
+                )
+            }
+        }
     }
 
     // MARK: - Private helpers

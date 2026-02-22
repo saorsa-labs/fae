@@ -189,28 +189,25 @@ final class ConversationBridgeController: ObservableObject {
 
         switch stage {
         case "download_plan_ready":
-            let fileCount = userInfo["file_count"] as? Int ?? 0
             let totalBytes = userInfo["total_bytes"] as? Int ?? 0
             let needsDownload = userInfo["needs_download"] as? Bool ?? false
             if needsDownload {
                 let sizeMB = totalBytes / (1024 * 1024)
-                appendStatusMessage("Preparing to download \(fileCount) model files (\(sizeMB) MB)…")
+                appendStatusMessage("Preparing to download Fae's components (\(sizeMB) MB)…")
             }
 
         case "download_started":
             let repoId = userInfo["repo_id"] as? String ?? ""
-            let filename = userInfo["filename"] as? String ?? "model"
-            let label = repoId.split(separator: "/").last.map(String.init) ?? filename
-            appendStatusMessage("Downloading \(label)…")
+            appendStatusMessage(Self.friendlyDownloadLabel(repoId: repoId))
 
         case "download_progress":
             let bytesDownloaded = userInfo["bytes_downloaded"] as? Int ?? 0
             let totalBytes = userInfo["total_bytes"] as? Int ?? 0
             if totalBytes > 0 {
                 let pct = Int(100.0 * Double(bytesDownloaded) / Double(totalBytes))
-                let filename = userInfo["filename"] as? String ?? "model"
-                let shortName = String(filename.split(separator: "/").last ?? Substring(filename))
-                subtitleState?.showProgress(label: "Downloading \(shortName)…", percent: pct)
+                let repoId = userInfo["repo_id"] as? String ?? ""
+                let label = Self.friendlyDownloadLabel(repoId: repoId)
+                subtitleState?.showProgress(label: label, percent: pct)
             }
 
         case "aggregate_progress":
@@ -228,7 +225,7 @@ final class ConversationBridgeController: ObservableObject {
             }
             let sizeMB = bytesDownloaded / (1024 * 1024)
             let totalMB = totalBytes / (1024 * 1024)
-            let message = "Downloading models… \(sizeMB)/\(totalMB) MB (\(filesComplete)/\(filesTotal) files)"
+            let message = "Downloading Fae's components… \(sizeMB)/\(totalMB) MB"
             subtitleState?.showProgress(label: message, percent: pct)
 
         case "download_complete", "cached":
@@ -236,39 +233,86 @@ final class ConversationBridgeController: ObservableObject {
 
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
-            // Show a pulsing progress bar during model loading.
-            // Models load sequentially: STT (~10%), LLM (~80%), TTS (~10%).
-            let label = "Loading \(model)…"
-            let pct: Int
-            if model.lowercased().contains("parakeet") || model.lowercased().contains("stt") {
-                pct = 10
-            } else if model.lowercased().contains("qwen") || model.lowercased().contains("llm") {
-                pct = 30
-            } else {
-                pct = 85
-            }
+            let (label, pct) = Self.friendlyLoadingLabel(model: model)
             subtitleState?.showProgress(label: label, percent: pct)
             appendStatusMessage(label)
 
         case "load_complete":
-            subtitleState?.showProgress(label: "Models loaded — warming up…", percent: 95)
-            appendStatusMessage("Models loaded.")
+            let model = userInfo["model_name"] as? String ?? "model"
+            let label = Self.friendlyLoadCompleteLabel(model: model)
+            subtitleState?.showProgress(label: label, percent: 95)
+            appendStatusMessage(label)
 
         case "error":
             let message = userInfo["message"] as? String ?? "unknown error"
-            appendStatusMessage("Model loading failed: \(message)")
+            appendStatusMessage("Something went wrong: \(message)")
 
         default:
             break
         }
     }
 
+    // MARK: - Friendly Labels
+
+    /// Human-friendly label for model loading progress (non-technical users).
+    private static func friendlyLoadingLabel(model: String) -> (String, Int) {
+        let lower = model.lowercased()
+        if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
+            return ("Teaching Fae to listen…", 10)
+        } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
+            return ("Loading Fae's brain — this takes a moment…", 30)
+        } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
+            return ("Giving Fae her voice…", 85)
+        } else {
+            return ("Loading \(model)…", 50)
+        }
+    }
+
+    /// Human-friendly label when a model finishes loading.
+    private static func friendlyLoadCompleteLabel(model: String) -> String {
+        let lower = model.lowercased()
+        if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
+            return "Fae can listen now ✓"
+        } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
+            return "Fae's brain is ready ✓"
+        } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
+            return "Fae has her voice ✓"
+        } else {
+            return "Loaded \(model) ✓"
+        }
+    }
+
+    /// Human-friendly label for download progress.
+    private static func friendlyDownloadLabel(repoId: String) -> String {
+        let lower = repoId.lowercased()
+        if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
+            return "Downloading speech recognition…"
+        } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
+            return "Downloading Fae's brain…"
+        } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
+            return "Downloading Fae's voice…"
+        } else {
+            let shortName = repoId.split(separator: "/").last.map(String.init) ?? repoId
+            return "Downloading \(shortName)…"
+        }
+    }
+
     private func handleRuntimeState(event: String, userInfo: [AnyHashable: Any]) {
         switch event {
+        case "runtime.starting":
+            // Show an initial indeterminate-style progress bar immediately so
+            // the user sees loading feedback before the first progress event.
+            subtitleState?.showProgress(label: "Fae is waking up…", percent: 2)
         case "runtime.started":
+            // NOTE: runtime.started fires immediately after spawning the async
+            // pipeline task — models are NOT loaded yet. Do NOT hide progress
+            // here. Progress is hidden when all models finish loading
+            // (see load_complete handling above, and PipelineAuxBridgeController).
+            break
+        case "runtime.stopped":
             subtitleState?.hideProgress()
-            appendStatusMessage("Ready to talk!")
         case "runtime.error":
+            subtitleState?.hideProgress()
             let payload = userInfo["payload"] as? [String: Any] ?? [:]
             let message = payload["error"] as? String ?? "unknown error"
             appendStatusMessage("Pipeline error: \(message)")
