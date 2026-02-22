@@ -18,10 +18,11 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             if !onboarding.isStateRestored || !onboarding.isComplete {
-                // Show a blank dark surface while onboarding state is being
-                // restored or while the separate onboarding window is active.
+                // Transparent surface while onboarding state is being restored
+                // or while the separate onboarding window is active.
                 // The main window is hidden during onboarding anyway.
-                Color.black.opacity(0.6)
+                // Using Color.clear so the frosted-glass blur shows through.
+                Color.clear
                     .ignoresSafeArea()
             } else {
                 nativeConversationView
@@ -30,11 +31,17 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
+        // Frosted-glass background using NSVisualEffectView inside SwiftUI's
+        // own view hierarchy. Immune to AppKit contentView manipulation.
+        .background(
+            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                .ignoresSafeArea()
+        )
         .background(
             NSWindowAccessor { window in
                 // Setting the window triggers WindowStateController's didSet
-                // which enforces compact size, installs frosted glass, and
-                // sets up the title-bar hover tracker — all in the correct order.
+                // which enforces compact size and sets up the title-bar hover
+                // tracker. Frosted glass is handled by VisualEffectBlur above.
                 windowState.window = window
             }
         )

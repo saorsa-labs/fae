@@ -59,44 +59,76 @@ final class WindowStateController: ObservableObject {
     weak var window: NSWindow? {
         didSet {
             guard let window else { return }
+            NSLog("WSC: window didSet fired — frame=%@ styleMask=%d", NSStringFromRect(window.frame), window.styleMask.rawValue)
 
-            // Prevent macOS from saving/restoring window state across launches.
-            // State restoration can override our frame with the previous session's
-            // collapsed 80×80 size, leaving the user stuck at a tiny window.
+            // ── Immediate properties ──────────────────────────────────
+            // These must be set before the window renders its first frame.
             window.isRestorable = false
-
-            // Set the styleMask ONCE and never change it again. With
-            // fullSizeContentView + transparent titlebar the window is
-            // visually borderless while preserving the contentView hierarchy.
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
-            // Remove the thin black separator line between title bar and content.
             window.titlebarSeparatorStyle = .none
             window.isMovableByWindowBackground = true
+            window.hasShadow = true
+            // Required for the VisualEffectBlur (NSVisualEffectView in
+            // SwiftUI's view tree) to blur through to the desktop.
             window.backgroundColor = .clear
             window.isOpaque = false
-            window.hasShadow = true
-            setWindowButtonsHidden(true)
 
-            // Enforce compact size on initial attach — macOS state restoration
-            // is disabled above but we also force the frame as a belt-and-suspenders
-            // defense against any residual frame caching.
-            let screen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
-            let visible = screen.visibleFrame
-            let size = NSSize(width: compactWidth, height: compactHeight)
-            let x = visible.midX - size.width / 2
-            let y = visible.midY - size.height / 2
-            window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
+            // ── First attempt at frame + styleMask (immediate) ────────
+            // Set frame now so the window is never visible at the wrong
+            // size. SwiftUI may override this, so we also set it again
+            // in the deferred block below.
+            configureWindowFrame(window)
 
-            // Set min/max so the user can't resize beyond reasonable bounds.
-            window.minSize = NSSize(width: 280, height: 400)
-            window.maxSize = NSSize(width: 500, height: 700)
-
-            // Install frosted glass AFTER styleMask is set and stable.
-            ensureFrostedGlass()
-            installTitleBarTracker()
+            // ── Deferred properties ───────────────────────────────────
+            // SwiftUI's WindowGroup applies its own window properties
+            // AFTER viewDidMoveToWindow. We re-apply our settings after
+            // a short delay to guarantee they stick.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, let window = self.window else { return }
+                self.configureWindowFrame(window)
+                self.installTitleBarTracker()
+            }
         }
+    }
+
+    /// Apply frame, styleMask, and constraints to the window.
+    /// Called both immediately and after a delay for robustness.
+    private func configureWindowFrame(_ window: NSWindow) {
+        NSLog("WSC: configureWindowFrame — before frame=%@ contentView=%@",
+              NSStringFromRect(window.frame),
+              String(describing: type(of: window.contentView as Any)))
+
+        // Insert fullSizeContentView into whatever SwiftUI set,
+        // rather than replacing the entire mask.
+        if !window.styleMask.contains(.fullSizeContentView) {
+            window.styleMask.insert(.fullSizeContentView)
+        }
+
+        setWindowButtonsHidden(true)
+
+        // Enforce compact size — overrides any stale cached frame.
+        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        let visible = screen.visibleFrame
+        let size = NSSize(width: compactWidth, height: compactHeight)
+        let x = visible.midX - size.width / 2
+        let y = visible.midY - size.height / 2
+        window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
+
+        window.minSize = NSSize(width: 280, height: 400)
+        window.maxSize = NSSize(width: 500, height: 700)
+
+        // Make hosting view's layer transparent so the VisualEffectBlur
+        // (in ContentView) can blur through to the desktop.
+        if let hostingView = window.contentView {
+            hostingView.wantsLayer = true
+            hostingView.layer?.backgroundColor = .clear
+        }
+
+        NSLog("WSC: configureWindowFrame — after frame=%@ isOpaque=%d bgColor=%@",
+              NSStringFromRect(window.frame),
+              window.isOpaque ? 1 : 0,
+              String(describing: window.backgroundColor))
     }
 
     // MARK: - Timer
@@ -293,46 +325,6 @@ final class WindowStateController: ObservableObject {
     func showWindow() {
         window?.makeKeyAndOrderFront(nil)
         startInactivityTimer()
-    }
-
-    // MARK: - Frosted Glass
-
-    /// Installs the frosted-glass `NSVisualEffectView` as the window's
-    /// content view, wrapping the SwiftUI hosting view inside it.
-    ///
-    /// Safe to call multiple times — skips if the glass is already in place.
-    /// Because we never change `styleMask`, this should only need to run once.
-    func ensureFrostedGlass() {
-        guard let window else { return }
-
-        // Already installed — the contentView IS the effect view.
-        if window.contentView is NSVisualEffectView { return }
-
-        guard let hostingView = window.contentView else { return }
-
-        let effectView = NSVisualEffectView()
-        effectView.material = .hudWindow
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
-
-        // Replace the window's contentView with the effect view,
-        // then re-add the SwiftUI hosting view on top of it.
-        window.contentView = effectView
-
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        // Make the hosting view transparent so the blur shows through
-        // any transparent SwiftUI regions (title bar gap, edges, etc.).
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = .clear
-
-        effectView.addSubview(hostingView)
-
-        NSLayoutConstraint.activate([
-            hostingView.topAnchor.constraint(equalTo: effectView.topAnchor),
-            hostingView.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
-            hostingView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
-            hostingView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
-        ])
     }
 
     // MARK: - Title Bar Hover (show/hide window buttons)
