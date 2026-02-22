@@ -411,3 +411,29 @@ Results: 26 unit tests + 8 integration tests, all pass, zero clippy warnings
 Results: 35 unit tests + 7 integration tests, all pass, zero clippy warnings
 
 ### Phase 8.7 Complete
+
+## Phase 8.8: Channel Migration
+
+- [x] Task 1: Channel skill templates (channel_templates.rs — ChannelType enum, manifest/script generation, install_channel_skill)
+- [x] Task 2: ChannelSkillAdapter (skill_adapter.rs — implements ChannelAdapter trait via Python skill delegation)
+- [x] Task 3: Refactor ChannelManager to use ChannelSkillAdapter (register_skill_channel helper, check_health via adapters)
+- [x] Task 4: Remove hardcoded adapters (deleted discord.rs + whatsapp.rs, rewrote gateway.rs to generic webhooks)
+- [x] Task 5: Host commands (skill.channel.install + skill.channel.list with DeviceTransferHandler wiring)
+- [x] Task 6: Integration tests (11 tests in tests/integration/python_channel_migration.rs)
+
+Results: 11 integration tests + all unit tests pass, zero clippy warnings
+
+### Phase 8.8 Complete
+
+### Milestone 8 Complete — 2026-02-22
+### Python Skill Runtime (v0.8.1) DONE
+
+Summary of Milestone 8:
+- Phase 8.1: Core Python Skill Runner (PythonSkillRunner, JSON-RPC 2.0, daemon/one-shot modes, ToolRegistry)
+- Phase 8.2: UV Bootstrap & Environment Management (auto-install UV, PEP 723 parser, env pre-warming)
+- Phase 8.3: Skill Lifecycle Management (state machine, install/activate/disable/rollback/quarantine)
+- Phase 8.4: Credential Mediation (CredentialSchema, CredentialMediator, Keychain integration)
+- Phase 8.5: Semantic Skill Discovery (sqlite-vec KNN, text extraction, semantic search)
+- Phase 8.6: Skill Generator Pipeline (LATM templates, staging validation, host commands)
+- Phase 8.7: Self-Healing & Health Monitoring (HealthLedger, auto-restart, fix patterns, quarantine)
+- Phase 8.8: Channel Migration (Python skill adapters replace hardcoded Discord/WhatsApp, ~600 lines removed)

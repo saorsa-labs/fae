@@ -11,6 +11,7 @@
 //!    the same directory with state tracked in `.state/registry.json`.
 
 pub mod builtins;
+pub mod channel_templates;
 pub mod credential_mediation;
 pub mod discovery;
 pub mod error;

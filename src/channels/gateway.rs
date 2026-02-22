@@ -1,19 +1,23 @@
+//! HTTP webhook gateway for channel inbound messages.
+//!
+//! The gateway provides a generic webhook endpoint for receiving inbound
+//! messages from any channel type. Platform-specific webhook handling
+//! (e.g. WhatsApp verification) is delegated to the Python skill backing
+//! each channel.
+
 use crate::channels::traits::ChannelInboundMessage;
-use crate::channels::whatsapp::WhatsAppAdapter;
 use crate::config::ChannelGatewayConfig;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
 struct GatewayState {
     inbound_tx: mpsc::Sender<ChannelInboundMessage>,
     bearer_token: Option<String>,
-    whatsapp: Option<Arc<WhatsAppAdapter>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -28,16 +32,6 @@ struct GenericWebhookBody {
 
 fn default_webhook_channel() -> String {
     "webhook".to_owned()
-}
-
-#[derive(serde::Deserialize)]
-struct WhatsAppVerifyQuery {
-    #[serde(rename = "hub.mode")]
-    mode: Option<String>,
-    #[serde(rename = "hub.verify_token")]
-    verify_token: Option<String>,
-    #[serde(rename = "hub.challenge")]
-    challenge: Option<String>,
 }
 
 fn resolve_gateway_bearer_token(
@@ -64,9 +58,13 @@ fn resolve_gateway_bearer_token(
     Ok(Some(token.to_owned()))
 }
 
+/// Run the channel webhook gateway.
+///
+/// The gateway exposes a generic `/webhook` endpoint for all channel types.
+/// Platform-specific webhook routes (e.g. WhatsApp verification) are handled
+/// by the Python skill processes, not by this gateway.
 pub async fn run_gateway(
     config: ChannelGatewayConfig,
-    whatsapp: Option<Arc<WhatsAppAdapter>>,
     inbound_tx: mpsc::Sender<ChannelInboundMessage>,
     manager: Box<dyn crate::credentials::CredentialManager>,
 ) -> anyhow::Result<()> {
@@ -79,14 +77,11 @@ pub async fn run_gateway(
     let state = GatewayState {
         inbound_tx,
         bearer_token,
-        whatsapp,
     };
 
     let app = Router::new()
         .route("/health", get(gateway_health))
         .route("/webhook", post(generic_webhook))
-        .route("/whatsapp", get(whatsapp_verify))
-        .route("/whatsapp", post(whatsapp_inbound))
         .with_state(state);
 
     tracing::info!("channels gateway listening on http://{local_addr}");
@@ -166,51 +161,6 @@ async fn generic_webhook(
         StatusCode::OK,
         Json(serde_json::json!({
             "queued": true
-        })),
-    )
-}
-
-async fn whatsapp_verify(
-    State(state): State<GatewayState>,
-    Query(query): Query<WhatsAppVerifyQuery>,
-) -> impl IntoResponse {
-    let Some(adapter) = state.whatsapp else {
-        return (StatusCode::NOT_FOUND, "whatsapp channel not configured").into_response();
-    };
-
-    let mode = query.mode.unwrap_or_default();
-    let token = query.verify_token.unwrap_or_default();
-    if mode == "subscribe" && token == adapter.verify_token() {
-        let challenge = query.challenge.unwrap_or_default();
-        return (StatusCode::OK, challenge).into_response();
-    }
-
-    (StatusCode::FORBIDDEN, "verification failed").into_response()
-}
-
-async fn whatsapp_inbound(
-    State(state): State<GatewayState>,
-    Json(payload): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let Some(adapter) = state.whatsapp else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "whatsapp channel not configured"})),
-        );
-    };
-
-    let mut queued: usize = 0;
-    for message in adapter.parse_webhook_payload(&payload) {
-        if state.inbound_tx.send(message).await.is_ok() {
-            queued = queued.saturating_add(1);
-        }
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "received": true,
-            "queued_messages": queued
         })),
     )
 }

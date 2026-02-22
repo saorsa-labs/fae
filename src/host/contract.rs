@@ -138,6 +138,14 @@ pub enum CommandName {
     /// Get the health status summary for all monitored Python skills.
     #[serde(rename = "skill.health.status")]
     SkillHealthStatusCmd,
+    /// Install a channel skill from a built-in template.
+    ///
+    /// Payload: `{ "channel_type": "discord" | "whatsapp" }`
+    #[serde(rename = "skill.channel.install")]
+    SkillChannelInstall,
+    /// List available and installed channel skill types.
+    #[serde(rename = "skill.channel.list")]
+    SkillChannelList,
 }
 
 impl CommandName {
@@ -195,6 +203,8 @@ impl CommandName {
             Self::SkillGenerateStatus => "skill.generate.status",
             Self::SkillHealthCheck => "skill.health.check",
             Self::SkillHealthStatusCmd => "skill.health.status",
+            Self::SkillChannelInstall => "skill.channel.install",
+            Self::SkillChannelList => "skill.channel.list",
         }
     }
 
@@ -252,6 +262,8 @@ impl CommandName {
             "skill.generate.status" => Some(Self::SkillGenerateStatus),
             "skill.health.check" => Some(Self::SkillHealthCheck),
             "skill.health.status" => Some(Self::SkillHealthStatusCmd),
+            "skill.channel.install" => Some(Self::SkillChannelInstall),
+            "skill.channel.list" => Some(Self::SkillChannelList),
             _ => None,
         }
     }

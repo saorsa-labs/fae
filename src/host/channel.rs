@@ -232,6 +232,14 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn skill_health_status(&self) -> Result<serde_json::Value> {
         Ok(serde_json::json!({ "skills": [] }))
     }
+    /// Install a channel skill from a built-in template.
+    fn skill_channel_install(&self, _channel_type: &str) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "status": "not_implemented" }))
+    }
+    /// List available channel skill types and their install status.
+    fn skill_channel_list(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "channels": [] }))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -392,6 +400,8 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::SkillGenerateStatus => self.handle_skill_generate_status(envelope),
             CommandName::SkillHealthCheck => self.handle_skill_health_check(envelope),
             CommandName::SkillHealthStatusCmd => self.handle_skill_health_status(envelope),
+            CommandName::SkillChannelInstall => self.handle_skill_channel_install(envelope),
+            CommandName::SkillChannelList => self.handle_skill_channel_list(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
@@ -1117,10 +1127,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
     }
 
     fn handle_skill_health_check(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
-        let skill_id = envelope
-            .payload
-            .get("skill_id")
-            .and_then(|v| v.as_str());
+        let skill_id = envelope.payload.get("skill_id").and_then(|v| v.as_str());
 
         let result = self.handler.skill_health_check(skill_id)?;
 
@@ -1129,6 +1136,30 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
 
     fn handle_skill_health_status(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
         let result = self.handler.skill_health_status()?;
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
+    }
+
+    fn handle_skill_channel_install(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let channel_type = envelope
+            .payload
+            .get("channel_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if channel_type.trim().is_empty() {
+            return Err(crate::SpeechError::Config(
+                "skill.channel.install: missing channel_type".to_owned(),
+            ));
+        }
+
+        let result = self.handler.skill_channel_install(channel_type)?;
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
+    }
+
+    fn handle_skill_channel_list(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        let result = self.handler.skill_channel_list()?;
 
         Ok(ResponseEnvelope::ok(envelope.request_id.clone(), result))
     }

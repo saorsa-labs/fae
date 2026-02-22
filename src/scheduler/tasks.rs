@@ -744,10 +744,7 @@ fn run_skill_health_check() -> TaskResult {
         .collect();
 
     if quarantined.is_empty() {
-        TaskResult::Success(format!(
-            "{active_count}/{} skills healthy",
-            skills.len()
-        ))
+        TaskResult::Success(format!("{active_count}/{} skills healthy", skills.len()))
     } else {
         TaskResult::Success(format!(
             "{active_count}/{} skills healthy, {} quarantined: {}",

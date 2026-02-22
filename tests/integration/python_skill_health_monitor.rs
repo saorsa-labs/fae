@@ -64,14 +64,21 @@ fn fix_pattern_round_trip() {
     let mut store = FixPatternStore::new();
 
     // Record a fix.
-    store.record_fix("connection refused", "restart the backend service", Some("discord-bot"));
+    store.record_fix(
+        "connection refused",
+        "restart the backend service",
+        Some("discord-bot"),
+    );
 
     // Match against a new error that contains the same pattern.
     let error = "2026-01-15T12:34:56Z error: connection refused on /var/run/discord.sock";
     let normalised = normalize_error(error);
     let found = store.find_matching(&normalised);
     assert!(found.is_some(), "should match normalised error");
-    assert_eq!(found.unwrap().fix_description, "restart the backend service");
+    assert_eq!(
+        found.unwrap().fix_description,
+        "restart the backend service"
+    );
     assert_eq!(found.unwrap().skill_id.as_deref(), Some("discord-bot"));
 }
 

@@ -30,6 +30,7 @@ mod permission_config_roundtrip;
 mod permission_skill_gate;
 mod personalization_integration;
 mod phase_1_3_wired_commands;
+mod python_channel_migration;
 mod python_skill_credentials;
 mod python_skill_discovery;
 mod python_skill_generator;

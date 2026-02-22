@@ -1078,8 +1078,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     }))
                 } else {
                     // Return proposal for review.
-                    let proposal_json = serde_json::to_value(&proposal)
-                        .map_err(|e| SpeechError::Config(format!("failed to serialize proposal: {e}")))?;
+                    let proposal_json = serde_json::to_value(&proposal).map_err(|e| {
+                        SpeechError::Config(format!("failed to serialize proposal: {e}"))
+                    })?;
                     Ok(serde_json::json!({
                         "status": "proposed",
                         "proposal": proposal_json,
@@ -1204,6 +1205,62 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(serde_json::json!({
             "total": summaries.len(),
             "skills": summaries,
+        }))
+    }
+
+    fn skill_channel_install(&self, channel_type: &str) -> Result<serde_json::Value> {
+        use crate::skills::channel_templates::{self, ChannelType};
+
+        info!(channel_type, "skill.channel.install");
+
+        let ct = match channel_type {
+            "discord" => ChannelType::Discord,
+            "whatsapp" => ChannelType::WhatsApp,
+            other => {
+                return Err(SpeechError::Config(format!(
+                    "unknown channel type: `{other}` (expected: discord, whatsapp)"
+                )));
+            }
+        };
+
+        let python_skills_dir = crate::fae_dirs::python_skills_dir();
+        let info = channel_templates::install_channel_skill(ct, &python_skills_dir)
+            .map_err(|e| SpeechError::Config(format!("failed to install channel skill: {e}")))?;
+
+        Ok(serde_json::json!({
+            "installed": true,
+            "skill_id": info.id,
+            "name": info.name,
+            "version": info.version,
+        }))
+    }
+
+    fn skill_channel_list(&self) -> Result<serde_json::Value> {
+        use crate::skills::channel_templates;
+
+        info!("skill.channel.list");
+
+        let available = channel_templates::available_channel_types();
+        let installed = crate::skills::list_python_skills();
+        let installed_ids: std::collections::HashSet<&str> =
+            installed.iter().map(|s| s.id.as_str()).collect();
+
+        let channels: Vec<_> = available
+            .iter()
+            .map(|ct| {
+                let skill_id = ct.skill_id();
+                let is_installed = installed_ids.contains(skill_id);
+                serde_json::json!({
+                    "channel_type": ct.to_string(),
+                    "skill_id": skill_id,
+                    "name": ct.name(),
+                    "installed": is_installed,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "channels": channels,
         }))
     }
 

@@ -466,7 +466,10 @@ pub fn normalize_error(raw: &str) -> String {
     // Strip absolute paths: /foo/bar/baz
     s = strip_pattern(&s, r"/[\w./-]+");
     // Strip UUIDs: 550e8400-e29b-41d4-a716-446655440000
-    s = strip_pattern(&s, r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+    s = strip_pattern(
+        &s,
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    );
     // Strip standalone numbers (IDs, ports, etc.)
     s = strip_pattern(&s, r"\b\d{2,}\b");
     // Collapse whitespace
@@ -480,15 +483,11 @@ fn strip_pattern(input: &str, pattern: &str) -> String {
     // for the most common cases.
     match pattern {
         // ISO timestamps
-        r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\dZ]*" => {
-            strip_iso_timestamps(input)
-        }
+        r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\dZ]*" => strip_iso_timestamps(input),
         // Absolute paths
         r"/[\w./-]+" => strip_absolute_paths(input),
         // UUIDs
-        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" => {
-            strip_uuids(input)
-        }
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" => strip_uuids(input),
         // Standalone numbers
         r"\b\d{2,}\b" => strip_long_numbers(input),
         _ => input.to_owned(),
@@ -519,7 +518,10 @@ fn strip_iso_timestamps(input: &str) -> String {
             if i < chars.len() && (chars[i] == 't' || chars[i] == ' ') {
                 i += 1;
                 while i < chars.len()
-                    && (chars[i].is_ascii_digit() || chars[i] == ':' || chars[i] == '.' || chars[i] == 'z')
+                    && (chars[i].is_ascii_digit()
+                        || chars[i] == ':'
+                        || chars[i] == '.'
+                        || chars[i] == 'z')
                 {
                     i += 1;
                 }
@@ -537,10 +539,17 @@ fn strip_absolute_paths(input: &str) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '/' && i + 1 < chars.len() && (chars[i + 1].is_alphanumeric() || chars[i + 1] == '.') {
+        if chars[i] == '/'
+            && i + 1 < chars.len()
+            && (chars[i + 1].is_alphanumeric() || chars[i + 1] == '.')
+        {
             // Skip the path
             while i < chars.len()
-                && (chars[i].is_alphanumeric() || chars[i] == '/' || chars[i] == '.' || chars[i] == '-' || chars[i] == '_')
+                && (chars[i].is_alphanumeric()
+                    || chars[i] == '/'
+                    || chars[i] == '.'
+                    || chars[i] == '-'
+                    || chars[i] == '_')
             {
                 i += 1;
             }
@@ -703,10 +712,7 @@ mod tests {
         assert_eq!(rec.total_checks, 2);
         assert_eq!(rec.total_failures, 2);
         assert_eq!(rec.consecutive_failures, 2);
-        assert_eq!(
-            rec.status,
-            SkillHealthStatus::Failing { consecutive: 2 }
-        );
+        assert_eq!(rec.status, SkillHealthStatus::Failing { consecutive: 2 });
         assert_eq!(rec.last_error.as_deref(), Some("timeout again"));
     }
 
@@ -801,7 +807,10 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         let parsed: HealthMonitorConfig = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.check_interval_secs, config.check_interval_secs);
-        assert_eq!(parsed.max_consecutive_failures, config.max_consecutive_failures);
+        assert_eq!(
+            parsed.max_consecutive_failures,
+            config.max_consecutive_failures
+        );
     }
 
     // ── HealthMonitor ──
@@ -863,7 +872,9 @@ mod tests {
                 },
             );
             assert!(
-                actions.iter().any(|a| matches!(a, HealthAction::RestartSkill { .. })),
+                actions
+                    .iter()
+                    .any(|a| matches!(a, HealthAction::RestartSkill { .. })),
                 "should get restart action"
             );
         }
@@ -875,11 +886,15 @@ mod tests {
             },
         );
         assert!(
-            actions.iter().any(|a| matches!(a, HealthAction::QuarantineSkill { .. })),
+            actions
+                .iter()
+                .any(|a| matches!(a, HealthAction::QuarantineSkill { .. })),
             "should quarantine after 5 consecutive failures"
         );
         assert!(
-            actions.iter().any(|a| matches!(a, HealthAction::NotifyUser { .. })),
+            actions
+                .iter()
+                .any(|a| matches!(a, HealthAction::NotifyUser { .. })),
             "should notify user about quarantine"
         );
     }
@@ -957,7 +972,11 @@ mod tests {
                 },
             );
             // Should only get restart, never quarantine
-            assert!(actions.iter().all(|a| !matches!(a, HealthAction::QuarantineSkill { .. })));
+            assert!(
+                actions
+                    .iter()
+                    .all(|a| !matches!(a, HealthAction::QuarantineSkill { .. }))
+            );
         }
     }
 
