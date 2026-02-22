@@ -236,9 +236,22 @@ final class ConversationBridgeController: ObservableObject {
 
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
-            appendStatusMessage("Loading \(model)…")
+            // Show a pulsing progress bar during model loading.
+            // Models load sequentially: STT (~10%), LLM (~80%), TTS (~10%).
+            let label = "Loading \(model)…"
+            let pct: Int
+            if model.lowercased().contains("parakeet") || model.lowercased().contains("stt") {
+                pct = 10
+            } else if model.lowercased().contains("qwen") || model.lowercased().contains("llm") {
+                pct = 30
+            } else {
+                pct = 85
+            }
+            subtitleState?.showProgress(label: label, percent: pct)
+            appendStatusMessage(label)
 
         case "load_complete":
+            subtitleState?.showProgress(label: "Models loaded — warming up…", percent: 95)
             appendStatusMessage("Models loaded.")
 
         case "error":

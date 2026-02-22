@@ -200,15 +200,19 @@ struct ContentView: View {
 
             // Only show overlays in compact mode (not collapsed 80×80 orb)
             if windowState.mode == .compact {
-                // Layer 1: Progress bar
+                // Layer 1: Progress bar (always visible for download/load feedback)
                 ProgressOverlayView()
 
                 // Layer 2: Subtitle overlay (above input bar)
                 SubtitleOverlayView()
-                    .padding(.bottom, 80) // make room for input bar
+                    .padding(.bottom, pipelineAux.isPipelineReady ? 80 : 0)
 
-                // Layer 3: Input bar
-                InputBarView()
+                // Layer 3: Input bar — hidden until models are loaded so
+                // users don't try to chat before the pipeline is ready.
+                if pipelineAux.isPipelineReady {
+                    InputBarView()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
 
             // Loading placeholder

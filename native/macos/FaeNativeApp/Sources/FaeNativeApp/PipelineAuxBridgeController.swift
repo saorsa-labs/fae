@@ -18,6 +18,10 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Current pipeline status string for display in SettingsView.
     @Published var status: String = "Not started"
 
+    /// Whether the pipeline has fully started (models loaded, ready for conversation).
+    /// Drives UI gating — e.g. the input bar is hidden until this becomes `true`.
+    @Published var isPipelineReady: Bool = false
+
     /// Last audio RMS level received from the pipeline (0.0–1.0).
     /// Read directly by `NativeOrbView` via SwiftUI property binding.
     @Published var audioRMS: Double = 0.0
@@ -29,6 +33,11 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Auxiliary window manager for showing/hiding conversation and canvas panels.
     /// Set by `FaeNativeApp` during wiring.
     weak var auxiliaryWindows: AuxiliaryWindowManager?
+
+    /// Tracks how many `load_complete` progress events we have received.
+    /// The pipeline loads 3 models: STT, LLM, TTS. After all 3 complete,
+    /// `isPipelineReady` is set to `true`.
+    private var loadCompleteCount: Int = 0
 
     private var observations: [NSObjectProtocol] = []
 
@@ -62,6 +71,32 @@ final class PipelineAuxBridgeController: ObservableObject {
             }
         )
 
+        // Runtime lifecycle events (stop/error → reset isPipelineReady)
+        observations.append(
+            center.addObserver(
+                forName: .faeRuntimeState, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let event = notification.userInfo?["event"] as? String else { return }
+                Task { @MainActor [weak self] in
+                    self?.handleRuntimeLifecycle(event: event)
+                }
+            }
+        )
+
+        // Runtime progress events (model download/load stages)
+        // This is the reliable signal for pipeline readiness — we track
+        // individual `load_complete` events until all 3 models are loaded.
+        observations.append(
+            center.addObserver(
+                forName: .faeRuntimeProgress, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo else { return }
+                Task { @MainActor [weak self] in
+                    self?.handleRuntimeProgress(userInfo: userInfo)
+                }
+            }
+        )
+
         // Audio level events
         observations.append(
             center.addObserver(
@@ -75,7 +110,67 @@ final class PipelineAuxBridgeController: ObservableObject {
         )
     }
 
-    // MARK: - Handlers
+    // MARK: - Runtime Lifecycle
+
+    private func handleRuntimeLifecycle(event: String) {
+        switch event {
+        case "runtime.started":
+            // NOTE: runtime.started fires immediately after spawning the async
+            // pipeline task — models may still be loading. We do NOT set
+            // isPipelineReady here. It is set via load_complete progress events.
+            status = "Starting…"
+        case "runtime.stopped", "runtime.error":
+            isPipelineReady = false
+            loadCompleteCount = 0
+        default:
+            break
+        }
+    }
+
+    // MARK: - Runtime Progress
+
+    private func handleRuntimeProgress(userInfo: [AnyHashable: Any]) {
+        let stage = userInfo["stage"] as? String ?? ""
+
+        switch stage {
+        case "load_started":
+            let model = userInfo["model_name"] as? String ?? "model"
+            status = "Loading \(model)…"
+
+        case "load_complete":
+            loadCompleteCount += 1
+            let model = userInfo["model_name"] as? String ?? "model"
+            status = "Loaded \(model)"
+
+            // Fae loads 3 models: STT, LLM, TTS. After all 3 complete,
+            // the pipeline coordinator starts and we're ready for conversation.
+            // Use >= 3 as a safety measure in case extra models are added.
+            if loadCompleteCount >= 3 && !isPipelineReady {
+                isPipelineReady = true
+                status = "Running"
+            }
+
+        case "download_started", "download_progress", "download_complete", "cached":
+            // Download progress is handled by ConversationBridgeController
+            // for the subtitle/progress bar UI. We only track status string.
+            if stage == "download_started" {
+                status = "Downloading models…"
+            }
+
+        case "aggregate":
+            let progress = userInfo["progress"] as? Double ?? 0
+            status = "Downloading… \(Int(progress * 100))%"
+
+        case "error":
+            let message = userInfo["message"] as? String ?? "unknown"
+            status = "Error: \(message)"
+
+        default:
+            break
+        }
+    }
+
+    // MARK: - Pipeline State Handlers
 
     private func handlePipelineState(event: String, payload: [String: Any]) {
         switch event {
@@ -125,7 +220,11 @@ final class PipelineAuxBridgeController: ObservableObject {
 
         case "pipeline.mic_status":
             let active = payload["active"] as? Bool ?? false
-            if status.hasPrefix("Model:") || status.hasPrefix("Pipeline:") {
+            // Also use mic_status as a fallback readiness signal.
+            if !isPipelineReady {
+                isPipelineReady = true
+                status = "Running"
+            } else {
                 status = "Mic: \(active ? "active" : "inactive")"
             }
 
