@@ -139,3 +139,133 @@ check: fmt-check lint test doc panic-scan
 
 # Quick check (format + lint + test only)
 quick-check: fmt-check lint test
+
+# ── macOS Code Signing & Bundle ──────────────────────────────────────────────
+
+# Directory paths
+_build_dir := "native/macos/FaeNativeApp/.build/arm64-apple-macosx/debug"
+_app_bundle := _build_dir / "FaeNativeApp.app"
+_entitlements := "Entitlements-debug.plist"
+
+# Set up the signing keychain (idempotent — safe to run multiple times).
+# Requires: MACOS_CERTIFICATE, MACOS_CERTIFICATE_PASSWORD, KEYCHAIN_PASSWORD
+# from env (sourced via ~/.zshrc → ~/.secrets).
+setup-signing-keychain:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${MACOS_CERTIFICATE:?Set MACOS_CERTIFICATE in ~/.secrets}"
+    : "${MACOS_CERTIFICATE_PASSWORD:?Set MACOS_CERTIFICATE_PASSWORD in ~/.secrets}"
+    : "${KEYCHAIN_PASSWORD:?Set KEYCHAIN_PASSWORD in ~/.secrets}"
+    KC="$HOME/Library/Keychains/fae-signing.keychain-db"
+    if security show-keychain-info "$KC" 2>/dev/null; then
+        echo "✓ Signing keychain already exists"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+    else
+        echo "Creating signing keychain…"
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+        security set-keychain-settings -lut 21600 "$KC"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+        EXISTING=$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')
+        security list-keychains -d user -s $EXISTING "$KC"
+    fi
+    # Import certificate (idempotent — re-import is harmless)
+    echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/_fae_cert.p12
+    security import /tmp/_fae_cert.p12 -k "$KC" \
+        -P "$MACOS_CERTIFICATE_PASSWORD" \
+        -T /usr/bin/codesign -T /usr/bin/security 2>/dev/null || true
+    security set-key-partition-list -S apple-tool:,apple:,codesign: \
+        -s -k "$KEYCHAIN_PASSWORD" "$KC" 2>/dev/null
+    rm -f /tmp/_fae_cert.p12
+    # Fetch Apple intermediate CA if not present
+    if ! security find-identity -v -p codesigning "$KC" 2>/dev/null | grep -q "valid"; then
+        echo "Installing Apple Developer ID intermediate CA…"
+        curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" -o /tmp/_devid_g2.cer
+        curl -sL "https://www.apple.com/certificateauthority/DeveloperIDCA.cer" -o /tmp/_devid_g1.cer
+        security import /tmp/_devid_g2.cer -k "$KC" -T /usr/bin/codesign 2>/dev/null || true
+        security import /tmp/_devid_g1.cer -k "$KC" -T /usr/bin/codesign 2>/dev/null || true
+        security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KC" 2>/dev/null
+        rm -f /tmp/_devid_g2.cer /tmp/_devid_g1.cer
+    fi
+    echo "✓ Signing identity ready:"
+    security find-identity -v -p codesigning "$KC" | head -3
+
+# Build, bundle, sign, and launch the native app.
+# Requires: MACOS_SIGNING_IDENTITY from env (sourced via ~/.zshrc → ~/.secrets).
+run-native: build-native-swift _bundle-app _sign-bundle
+    open "{{_app_bundle}}"
+
+# Build the Swift app, create .app bundle, and sign it (without launching).
+bundle-native: build-native-swift _bundle-app _sign-bundle
+    @echo "✓ Signed bundle ready: {{_app_bundle}}"
+
+# (internal) Assemble the .app bundle from the SPM debug build.
+_bundle-app:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUILD="{{_build_dir}}"
+    BUNDLE="{{_app_bundle}}"
+    rm -rf "$BUNDLE"
+    mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Frameworks"
+    cp "$BUILD/FaeNativeApp" "$BUNDLE/Contents/MacOS/FaeNativeApp"
+    cp -R "$BUILD/Sparkle.framework" "$BUNDLE/Contents/Frameworks/"
+    install_name_tool -add_rpath "@executable_path/../Frameworks" \
+        "$BUNDLE/Contents/MacOS/FaeNativeApp" 2>/dev/null || true
+    cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+      "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>CFBundleIdentifier</key>
+        <string>com.saorsalabs.fae</string>
+        <key>CFBundleName</key>
+        <string>Fae</string>
+        <key>CFBundleDisplayName</key>
+        <string>Fae</string>
+        <key>CFBundleExecutable</key>
+        <string>FaeNativeApp</string>
+        <key>CFBundlePackageType</key>
+        <string>APPL</string>
+        <key>CFBundleVersion</key>
+        <string>0.7.1</string>
+        <key>CFBundleShortVersionString</key>
+        <string>0.7.1</string>
+        <key>LSMinimumSystemVersion</key>
+        <string>14.0</string>
+        <key>NSMicrophoneUsageDescription</key>
+        <string>Fae needs microphone access for voice conversations.</string>
+        <key>NSContactsUsageDescription</key>
+        <string>Fae can access your contacts to help you communicate.</string>
+        <key>NSCalendarsUsageDescription</key>
+        <string>Fae can access your calendar to help manage your schedule.</string>
+        <key>NSHighResolutionCapable</key>
+        <true/>
+    </dict>
+    </plist>
+    PLIST
+    echo "✓ Bundle assembled: $BUNDLE"
+
+# (internal) Sign the .app bundle with Developer ID.
+_sign-bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${MACOS_SIGNING_IDENTITY:?Set MACOS_SIGNING_IDENTITY in ~/.secrets}"
+    KC="$HOME/Library/Keychains/fae-signing.keychain-db"
+    BUNDLE="{{_app_bundle}}"
+    ENT="{{_entitlements}}"
+    # Ensure keychain is unlocked
+    security unlock-keychain -p "${KEYCHAIN_PASSWORD:-password}" "$KC" 2>/dev/null || true
+    # Sign deepest components first
+    for xpc in "$BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices"/*.xpc; do
+        [ -d "$xpc" ] && codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" "$xpc"
+    done
+    [ -d "$BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" ] && \
+        codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
+            "$BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+    codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
+        "$BUNDLE/Contents/Frameworks/Sparkle.framework"
+    codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
+        --entitlements "$ENT" "$BUNDLE"
+    echo "✓ Signed: $BUNDLE"
+    codesign --verify --verbose "$BUNDLE" 2>&1 | tail -2
