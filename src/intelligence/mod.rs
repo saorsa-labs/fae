@@ -40,7 +40,9 @@ pub use research::{
     store_research_result,
 };
 pub use skill_proposals::{
-    ProposalStatus, SkillProposal, SkillProposalStore, detect_skill_opportunities,
+    ProposalStatus, SkillOpportunityPolicy, SkillProposal, SkillProposalStore,
+    detect_skill_opportunities, detect_skill_opportunities_with_policy,
+    load_skill_opportunity_policy,
 };
 pub use store::{IntelligenceStore, RelationshipMeta};
 pub use types::{
