@@ -402,7 +402,12 @@ impl FaeDeviceTransferHandler {
             )
         };
         if auto_activated_rescue {
-            self.save_config()?;
+            if let Err(e) = self.save_config() {
+                warn!(
+                    error = %e,
+                    "failed to persist rescue activation; continuing with in-memory rescue profile"
+                );
+            }
             self.emit_event(
                 "runtime.rescue_mode_activated",
                 serde_json::json!({
@@ -456,7 +461,12 @@ impl FaeDeviceTransferHandler {
         };
 
         if auto_recovered {
-            self.save_config()?;
+            if let Err(e) = self.save_config() {
+                warn!(
+                    error = %e,
+                    "failed to persist rescue auto-recovery; continuing with in-memory standard profile"
+                );
+            }
             self.emit_event(
                 "runtime.rescue_mode_auto_recovered",
                 serde_json::json!({
@@ -2462,6 +2472,21 @@ mod tests {
         (handler, dir, rt)
     }
 
+    fn handler_with_unwritable_config_path() -> (
+        FaeDeviceTransferHandler,
+        tempfile::TempDir,
+        tokio::runtime::Runtime,
+    ) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config_path = dir.path().to_path_buf();
+        let config = SpeechConfig::default();
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let (event_tx, _) = broadcast::channel(16);
+        let handler =
+            FaeDeviceTransferHandler::new(config, config_path, rt.handle().clone(), event_tx);
+        (handler, dir, rt)
+    }
+
     #[test]
     fn grant_capability_persists_to_config() {
         let (handler, _dir, _rt) = temp_handler();
@@ -2707,6 +2732,19 @@ mod tests {
     }
 
     #[test]
+    fn rescue_profile_auto_activation_succeeds_even_if_config_save_fails() {
+        let (handler, _dir, _rt) = handler_with_unwritable_config_path();
+        let activated = handler
+            .maybe_activate_rescue_profile_for_restart_pressure(3)
+            .expect("rescue activation should still succeed");
+        assert!(activated, "rescue should activate despite save failure");
+
+        let guard = handler.config.lock().unwrap();
+        assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
+    }
+
+    #[test]
     fn poisoned_restart_count_lock_forces_rescue_activation() {
         let (handler, _dir, _rt) = temp_handler();
 
@@ -2786,6 +2824,34 @@ mod tests {
         assert_eq!(entries[0].from_profile, RuntimeProfile::Rescue);
         assert_eq!(entries[0].to_profile, RuntimeProfile::Standard);
         assert_eq!(entries[0].reason, "rescue_timeout_elapsed");
+    }
+
+    #[test]
+    fn rescue_timeout_auto_recovery_succeeds_even_if_config_save_fails() {
+        let (handler, _dir, _rt) = handler_with_unwritable_config_path();
+        {
+            let mut guard = handler.config.lock().unwrap();
+            guard.runtime.profile = RuntimeProfile::Rescue;
+            guard.runtime.rescue_saved_llm = Some(RuntimeRescueSavedLlmConfig {
+                backend: LlmBackend::Local,
+                tool_mode: AgentToolMode::FullNoApproval,
+            });
+            guard.runtime.rescue_auto_exit_minutes = 1;
+            guard.runtime.rescue_entered_at_secs =
+                Some(FaeDeviceTransferHandler::now_epoch_secs().saturating_sub(60));
+        }
+
+        let recovered = handler
+            .maybe_exit_rescue_profile_for_timeout()
+            .expect("rescue timeout recovery should still succeed");
+        assert!(
+            recovered,
+            "rescue timeout should recover despite save failure"
+        );
+
+        let guard = handler.config.lock().unwrap();
+        assert_eq!(guard.runtime.profile, RuntimeProfile::Standard);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::FullNoApproval);
     }
 
     #[test]
