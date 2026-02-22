@@ -60,12 +60,19 @@ final class WindowStateController: ObservableObject {
         didSet {
             guard let window else { return }
 
+            // Prevent macOS from saving/restoring window state across launches.
+            // State restoration can override our frame with the previous session's
+            // collapsed 80×80 size, leaving the user stuck at a tiny window.
+            window.isRestorable = false
+
             // Set the styleMask ONCE and never change it again. With
             // fullSizeContentView + transparent titlebar the window is
             // visually borderless while preserving the contentView hierarchy.
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            // Remove the thin black separator line between title bar and content.
+            window.titlebarSeparatorStyle = .none
             window.isMovableByWindowBackground = true
             window.backgroundColor = .clear
             window.isOpaque = false
@@ -73,13 +80,14 @@ final class WindowStateController: ObservableObject {
             setWindowButtonsHidden(true)
 
             // Enforce compact size on initial attach — macOS state restoration
-            // may have saved a different (larger) frame from a previous session.
+            // is disabled above but we also force the frame as a belt-and-suspenders
+            // defense against any residual frame caching.
             let screen = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
             let visible = screen.visibleFrame
             let size = NSSize(width: compactWidth, height: compactHeight)
             let x = visible.midX - size.width / 2
             let y = visible.midY - size.height / 2
-            window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: false)
+            window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
 
             // Set min/max so the user can't resize beyond reasonable bounds.
             window.minSize = NSSize(width: 280, height: 400)
