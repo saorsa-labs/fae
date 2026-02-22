@@ -118,6 +118,12 @@ pub fn scheduler_file() -> PathBuf {
     config_dir().join("scheduler.json")
 }
 
+/// Runtime profile audit log path (`config_dir()/runtime_audit.jsonl`).
+#[must_use]
+pub fn runtime_audit_file() -> PathBuf {
+    config_dir().join("runtime_audit.jsonl")
+}
+
 /// Diagnostics output directory (`data_dir()/diagnostics/`).
 #[must_use]
 pub fn diagnostics_dir() -> PathBuf {
@@ -241,7 +247,19 @@ mod tests {
     }
 
     #[test]
+    fn runtime_audit_file_ends_with_runtime_audit_jsonl() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = runtime_audit_file();
+        let s = path.to_string_lossy();
+        assert!(
+            s.ends_with("runtime_audit.jsonl"),
+            "runtime_audit_file: {s}"
+        );
+    }
+
+    #[test]
     fn logs_dir_is_subpath_of_data_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let logs = logs_dir();
         let data = data_dir();
         assert!(
@@ -254,6 +272,7 @@ mod tests {
 
     #[test]
     fn skills_dir_is_subpath_of_data_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let skills = skills_dir();
         let data = data_dir();
         assert!(
@@ -266,6 +285,7 @@ mod tests {
 
     #[test]
     fn diagnostics_dir_is_subpath_of_data_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let diag = diagnostics_dir();
         let data = data_dir();
         assert!(
@@ -278,6 +298,7 @@ mod tests {
 
     #[test]
     fn hf_cache_dir_is_subpath_of_cache_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let hf = hf_cache_dir();
         let cache = cache_dir();
         assert!(

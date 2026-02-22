@@ -13,6 +13,7 @@ use crate::pipeline::coordinator::PipelineCoordinator;
 use crate::pipeline::messages::{GateCommand, TextInjection};
 use crate::progress::ProgressEvent;
 use crate::runtime::RuntimeEvent;
+use crate::runtime_audit::{RuntimeAuditEntry, RuntimeAuditSource};
 use crate::startup::initialize_models_with_progress;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -317,7 +318,10 @@ impl FaeDeviceTransferHandler {
         if config.runtime.profile == profile {
             if profile == RuntimeProfile::Rescue {
                 config.llm.backend = LlmBackend::Local;
-                config.llm.tool_mode = AgentToolMode::ReadWrite;
+                config.llm.tool_mode = AgentToolMode::ReadOnly;
+                if config.runtime.rescue_entered_at_secs.is_none() {
+                    config.runtime.rescue_entered_at_secs = Some(Self::now_epoch_secs());
+                }
             }
             return false;
         }
@@ -331,11 +335,13 @@ impl FaeDeviceTransferHandler {
                     });
                 }
                 config.runtime.profile = RuntimeProfile::Rescue;
+                config.runtime.rescue_entered_at_secs = Some(Self::now_epoch_secs());
                 config.llm.backend = LlmBackend::Local;
-                config.llm.tool_mode = AgentToolMode::ReadWrite;
+                config.llm.tool_mode = AgentToolMode::ReadOnly;
             }
             RuntimeProfile::Standard => {
                 config.runtime.profile = RuntimeProfile::Standard;
+                config.runtime.rescue_entered_at_secs = None;
                 if let Some(saved) = config.runtime.rescue_saved_llm.take() {
                     config.llm.backend = saved.backend;
                     config.llm.tool_mode = saved.tool_mode;
@@ -346,6 +352,33 @@ impl FaeDeviceTransferHandler {
         true
     }
 
+    fn now_epoch_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Persist a runtime profile transition audit record.
+    ///
+    /// Errors are non-fatal and only logged so rescue/profile transitions are
+    /// never blocked by audit I/O failures.
+    fn append_runtime_profile_audit(&self, entry: RuntimeAuditEntry) {
+        if entry.from_profile == entry.to_profile {
+            return;
+        }
+        if let Err(e) =
+            crate::runtime_audit::append_runtime_audit_for_config(&self.config_path, &entry)
+        {
+            warn!(
+                error = %e,
+                from_profile = entry.from_profile.as_str(),
+                to_profile = entry.to_profile.as_str(),
+                "failed to append runtime profile audit entry"
+            );
+        }
+    }
+
     /// Auto-enable rescue runtime profile when crash restart pressure is high.
     ///
     /// Returns `true` when the profile was switched during this call.
@@ -353,13 +386,20 @@ impl FaeDeviceTransferHandler {
         &self,
         restart_count: u32,
     ) -> Result<bool> {
-        let (auto_activated_rescue, rescue_threshold) = {
+        let (auto_activated_rescue, rescue_threshold, from_profile, to_profile) = {
             let mut guard = self.lock_config()?;
             let rescue_threshold = guard.runtime.rescue_restart_threshold;
+            let from_profile = guard.runtime.profile;
             let auto_activated_rescue = guard.runtime.profile != RuntimeProfile::Rescue
                 && restart_count >= guard.runtime.rescue_restart_threshold
                 && Self::apply_runtime_profile(&mut guard, RuntimeProfile::Rescue);
-            (auto_activated_rescue, rescue_threshold)
+            let to_profile = guard.runtime.profile;
+            (
+                auto_activated_rescue,
+                rescue_threshold,
+                from_profile,
+                to_profile,
+            )
         };
         if auto_activated_rescue {
             self.save_config()?;
@@ -375,8 +415,73 @@ impl FaeDeviceTransferHandler {
                 restart_count,
                 rescue_threshold, "runtime profile auto-switched to rescue mode"
             );
+            self.append_runtime_profile_audit(RuntimeAuditEntry::new(
+                RuntimeAuditSource::AutoRecovery,
+                from_profile,
+                to_profile,
+                "restart_threshold_reached",
+                Some(restart_count),
+                Some(rescue_threshold),
+                None,
+            ));
         }
         Ok(auto_activated_rescue)
+    }
+
+    /// Auto-exit rescue profile when configured timeout has elapsed.
+    ///
+    /// Returns `true` if profile changed from `rescue` to `standard`.
+    fn maybe_exit_rescue_profile_for_timeout(&self) -> Result<bool> {
+        let now_secs = Self::now_epoch_secs();
+        let (auto_recovered, timeout_minutes, entered_at, from_profile, to_profile) = {
+            let mut guard = self.lock_config()?;
+            let timeout_minutes = guard.runtime.rescue_auto_exit_minutes;
+            let entered_at = guard.runtime.rescue_entered_at_secs;
+            let from_profile = guard.runtime.profile;
+            let timeout_secs = u64::from(timeout_minutes).saturating_mul(60);
+            let timed_out = guard.runtime.profile == RuntimeProfile::Rescue
+                && timeout_minutes > 0
+                && entered_at
+                    .is_some_and(|entered| now_secs.saturating_sub(entered) >= timeout_secs);
+            let auto_recovered =
+                timed_out && Self::apply_runtime_profile(&mut guard, RuntimeProfile::Standard);
+            let to_profile = guard.runtime.profile;
+            (
+                auto_recovered,
+                timeout_minutes,
+                entered_at,
+                from_profile,
+                to_profile,
+            )
+        };
+
+        if auto_recovered {
+            self.save_config()?;
+            self.emit_event(
+                "runtime.rescue_mode_auto_recovered",
+                serde_json::json!({
+                    "reason": "timeout_elapsed",
+                    "timeout_minutes": timeout_minutes,
+                    "entered_at_secs": entered_at,
+                }),
+            );
+            info!(
+                timeout_minutes,
+                entered_at = entered_at.unwrap_or(0),
+                "runtime profile auto-switched to standard after rescue timeout elapsed"
+            );
+            self.append_runtime_profile_audit(RuntimeAuditEntry::new(
+                RuntimeAuditSource::AutoRecovery,
+                from_profile,
+                to_profile,
+                "rescue_timeout_elapsed",
+                None,
+                None,
+                None,
+            ));
+        }
+
+        Ok(auto_recovered)
     }
 
     /// Read the restart counter for startup decisions.
@@ -1551,6 +1656,8 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             _ => {}
         }
 
+        let _ = self.maybe_exit_rescue_profile_for_timeout()?;
+
         // Auto-activate rescue profile after repeated crash restarts.
         let restart_count = self.restart_count_for_start();
         let _ = self.maybe_activate_rescue_profile_for_restart_pressure(restart_count)?;
@@ -2279,10 +2386,21 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     )) {
                         Ok(profile) => {
                             let mut guard = self.lock_config()?;
+                            let from_profile = guard.runtime.profile;
                             let changed = Self::apply_runtime_profile(&mut guard, profile);
+                            let to_profile = guard.runtime.profile;
                             drop(guard);
                             if changed {
                                 self.save_config()?;
+                                self.append_runtime_profile_audit(RuntimeAuditEntry::new(
+                                    RuntimeAuditSource::ConfigPatch,
+                                    from_profile,
+                                    to_profile,
+                                    "manual_config_patch_runtime_profile",
+                                    None,
+                                    None,
+                                    None,
+                                ));
                             }
                             info!(?profile, "config.patch applied: runtime.profile");
                         }
@@ -2457,7 +2575,8 @@ mod tests {
         let guard = handler.config.lock().unwrap();
         assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
         assert_eq!(guard.llm.backend, LlmBackend::Local);
-        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
+        assert!(guard.runtime.rescue_entered_at_secs.is_some());
     }
 
     #[test]
@@ -2475,7 +2594,7 @@ mod tests {
         {
             let guard = handler.config.lock().unwrap();
             assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
-            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
             let saved = guard
                 .runtime
                 .rescue_saved_llm
@@ -2491,10 +2610,38 @@ mod tests {
         assert_eq!(guard.runtime.profile, RuntimeProfile::Standard);
         assert_eq!(guard.llm.tool_mode, AgentToolMode::Full);
         assert_eq!(guard.llm.backend, LlmBackend::Local);
+        assert!(guard.runtime.rescue_entered_at_secs.is_none());
         assert!(
             guard.runtime.rescue_saved_llm.is_none(),
             "saved rescue settings should be cleared after restore"
         );
+    }
+
+    #[test]
+    fn runtime_profile_patch_writes_transition_audit_entries() {
+        let (handler, dir, _rt) = temp_handler();
+        let config_path = dir.path().join("config.toml");
+
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("rescue"))
+            .unwrap();
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("standard"))
+            .unwrap();
+
+        let entries =
+            crate::runtime_audit::read_recent_runtime_audit_for_config(&config_path, 10).unwrap();
+        assert_eq!(entries.len(), 2, "expected two profile transition audits");
+
+        assert_eq!(entries[0].source, RuntimeAuditSource::ConfigPatch);
+        assert_eq!(entries[0].from_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[0].to_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[0].reason, "manual_config_patch_runtime_profile");
+
+        assert_eq!(entries[1].source, RuntimeAuditSource::ConfigPatch);
+        assert_eq!(entries[1].from_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[1].to_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[1].reason, "manual_config_patch_runtime_profile");
     }
 
     #[test]
@@ -2524,7 +2671,8 @@ mod tests {
 
     #[test]
     fn rescue_profile_auto_activates_after_restart_threshold() {
-        let (handler, _dir, _rt) = temp_handler();
+        let (handler, dir, _rt) = temp_handler();
+        let config_path = dir.path().join("config.toml");
         {
             let mut guard = handler.config.lock().unwrap();
             guard.llm.tool_mode = AgentToolMode::FullNoApproval;
@@ -2540,12 +2688,22 @@ mod tests {
             let guard = handler.config.lock().unwrap();
             assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
             assert_eq!(guard.llm.backend, LlmBackend::Local);
-            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
             assert_eq!(
                 guard.runtime.rescue_saved_llm.map(|saved| saved.tool_mode),
                 Some(AgentToolMode::FullNoApproval)
             );
         }
+
+        let entries =
+            crate::runtime_audit::read_recent_runtime_audit_for_config(&config_path, 10).unwrap();
+        assert_eq!(entries.len(), 1, "expected one auto rescue audit");
+        assert_eq!(entries[0].source, RuntimeAuditSource::AutoRecovery);
+        assert_eq!(entries[0].from_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[0].to_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[0].reason, "restart_threshold_reached");
+        assert_eq!(entries[0].restart_count, Some(3));
+        assert_eq!(entries[0].threshold, Some(3));
     }
 
     #[test]
@@ -2588,7 +2746,46 @@ mod tests {
             RuntimeProfile::Rescue,
             "poisoned restart_count should force rescue profile"
         );
-        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
+    }
+
+    #[test]
+    fn rescue_profile_auto_recovers_after_timeout() {
+        let (handler, dir, _rt) = temp_handler();
+        let config_path = dir.path().join("config.toml");
+        {
+            let mut guard = handler.config.lock().unwrap();
+            guard.llm.tool_mode = AgentToolMode::FullNoApproval;
+            guard.runtime.profile = RuntimeProfile::Rescue;
+            guard.runtime.rescue_saved_llm = Some(RuntimeRescueSavedLlmConfig {
+                backend: LlmBackend::Local,
+                tool_mode: AgentToolMode::FullNoApproval,
+            });
+            guard.runtime.rescue_auto_exit_minutes = 10;
+            guard.runtime.rescue_entered_at_secs =
+                Some(FaeDeviceTransferHandler::now_epoch_secs().saturating_sub(10 * 60));
+        }
+
+        let recovered = handler
+            .maybe_exit_rescue_profile_for_timeout()
+            .expect("rescue timeout recovery should succeed");
+        assert!(recovered, "rescue timeout should auto-recover");
+
+        {
+            let guard = handler.config.lock().unwrap();
+            assert_eq!(guard.runtime.profile, RuntimeProfile::Standard);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::FullNoApproval);
+            assert!(guard.runtime.rescue_entered_at_secs.is_none());
+            assert!(guard.runtime.rescue_saved_llm.is_none());
+        }
+
+        let entries =
+            crate::runtime_audit::read_recent_runtime_audit_for_config(&config_path, 10).unwrap();
+        assert_eq!(entries.len(), 1, "expected one timeout recovery audit");
+        assert_eq!(entries[0].source, RuntimeAuditSource::AutoRecovery);
+        assert_eq!(entries[0].from_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[0].to_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[0].reason, "rescue_timeout_elapsed");
     }
 
     #[test]

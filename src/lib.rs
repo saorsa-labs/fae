@@ -55,6 +55,7 @@ pub mod pipeline;
 pub mod platform;
 pub mod progress;
 pub mod runtime;
+pub mod runtime_audit;
 pub mod scheduler;
 pub mod sentiment;
 pub mod skills;

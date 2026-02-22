@@ -269,6 +269,15 @@ pub struct RuntimeConfig {
     pub profile: RuntimeProfile,
     /// Auto-activate rescue profile when crash restart count reaches this value.
     pub rescue_restart_threshold: u32,
+    /// Auto-exit rescue profile after this many minutes.
+    ///
+    /// `0` disables timeout-based auto recovery.
+    pub rescue_auto_exit_minutes: u32,
+    /// Unix timestamp (seconds) when rescue profile was entered.
+    ///
+    /// Persisted to support timeout-based recovery across restarts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rescue_entered_at_secs: Option<u64>,
     /// Last known LLM settings before entering rescue mode.
     ///
     /// Persisted so returning to `standard` can restore the user's choices.
@@ -300,6 +309,8 @@ impl Default for RuntimeConfig {
         Self {
             profile: RuntimeProfile::Standard,
             rescue_restart_threshold: 3,
+            rescue_auto_exit_minutes: 10,
+            rescue_entered_at_secs: None,
             rescue_saved_llm: None,
         }
     }
@@ -2004,6 +2015,8 @@ enabled = true
         let cfg = SpeechConfig::default();
         assert_eq!(cfg.runtime.profile, RuntimeProfile::Standard);
         assert_eq!(cfg.runtime.rescue_restart_threshold, 3);
+        assert_eq!(cfg.runtime.rescue_auto_exit_minutes, 10);
+        assert!(cfg.runtime.rescue_entered_at_secs.is_none());
         assert!(cfg.runtime.rescue_saved_llm.is_none());
     }
 
@@ -2017,6 +2030,8 @@ rescue_restart_threshold = 4
         let cfg: SpeechConfig = toml::from_str(toml_str).expect("parse runtime config");
         assert_eq!(cfg.runtime.profile, RuntimeProfile::Rescue);
         assert_eq!(cfg.runtime.rescue_restart_threshold, 4);
+        assert_eq!(cfg.runtime.rescue_auto_exit_minutes, 10);
+        assert!(cfg.runtime.rescue_entered_at_secs.is_none());
         assert!(cfg.runtime.rescue_saved_llm.is_none());
     }
 
@@ -2038,5 +2053,20 @@ tool_mode = "full"
             .expect("saved llm state should deserialize");
         assert_eq!(saved.backend, LlmBackend::Local);
         assert_eq!(saved.tool_mode, AgentToolMode::Full);
+    }
+
+    #[test]
+    fn runtime_profile_parses_rescue_timeout_and_entry_timestamp() {
+        let toml_str = r#"
+[runtime]
+profile = "rescue"
+rescue_restart_threshold = 4
+rescue_auto_exit_minutes = 12
+rescue_entered_at_secs = 1700000000
+"#;
+        let cfg: SpeechConfig = toml::from_str(toml_str).expect("parse runtime config");
+        assert_eq!(cfg.runtime.profile, RuntimeProfile::Rescue);
+        assert_eq!(cfg.runtime.rescue_auto_exit_minutes, 12);
+        assert_eq!(cfg.runtime.rescue_entered_at_secs, Some(1_700_000_000));
     }
 }
