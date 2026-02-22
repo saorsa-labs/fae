@@ -26,6 +26,7 @@ use crate::llm::LocalLlm;
 use crate::permissions::SharedPermissionStore;
 use crate::pipeline::messages::SentenceChunk;
 use crate::runtime::RuntimeEvent;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -131,6 +132,13 @@ impl FaeAgentLlm {
         interrupt: Arc<AtomicBool>,
     ) -> Result<bool> {
         let interrupt_flag = interrupt;
+        let user_message = extract_latest_user_message(&user_input);
+        let tool_allowlist = select_tool_allowlist(user_message);
+        tracing::debug!(
+            user_message,
+            tools = ?tool_allowlist,
+            "selected per-turn tool allowlist"
+        );
 
         self.history.push(Message::user(user_input));
         self.trim_history();
@@ -141,7 +149,8 @@ impl FaeAgentLlm {
             self.agent_config.clone(),
             Arc::clone(&self.provider),
             Arc::clone(&self.registry),
-        );
+        )
+        .restrict_tools_to(&tool_allowlist);
         if let Some(ref tx) = self.runtime_tx {
             agent = agent.with_runtime_tx(tx.clone());
         }
@@ -297,6 +306,116 @@ impl FaeAgentLlm {
         compacted.extend_from_slice(&self.history[split_at..]);
         self.history = compacted;
     }
+}
+
+fn extract_latest_user_message(input: &str) -> &str {
+    const PREFIX: &str = "User message:\n";
+    if let Some((_, message)) = input.rsplit_once(PREFIX) {
+        message.trim()
+    } else {
+        input.trim()
+    }
+}
+
+fn contains_any(haystack: &str, terms: &[&str]) -> bool {
+    terms.iter().any(|term| haystack.contains(term))
+}
+
+/// Select a small per-turn tool allowlist based on explicit user intent.
+///
+/// Normal conversational turns return an empty allowlist (no tool schemas),
+/// which reduces prompt bloat and improves first-token latency.
+fn select_tool_allowlist(user_text: &str) -> Vec<String> {
+    let lower = user_text.to_ascii_lowercase();
+    let mut allow: HashSet<&'static str> = HashSet::new();
+
+    if contains_any(
+        &lower,
+        &[
+            "search", "look up", "lookup", "latest", "news", "web", "internet", "online",
+            "website", "source", "article",
+        ],
+    ) {
+        allow.insert("web_search");
+        allow.insert("fetch_url");
+    }
+
+    if contains_any(
+        &lower,
+        &["calendar", "meeting", "event", "schedule on my calendar"],
+    ) {
+        allow.insert("list_calendars");
+        allow.insert("list_calendar_events");
+        allow.insert("create_calendar_event");
+        allow.insert("update_calendar_event");
+        allow.insert("delete_calendar_event");
+    }
+
+    if contains_any(&lower, &["reminder", "reminders", "todo", "to-do"]) {
+        allow.insert("list_reminder_lists");
+        allow.insert("list_reminders");
+        allow.insert("create_reminder");
+        allow.insert("set_reminder_completed");
+    }
+
+    if contains_any(&lower, &["note", "notes"]) {
+        allow.insert("list_notes");
+        allow.insert("get_note");
+        allow.insert("create_note");
+        allow.insert("append_to_note");
+    }
+
+    if contains_any(&lower, &["mail", "email", "inbox"]) {
+        allow.insert("search_mail");
+        allow.insert("get_mail");
+        allow.insert("compose_mail");
+    }
+
+    if contains_any(
+        &lower,
+        &["contact", "contacts", "phone number", "address book"],
+    ) {
+        allow.insert("search_contacts");
+        allow.insert("get_contact");
+        allow.insert("create_contact");
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "scheduled task",
+            "scheduled tasks",
+            "automation",
+            "automations",
+            "remind me every",
+            "every day",
+            "every week",
+        ],
+    ) {
+        allow.insert("list_scheduled_tasks");
+        allow.insert("create_scheduled_task");
+        allow.insert("update_scheduled_task");
+        allow.insert("delete_scheduled_task");
+        allow.insert("trigger_scheduled_task");
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "read file",
+            "open file",
+            "show file",
+            "in this file",
+            "in this repo",
+            "in this project",
+        ],
+    ) {
+        allow.insert("read");
+    }
+
+    let mut tools: Vec<String> = allow.into_iter().map(str::to_owned).collect();
+    tools.sort();
+    tools
 }
 
 struct MissingLocalModelAdapter;
@@ -747,6 +866,69 @@ mod tests {
         assert!(
             registry.exists("python_skill"),
             "python_skill tool should be registered in full mode"
+        );
+    }
+
+    #[test]
+    fn extract_latest_user_message_prefers_user_message_suffix() {
+        let input =
+            "<memory_context>\nfoo\n</memory_context>\n\nUser message:\nFind latest Apple news";
+        assert_eq!(extract_latest_user_message(input), "Find latest Apple news");
+    }
+
+    #[test]
+    fn select_tool_allowlist_empty_for_plain_conversation() {
+        let tools = select_tool_allowlist("How are you feeling today?");
+        assert!(
+            tools.is_empty(),
+            "plain chat should return empty allowlist (all tools stay available)"
+        );
+    }
+
+    #[test]
+    fn select_tool_allowlist_adds_web_tools_for_search_intent() {
+        let tools = select_tool_allowlist("Can you search the web for today's AI news?");
+        assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"fetch_url".to_string()));
+    }
+
+    #[test]
+    fn select_tool_allowlist_adds_calendar_tools_for_calendar_intent() {
+        let tools = select_tool_allowlist("What's on my calendar tomorrow?");
+        assert!(tools.contains(&"list_calendars".to_string()));
+        assert!(tools.contains(&"list_calendar_events".to_string()));
+    }
+
+    #[test]
+    fn select_tool_allowlist_multi_category_overlap() {
+        // "search for meetings" should trigger both web and calendar tools.
+        let tools = select_tool_allowlist("search for meetings this week");
+        assert!(
+            tools.contains(&"web_search".to_string()),
+            "should include web_search for 'search'"
+        );
+        assert!(
+            tools.contains(&"list_calendar_events".to_string()),
+            "should include calendar for 'meeting'"
+        );
+    }
+
+    #[test]
+    fn select_tool_allowlist_case_insensitive() {
+        let tools = select_tool_allowlist("CHECK MY CALENDAR");
+        assert!(
+            tools.contains(&"list_calendar_events".to_string()),
+            "uppercase input should still match"
+        );
+    }
+
+    #[test]
+    fn select_tool_allowlist_plurals_match_via_substring() {
+        // "reminders" contains "reminder" → should match.
+        let tools = select_tool_allowlist("show me my reminders");
+        assert!(
+            tools.contains(&"list_reminders".to_string()),
+            "plural 'reminders' should match substring 'reminder'"
         );
     }
 }

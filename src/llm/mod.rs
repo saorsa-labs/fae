@@ -202,15 +202,22 @@ impl LocalLlm {
         let use_vision = config.enable_vision && config.gguf_file.is_empty();
 
         if use_vision {
+            info!(
+                model_id = config.model_id,
+                "loading LLM via vision path (ISQ quantization at startup)"
+            );
             match Self::load_vision_model(config).await {
                 Ok(model) => return Ok((model, true)),
                 Err(e) => {
                     warn!("vision model load failed ({e}), falling back to GGUF text-only");
-                    // Fall back to Qwen3-4B GGUF text-only.
+                    // Fall back to the managed voice GGUF model selection.
+                    let ram = crate::system_profile::detect_total_memory_bytes();
+                    let (model_id, gguf_file, tokenizer_id, _) =
+                        crate::config::recommended_local_model(ram, config.voice_model_preset);
                     let fallback = LlmConfig {
-                        model_id: "unsloth/Qwen3-4B-Instruct-2507-GGUF".to_owned(),
-                        gguf_file: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf".to_owned(),
-                        tokenizer_id: "Qwen/Qwen3-4B-Instruct-2507".to_owned(),
+                        model_id: model_id.to_owned(),
+                        gguf_file: gguf_file.to_owned(),
+                        tokenizer_id: tokenizer_id.to_owned(),
                         enable_vision: false,
                         ..config.clone()
                     };
@@ -220,6 +227,11 @@ impl LocalLlm {
             }
         }
 
+        info!(
+            model_id = config.model_id,
+            gguf_file = config.gguf_file,
+            "loading LLM via GGUF path (pre-quantized, no ISQ)"
+        );
         let model = Self::load_gguf_model(config).await?;
         Ok((model, false))
     }
@@ -227,7 +239,7 @@ impl LocalLlm {
     /// Build a new local LLM from the given configuration.
     ///
     /// When vision is enabled, loads a `VisionModelBuilder` model with ISQ.
-    /// If vision loading fails, falls back to Qwen3-4B GGUF text-only.
+    /// If vision loading fails, falls back to the managed voice GGUF model.
     ///
     /// # Errors
     ///

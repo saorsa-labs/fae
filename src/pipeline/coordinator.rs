@@ -1060,14 +1060,19 @@ async fn run_vad_stage(
     let mut in_fast_mode = false;
 
     // Echo suppression tail: after assistant stops speaking, keep suppressing
-    // for a brief window so residual echo/reverb doesn't leak through.
-    // When AEC is active, the DSP filter handles most echo removal, so only a
-    // short tail is needed to catch residual reverb.
-    let echo_tail_ms: u64 = if state.aec_enabled { 1000 } else { 2000 };
+    // for a longer window so residual room echo/reverb does not leak through.
+    let echo_tail_ms: u64 = if state.aec_enabled { 3000 } else { 5000 };
     let echo_tail = std::time::Duration::from_millis(echo_tail_ms);
+    // Additional post-playback guard where very short utterances are rejected.
+    // This targets ghost backchannels like "yeah"/"mm-hmm" that can appear
+    // right after long playback.
+    let short_utterance_guard_ms: u64 = if state.aec_enabled { 5000 } else { 7000 };
+    let short_utterance_guard = std::time::Duration::from_millis(short_utterance_guard_ms);
+    const MIN_POST_PLAYBACK_SEGMENT_SECS: f32 = 0.5;
 
     let mut was_suppressing = false;
     let mut suppress_until: Option<std::time::Instant> = None;
+    let mut short_utterance_guard_until: Option<std::time::Instant> = None;
 
     loop {
         tokio::select! {
@@ -1108,7 +1113,9 @@ async fn run_vad_stage(
                                     state.assistant_speaking.load(Ordering::Relaxed)
                                     || state.assistant_generating.load(Ordering::Relaxed);
                                 if was_suppressing && !actively_suppressing {
-                                    suppress_until = Some(std::time::Instant::now() + echo_tail);
+                                    let now = std::time::Instant::now();
+                                    suppress_until = Some(now + echo_tail);
+                                    short_utterance_guard_until = Some(now + short_utterance_guard);
                                     // Flush the VAD buffer so audio accumulated
                                     // during assistant playback is discarded.
                                     // Without this, the VAD emits the buffered
@@ -1132,6 +1139,8 @@ async fn run_vad_stage(
                                 }
 
                                 let in_echo_tail = suppress_until
+                                    .is_some_and(|t| std::time::Instant::now() < t);
+                                let in_short_utterance_guard = short_utterance_guard_until
                                     .is_some_and(|t| std::time::Instant::now() < t);
 
                                 if out.speech_started {
@@ -1164,7 +1173,7 @@ async fn run_vad_stage(
                                 // spotter provides fast barge-in detection on
                                 // raw audio, bypassing VAD entirely.
                                 let allow_event =
-                                    !actively_suppressing && !in_echo_tail;
+                                    !actively_suppressing && !in_echo_tail && !in_short_utterance_guard;
                                 if let Some((captured_at, rms)) = emit
                                     && allow_event
                                 {
@@ -1189,6 +1198,15 @@ async fn run_vad_stage(
                                     if should_drop {
                                         info!(
                                             "dropping {duration_s:.1}s speech segment (echo suppression)"
+                                        );
+                                        continue;
+                                    }
+
+                                    if in_short_utterance_guard
+                                        && duration_s < MIN_POST_PLAYBACK_SEGMENT_SECS
+                                    {
+                                        info!(
+                                            "dropping {duration_s:.1}s speech segment (post-playback short-utterance guard)"
                                         );
                                         continue;
                                     }
@@ -1227,6 +1245,7 @@ async fn run_vad_stage(
 
                                     // Clear the tail once we accept a real segment.
                                     suppress_until = None;
+                                    short_utterance_guard_until = None;
 
                                     let vad_duration_ms = segment.started_at.elapsed().as_millis() as u64;
                                     info!(

@@ -246,6 +246,23 @@ pub enum AgentToolMode {
     FullNoApproval,
 }
 
+/// Voice-focused local model preset for the embedded LLM.
+///
+/// This controls the managed default GGUF model family used by Fae's voice
+/// pipeline. The actual `model_id`/`gguf_file` fields are derived from this
+/// preset when managed defaults are active.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceModelPreset {
+    /// Choose based on detected RAM (`>=32GiB` → 4B, otherwise 1.7B).
+    #[default]
+    Auto,
+    /// Force Qwen3 4B GGUF.
+    Qwen3_4b,
+    /// Force Qwen3 1.7B GGUF.
+    Qwen3_1_7b,
+}
+
 /// Runtime safety profile.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -386,6 +403,13 @@ pub struct LlmConfig {
     /// This enables image understanding capabilities.
     #[serde(default)]
     pub enable_vision: bool,
+    /// Managed voice model preset (`auto`, `qwen3_4b`, `qwen3_1_7b`).
+    ///
+    /// This is used to pick the default local GGUF voice model. When
+    /// `model_id` is one of Fae's managed defaults, this preset controls
+    /// which model is selected.
+    #[serde(default)]
+    pub voice_model_preset: VoiceModelPreset,
     /// Tool capability mode for the embedded agent harness.
     pub tool_mode: AgentToolMode,
     /// Maximum tokens to generate per response.
@@ -437,9 +461,11 @@ pub struct LlmConfig {
 
 impl Default for LlmConfig {
     fn default() -> Self {
-        // Select the best embedded vision model based on available RAM.
+        // Select the managed voice model based on available RAM.
         let ram = crate::system_profile::detect_total_memory_bytes();
-        let (model_id, gguf_file, tokenizer_id, enable_vision) = recommended_local_model(ram);
+        let voice_model_preset = VoiceModelPreset::Auto;
+        let (model_id, gguf_file, tokenizer_id, enable_vision) =
+            recommended_local_model(ram, voice_model_preset);
 
         Self {
             backend: LlmBackend::default(),
@@ -447,6 +473,7 @@ impl Default for LlmConfig {
             gguf_file: gguf_file.to_owned(),
             tokenizer_id: tokenizer_id.to_owned(),
             enable_vision,
+            voice_model_preset,
             tool_mode: AgentToolMode::default(),
             max_tokens: 200,
             context_size_tokens: default_llm_context_size_tokens(),
@@ -473,30 +500,52 @@ fn default_llm_context_size_tokens() -> usize {
 
 /// Recommend a local LLM context window based on total system RAM.
 ///
-/// This is intentionally conservative to avoid over-allocating KV cache on
-/// smaller machines while allowing larger context windows on high-memory hosts.
+/// Voice interactions benefit more from lower first-token latency than from
+/// very large context windows. Keep defaults small to reduce KV cache pressure.
 pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize {
     const GIB: u64 = 1024 * 1024 * 1024;
     match total_memory_bytes {
-        Some(bytes) if bytes < 12 * GIB => 8_192,
-        Some(bytes) if bytes < 20 * GIB => 16_384,
-        Some(bytes) if bytes < 40 * GIB => 32_768,
-        Some(_) => 65_536,
-        None => 32_768,
+        Some(bytes) if bytes >= 32 * GIB => 16_384,
+        _ => 8_192,
     }
 }
 
 /// Recommended local model selection based on total system RAM.
 ///
 /// Returns a tuple of `(model_id, gguf_file, tokenizer_id, enable_vision)`.
-/// Both VL models use `VisionModelBuilder` (empty `gguf_file`, empty `tokenizer_id`).
+/// Managed defaults are text-only GGUF for low-latency voice conversations.
 pub fn recommended_local_model(
     total_memory_bytes: Option<u64>,
+    voice_model_preset: VoiceModelPreset,
 ) -> (&'static str, &'static str, &'static str, bool) {
     const GIB: u64 = 1024 * 1024 * 1024;
-    match total_memory_bytes {
-        Some(bytes) if bytes >= 24 * GIB => ("Qwen/Qwen3-VL-8B-Instruct", "", "", true),
-        _ => ("Qwen/Qwen3-VL-4B-Instruct", "", "", true),
+    match voice_model_preset {
+        VoiceModelPreset::Qwen3_4b => (
+            "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+            "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+            "Qwen/Qwen3-4B-Instruct-2507",
+            false,
+        ),
+        VoiceModelPreset::Qwen3_1_7b => (
+            "unsloth/Qwen3-1.7B-GGUF",
+            "Qwen3-1.7B-Q4_K_M.gguf",
+            "Qwen/Qwen3-1.7B",
+            false,
+        ),
+        VoiceModelPreset::Auto => match total_memory_bytes {
+            Some(bytes) if bytes >= 32 * GIB => (
+                "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+                "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+                "Qwen/Qwen3-4B-Instruct-2507",
+                false,
+            ),
+            _ => (
+                "unsloth/Qwen3-1.7B-GGUF",
+                "Qwen3-1.7B-Q4_K_M.gguf",
+                "Qwen/Qwen3-1.7B",
+                false,
+            ),
+        },
     }
 }
 
@@ -506,19 +555,28 @@ pub fn recommended_local_model(
 /// overwrites the LLM fields with the RAM-appropriate model. User-customised
 /// configs are left untouched.
 pub fn apply_ram_model_selection(llm: &mut LlmConfig) {
-    if is_managed_default_model_id(&llm.model_id) {
+    let should_manage = is_managed_default_model_id(&llm.model_id)
+        || !matches!(llm.voice_model_preset, VoiceModelPreset::Auto);
+    if should_manage {
         let ram = crate::system_profile::detect_total_memory_bytes();
-        let (model_id, gguf_file, tokenizer_id, enable_vision) = recommended_local_model(ram);
+        let (model_id, gguf_file, tokenizer_id, enable_vision) =
+            recommended_local_model(ram, llm.voice_model_preset);
+        let recommended_context = recommended_context_size_tokens(ram);
         tracing::debug!(
-            "RAM-based model selection: {} (vision={}), RAM={:?}",
+            "RAM-based voice model selection: {} (preset={:?}, vision={}, context={}, RAM={:?})",
             model_id,
+            llm.voice_model_preset,
             enable_vision,
-            ram
+            recommended_context,
+            ram,
         );
         llm.model_id = model_id.to_owned();
         llm.gguf_file = gguf_file.to_owned();
         llm.tokenizer_id = tokenizer_id.to_owned();
         llm.enable_vision = enable_vision;
+        if llm.context_size_tokens > recommended_context {
+            llm.context_size_tokens = recommended_context;
+        }
     }
 }
 
@@ -532,6 +590,7 @@ pub fn is_managed_default_model_id(model_id: &str) -> bool {
         model_id,
         "unsloth/Qwen3-4B-Instruct-2507-GGUF"
             | "MaziyarPanahi/Qwen3-4B-Instruct-GGUF"
+            | "unsloth/Qwen3-1.7B-GGUF"
             | "Qwen/Qwen3-VL-4B-Instruct"
             | "Qwen/Qwen3-VL-8B-Instruct"
     )
@@ -1480,10 +1539,10 @@ mod tests {
     fn recommended_context_size_tokens_scales_with_memory() {
         const GIB: u64 = 1024 * 1024 * 1024;
         assert_eq!(recommended_context_size_tokens(Some(8 * GIB)), 8_192);
-        assert_eq!(recommended_context_size_tokens(Some(16 * GIB)), 16_384);
-        assert_eq!(recommended_context_size_tokens(Some(32 * GIB)), 32_768);
-        assert_eq!(recommended_context_size_tokens(Some(64 * GIB)), 65_536);
-        assert_eq!(recommended_context_size_tokens(None), 32_768);
+        assert_eq!(recommended_context_size_tokens(Some(16 * GIB)), 8_192);
+        assert_eq!(recommended_context_size_tokens(Some(32 * GIB)), 16_384);
+        assert_eq!(recommended_context_size_tokens(Some(64 * GIB)), 16_384);
+        assert_eq!(recommended_context_size_tokens(None), 8_192);
     }
 
     #[test]
@@ -1852,38 +1911,50 @@ wake_word = "hey fae"
         assert_eq!(config.audio.input_sample_rate, 16000);
     }
 
-    // ── Vision / RAM model selection ────────────────────────────
+    // ── Voice model / RAM selection ─────────────────────────────
 
     #[test]
-    fn llm_config_default_enables_vision() {
+    fn llm_config_default_uses_text_only_managed_model() {
         let config = LlmConfig::default();
-        assert!(config.enable_vision);
-        assert!(config.gguf_file.is_empty());
-        assert!(config.tokenizer_id.is_empty());
-        assert!(config.model_id.contains("VL"));
+        assert!(!config.enable_vision);
+        assert!(!config.gguf_file.is_empty());
+        assert!(!config.tokenizer_id.is_empty());
+        assert!(config.model_id.contains("Qwen3"));
     }
 
     #[test]
-    fn recommended_local_model_selects_8b_for_high_ram() {
+    fn recommended_local_model_selects_4b_for_high_ram_auto() {
         const GIB: u64 = 1024 * 1024 * 1024;
-        let (model_id, _, _, vision) = recommended_local_model(Some(32 * GIB));
-        assert_eq!(model_id, "Qwen/Qwen3-VL-8B-Instruct");
-        assert!(vision);
+        let (model_id, gguf_file, tokenizer_id, vision) =
+            recommended_local_model(Some(32 * GIB), VoiceModelPreset::Auto);
+        assert_eq!(model_id, "unsloth/Qwen3-4B-Instruct-2507-GGUF");
+        assert_eq!(gguf_file, "Qwen3-4B-Instruct-2507-Q4_K_M.gguf");
+        assert_eq!(tokenizer_id, "Qwen/Qwen3-4B-Instruct-2507");
+        assert!(!vision);
     }
 
     #[test]
-    fn recommended_local_model_selects_4b_for_low_ram() {
+    fn recommended_local_model_selects_1_7b_for_low_ram_auto() {
         const GIB: u64 = 1024 * 1024 * 1024;
-        let (model_id, _, _, vision) = recommended_local_model(Some(16 * GIB));
-        assert_eq!(model_id, "Qwen/Qwen3-VL-4B-Instruct");
-        assert!(vision);
+        let (model_id, gguf_file, tokenizer_id, vision) =
+            recommended_local_model(Some(16 * GIB), VoiceModelPreset::Auto);
+        assert_eq!(model_id, "unsloth/Qwen3-1.7B-GGUF");
+        assert_eq!(gguf_file, "Qwen3-1.7B-Q4_K_M.gguf");
+        assert_eq!(tokenizer_id, "Qwen/Qwen3-1.7B");
+        assert!(!vision);
     }
 
     #[test]
-    fn recommended_local_model_selects_4b_for_unknown_ram() {
-        let (model_id, _, _, vision) = recommended_local_model(None);
-        assert_eq!(model_id, "Qwen/Qwen3-VL-4B-Instruct");
-        assert!(vision);
+    fn recommended_local_model_forced_presets_ignore_ram() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let (model_4b, _, _, vision_4b) =
+            recommended_local_model(Some(8 * GIB), VoiceModelPreset::Qwen3_4b);
+        let (model_1_7b, _, _, vision_1_7b) =
+            recommended_local_model(Some(96 * GIB), VoiceModelPreset::Qwen3_1_7b);
+        assert_eq!(model_4b, "unsloth/Qwen3-4B-Instruct-2507-GGUF");
+        assert_eq!(model_1_7b, "unsloth/Qwen3-1.7B-GGUF");
+        assert!(!vision_4b);
+        assert!(!vision_1_7b);
     }
 
     #[test]
@@ -1891,6 +1962,7 @@ wake_word = "hey fae"
         assert!(is_managed_default_model_id(
             "unsloth/Qwen3-4B-Instruct-2507-GGUF"
         ));
+        assert!(is_managed_default_model_id("unsloth/Qwen3-1.7B-GGUF"));
         assert!(is_managed_default_model_id("Qwen/Qwen3-VL-4B-Instruct"));
         assert!(is_managed_default_model_id("Qwen/Qwen3-VL-8B-Instruct"));
         assert!(!is_managed_default_model_id("custom/my-model"));

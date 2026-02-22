@@ -4,6 +4,7 @@
 //! -> continue. The [`AgentLoop`] struct ties together a provider adapter,
 //! tool registry, and configuration to drive multi-turn LLM interactions.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -123,6 +124,23 @@ impl AgentLoop {
     /// rather than requiring post-hoc emission.
     pub fn with_runtime_tx(mut self, tx: broadcast::Sender<RuntimeEvent>) -> Self {
         self.runtime_tx = Some(tx);
+        self
+    }
+
+    /// Restrict tool schemas exposed to the model for this loop instance.
+    ///
+    /// Execution still goes through the same registry; this only narrows the
+    /// advertised function-calling surface.
+    pub fn restrict_tools_to(mut self, allowed_names: &[String]) -> Self {
+        if allowed_names.is_empty() {
+            // No specific intent detected — keep all tools available so the
+            // model can still call any tool for ambiguous requests.
+            return self;
+        }
+
+        let allowed: HashSet<&str> = allowed_names.iter().map(String::as_str).collect();
+        self.tool_definitions
+            .retain(|tool| allowed.contains(tool.name.as_str()));
         self
     }
 

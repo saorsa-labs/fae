@@ -172,9 +172,9 @@ pub async fn initialize_models_with_progress(
     crate::fae_dirs::ensure_hf_home();
 
     let mut resolved_config = config.clone();
-    // Apply RAM-based model selection for managed default models.
-    // This upgrades default Qwen3-4B to Qwen3-VL based on available memory,
-    // but never overwrites user-customised model_id values.
+    // Apply RAM-based model selection for managed voice defaults.
+    // This picks between Qwen3 4B and 1.7B GGUF presets and leaves
+    // user-customized model IDs untouched.
     crate::config::apply_ram_model_selection(&mut resolved_config.llm);
 
     let config = &resolved_config;

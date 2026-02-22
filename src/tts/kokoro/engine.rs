@@ -9,7 +9,7 @@ use crate::error::{Result, SpeechError};
 use ort::session::Session;
 use ort::value::Tensor;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Maximum context length for Kokoro (including pad tokens).
 const MAX_CONTEXT: usize = 512;
@@ -43,10 +43,7 @@ impl KokoroTts {
     /// Returns an error if model loading or phonemizer init fails.
     pub fn from_paths(paths: super::download::KokoroPaths, config: &TtsConfig) -> Result<Self> {
         info!("loading Kokoro ONNX model");
-        let session = Session::builder()
-            .and_then(|b| b.with_intra_threads(4))
-            .and_then(|b| b.commit_from_file(&paths.model_onnx))
-            .map_err(|e| SpeechError::Tts(format!("failed to load Kokoro ONNX model: {e}")))?;
+        let session = build_kokoro_session(&paths.model_onnx)?;
 
         info!("loading tokenizer");
         let tokenizer = load_tokenizer(&paths.tokenizer_json)?;
@@ -66,13 +63,17 @@ impl KokoroTts {
             config.voice, config.model_variant
         );
 
-        Ok(Self {
+        let mut engine = Self {
             session,
             tokenizer,
             phonemizer,
             voice_styles,
             speed,
-        })
+        };
+        if let Err(e) = engine.prewarm() {
+            warn!("Kokoro prewarm failed (continuing): {e}");
+        }
+        Ok(engine)
     }
 
     /// Load the Kokoro engine.
@@ -216,6 +217,69 @@ impl KokoroTts {
 
         Ok(data.to_vec())
     }
+
+    /// Execute one tiny inference to warm session caches and reduce first-clause latency.
+    fn prewarm(&mut self) -> Result<()> {
+        if self.voice_styles.len() < 256 {
+            return Err(SpeechError::Tts(
+                "voice style tensor is too small for prewarm".to_owned(),
+            ));
+        }
+        let mut token_ids: Vec<i64> = vec![0];
+        if let Ok(encoding) = self.tokenizer.encode("a", false) {
+            token_ids.extend(encoding.get_ids().iter().map(|&id| id as i64));
+        }
+        token_ids.push(0);
+        if token_ids.len() > MAX_CONTEXT {
+            token_ids.truncate(MAX_CONTEXT);
+        }
+        if token_ids.len() < 2 {
+            token_ids = vec![0, 0];
+        }
+        let style = self.voice_styles[..256].to_vec();
+        let _ = self.run_inference(&token_ids, &style, self.speed)?;
+        info!("Kokoro prewarm complete");
+        Ok(())
+    }
+}
+
+fn build_kokoro_session(model_path: &std::path::Path) -> Result<Session> {
+    let builder = Session::builder()
+        .and_then(|b| b.with_intra_threads(4))
+        .map_err(|e| SpeechError::Tts(format!("failed to create ONNX session builder: {e}")))?;
+
+    #[cfg(target_os = "macos")]
+    let builder = {
+        let mut cache_dir = crate::fae_dirs::cache_dir();
+        cache_dir.push("onnx-coreml-kokoro");
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            warn!(
+                "failed to create CoreML cache dir {}: {e}",
+                cache_dir.display()
+            );
+        }
+
+        let coreml = ort::ep::CoreML::default()
+            .with_compute_units(ort::ep::coreml::ComputeUnits::All)
+            .with_model_cache_dir(cache_dir.display().to_string())
+            .build()
+            .error_on_failure();
+
+        match builder.clone().with_execution_providers([coreml]) {
+            Ok(b) => {
+                info!("Kokoro ONNX using CoreML execution provider");
+                b
+            }
+            Err(e) => {
+                warn!("CoreML execution provider unavailable, falling back to CPU: {e}");
+                builder
+            }
+        }
+    };
+
+    builder
+        .commit_from_file(model_path)
+        .map_err(|e| SpeechError::Tts(format!("failed to load Kokoro ONNX model: {e}")))
 }
 
 /// Load and patch the Kokoro tokenizer.

@@ -36,8 +36,7 @@ path = "src/bin/host_bridge.rs"
 default = []
 metal = ["mistralrs/metal"]
 tools = []
-# TTS ONNX execution provider features.
-coreml = ["ort/coreml"]
+# TTS ONNX execution provider features (CoreML always enabled on macOS via ort dep).
 directml = ["ort/directml"]
 cuda = ["ort/cuda"]
 # Voice cloning TTS backend (Fish Speech).
@@ -61,7 +60,7 @@ parakeet-rs = { version = "0.3", default-features = false, features = ["cpu"] }
 mistralrs = "0.7"
 
 # TTS (Kokoro-82M — single ONNX model, misaki-rs G2P phonemizer)
-ort = { version = "2.0.0-rc.11", features = ["half"] }
+ort = { version = "2.0.0-rc.11", features = ["half", "coreml"] }
 half = "2"
 hound = "3"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }

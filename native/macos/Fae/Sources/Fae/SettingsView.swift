@@ -25,7 +25,7 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
 
-            SettingsModelsTab()
+            SettingsModelsTab(commandSender: commandSender)
                 .environmentObject(pipelineAux)
                 .tabItem {
                     Label("Models", systemImage: "cpu")

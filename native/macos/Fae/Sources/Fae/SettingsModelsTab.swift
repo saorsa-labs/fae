@@ -2,7 +2,15 @@ import SwiftUI
 
 /// Models settings tab: pipeline status and model information.
 struct SettingsModelsTab: View {
+    var commandSender: HostCommandSender?
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
+    @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
+
+    private let voiceModelOptions: [(label: String, value: String, description: String)] = [
+        ("Auto (Recommended)", "auto", "Uses Qwen3-4B on systems with at least 32 GB RAM, otherwise Qwen3-1.7B."),
+        ("Qwen3-4B", "qwen3_4b", "Higher instruction quality, slightly slower."),
+        ("Qwen3-1.7B", "qwen3_1_7b", "Fastest local voice model.")
+    ]
 
     var body: some View {
         Form {
@@ -35,9 +43,24 @@ struct SettingsModelsTab: View {
 
             Section("LLM") {
                 modelRow(label: "Provider", value: "Local (Embedded)")
-                Text("LLM configuration is managed via config.toml.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Picker("Voice Model", selection: $voiceModelPreset) {
+                    ForEach(voiceModelOptions, id: \.value) { option in
+                        Text(option.label).tag(option.value)
+                    }
+                }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .onChange(of: voiceModelPreset) {
+                    commandSender?.sendCommand(
+                        name: "config.patch",
+                        payload: ["key": "llm.voice_model_preset", "value": voiceModelPreset]
+                    )
+                }
+
+                if let current = voiceModelOptions.first(where: { $0.value == voiceModelPreset }) {
+                    Text(current.description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)

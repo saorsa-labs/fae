@@ -3,7 +3,7 @@
 use crate::approval::ToolApprovalRequest;
 use crate::config::{
     AgentToolMode, LlmBackend, RuntimeConfig, RuntimeProfile, RuntimeRescueSavedLlmConfig,
-    SpeechConfig,
+    SpeechConfig, VoiceModelPreset,
 };
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
@@ -2541,6 +2541,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     "profile": guard.runtime.profile.as_str()
                 }
             })),
+            Some("llm.voice_model_preset") => Ok(serde_json::json!({
+                "llm": {
+                    "voice_model_preset": guard.llm.voice_model_preset
+                }
+            })),
             _ => Ok(serde_json::json!({})),
         }
     }
@@ -2586,6 +2591,29 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                         }
                         Err(_) => {
                             warn!(key, value = s, "config.patch: invalid tool_mode value");
+                        }
+                    }
+                }
+            }
+            "llm.voice_model_preset" | "voice_model_preset" => {
+                if let Some(s) = value.as_str() {
+                    match serde_json::from_value::<VoiceModelPreset>(serde_json::Value::String(
+                        s.to_owned(),
+                    )) {
+                        Ok(preset) => {
+                            let mut guard = self.lock_config()?;
+                            guard.llm.voice_model_preset = preset;
+                            crate::config::apply_ram_model_selection(&mut guard.llm);
+                            drop(guard);
+                            self.save_config()?;
+                            info!(?preset, "config.patch applied: llm.voice_model_preset");
+                        }
+                        Err(_) => {
+                            warn!(
+                                key,
+                                value = s,
+                                "config.patch: invalid llm.voice_model_preset value"
+                            );
                         }
                     }
                 }
@@ -2893,6 +2921,42 @@ mod tests {
 
         let result = handler.query_config_get(Some("runtime.profile")).unwrap();
         assert_eq!(result["runtime"]["profile"], "rescue");
+    }
+
+    #[test]
+    fn config_patch_voice_model_preset_updates_managed_llm_fields() {
+        let (handler, dir, _rt) = temp_handler();
+        let path = dir.path().join("config.toml");
+
+        handler
+            .request_config_patch("llm.voice_model_preset", &serde_json::json!("qwen3_1_7b"))
+            .unwrap();
+
+        {
+            let guard = handler.config.lock().unwrap();
+            assert_eq!(guard.llm.voice_model_preset, VoiceModelPreset::Qwen3_1_7b);
+            assert_eq!(guard.llm.model_id, "unsloth/Qwen3-1.7B-GGUF");
+            assert_eq!(guard.llm.gguf_file, "Qwen3-1.7B-Q4_K_M.gguf");
+            assert_eq!(guard.llm.tokenizer_id, "Qwen/Qwen3-1.7B");
+            assert!(!guard.llm.enable_vision);
+        }
+
+        let loaded = SpeechConfig::from_file(&path).unwrap();
+        assert_eq!(loaded.llm.voice_model_preset, VoiceModelPreset::Qwen3_1_7b);
+        assert_eq!(loaded.llm.model_id, "unsloth/Qwen3-1.7B-GGUF");
+    }
+
+    #[test]
+    fn config_get_voice_model_preset_returns_current_value() {
+        let (handler, _dir, _rt) = temp_handler();
+        handler
+            .request_config_patch("llm.voice_model_preset", &serde_json::json!("qwen3_4b"))
+            .unwrap();
+
+        let result = handler
+            .query_config_get(Some("llm.voice_model_preset"))
+            .unwrap();
+        assert_eq!(result["llm"]["voice_model_preset"], "qwen3_4b");
     }
 
     #[test]
