@@ -133,8 +133,11 @@ impl AgentLoop {
     /// advertised function-calling surface.
     pub fn restrict_tools_to(mut self, allowed_names: &[String]) -> Self {
         if allowed_names.is_empty() {
-            // No specific intent detected — keep all tools available so the
-            // model can still call any tool for ambiguous requests.
+            // No tool-intent keywords detected — strip ALL tools so the model
+            // generates a pure conversational response without tool-calling
+            // overhead. This dramatically reduces prompt size (14 tool schemas
+            // = ~2000 tokens) and prefill time.
+            self.tool_definitions.clear();
             return self;
         }
 

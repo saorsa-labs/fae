@@ -881,7 +881,7 @@ mod tests {
         let tools = select_tool_allowlist("How are you feeling today?");
         assert!(
             tools.is_empty(),
-            "plain chat should return empty allowlist (all tools stay available)"
+            "plain chat should return empty allowlist (strips all tools for speed)"
         );
     }
 

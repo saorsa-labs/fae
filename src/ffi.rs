@@ -23,7 +23,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::hint::black_box;
-use std::sync::Mutex;
+use std::sync::{Mutex, Once};
 
 use crate::host::channel::{HostCommandServer, command_channel_with_events};
 use crate::host::contract::{CommandEnvelope, EventEnvelope};
@@ -157,6 +157,46 @@ unsafe fn borrow_runtime<'a>(handle: *mut c_void) -> Option<&'a FaeRuntime> {
     Some(unsafe { &*(handle as *const FaeRuntime) })
 }
 
+// ── Tracing bootstrap ────────────────────────────────────────────────────
+
+/// Global once-guard for tracing subscriber initialisation.
+static TRACING_INIT: Once = Once::new();
+
+/// Set up a tracing subscriber that writes to a log file in the Fae data
+/// directory (`~/Library/Application Support/fae/fae.log` on macOS).
+///
+/// Uses `tracing-appender` non-blocking writer so `tracing::info!` calls
+/// never block the pipeline. The guard is intentionally leaked — the
+/// background I/O thread lives for the process lifetime.
+///
+/// If anything fails (directory creation, subscriber init), tracing events
+/// are silently discarded — the app still works, just without log output.
+fn init_file_tracing() {
+    TRACING_INIT.call_once(|| {
+        let Some(data_dir) = dirs::data_dir() else {
+            return;
+        };
+        let log_dir = data_dir.join("fae");
+        if std::fs::create_dir_all(&log_dir).is_err() {
+            return;
+        }
+
+        let file_appender = tracing_appender::rolling::never(&log_dir, "fae.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        // Leak the guard so the background writer lives for the process.
+        std::mem::forget(guard);
+
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(non_blocking)
+            .with_ansi(false)
+            .with_target(true)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
+}
+
 // ── Extern "C" functions ──────────────────────────────────────────────────
 
 /// Create a new Fae runtime from a JSON configuration string.
@@ -170,6 +210,9 @@ unsafe fn borrow_runtime<'a>(handle: *mut c_void) -> Option<&'a FaeRuntime> {
 /// JSON. The returned handle must eventually be passed to `fae_core_destroy`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fae_core_init(config_json: *const c_char) -> *mut c_void {
+    // Bootstrap tracing — writes to ~/Library/Application Support/fae/fae.log.
+    init_file_tracing();
+
     // Anchor the keep-alive symbol so the linker retains all subsystem code.
     // See `linker_anchor.rs` for details on why this is necessary.
     black_box(crate::linker_anchor::fae_keep_alive as *const () as usize);

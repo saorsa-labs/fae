@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -115,6 +116,11 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             "building mistralrs request with {} messages",
             messages.len()
         );
+
+        // Inject /no_think into the first system message to suppress Qwen3
+        // internal reasoning. The enable_thinking(false) API flag alone is
+        // insufficient for some GGUF model templates.
+        let mut injected_no_think = false;
         for msg in messages {
             tracing::debug!(role = ?msg.role, content_type = ?std::mem::discriminant(&msg.content), "adding message");
             match (&msg.role, &msg.content) {
@@ -174,7 +180,7 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                         }
                         crate::fae_llm::providers::message::Role::Tool => continue,
                     };
-                    let text = match content {
+                    let mut text = match content {
                         crate::fae_llm::providers::message::MessageContent::Text { text } => {
                             text.clone()
                         }
@@ -183,6 +189,11 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                             ..
                         } => content.clone(),
                     };
+                    // Prepend /no_think to the first system message.
+                    if mistral_role == mistralrs::TextMessageRole::System && !injected_no_think {
+                        text = format!("/no_think\n\n{text}");
+                        injected_no_think = true;
+                    }
                     request = request.add_message(mistral_role, &text);
                 }
             }
@@ -295,15 +306,47 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             let mut has_tool_calls = false;
             let mut last_finish_reason: Option<String> = None;
             let mut event_count: usize = 1; // StreamStart already sent
+            let gen_start = Instant::now();
+            let mut first_visible = false;
+            let mut reasoning_events: usize = 0;
 
             while let Some(response) = mistral_stream.next().await {
                 match response {
                     mistralrs::Response::Chunk(chunk) => {
                         if let Some(choice) = chunk.choices.first() {
+                            // Track reasoning-only tokens (Qwen3 think mode).
+                            let has_reasoning = choice
+                                .delta
+                                .reasoning_content
+                                .as_ref()
+                                .is_some_and(|r| !r.is_empty());
+                            let has_content =
+                                choice.delta.content.as_ref().is_some_and(|c| !c.is_empty());
+
+                            if has_reasoning && !has_content {
+                                reasoning_events += 1;
+                                if reasoning_events == 1 {
+                                    tracing::info!(
+                                        "model started emitting reasoning tokens \
+                                         (thinking mode active despite enable_thinking=false)"
+                                    );
+                                }
+                            }
+
                             // Forward text content delta immediately
                             if let Some(ref content) = choice.delta.content
                                 && !content.is_empty()
                             {
+                                if !first_visible {
+                                    first_visible = true;
+                                    let ttft = gen_start.elapsed();
+                                    tracing::info!(
+                                        "first visible token in {:.1}s \
+                                         (after {} reasoning-only events)",
+                                        ttft.as_secs_f64(),
+                                        reasoning_events,
+                                    );
+                                }
                                 event_count += 1;
                                 if tx
                                     .send(LlmEvent::TextDelta {
@@ -462,10 +505,13 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             };
 
             tracing::info!(
-                "mistralrs response complete: {} events, finish_reason={}, has_tool_calls={}",
+                "mistralrs response complete: {} events in {:.1}s, \
+                 finish_reason={}, has_tool_calls={}, reasoning_events={}",
                 event_count,
+                gen_start.elapsed().as_secs_f64(),
                 finish_reason,
                 has_tool_calls,
+                reasoning_events,
             );
 
             let _ = tx.send(LlmEvent::StreamEnd { finish_reason }).await;
