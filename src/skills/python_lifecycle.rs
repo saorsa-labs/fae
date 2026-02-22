@@ -28,6 +28,7 @@ use super::error::PythonSkillError;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 // ── Status enum ──────────────────────────────────────────────────────────────
 
@@ -286,6 +287,21 @@ pub(crate) fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn sync_mutation_manifest_from_python_lifecycle(action: &str, reason: Option<&str>) {
+    let event = crate::mutation_manifest::MutationSyncEvent::new(
+        "skills.python_lifecycle",
+        action,
+        reason.map(str::to_owned),
+    );
+    if let Err(e) = crate::mutation_manifest::sync_mutation_manifest(event) {
+        warn!(
+            action,
+            error = %e,
+            "python lifecycle: failed to sync mutation manifest"
+        );
+    }
+}
+
 // ── Transition helper ─────────────────────────────────────────────────────────
 
 /// Validates and applies a status transition on a registry entry.
@@ -459,6 +475,7 @@ pub fn install_python_skill_at(
 
     registry.upsert(record.clone());
     save_python_registry(paths, &registry)?;
+    sync_mutation_manifest_from_python_lifecycle("skill.python.install", None);
 
     Ok(PythonSkillInfo::from(&record))
 }
@@ -490,7 +507,12 @@ pub fn advance_python_skill_status_at(
         });
     };
     apply_status_transition(entry, new_status)?;
-    save_python_registry(paths, &registry)
+    save_python_registry(paths, &registry)?;
+    sync_mutation_manifest_from_python_lifecycle(
+        "skill.python.advance_status",
+        Some(&new_status.to_string()),
+    );
+    Ok(())
 }
 
 /// Disables a Python skill.
@@ -528,7 +550,9 @@ pub fn disable_python_skill_at(
     }
 
     apply_status_transition(entry, PythonSkillStatus::Disabled)?;
-    save_python_registry(paths, &registry)
+    save_python_registry(paths, &registry)?;
+    sync_mutation_manifest_from_python_lifecycle("skill.python.disable", None);
+    Ok(())
 }
 
 /// Quarantines a Python skill and records the error reason.
@@ -568,7 +592,9 @@ pub fn quarantine_python_skill_at(
     apply_status_transition(entry, PythonSkillStatus::Quarantined)?;
     entry.last_error = Some(reason.to_owned());
     entry.updated_at = now_secs();
-    save_python_registry(paths, &registry)
+    save_python_registry(paths, &registry)?;
+    sync_mutation_manifest_from_python_lifecycle("skill.python.quarantine", Some(reason));
+    Ok(())
 }
 
 /// Activates (or reactivates) a Python skill.
@@ -629,7 +655,9 @@ pub fn activate_python_skill_at(
     apply_status_transition(entry, PythonSkillStatus::Active)?;
     entry.last_error = None;
     entry.updated_at = now_secs();
-    save_python_registry(paths, &registry)
+    save_python_registry(paths, &registry)?;
+    sync_mutation_manifest_from_python_lifecycle("skill.python.activate", None);
+    Ok(())
 }
 
 /// Rolls a Python skill back to its last-known-good snapshot.
@@ -690,7 +718,9 @@ pub fn rollback_python_skill_at(
     entry.status = PythonSkillStatus::Active;
     entry.last_error = None;
     entry.updated_at = now_secs();
-    save_python_registry(paths, &registry)
+    save_python_registry(paths, &registry)?;
+    sync_mutation_manifest_from_python_lifecycle("skill.python.rollback", None);
+    Ok(())
 }
 
 /// Returns information about all registered Python skills.

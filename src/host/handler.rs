@@ -2,7 +2,8 @@
 
 use crate::approval::ToolApprovalRequest;
 use crate::config::{
-    AgentToolMode, LlmBackend, RuntimeProfile, RuntimeRescueSavedLlmConfig, SpeechConfig,
+    AgentToolMode, LlmBackend, RuntimeConfig, RuntimeProfile, RuntimeRescueSavedLlmConfig,
+    SpeechConfig,
 };
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
@@ -207,6 +208,25 @@ impl FaeDeviceTransferHandler {
         let envelope =
             EventEnvelope::new(uuid::Uuid::new_v4().to_string(), event.to_owned(), payload);
         let _ = self.event_tx.send(envelope);
+    }
+
+    /// Best-effort mutation-manifest sync.
+    ///
+    /// Failures are logged but never block command handling.
+    fn sync_mutation_manifest(&self, source: &str, action: &str, reason: Option<&str>) {
+        let event = crate::mutation_manifest::MutationSyncEvent::new(
+            source,
+            action,
+            reason.map(str::to_owned),
+        );
+        if let Err(e) = crate::mutation_manifest::sync_mutation_manifest(event) {
+            warn!(
+                source,
+                action,
+                error = %e,
+                "failed to sync mutation manifest"
+            );
+        }
     }
 
     /// Read the current pipeline state.
@@ -1226,6 +1246,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
     fn reload_skills(&self) -> Result<()> {
         info!("skills.reload — re-scanning custom skills directory");
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skills.reload", None);
         Ok(())
     }
 
@@ -1307,6 +1328,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let info = crate::skills::install_python_skill(package_dir)
             .map_err(|e| SpeechError::Config(format!("skill.python.install failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.install", None);
         Ok(info)
     }
 
@@ -1316,6 +1338,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::disable_python_skill(skill_id)
             .map_err(|e| SpeechError::Config(format!("skill.python.disable failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.disable", None);
         Ok(())
     }
 
@@ -1325,6 +1348,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::activate_python_skill(skill_id)
             .map_err(|e| SpeechError::Config(format!("skill.python.activate failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.activate", None);
         Ok(())
     }
 
@@ -1334,6 +1358,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::quarantine_python_skill(skill_id, reason)
             .map_err(|e| SpeechError::Config(format!("skill.python.quarantine failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.quarantine", Some(reason));
         Ok(())
     }
 
@@ -1343,6 +1368,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::rollback_python_skill(skill_id)
             .map_err(|e| SpeechError::Config(format!("skill.python.rollback failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.rollback", None);
         Ok(())
     }
 
@@ -1356,6 +1382,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::advance_python_skill_status(skill_id, status)
             .map_err(|e| SpeechError::Config(format!("skill.python.advance_status failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest(
+            "host.command",
+            "skill.python.advance_status",
+            Some(&status.to_string()),
+        );
         Ok(())
     }
 
@@ -1515,6 +1546,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     )
                     .map_err(|e| SpeechError::Config(format!("skill install failed: {e}")))?;
                     self.invalidate_skill_discovery_cache();
+                    self.sync_mutation_manifest(
+                        "host.command",
+                        "skill.generate.install",
+                        Some("proposal_confirmed"),
+                    );
                     Ok(serde_json::json!({
                         "status": "installed",
                         "skill_id": info.id,
@@ -1522,6 +1558,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     }))
                 } else {
                     // Return proposal for review.
+                    self.sync_mutation_manifest(
+                        "host.command",
+                        "skill.generate.propose",
+                        Some("proposal_staged"),
+                    );
                     let proposal_json = serde_json::to_value(&proposal).map_err(|e| {
                         SpeechError::Config(format!("failed to serialize proposal: {e}"))
                     })?;
@@ -1670,6 +1711,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let python_skills_dir = crate::fae_dirs::python_skills_dir();
         let info = channel_templates::install_channel_skill(ct, &python_skills_dir)
             .map_err(|e| SpeechError::Config(format!("failed to install channel skill: {e}")))?;
+        self.sync_mutation_manifest("host.command", "skill.channel.install", Some(channel_type));
 
         Ok(serde_json::json!({
             "installed": true,
@@ -1759,6 +1801,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         // Auto-activate rescue profile after repeated crash restarts.
         let restart_count = self.restart_count_for_start();
         let _ = self.maybe_activate_rescue_profile_for_restart_pressure(restart_count)?;
+        self.sync_mutation_manifest("host.runtime", "runtime.start_scan", None);
 
         if let Ok(mut guard) = self.pipeline_state.lock() {
             *guard = PipelineState::Starting;
@@ -2266,18 +2309,16 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             result["pipeline_mode"] = serde_json::json!(mode.to_string());
         }
 
-        let (profile, restart_threshold, timeout_minutes, entered_at_secs) = self
+        let runtime_config = self
             .config
             .lock()
-            .map(|g| {
-                (
-                    g.runtime.profile,
-                    g.runtime.rescue_restart_threshold,
-                    g.runtime.rescue_auto_exit_minutes,
-                    g.runtime.rescue_entered_at_secs,
-                )
-            })
-            .unwrap_or((RuntimeProfile::Standard, 3, 10, None));
+            .map(|g| g.runtime.clone())
+            .unwrap_or_else(|_| RuntimeConfig::default());
+
+        let profile = runtime_config.profile;
+        let restart_threshold = runtime_config.rescue_restart_threshold;
+        let timeout_minutes = runtime_config.rescue_auto_exit_minutes;
+        let entered_at_secs = runtime_config.rescue_entered_at_secs;
         let rescue_health = Self::rescue_health_json(
             RescueHealthInputs {
                 profile,
@@ -2291,6 +2332,46 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             Self::now_epoch_secs(),
         );
         result["rescue_health"] = rescue_health;
+
+        match crate::kernel_signature::run_kernel_signature_check(&runtime_config) {
+            Ok(report) => match serde_json::to_value(report) {
+                Ok(value) => {
+                    result["kernel_signature"] = value;
+                }
+                Err(e) => {
+                    result["kernel_signature"] = serde_json::json!({
+                        "status": "serialization_error",
+                        "error": format!("{e}"),
+                    });
+                }
+            },
+            Err(e) => {
+                result["kernel_signature"] = serde_json::json!({
+                    "status": "error",
+                    "error": format!("{e}"),
+                });
+            }
+        }
+
+        match crate::mutation_manifest::summarize_mutation_manifest() {
+            Ok(summary) => match serde_json::to_value(summary) {
+                Ok(value) => {
+                    result["mutation_manifest"] = value;
+                }
+                Err(e) => {
+                    result["mutation_manifest"] = serde_json::json!({
+                        "status": "serialization_error",
+                        "error": format!("{e}"),
+                    });
+                }
+            },
+            Err(e) => {
+                result["mutation_manifest"] = serde_json::json!({
+                    "status": "error",
+                    "error": format!("{e}"),
+                });
+            }
+        }
 
         Ok(result)
     }
@@ -3241,6 +3322,12 @@ mod tests {
         let rescue_health = status
             .get("rescue_health")
             .expect("runtime status should include rescue_health");
+        let kernel_signature = status
+            .get("kernel_signature")
+            .expect("runtime status should include kernel_signature");
+        let mutation_manifest = status
+            .get("mutation_manifest")
+            .expect("runtime status should include mutation_manifest");
 
         assert_eq!(rescue_health["profile"], "standard");
         assert_eq!(rescue_health["state"], "stable");
@@ -3248,6 +3335,11 @@ mod tests {
         assert_eq!(rescue_health["restart_count_fail_safe"], false);
         assert_eq!(rescue_health["should_enter_rescue"], false);
         assert_eq!(rescue_health["should_exit_rescue"], false);
+        assert_eq!(kernel_signature["status"], "disabled");
+        assert!(
+            mutation_manifest.get("artifact_count").is_some(),
+            "mutation manifest summary should include artifact_count"
+        );
     }
 
     #[test]

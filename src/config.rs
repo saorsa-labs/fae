@@ -261,6 +261,19 @@ impl RuntimeProfile {
     }
 }
 
+/// Policy mode for optional kernel signature verification.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelSignatureMode {
+    /// Signature checks disabled.
+    #[default]
+    Off,
+    /// Report signature failures but continue startup.
+    Warn,
+    /// Block startup when required signatures fail.
+    Enforce,
+}
+
 /// Runtime safety configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -283,6 +296,11 @@ pub struct RuntimeConfig {
     /// Persisted so returning to `standard` can restore the user's choices.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rescue_saved_llm: Option<RuntimeRescueSavedLlmConfig>,
+    /// Signature verification policy for protected-kernel modules/binaries.
+    pub kernel_signature_mode: KernelSignatureMode,
+    /// Optional explicit path to a kernel signature manifest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel_signature_manifest: Option<PathBuf>,
 }
 
 /// Saved LLM settings captured before rescue mode overrides are applied.
@@ -312,6 +330,8 @@ impl Default for RuntimeConfig {
             rescue_auto_exit_minutes: 10,
             rescue_entered_at_secs: None,
             rescue_saved_llm: None,
+            kernel_signature_mode: KernelSignatureMode::Off,
+            kernel_signature_manifest: None,
         }
     }
 }
@@ -2018,6 +2038,8 @@ enabled = true
         assert_eq!(cfg.runtime.rescue_auto_exit_minutes, 10);
         assert!(cfg.runtime.rescue_entered_at_secs.is_none());
         assert!(cfg.runtime.rescue_saved_llm.is_none());
+        assert_eq!(cfg.runtime.kernel_signature_mode, KernelSignatureMode::Off);
+        assert!(cfg.runtime.kernel_signature_manifest.is_none());
     }
 
     #[test]
@@ -2033,6 +2055,8 @@ rescue_restart_threshold = 4
         assert_eq!(cfg.runtime.rescue_auto_exit_minutes, 10);
         assert!(cfg.runtime.rescue_entered_at_secs.is_none());
         assert!(cfg.runtime.rescue_saved_llm.is_none());
+        assert_eq!(cfg.runtime.kernel_signature_mode, KernelSignatureMode::Off);
+        assert!(cfg.runtime.kernel_signature_manifest.is_none());
     }
 
     #[test]
@@ -2068,5 +2092,23 @@ rescue_entered_at_secs = 1700000000
         assert_eq!(cfg.runtime.profile, RuntimeProfile::Rescue);
         assert_eq!(cfg.runtime.rescue_auto_exit_minutes, 12);
         assert_eq!(cfg.runtime.rescue_entered_at_secs, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn runtime_profile_parses_kernel_signature_settings() {
+        let toml_str = r#"
+[runtime]
+kernel_signature_mode = "enforce"
+kernel_signature_manifest = "/tmp/kernel-signatures.toml"
+"#;
+        let cfg: SpeechConfig = toml::from_str(toml_str).expect("parse runtime config");
+        assert_eq!(
+            cfg.runtime.kernel_signature_mode,
+            KernelSignatureMode::Enforce
+        );
+        assert_eq!(
+            cfg.runtime.kernel_signature_manifest,
+            Some(std::path::PathBuf::from("/tmp/kernel-signatures.toml"))
+        );
     }
 }

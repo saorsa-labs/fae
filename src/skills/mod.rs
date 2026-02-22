@@ -249,6 +249,21 @@ fn now_epoch_secs() -> u64 {
     }
 }
 
+fn sync_mutation_manifest_from_managed_skills(action: &str, reason: Option<&str>) {
+    let event = crate::mutation_manifest::MutationSyncEvent::new(
+        "skills.managed_lifecycle",
+        action,
+        reason.map(str::to_owned),
+    );
+    if let Err(e) = crate::mutation_manifest::sync_mutation_manifest(event) {
+        tracing::warn!(
+            action,
+            error = %e,
+            "managed skills: failed to sync mutation manifest"
+        );
+    }
+}
+
 /// Returns the directory where user-created skills are stored.
 ///
 /// Override for local tooling via `FAE_SKILLS_DIR=/path/to/skills`.
@@ -457,6 +472,7 @@ fn install_skill_package_at(
 
     registry.upsert(record.clone());
     save_registry(paths, &registry)?;
+    sync_mutation_manifest_from_managed_skills("skill.managed.install", None);
 
     Ok(ManagedSkillInfo::from(&record))
 }
@@ -500,7 +516,16 @@ fn set_skill_state(
     entry.last_error = last_error;
     entry.updated_at = now_epoch_secs();
 
-    save_registry(&paths, &registry)
+    save_registry(&paths, &registry)?;
+    sync_mutation_manifest_from_managed_skills(
+        "skill.managed.set_state",
+        Some(match state {
+            ManagedSkillState::Active => "active",
+            ManagedSkillState::Disabled => "disabled",
+            ManagedSkillState::Quarantined => "quarantined",
+        }),
+    );
+    Ok(())
 }
 
 /// Re-activate a managed skill.
@@ -537,7 +562,9 @@ pub fn activate_skill(skill_id: &str) -> crate::Result<()> {
     entry.state = ManagedSkillState::Active;
     entry.last_error = None;
     entry.updated_at = now_epoch_secs();
-    save_registry(&paths, &registry)
+    save_registry(&paths, &registry)?;
+    sync_mutation_manifest_from_managed_skills("skill.managed.activate", None);
+    Ok(())
 }
 
 /// Roll back a managed skill to its last-known-good snapshot.
@@ -578,7 +605,9 @@ fn rollback_skill_at(paths: &SkillPaths, skill_id: &str) -> crate::Result<()> {
     entry.last_error = None;
     entry.updated_at = now_epoch_secs();
 
-    save_registry(paths, &registry)
+    save_registry(paths, &registry)?;
+    sync_mutation_manifest_from_managed_skills("skill.managed.rollback", None);
+    Ok(())
 }
 
 fn move_file(from: &Path, to: &Path) -> crate::Result<()> {
