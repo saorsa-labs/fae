@@ -82,7 +82,7 @@ struct NativeOrbView: View {
         let pInfluence: Float = isHovering ? 1.0 : 0.0
 
         Rectangle()
-            .fill(Color.black)
+            .fill(Color.black.opacity(0.001))
             .colorEffect(
                 Self.shaderLib.fogCloudOrb(
                     // Time & geometry

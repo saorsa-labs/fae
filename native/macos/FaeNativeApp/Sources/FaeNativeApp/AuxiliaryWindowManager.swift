@@ -383,16 +383,15 @@ final class AuxiliaryWindowManager: ObservableObject {
     private func makeUtilityPanel(size: NSSize, title: String, delegate: PanelCloseDelegate) -> NSPanel {
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
+            styleMask: [.borderless, .utilityWindow, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
         panel.title = title
-        panel.titlebarAppearsTransparent = true
-        panel.titleVisibility = .hidden
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
+        panel.isMovableByWindowBackground = true
         panel.level = .floating
         panel.backgroundColor = NSColor(red: 0.06, green: 0.063, blue: 0.075, alpha: 0.95)
         panel.hasShadow = true

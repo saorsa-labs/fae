@@ -91,6 +91,10 @@ doc:
 clean:
     cargo clean
 
+# Clean native Swift build artifacts (prevents stale code/artifacts)
+clean-native:
+    rm -rf native/macos/FaeNativeApp/.build
+
 # Build libfae static library for macOS arm64 (for Swift embedding)
 build-staticlib:
     cargo build --release --no-default-features --target aarch64-apple-darwin
@@ -195,8 +199,9 @@ setup-signing-keychain:
 run-native: build-native-swift _bundle-app _sign-bundle
     open "{{_app_bundle}}"
 
-# Build the Swift app, create .app bundle, and sign it (without launching).
-bundle-native: build-native-swift _bundle-app _sign-bundle
+# Build the Swift app, create .app bundle, sign, and verify it (without launching).
+# Always cleans the Swift build first to prevent stale artifacts.
+bundle-native: clean-native build-native-swift _bundle-app _sign-bundle _verify-bundle
     @echo "✓ Signed bundle ready: {{_app_bundle}}"
 
 # (internal) Assemble the .app bundle from the SPM debug build.
@@ -206,9 +211,19 @@ _bundle-app:
     BUILD="{{_build_dir}}"
     BUNDLE="{{_app_bundle}}"
     rm -rf "$BUNDLE"
-    mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Frameworks"
+    mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Frameworks" "$BUNDLE/Contents/Resources"
     cp "$BUILD/FaeNativeApp" "$BUNDLE/Contents/MacOS/FaeNativeApp"
     cp -R "$BUILD/Sparkle.framework" "$BUNDLE/Contents/Frameworks/"
+    # Copy SPM resource bundle (contains Metal shaders, icons, help HTML).
+    # Without this, the frosted-glass orb shader fails to load and the window is solid black.
+    RESOURCE_BUNDLE="$BUILD/FaeNativeApp_FaeNativeApp.bundle"
+    if [ -d "$RESOURCE_BUNDLE" ]; then
+        cp -R "$RESOURCE_BUNDLE" "$BUNDLE/Contents/Resources/"
+        echo "  → Copied resource bundle (metallib, icons, help)"
+    else
+        echo "WARNING: Resource bundle not found at $RESOURCE_BUNDLE"
+        echo "         Metal shaders will not load — window will be black."
+    fi
     install_name_tool -add_rpath "@executable_path/../Frameworks" \
         "$BUNDLE/Contents/MacOS/FaeNativeApp" 2>/dev/null || true
     cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
@@ -269,3 +284,61 @@ _sign-bundle:
         --entitlements "$ENT" "$BUNDLE"
     echo "✓ Signed: $BUNDLE"
     codesign --verify --verbose "$BUNDLE" 2>&1 | tail -2
+
+# (internal) Verify the .app bundle has all required components.
+# Prevents regressions like missing Metal shaders causing black window.
+_verify-bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUNDLE="{{_app_bundle}}"
+    ERRORS=0
+    echo "Verifying bundle integrity…"
+    # 1. Executable exists
+    if [ ! -f "$BUNDLE/Contents/MacOS/FaeNativeApp" ]; then
+        echo "  ✗ FAIL: Missing executable"
+        ERRORS=$((ERRORS+1))
+    else
+        echo "  ✓ Executable present"
+    fi
+    # 2. Resource bundle with Metal shader
+    METALLIB="$BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle/default.metallib"
+    if [ ! -f "$METALLIB" ]; then
+        echo "  ✗ FAIL: Missing Metal shader (default.metallib)"
+        echo "         Window will show solid black without this."
+        ERRORS=$((ERRORS+1))
+    else
+        echo "  ✓ Metal shader present ($(du -h "$METALLIB" | cut -f1))"
+    fi
+    # 3. App icon
+    ICON="$BUNDLE/Contents/Resources/FaeNativeApp_FaeNativeApp.bundle/AppIconFace.jpg"
+    if [ ! -f "$ICON" ]; then
+        echo "  ⚠ WARNING: Missing app icon (AppIconFace.jpg)"
+    else
+        echo "  ✓ App icon present"
+    fi
+    # 4. Sparkle framework
+    if [ ! -d "$BUNDLE/Contents/Frameworks/Sparkle.framework" ]; then
+        echo "  ✗ FAIL: Missing Sparkle.framework"
+        ERRORS=$((ERRORS+1))
+    else
+        echo "  ✓ Sparkle framework present"
+    fi
+    # 5. Info.plist
+    if [ ! -f "$BUNDLE/Contents/Info.plist" ]; then
+        echo "  ✗ FAIL: Missing Info.plist"
+        ERRORS=$((ERRORS+1))
+    else
+        echo "  ✓ Info.plist present"
+    fi
+    # 6. Code signature valid
+    if ! codesign --verify "$BUNDLE" 2>/dev/null; then
+        echo "  ✗ FAIL: Code signature invalid"
+        ERRORS=$((ERRORS+1))
+    else
+        echo "  ✓ Code signature valid"
+    fi
+    if [ "$ERRORS" -gt 0 ]; then
+        echo "BUNDLE VERIFICATION FAILED: $ERRORS error(s)"
+        exit 1
+    fi
+    echo "✓ Bundle verification passed"

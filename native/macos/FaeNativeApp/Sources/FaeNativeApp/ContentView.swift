@@ -20,8 +20,6 @@ struct ContentView: View {
             if !onboarding.isStateRestored || !onboarding.isComplete {
                 // Transparent surface while onboarding state is being restored
                 // or while the separate onboarding window is active.
-                // The main window is hidden during onboarding anyway.
-                // Using Color.clear so the frosted-glass blur shows through.
                 Color.clear
                     .ignoresSafeArea()
             } else {
@@ -30,18 +28,16 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // SwiftUI-native frosted glass — .ultraThinMaterial in dark mode.
+        // The window is frameless (.borderless) so there is no title bar
+        // to interfere with the material blur.
+        .background(.ultraThinMaterial, ignoresSafeAreaEdges: .all)
+        .preferredColorScheme(.dark)
         .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
-        // Frosted-glass background using NSVisualEffectView inside SwiftUI's
-        // own view hierarchy. Immune to AppKit contentView manipulation.
-        .background(
-            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
-                .ignoresSafeArea()
-        )
         .background(
             NSWindowAccessor { window in
                 // Setting the window triggers WindowStateController's didSet
-                // which enforces compact size and sets up the title-bar hover
-                // tracker. Frosted glass is handled by VisualEffectBlur above.
+                // which configures the frameless window style and transparency.
                 windowState.window = window
             }
         )
@@ -139,9 +135,6 @@ struct ContentView: View {
                     showOrbContextMenu()
                 }
             )
-            // Inset the orb below the title bar so the frosted-glass
-            // background shows through the transparent title bar region.
-            .padding(.top, 28)
             .opacity(viewLoaded ? 1 : 0)
 
             // Only show overlays in compact mode (not collapsed 80×80 orb)
