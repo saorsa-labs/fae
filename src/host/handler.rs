@@ -52,6 +52,16 @@ struct SkillDiscoveryCacheState {
     rebuild_count: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RescueHealthInputs {
+    profile: RuntimeProfile,
+    restart_count: u32,
+    restart_threshold: u32,
+    timeout_minutes: u32,
+    entered_at_secs: Option<u64>,
+    pipeline_error: bool,
+}
+
 /// Production device transfer handler that persists permission grants and
 /// onboarding state to `config.toml`.
 ///
@@ -357,6 +367,77 @@ impl FaeDeviceTransferHandler {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
+    }
+
+    fn rescue_health_json(inputs: RescueHealthInputs, now_secs: u64) -> serde_json::Value {
+        let mut score: i32 = 100;
+        let mut reasons: Vec<&'static str> = Vec::new();
+
+        if inputs.pipeline_error {
+            score -= 35;
+            reasons.push("pipeline_error");
+        }
+
+        let threshold = inputs.restart_threshold.max(1);
+        if inputs.restart_count >= threshold {
+            score -= 40;
+            reasons.push("restart_threshold_reached");
+        } else if inputs.restart_count.saturating_mul(100) >= threshold.saturating_mul(66) {
+            score -= 25;
+            reasons.push("restart_pressure_high");
+        } else if inputs.restart_count > 0 {
+            score -= 10;
+            reasons.push("restart_pressure_present");
+        }
+
+        if inputs.profile == RuntimeProfile::Rescue {
+            score = score.min(35);
+            reasons.push("rescue_mode_active");
+        }
+
+        let timeout_secs = u64::from(inputs.timeout_minutes).saturating_mul(60);
+        let auto_exit_in_secs = if inputs.profile == RuntimeProfile::Rescue && timeout_secs > 0 {
+            inputs.entered_at_secs.map(|entered| {
+                let elapsed = now_secs.saturating_sub(entered);
+                timeout_secs.saturating_sub(elapsed)
+            })
+        } else {
+            None
+        };
+
+        let should_enter_rescue = inputs.profile == RuntimeProfile::Standard
+            && inputs.restart_threshold > 0
+            && inputs.restart_count >= inputs.restart_threshold;
+        let should_exit_rescue = inputs.profile == RuntimeProfile::Rescue
+            && timeout_secs > 0
+            && inputs
+                .entered_at_secs
+                .is_some_and(|entered| now_secs.saturating_sub(entered) >= timeout_secs);
+
+        let state = if inputs.profile == RuntimeProfile::Rescue {
+            "rescue"
+        } else if score >= 80 {
+            "stable"
+        } else if score >= 50 {
+            "degraded"
+        } else {
+            "critical"
+        };
+
+        let score = score.clamp(0, 100);
+        serde_json::json!({
+            "score": score,
+            "state": state,
+            "profile": inputs.profile.as_str(),
+            "restart_count": inputs.restart_count,
+            "restart_threshold": inputs.restart_threshold,
+            "should_enter_rescue": should_enter_rescue,
+            "should_exit_rescue": should_exit_rescue,
+            "timeout_minutes": inputs.timeout_minutes,
+            "entered_at_secs": inputs.entered_at_secs,
+            "auto_exit_in_secs": auto_exit_in_secs,
+            "reasons": reasons,
+        })
     }
 
     /// Persist a runtime profile transition audit record.
@@ -2176,6 +2257,32 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             result["pipeline_mode"] = serde_json::json!(mode.to_string());
         }
 
+        let (profile, restart_threshold, timeout_minutes, entered_at_secs) = self
+            .config
+            .lock()
+            .map(|g| {
+                (
+                    g.runtime.profile,
+                    g.runtime.rescue_restart_threshold,
+                    g.runtime.rescue_auto_exit_minutes,
+                    g.runtime.rescue_entered_at_secs,
+                )
+            })
+            .unwrap_or((RuntimeProfile::Standard, 3, 10, None));
+        let restart_count = self.restart_count.lock().map(|c| *c).unwrap_or(u32::MAX);
+        let rescue_health = Self::rescue_health_json(
+            RescueHealthInputs {
+                profile,
+                restart_count,
+                restart_threshold,
+                timeout_minutes,
+                entered_at_secs,
+                pipeline_error: matches!(state, PipelineState::Error(_)),
+            },
+            Self::now_epoch_secs(),
+        );
+        result["rescue_health"] = rescue_health;
+
         Ok(result)
     }
 
@@ -3116,6 +3223,82 @@ mod tests {
             "runtime status should include restart_count"
         );
         assert_eq!(status["restart_count"], 0);
+    }
+
+    #[test]
+    fn runtime_status_includes_rescue_health() {
+        let (handler, _dir, _rt) = temp_handler();
+        let status = handler.query_runtime_status().unwrap();
+        let rescue_health = status
+            .get("rescue_health")
+            .expect("runtime status should include rescue_health");
+
+        assert_eq!(rescue_health["profile"], "standard");
+        assert_eq!(rescue_health["state"], "stable");
+        assert_eq!(rescue_health["score"], 100);
+        assert_eq!(rescue_health["should_enter_rescue"], false);
+        assert_eq!(rescue_health["should_exit_rescue"], false);
+    }
+
+    #[test]
+    fn rescue_health_marks_threshold_pressure_in_standard_profile() {
+        let health = FaeDeviceTransferHandler::rescue_health_json(
+            RescueHealthInputs {
+                profile: RuntimeProfile::Standard,
+                restart_count: 3,
+                restart_threshold: 3,
+                timeout_minutes: 10,
+                entered_at_secs: None,
+                pipeline_error: false,
+            },
+            1_000,
+        );
+
+        assert_eq!(health["state"], "degraded");
+        assert_eq!(health["score"], 60);
+        assert_eq!(health["should_enter_rescue"], true);
+        assert_eq!(health["should_exit_rescue"], false);
+
+        let reasons = health["reasons"]
+            .as_array()
+            .expect("reasons should be an array");
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.as_str() == Some("restart_threshold_reached")),
+            "threshold pressure reason should be present"
+        );
+    }
+
+    #[test]
+    fn rescue_health_marks_timeout_exit_in_rescue_profile() {
+        let health = FaeDeviceTransferHandler::rescue_health_json(
+            RescueHealthInputs {
+                profile: RuntimeProfile::Rescue,
+                restart_count: 0,
+                restart_threshold: 3,
+                timeout_minutes: 10,
+                entered_at_secs: Some(1_000),
+                pipeline_error: false,
+            },
+            1_700,
+        );
+
+        assert_eq!(health["state"], "rescue");
+        assert_eq!(health["score"], 35);
+        assert_eq!(health["should_enter_rescue"], false);
+        assert_eq!(health["should_exit_rescue"], true);
+        assert_eq!(health["auto_exit_in_secs"], 0);
+
+        let reasons = health["reasons"]
+            .as_array()
+            .expect("reasons should be an array");
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.as_str() == Some("rescue_mode_active")),
+            "rescue reason should be present"
+        );
     }
 
     #[test]
