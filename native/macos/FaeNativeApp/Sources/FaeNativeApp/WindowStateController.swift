@@ -46,7 +46,7 @@ final class WindowStateController: ObservableObject {
 
     private let compactWidth: CGFloat = 340
     private let compactHeight: CGFloat = 500
-    private let collapsedSize: CGFloat = 80
+    private let collapsedSize: CGFloat = 120
     private let inactivityDelay: TimeInterval = 300.0
 
     /// Padding from the left edge and top of the visible frame when collapsed.

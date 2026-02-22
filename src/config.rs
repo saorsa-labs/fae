@@ -186,7 +186,12 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             threshold: 0.01,
-            min_silence_duration_ms: 800,
+            // 1000ms balances responsiveness vs natural speech pauses.
+            // - Too low (500-600ms): fragments mid-sentence pauses
+            // - Too high (1400ms+): adds noticeable delay before Fae responds
+            // - 1000ms: covers most inter-word pauses while keeping response
+            //   latency under ~1s from when the user stops speaking.
+            min_silence_duration_ms: 1000,
             speech_pad_ms: 30,
             min_speech_duration_ms: 300,
         }
@@ -845,7 +850,11 @@ impl Default for BargeInConfig {
             min_rms: 0.05,
             confirm_ms: 150,
             assistant_start_holdoff_ms: 500,
-            barge_in_silence_ms: 800,
+            // During assistant speech, use a shorter silence gap so barge-in
+            // segments reach the conversation gate quickly. 600ms is short
+            // enough for responsive interruption but not so short that brief
+            // breath pauses get split into fragments.
+            barge_in_silence_ms: 600,
         }
     }
 }

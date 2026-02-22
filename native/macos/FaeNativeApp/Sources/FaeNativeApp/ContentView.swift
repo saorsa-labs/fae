@@ -31,7 +31,14 @@ struct ContentView: View {
         // SwiftUI-native frosted glass — .ultraThinMaterial in dark mode.
         // The window is frameless (.borderless) so there is no title bar
         // to interfere with the material blur.
-        .background(.ultraThinMaterial, ignoresSafeAreaEdges: .all)
+        // In collapsed mode, use a clear background so the circular orb
+        // floats without a frosted-glass square behind it.
+        .background(
+            windowState.mode == .collapsed
+                ? AnyShapeStyle(Color.clear)
+                : AnyShapeStyle(.ultraThinMaterial),
+            ignoresSafeAreaEdges: .all
+        )
         .preferredColorScheme(.dark)
         .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
         .background(
@@ -41,6 +48,7 @@ struct ContentView: View {
                 windowState.window = window
             }
         )
+        .animation(.easeInOut(duration: 0.5), value: windowState.mode)
         .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
     }
@@ -134,6 +142,13 @@ struct ContentView: View {
                 onOrbContextMenu: {
                     showOrbContextMenu()
                 }
+            )
+            .clipShape(
+                // Circular clip when collapsed so the orb looks like a floating sphere.
+                // Full rounded rect in compact mode to match the frosted window.
+                windowState.mode == .collapsed
+                    ? AnyShape(Circle())
+                    : AnyShape(RoundedRectangle(cornerRadius: 12))
             )
             .opacity(viewLoaded ? 1 : 0)
 

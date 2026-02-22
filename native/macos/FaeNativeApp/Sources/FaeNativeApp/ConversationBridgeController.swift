@@ -321,9 +321,13 @@ final class ConversationBridgeController: ObservableObject {
         }
     }
 
-    /// Append a system status message to both the subtitle overlay and the native message store.
+    /// Append a system status message to the **subtitle overlay only**.
+    ///
+    /// Boot/progress/error messages are transient UI feedback — they belong
+    /// in the auto-hiding subtitle layer, NOT in the persistent conversation
+    /// message store. The conversation panel should only contain actual
+    /// user/assistant/tool interaction messages.
     private func appendStatusMessage(_ text: String) {
         subtitleState?.showToolMessage(text)
-        conversationController?.appendMessage(role: .tool, content: text)
     }
 }

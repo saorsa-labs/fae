@@ -1191,11 +1191,11 @@ async fn run_vad_stage(
                                         continue;
                                     }
 
-                                    // Duration guard: human utterances rarely exceed
-                                    // 15 s in a single VAD segment.  Anything longer
-                                    // is almost certainly accumulated playback that
-                                    // slipped past echo suppression.
-                                    const MAX_SEGMENT_SECS: f32 = 15.0;
+                                    // Duration guard: very long segments are likely
+                                    // accumulated playback that slipped past echo
+                                    // suppression. With the 1000ms silence threshold,
+                                    // most natural utterances fit within 20s.
+                                    const MAX_SEGMENT_SECS: f32 = 20.0;
                                     if duration_s > MAX_SEGMENT_SECS {
                                         info!(
                                             "dropping {duration_s:.1}s speech segment (exceeds {MAX_SEGMENT_SECS}s cap — likely echo)"

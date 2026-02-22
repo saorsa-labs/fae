@@ -94,6 +94,11 @@ struct FaeNativeApp: App {
         // launched as a bare binary from the terminal (debug builds).
         NSApplication.shared.setActivationPolicy(.regular)
 
+        // Override the process name so the menu bar shows "Fae" instead of
+        // the SPM executable name "FaeNativeApp". macOS uses processName for
+        // the bold application menu title.
+        ProcessInfo.processInfo.processName = "Fae"
+
         // Render an initial orb icon immediately so the dock never shows
         // the generic app icon. DockIconAnimator takes over in .onAppear.
         NSApplication.shared.applicationIconImage = Self.renderStaticOrb()
