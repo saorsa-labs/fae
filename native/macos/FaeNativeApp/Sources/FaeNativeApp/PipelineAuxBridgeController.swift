@@ -211,10 +211,16 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     /// Clear the crawl and replace with the interactive "Fae is Ready" FAQ page.
     /// Gives users time to finish reading the crawl ending before swapping.
+    /// After 20s of the ready page being shown, auto-hide the canvas if still visible.
     private func transitionToReadyCanvas() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
             guard let self, self.hasShownLoadingCanvas else { return }
             self.canvasController?.setContent(LoadingCanvasContent.readyExperience())
+
+            // Auto-hide the canvas after 20s if the user hasn't interacted with it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
+                self?.auxiliaryWindows?.hideCanvas()
+            }
         }
     }
 

@@ -160,12 +160,12 @@ enum LoadingCanvasContent {
         right: 8%;
         top: 100%;
         text-align: center;
-        animation: crawl-scroll 120s linear 11s forwards;
+        animation: crawl-scroll 160s linear 11s forwards;
       }
 
       @keyframes crawl-scroll {
         0%   { top: 100%; }
-        100% { top: -450%; }
+        100% { top: -580%; }
       }
 
       /* ── Crawl typography ── */

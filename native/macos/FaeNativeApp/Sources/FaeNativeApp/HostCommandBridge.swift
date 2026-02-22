@@ -159,8 +159,6 @@ final class HostCommandBridge: ObservableObject {
     private func dispatch(_ name: String, payload: [String: Any]) {
         if let sender {
             sender.sendCommand(name: name, payload: payload)
-        } else {
-            NSLog("HostCommandBridge: no backend connected, dropped %@", name)
         }
     }
 }
