@@ -3544,6 +3544,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires ML model download — run locally with cached models"]
     fn clean_stop_does_not_increment_restart_count() {
         let (handler, _dir, _rt) = temp_handler();
 

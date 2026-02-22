@@ -36,8 +36,8 @@ pub use extraction::parse_extraction_response;
 pub use extractor::IntelligenceExtractor;
 pub use noise::{DeliveryBlock, NoiseController};
 pub use research::{
-    ResearchTask, create_research_tasks, gather_recent_research, has_recent_research,
-    store_research_result,
+    ResearchPolicy, ResearchTask, create_research_tasks, create_research_tasks_with_policy,
+    gather_recent_research, has_recent_research, load_research_policy, store_research_result,
 };
 pub use skill_proposals::{
     ProposalStatus, SkillOpportunityPolicy, SkillProposal, SkillProposalStore,

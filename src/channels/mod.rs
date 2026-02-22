@@ -132,6 +132,34 @@ pub fn start_runtime(
     }
 }
 
+fn extension_channel_type(
+    extension: &crate::config::ChannelExtensionConfig,
+) -> Option<ChannelType> {
+    match extension.kind.trim().to_ascii_lowercase().as_str() {
+        "discord" | "channel-discord" => Some(ChannelType::Discord),
+        "whatsapp" | "channel-whatsapp" => Some(ChannelType::WhatsApp),
+        _ => None,
+    }
+}
+
+fn configured_channel_types(config: &SpeechConfig) -> Vec<ChannelType> {
+    let mut types = Vec::new();
+    if config.channels.discord.is_some() {
+        types.push(ChannelType::Discord);
+    }
+    if config.channels.whatsapp.is_some() {
+        types.push(ChannelType::WhatsApp);
+    }
+    for extension in &config.channels.extensions {
+        if let Some(channel_type) = extension_channel_type(extension)
+            && !types.contains(&channel_type)
+        {
+            types.push(channel_type);
+        }
+    }
+    types
+}
+
 /// Validate channel configuration without network calls.
 #[must_use]
 pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
@@ -140,16 +168,40 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
         return issues;
     }
 
-    let has_discord = config.channels.discord.is_some();
-    let has_whatsapp = config.channels.whatsapp.is_some();
-    let has_extensions = !config.channels.extensions.is_empty();
-    if !(has_discord || has_whatsapp || has_extensions) {
+    if configured_channel_types(config).is_empty() {
         issues.push(ChannelValidationIssue {
             id: "channels-enabled-without-adapters".to_owned(),
             title: "Channels enabled with no adapters".to_owned(),
             severity: ChannelValidationSeverity::Warning,
             summary: "Enable at least one channel adapter or disable external channels.".to_owned(),
         });
+    }
+
+    for (index, extension) in config.channels.extensions.iter().enumerate() {
+        let kind = extension.kind.trim();
+        if kind.is_empty() {
+            issues.push(ChannelValidationIssue {
+                id: format!("extension-missing-kind-{index}"),
+                title: "Channel extension missing kind".to_owned(),
+                severity: ChannelValidationSeverity::Warning,
+                summary: format!(
+                    "Channel extension `{}` is missing a kind and will be ignored.",
+                    extension.id
+                ),
+            });
+            continue;
+        }
+
+        if extension_channel_type(extension).is_none() {
+            issues.push(ChannelValidationIssue {
+                id: format!("extension-unsupported-kind-{index}"),
+                title: "Channel extension kind unsupported".to_owned(),
+                severity: ChannelValidationSeverity::Warning,
+                summary: format!(
+                    "Channel extension kind `{kind}` is unsupported; supported kinds: discord, whatsapp."
+                ),
+            });
+        }
     }
 
     if let Some(discord) = &config.channels.discord {
@@ -241,26 +293,15 @@ pub fn validate_config(config: &SpeechConfig) -> Vec<ChannelValidationIssue> {
 pub async fn check_health(config: &SpeechConfig) -> HashMap<String, bool> {
     let mut health = HashMap::new();
 
-    if config.channels.discord.is_some() {
-        let adapter = ChannelSkillAdapter::new(ChannelType::Discord);
+    for channel_type in configured_channel_types(config) {
+        let adapter = ChannelSkillAdapter::new(channel_type);
+        let id = adapter.id().to_owned();
         match adapter.health_check().await {
             Ok(ok) => {
-                health.insert("discord".to_owned(), ok);
+                health.insert(id, ok);
             }
             Err(_) => {
-                health.insert("discord".to_owned(), false);
-            }
-        }
-    }
-
-    if config.channels.whatsapp.is_some() {
-        let adapter = ChannelSkillAdapter::new(ChannelType::WhatsApp);
-        match adapter.health_check().await {
-            Ok(ok) => {
-                health.insert("whatsapp".to_owned(), ok);
-            }
-            Err(_) => {
-                health.insert("whatsapp".to_owned(), false);
+                health.insert(id, false);
             }
         }
     }
@@ -312,15 +353,9 @@ async fn run_runtime(
     let mut adapters: HashMap<String, Arc<dyn ChannelAdapter>> = HashMap::new();
     let mut active_channels = Vec::new();
 
-    // Register skill-based channel adapters driven by config.
-    if config.channels.discord.is_some() {
-        let (id, adapter) = register_skill_channel(ChannelType::Discord);
-        adapters.insert(id.clone(), adapter);
-        active_channels.push(id);
-    }
-
-    if config.channels.whatsapp.is_some() {
-        let (id, adapter) = register_skill_channel(ChannelType::WhatsApp);
+    // Register skill-based channel adapters driven by config and extension kinds.
+    for channel_type in configured_channel_types(&config) {
+        let (id, adapter) = register_skill_channel(channel_type);
         adapters.insert(id.clone(), adapter);
         active_channels.push(id);
     }
@@ -490,7 +525,10 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use crate::config::{ChannelGatewayConfig, ChannelsConfig, DiscordChannelConfig, SpeechConfig};
+    use crate::config::{
+        ChannelExtensionConfig, ChannelGatewayConfig, ChannelsConfig, DiscordChannelConfig,
+        SpeechConfig,
+    };
     use crate::credentials::CredentialRef;
 
     #[test]
@@ -554,5 +592,80 @@ mod tests {
 
         let issues = validate_config(&config);
         assert!(!issues.iter().any(|i| i.id == "gateway-public-without-auth"));
+    }
+
+    #[test]
+    fn validation_accepts_supported_extension_kind() {
+        let config = SpeechConfig {
+            channels: ChannelsConfig {
+                enabled: true,
+                extensions: vec![ChannelExtensionConfig {
+                    id: "discord-ext".to_owned(),
+                    kind: "discord".to_owned(),
+                    config: serde_json::json!({}),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let issues = validate_config(&config);
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.id == "channels-enabled-without-adapters")
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.id.starts_with("extension-unsupported-kind-"))
+        );
+    }
+
+    #[test]
+    fn validation_flags_unsupported_extension_kind() {
+        let config = SpeechConfig {
+            channels: ChannelsConfig {
+                enabled: true,
+                extensions: vec![ChannelExtensionConfig {
+                    id: "slack-ext".to_owned(),
+                    kind: "slack".to_owned(),
+                    config: serde_json::json!({}),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let issues = validate_config(&config);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.id == "channels-enabled-without-adapters")
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.id.starts_with("extension-unsupported-kind-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn check_health_includes_supported_extension_kind() {
+        let config = SpeechConfig {
+            channels: ChannelsConfig {
+                enabled: true,
+                extensions: vec![ChannelExtensionConfig {
+                    id: "wa-ext".to_owned(),
+                    kind: "whatsapp".to_owned(),
+                    config: serde_json::json!({}),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let health = check_health(&config).await;
+        assert_eq!(health.get("whatsapp"), Some(&true));
     }
 }
