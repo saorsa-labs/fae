@@ -56,6 +56,7 @@ struct SkillDiscoveryCacheState {
 struct RescueHealthInputs {
     profile: RuntimeProfile,
     restart_count: u32,
+    restart_count_fail_safe: bool,
     restart_threshold: u32,
     timeout_minutes: u32,
     entered_at_secs: Option<u64>,
@@ -373,6 +374,11 @@ impl FaeDeviceTransferHandler {
         let mut score: i32 = 100;
         let mut reasons: Vec<&'static str> = Vec::new();
 
+        if inputs.restart_count_fail_safe {
+            score -= 30;
+            reasons.push("restart_count_fail_safe");
+        }
+
         if inputs.pipeline_error {
             score -= 35;
             reasons.push("pipeline_error");
@@ -430,6 +436,7 @@ impl FaeDeviceTransferHandler {
             "state": state,
             "profile": inputs.profile.as_str(),
             "restart_count": inputs.restart_count,
+            "restart_count_fail_safe": inputs.restart_count_fail_safe,
             "restart_threshold": inputs.restart_threshold,
             "should_enter_rescue": should_enter_rescue,
             "should_exit_rescue": should_exit_rescue,
@@ -2249,9 +2256,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             result["uptime_secs"] = serde_json::json!(started.elapsed().as_secs());
         }
 
-        if let Ok(cnt) = self.restart_count.lock() {
-            result["restart_count"] = serde_json::json!(*cnt);
-        }
+        let (restart_count, restart_count_fail_safe) = match self.restart_count.lock() {
+            Ok(count) => (*count, false),
+            Err(_) => (u32::MAX, true),
+        };
+        result["restart_count"] = serde_json::json!(restart_count);
 
         if let Ok(mode) = self.pipeline_mode.lock() {
             result["pipeline_mode"] = serde_json::json!(mode.to_string());
@@ -2269,11 +2278,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 )
             })
             .unwrap_or((RuntimeProfile::Standard, 3, 10, None));
-        let restart_count = self.restart_count.lock().map(|c| *c).unwrap_or(u32::MAX);
         let rescue_health = Self::rescue_health_json(
             RescueHealthInputs {
                 profile,
                 restart_count,
+                restart_count_fail_safe,
                 restart_threshold,
                 timeout_minutes,
                 entered_at_secs,
@@ -3236,6 +3245,7 @@ mod tests {
         assert_eq!(rescue_health["profile"], "standard");
         assert_eq!(rescue_health["state"], "stable");
         assert_eq!(rescue_health["score"], 100);
+        assert_eq!(rescue_health["restart_count_fail_safe"], false);
         assert_eq!(rescue_health["should_enter_rescue"], false);
         assert_eq!(rescue_health["should_exit_rescue"], false);
     }
@@ -3246,6 +3256,7 @@ mod tests {
             RescueHealthInputs {
                 profile: RuntimeProfile::Standard,
                 restart_count: 3,
+                restart_count_fail_safe: false,
                 restart_threshold: 3,
                 timeout_minutes: 10,
                 entered_at_secs: None,
@@ -3276,6 +3287,7 @@ mod tests {
             RescueHealthInputs {
                 profile: RuntimeProfile::Rescue,
                 restart_count: 0,
+                restart_count_fail_safe: false,
                 restart_threshold: 3,
                 timeout_minutes: 10,
                 entered_at_secs: Some(1_000),
@@ -3299,6 +3311,59 @@ mod tests {
                 .any(|reason| reason.as_str() == Some("rescue_mode_active")),
             "rescue reason should be present"
         );
+    }
+
+    #[test]
+    fn rescue_health_marks_restart_count_fail_safe() {
+        let health = FaeDeviceTransferHandler::rescue_health_json(
+            RescueHealthInputs {
+                profile: RuntimeProfile::Standard,
+                restart_count: u32::MAX,
+                restart_count_fail_safe: true,
+                restart_threshold: 3,
+                timeout_minutes: 10,
+                entered_at_secs: None,
+                pipeline_error: false,
+            },
+            1_000,
+        );
+
+        assert_eq!(health["restart_count_fail_safe"], true);
+        assert_eq!(health["should_enter_rescue"], true);
+        assert_eq!(health["state"], "critical");
+
+        let reasons = health["reasons"]
+            .as_array()
+            .expect("reasons should be an array");
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.as_str() == Some("restart_count_fail_safe")),
+            "restart_count_fail_safe reason should be present"
+        );
+    }
+
+    #[test]
+    fn runtime_status_reports_restart_count_fail_safe_when_lock_poisoned() {
+        let (handler, _dir, _rt) = temp_handler();
+
+        {
+            let restart_count = Arc::clone(&handler.restart_count);
+            let _ = std::thread::spawn(move || {
+                let _guard = restart_count
+                    .lock()
+                    .expect("restart_count lock should be acquired");
+                panic!("poison restart_count");
+            })
+            .join();
+        }
+
+        let status = handler
+            .query_runtime_status()
+            .expect("runtime status query");
+        assert_eq!(status["restart_count"], u32::MAX);
+        assert_eq!(status["rescue_health"]["restart_count_fail_safe"], true);
+        assert_eq!(status["rescue_health"]["should_enter_rescue"], true);
     }
 
     #[test]
