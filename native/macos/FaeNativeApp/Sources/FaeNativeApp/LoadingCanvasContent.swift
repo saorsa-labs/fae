@@ -15,8 +15,13 @@ enum LoadingCanvasContent {
     // MARK: - Public API
 
     /// Star Wars-style loading crawl — push this when model loading begins.
-    static func crawlExperience() -> String {
-        "\(crawlCSS)\n\(introOverlay)\n\(titleCard)\n\(crawlSection)"
+    /// - Parameters:
+    ///   - ramGB: Total physical RAM in GB (auto-detected if nil).
+    ///   - modelName: Display name for the LLM model being loaded.
+    static func crawlExperience(ramGB: Int? = nil, modelName: String? = nil) -> String {
+        let ram = ramGB ?? Self.systemRAMInGB()
+        let model = modelName ?? "Qwen 8B"
+        return "\(crawlCSS)\n\(introOverlay)\n\(titleCard)\n\(crawlContent(ramGB: ram, modelName: model))"
     }
 
     /// Clean interactive FAQ — push this when the pipeline is ready.
@@ -26,6 +31,13 @@ enum LoadingCanvasContent {
 
     /// Legacy compatibility — same as `crawlExperience()`.
     static func fullExperience() -> String { crawlExperience() }
+
+    // MARK: - System Info
+
+    /// Detect system RAM in whole GB.
+    private static func systemRAMInGB() -> Int {
+        Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
+    }
 
     // MARK: - Crawl CSS
 
@@ -303,9 +315,10 @@ enum LoadingCanvasContent {
     </div>
     """
 
-    // MARK: - The Crawl
+    // MARK: - The Crawl (dynamic)
 
-    private static let crawlSection = """
+    private static func crawlContent(ramGB: Int, modelName: String) -> String {
+    """
     <div class="crawl-viewport">
       <div class="crawl">
 
@@ -337,10 +350,16 @@ enum LoadingCanvasContent {
           problems, and form thoughtful responses.
         </p>
         <p>
+          Your Mac has <span class="highlight">\(ramGB) GB</span> of RAM,<br>
+          so Fae is loading the <span class="highlight">\(modelName)</span><br>
+          model &mdash; the best brain that fits<br>
+          comfortably in your machine&rsquo;s memory.
+        </p>
+        <p>
           This part takes the longest because<br>
           her brain is the biggest component.
         </p>
-        <div class="tech-note">Qwen 8B &mdash; runs entirely on your Mac</div>
+        <div class="tech-note">\(modelName) &mdash; runs entirely on your Mac</div>
 
         <div class="section-icon">\u{1F5E3}\u{FE0F}</div>
         <h3>Speaking</h3>
@@ -351,6 +370,58 @@ enum LoadingCanvasContent {
           uniquely hers.
         </p>
         <div class="tech-note">Kokoro TTS &mdash; British English, warm tone</div>
+
+        <div class="divider"></div>
+
+        <div class="section-icon">\u{1F52E}</div>
+        <h3>Getting Smarter</h3>
+        <p>
+          Fae&rsquo;s brain is already pretty good,<br>
+          but it will get <span class="highlight">much better, fast</span>.<br>
+          AI models are improving at a stunning<br>
+          pace &mdash; and because Fae runs locally,<br>
+          each upgrade drops right in.
+        </p>
+        <p>
+          As better models become available,<br>
+          Fae will think deeper, understand more,<br>
+          and respond more naturally &mdash; all<br>
+          without sending your data anywhere.
+        </p>
+
+        <div class="divider"></div>
+
+        <div class="section-icon">\u{1F310}</div>
+        <h3>The Fae</h3>
+        <p>
+          Right now, your Fae works alone.<br>
+          But she won&rsquo;t always have to.
+        </p>
+        <p>
+          We&rsquo;re building a <span class="highlight">global, private
+          network</span> called <strong>The Fae</strong> &mdash;<br>
+          where individual Fae companions can<br>
+          find friends, seek collaboration, and<br>
+          increase their power exponentially.
+        </p>
+        <p>
+          Imagine your Fae connecting with<br>
+          others around the world &mdash; sharing<br>
+          knowledge, coordinating tasks, and<br>
+          helping each other &mdash; all through<br>
+          an encrypted, decentralised network<br>
+          with <span class="highlight">no central authority</span>.
+        </p>
+        <p>
+          No company owns The Fae. No server<br>
+          sees your data. Every connection is<br>
+          quantum-resistant and peer-to-peer.<br>
+          Your Fae stays yours. Always.
+        </p>
+        <div class="tech-note">
+          Powered by x0x &mdash; agent-to-agent gossip protocol<br>
+          <a href="https://the-fae.com" style="color: #B4A8C4;">the-fae.com</a>
+        </div>
 
         <div class="divider"></div>
 
@@ -472,6 +543,7 @@ enum LoadingCanvasContent {
       </div>
     </div>
     """
+    }
 
     // MARK: - Ready Experience CSS
 

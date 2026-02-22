@@ -160,15 +160,21 @@ final class PipelineAuxBridgeController: ObservableObject {
             status = "Loaded \(model)"
 
             // Fae loads 3 models: STT, LLM, TTS. After all 3 complete,
-            // the pipeline coordinator starts and we're ready for conversation.
-            // Use >= 3 as a safety measure in case extra models are added.
+            // show a brief "personality" loading stage, then mark ready.
             if loadCompleteCount >= 3 && !isPipelineReady {
-                isPipelineReady = true
-                status = "Running"
-                subtitleState?.hideProgress()
-                // Transition canvas from the Star Wars crawl to the clean
-                // interactive FAQ page after a brief pause.
-                transitionToReadyCanvas()
+                status = "Loading personality…"
+                subtitleState?.showProgress(
+                    label: "Loading personality, memories and relationships…",
+                    percent: 97
+                )
+                // Brief pause so users see the final stage, then mark ready.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    guard let self, !self.isPipelineReady else { return }
+                    self.isPipelineReady = true
+                    self.status = "Running"
+                    self.subtitleState?.hideProgress()
+                    self.transitionToReadyCanvas()
+                }
             }
 
         case "download_started", "download_progress", "download_complete", "cached":
@@ -204,9 +210,9 @@ final class PipelineAuxBridgeController: ObservableObject {
     }
 
     /// Clear the crawl and replace with the interactive "Fae is Ready" FAQ page.
-    /// Uses a brief delay so the transition doesn't feel abrupt.
+    /// Gives users time to finish reading the crawl ending before swapping.
     private func transitionToReadyCanvas() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
             guard let self, self.hasShownLoadingCanvas else { return }
             self.canvasController?.setContent(LoadingCanvasContent.readyExperience())
         }

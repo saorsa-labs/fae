@@ -258,11 +258,11 @@ final class ConversationBridgeController: ObservableObject {
     private static func friendlyLoadingLabel(model: String) -> (String, Int) {
         let lower = model.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
-            return ("Teaching Fae to listen…", 10)
+            return ("Loading ears to listen…", 10)
         } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
-            return ("Loading Fae's brain — this takes a moment…", 30)
+            return ("Loading brain to think — this takes a moment…", 30)
         } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
-            return ("Giving Fae her voice…", 85)
+            return ("Loading voice to speak with…", 85)
         } else {
             return ("Loading \(model)…", 50)
         }
@@ -272,11 +272,11 @@ final class ConversationBridgeController: ObservableObject {
     private static func friendlyLoadCompleteLabel(model: String) -> String {
         let lower = model.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
-            return "Fae can listen now ✓"
+            return "Ears ready — Fae can listen ✓"
         } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
-            return "Fae's brain is ready ✓"
+            return "Brain ready — Fae can think ✓"
         } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
-            return "Fae has her voice ✓"
+            return "Voice ready — Fae can speak ✓"
         } else {
             return "Loaded \(model) ✓"
         }
