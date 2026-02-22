@@ -8,6 +8,7 @@
 
 use crate::config::{MemoryConfig, SpeechConfig, TtsBackend};
 use crate::error::{Result, SpeechError};
+use crate::kernel_signature::{KernelSignatureStatus, run_kernel_signature_check};
 use crate::llm::LocalLlm;
 use crate::models::ModelManager;
 use crate::progress::{DownloadFile, DownloadPlan, ProgressCallback, ProgressEvent};
@@ -177,6 +178,29 @@ pub async fn initialize_models_with_progress(
     crate::config::apply_ram_model_selection(&mut resolved_config.llm);
 
     let config = &resolved_config;
+
+    let kernel_report = run_kernel_signature_check(&config.runtime)?;
+    match kernel_report.status {
+        KernelSignatureStatus::Disabled => {}
+        KernelSignatureStatus::Ok => {
+            info!(
+                checked = kernel_report.checked,
+                ok = kernel_report.ok,
+                "kernel signature check passed"
+            );
+        }
+        KernelSignatureStatus::ManifestMissing | KernelSignatureStatus::Failed => {
+            warn!(
+                status = ?kernel_report.status,
+                checked = kernel_report.checked,
+                ok = kernel_report.ok,
+                missing = kernel_report.missing,
+                mismatched = kernel_report.mismatched,
+                manifest = %kernel_report.manifest_path,
+                "kernel signature check reported issues (non-fatal in warn mode)"
+            );
+        }
+    }
 
     let model_manager = ModelManager::new(&config.models)?;
     let use_local_llm = should_preload_local_llm(config);

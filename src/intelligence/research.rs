@@ -6,6 +6,9 @@
 
 use crate::intelligence::store::IntelligenceStore;
 use crate::memory::{MemoryKind, MemoryRecord};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use tracing::warn;
 
 /// A research task waiting to be executed.
 #[derive(Debug, Clone)]
@@ -48,6 +51,27 @@ const DEFAULT_FRESHNESS_DAYS: u32 = 7;
 
 /// Maximum daily research tasks.
 const MAX_DAILY_RESEARCH: usize = 3;
+/// Relative location for mutable research scheduling policy.
+const RESEARCH_POLICY_RELATIVE_PATH: &str = "skills/intelligence/research-policy.toml";
+
+/// Policy thresholds for research scheduling heuristics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResearchPolicy {
+    /// Freshness horizon in days before a topic is considered stale.
+    pub freshness_days: u32,
+    /// Maximum number of research tasks to schedule in a pass.
+    pub max_daily_tasks: usize,
+}
+
+impl Default for ResearchPolicy {
+    fn default() -> Self {
+        Self {
+            freshness_days: DEFAULT_FRESHNESS_DAYS,
+            max_daily_tasks: MAX_DAILY_RESEARCH,
+        }
+    }
+}
 
 /// Check if recent research exists for a topic.
 ///
@@ -135,14 +159,64 @@ pub fn create_research_tasks(
     topics: &[String],
     max_daily: Option<usize>,
 ) -> Vec<ResearchTask> {
-    let limit = max_daily.unwrap_or(MAX_DAILY_RESEARCH);
+    let mut policy = ResearchPolicy::default();
+    if let Some(limit) = max_daily {
+        policy.max_daily_tasks = limit;
+    }
+    create_research_tasks_with_policy(store, topics, policy)
+}
 
+/// Create research tasks using a mutable policy pack.
+///
+/// This keeps scheduler heuristics in data while preserving the same core
+/// filtering logic.
+pub fn create_research_tasks_with_policy(
+    store: &IntelligenceStore,
+    topics: &[String],
+    policy: ResearchPolicy,
+) -> Vec<ResearchTask> {
+    let limit = policy.max_daily_tasks;
     topics
         .iter()
-        .filter(|topic| !has_recent_research(store, topic, DEFAULT_FRESHNESS_DAYS))
+        .filter(|topic| !has_recent_research(store, topic, policy.freshness_days))
         .take(limit)
-        .map(|topic| ResearchTask::new(topic.as_str()))
+        .map(|topic| ResearchTask::new(topic.as_str()).with_freshness_days(policy.freshness_days))
         .collect()
+}
+
+/// Load research scheduling policy from mutable root.
+///
+/// Missing or malformed policy file falls back to defaults.
+#[must_use]
+pub fn load_research_policy(fae_root: &Path) -> ResearchPolicy {
+    let path = fae_root.join(RESEARCH_POLICY_RELATIVE_PATH);
+    if !path.exists() {
+        return ResearchPolicy::default();
+    }
+
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to read research policy; using defaults"
+            );
+            return ResearchPolicy::default();
+        }
+    };
+
+    match toml::from_str::<ResearchPolicy>(&contents) {
+        Ok(policy) => policy,
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to parse research policy; using defaults"
+            );
+            ResearchPolicy::default()
+        }
+    }
 }
 
 /// Get current time as epoch seconds.
@@ -261,5 +335,79 @@ mod tests {
         // Should match case-insensitively.
         assert!(has_recent_research(&store, "hiking", 7));
         assert!(has_recent_research(&store, "HIKING", 7));
+    }
+
+    #[test]
+    fn create_research_tasks_with_policy_respects_freshness_days() {
+        let (_tmp, store) = temp_store();
+        let result = store_research_result(&store, "hiking", "Trail info", &[]);
+        assert!(result.is_ok());
+        let topics = vec!["hiking".to_owned()];
+
+        let strict = create_research_tasks_with_policy(
+            &store,
+            &topics,
+            ResearchPolicy {
+                freshness_days: 365,
+                max_daily_tasks: 5,
+            },
+        );
+        assert!(strict.is_empty(), "fresh research should be filtered");
+
+        let zero_freshness = create_research_tasks_with_policy(
+            &store,
+            &topics,
+            ResearchPolicy {
+                freshness_days: 0,
+                max_daily_tasks: 5,
+            },
+        );
+        assert_eq!(
+            zero_freshness.len(),
+            1,
+            "zero freshness means topics are immediately eligible again"
+        );
+        assert_eq!(zero_freshness[0].freshness_days, 0);
+    }
+
+    #[test]
+    fn create_research_tasks_with_policy_respects_max_daily_tasks() {
+        let (_tmp, store) = temp_store();
+        let topics: Vec<String> = (0..10).map(|i| format!("topic-{i}")).collect();
+        let tasks = create_research_tasks_with_policy(
+            &store,
+            &topics,
+            ResearchPolicy {
+                freshness_days: 7,
+                max_daily_tasks: 4,
+            },
+        );
+        assert_eq!(tasks.len(), 4);
+    }
+
+    #[test]
+    fn load_research_policy_defaults_when_file_missing() {
+        let tmp = TempDir::new().expect("tempdir");
+        let loaded = load_research_policy(tmp.path());
+        assert_eq!(loaded, ResearchPolicy::default());
+    }
+
+    #[test]
+    fn load_research_policy_from_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let policy_path = tmp.path().join(RESEARCH_POLICY_RELATIVE_PATH);
+        let parent = policy_path.parent().expect("policy parent");
+        std::fs::create_dir_all(parent).expect("create policy dir");
+        std::fs::write(&policy_path, "freshness_days = 10\nmax_daily_tasks = 6\n")
+            .expect("write policy file");
+
+        let loaded = load_research_policy(tmp.path());
+        assert_eq!(
+            loaded,
+            ResearchPolicy {
+                freshness_days: 10,
+                max_daily_tasks: 6,
+            }
+        );
     }
 }

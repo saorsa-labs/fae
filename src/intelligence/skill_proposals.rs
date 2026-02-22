@@ -53,6 +53,73 @@ pub struct SkillProposalStore {
 
 /// Rejection cooldown in seconds (30 days).
 const REJECTION_COOLDOWN_SECS: u64 = 30 * 86_400;
+/// Relative location for the mutable skill-opportunity policy pack.
+const SKILL_OPPORTUNITY_POLICY_RELATIVE_PATH: &str =
+    "skills/intelligence/skill-opportunity-policy.toml";
+
+/// Policy thresholds for adaptive skill opportunity detection.
+///
+/// This policy is designed to live in the mutable self-authored layer so users
+/// or skills can tune proposal sensitivity and match patterns without changing
+/// Rust code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillOpportunityPolicy {
+    /// Minimum active event records before proposing calendar integration.
+    pub calendar_min_event_mentions: usize,
+    /// Record kinds that count as calendar-related signals.
+    pub calendar_kinds: Vec<crate::memory::MemoryKind>,
+    /// Case-insensitive substrings matched against record text.
+    pub calendar_text_keywords: Vec<String>,
+    /// Case-insensitive substrings matched against record tags.
+    pub calendar_tag_keywords: Vec<String>,
+    /// Minimum active email mentions before proposing email integration.
+    pub email_min_mentions: usize,
+    /// Case-insensitive substrings matched against record text.
+    pub email_text_keywords: Vec<String>,
+    /// Case-insensitive substrings matched against record tags.
+    pub email_tag_keywords: Vec<String>,
+    /// Minimum research-topic repeats before proposing a topic expert skill.
+    pub topic_min_research_mentions: usize,
+    /// Record kinds considered for topic opportunity detection.
+    pub topic_kinds: Vec<crate::memory::MemoryKind>,
+    /// Case-insensitive tag terms; at least one must match when non-empty.
+    pub topic_required_tags_any: Vec<String>,
+    /// Prefixes used to extract topic identifiers from tags.
+    pub topic_tag_prefixes: Vec<String>,
+}
+
+impl Default for SkillOpportunityPolicy {
+    fn default() -> Self {
+        Self {
+            calendar_min_event_mentions: 3,
+            calendar_kinds: vec![crate::memory::MemoryKind::Event],
+            calendar_text_keywords: vec![
+                "calendar".to_owned(),
+                "meeting".to_owned(),
+                "appointment".to_owned(),
+                "deadline".to_owned(),
+            ],
+            calendar_tag_keywords: vec![
+                "calendar".to_owned(),
+                "event".to_owned(),
+                "date".to_owned(),
+            ],
+            email_min_mentions: 3,
+            email_text_keywords: vec![
+                "email".to_owned(),
+                "e-mail".to_owned(),
+                "inbox".to_owned(),
+                "mail".to_owned(),
+            ],
+            email_tag_keywords: vec!["email".to_owned(), "inbox".to_owned(), "mail".to_owned()],
+            topic_min_research_mentions: 3,
+            topic_kinds: vec![crate::memory::MemoryKind::Fact],
+            topic_required_tags_any: vec!["research".to_owned()],
+            topic_tag_prefixes: vec!["topic:".to_owned()],
+        }
+    }
+}
 
 impl SkillProposalStore {
     /// Load proposals from disk, returning an empty store on error.
@@ -181,7 +248,20 @@ impl SkillProposalStore {
 /// - Repeated calendar/date mentions → "Calendar Integration"
 /// - Repeated email mentions → "Email Integration"
 /// - Frequent same-topic research → topic-specific skill
+#[must_use]
 pub fn detect_skill_opportunities(memory_path: &Path) -> Vec<(String, String, String)> {
+    detect_skill_opportunities_with_policy(memory_path, SkillOpportunityPolicy::default())
+}
+
+/// Detect skill opportunities using a provided policy pack.
+///
+/// Policy controls both thresholds and pattern matching signals in mutable
+/// data that can be tuned in the self-authored layer.
+#[must_use]
+pub fn detect_skill_opportunities_with_policy(
+    memory_path: &Path,
+    policy: SkillOpportunityPolicy,
+) -> Vec<(String, String, String)> {
     let repo = match crate::memory::SqliteMemoryRepository::new(memory_path) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
@@ -193,35 +273,60 @@ pub fn detect_skill_opportunities(memory_path: &Path) -> Vec<(String, String, St
 
     let mut opportunities = Vec::new();
 
-    // Count date events.
-    let date_events = records
-        .iter()
-        .filter(|r| {
-            r.kind == crate::memory::MemoryKind::Event
-                && r.status == crate::memory::MemoryStatus::Active
-        })
-        .count();
+    let calendar_text_keywords = normalized_terms(&policy.calendar_text_keywords);
+    let calendar_tag_keywords = normalized_terms(&policy.calendar_tag_keywords);
+    let email_text_keywords = normalized_terms(&policy.email_text_keywords);
+    let email_tag_keywords = normalized_terms(&policy.email_tag_keywords);
+    let topic_required_tags_any = normalized_terms(&policy.topic_required_tags_any);
+    let topic_tag_prefixes = normalized_terms(&policy.topic_tag_prefixes);
 
-    if date_events >= 3 {
+    let mut calendar_mentions = 0usize;
+    let mut email_mentions = 0usize;
+    let mut topic_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for record in &records {
+        if record.status != crate::memory::MemoryStatus::Active {
+            continue;
+        }
+
+        let lower_text = record.text.to_lowercase();
+        let lower_tags: Vec<String> = record.tags.iter().map(|tag| tag.to_lowercase()).collect();
+
+        let calendar_kind_match = policy.calendar_kinds.contains(&record.kind);
+        let calendar_text_match = contains_any_keyword(&lower_text, &calendar_text_keywords);
+        let calendar_tag_match = tags_match_keywords(&lower_tags, &calendar_tag_keywords);
+        if calendar_kind_match || calendar_text_match || calendar_tag_match {
+            calendar_mentions = calendar_mentions.saturating_add(1);
+        }
+
+        let email_text_match = contains_any_keyword(&lower_text, &email_text_keywords);
+        let email_tag_match = tags_match_keywords(&lower_tags, &email_tag_keywords);
+        if email_text_match || email_tag_match {
+            email_mentions = email_mentions.saturating_add(1);
+        }
+
+        let topic_kind_match = policy.topic_kinds.contains(&record.kind);
+        let topic_required_match = topic_required_tags_any.is_empty()
+            || tags_match_keywords(&lower_tags, &topic_required_tags_any);
+        if topic_kind_match && topic_required_match {
+            for tag in &lower_tags {
+                if let Some(topic) = extract_topic_from_tag(tag, &topic_tag_prefixes) {
+                    *topic_counts.entry(topic).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    if calendar_mentions >= policy.calendar_min_event_mentions.max(1) {
         opportunities.push((
             "Calendar Integration".to_owned(),
             "Sync with your calendar to automatically track events and send reminders".to_owned(),
-            format!("Detected {date_events} date/event mentions in conversations"),
+            format!("Detected {calendar_mentions} calendar-related mentions"),
         ));
     }
 
-    // Count email-related mentions.
-    let email_mentions = records
-        .iter()
-        .filter(|r| {
-            r.status == crate::memory::MemoryStatus::Active
-                && (r.text.to_lowercase().contains("email")
-                    || r.text.to_lowercase().contains("e-mail")
-                    || r.tags.iter().any(|t| t.contains("email")))
-        })
-        .count();
-
-    if email_mentions >= 3 {
+    if email_mentions >= policy.email_min_mentions.max(1) {
         opportunities.push((
             "Email Integration".to_owned(),
             "Connect to your email to help manage inbox, draft responses, and track threads"
@@ -230,23 +335,8 @@ pub fn detect_skill_opportunities(memory_path: &Path) -> Vec<(String, String, St
         ));
     }
 
-    // Count research topics with multiple entries.
-    let mut topic_counts: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    for record in &records {
-        if record.kind == crate::memory::MemoryKind::Fact
-            && record.tags.iter().any(|t| t == "research")
-        {
-            for tag in &record.tags {
-                if let Some(topic) = tag.strip_prefix("topic:") {
-                    *topic_counts.entry(topic.to_lowercase()).or_insert(0) += 1;
-                }
-            }
-        }
-    }
-
     for (topic, count) in &topic_counts {
-        if *count >= 3 {
+        if *count >= policy.topic_min_research_mentions.max(1) {
             opportunities.push((
                 format!("{} Expert", capitalize_first(topic)),
                 format!(
@@ -258,6 +348,77 @@ pub fn detect_skill_opportunities(memory_path: &Path) -> Vec<(String, String, St
     }
 
     opportunities
+}
+
+fn normalized_terms(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn contains_any_keyword(haystack_lower: &str, keywords_lower: &[String]) -> bool {
+    keywords_lower
+        .iter()
+        .any(|keyword| haystack_lower.contains(keyword))
+}
+
+fn tags_match_keywords(tags_lower: &[String], keywords_lower: &[String]) -> bool {
+    if keywords_lower.is_empty() {
+        return false;
+    }
+
+    tags_lower
+        .iter()
+        .any(|tag| contains_any_keyword(tag.as_str(), keywords_lower))
+}
+
+fn extract_topic_from_tag(tag_lower: &str, prefixes_lower: &[String]) -> Option<String> {
+    for prefix in prefixes_lower {
+        if let Some(topic) = tag_lower.strip_prefix(prefix) {
+            let normalized = topic.trim().to_owned();
+            if !normalized.is_empty() {
+                return Some(normalized);
+            }
+        }
+    }
+    None
+}
+
+/// Load a skill-opportunity policy pack from the mutable Fae root.
+///
+/// If the file is missing or malformed, default thresholds are returned.
+#[must_use]
+pub fn load_skill_opportunity_policy(fae_root: &Path) -> SkillOpportunityPolicy {
+    let path = fae_root.join(SKILL_OPPORTUNITY_POLICY_RELATIVE_PATH);
+    if !path.exists() {
+        return SkillOpportunityPolicy::default();
+    }
+
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to read skill opportunity policy; using defaults"
+            );
+            return SkillOpportunityPolicy::default();
+        }
+    };
+
+    match toml::from_str::<SkillOpportunityPolicy>(&contents) {
+        Ok(policy) => policy,
+        Err(e) => {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "failed to parse skill opportunity policy; using defaults"
+            );
+            SkillOpportunityPolicy::default()
+        }
+    }
 }
 
 /// Capitalize the first character of a string.
@@ -280,7 +441,35 @@ fn now_epoch_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::{MemoryKind, MemoryRecord, MemoryStatus, SqliteMemoryRepository};
     use tempfile::TempDir;
+
+    fn seed_active_record(
+        repo: &SqliteMemoryRepository,
+        id: &str,
+        kind: MemoryKind,
+        text: &str,
+        tags: Vec<String>,
+    ) {
+        let now = now_epoch_secs();
+        let record = MemoryRecord {
+            id: id.to_owned(),
+            kind,
+            status: MemoryStatus::Active,
+            text: text.to_owned(),
+            confidence: 0.9,
+            source_turn_id: None,
+            tags,
+            supersedes: None,
+            created_at: now,
+            updated_at: now,
+            importance_score: None,
+            stale_after_secs: None,
+            metadata: None,
+        };
+        repo.insert_record_raw(&record)
+            .expect("insert seeded memory record");
+    }
 
     #[test]
     fn proposal_lifecycle() {
@@ -385,6 +574,183 @@ mod tests {
 
         let opportunities = detect_skill_opportunities(tmp.path());
         assert!(opportunities.is_empty());
+    }
+
+    #[test]
+    fn detect_skill_opportunities_with_policy_respects_thresholds() {
+        let tmp = TempDir::new().expect("tempdir");
+        let repo = SqliteMemoryRepository::new(tmp.path()).expect("sqlite repo");
+        repo.ensure_layout().expect("ensure_layout");
+
+        for idx in 0..3 {
+            seed_active_record(
+                &repo,
+                &format!("event-{idx}"),
+                MemoryKind::Event,
+                "meeting tomorrow",
+                vec!["calendar".to_owned()],
+            );
+        }
+
+        let strict = SkillOpportunityPolicy {
+            calendar_min_event_mentions: 4,
+            email_min_mentions: 99,
+            topic_min_research_mentions: 99,
+            ..SkillOpportunityPolicy::default()
+        };
+        let relaxed = SkillOpportunityPolicy {
+            calendar_min_event_mentions: 3,
+            email_min_mentions: 99,
+            topic_min_research_mentions: 99,
+            ..SkillOpportunityPolicy::default()
+        };
+
+        let strict_results = detect_skill_opportunities_with_policy(tmp.path(), strict);
+        assert!(
+            !strict_results
+                .iter()
+                .any(|(name, _, _)| name == "Calendar Integration")
+        );
+
+        let relaxed_results = detect_skill_opportunities_with_policy(tmp.path(), relaxed);
+        assert!(
+            relaxed_results
+                .iter()
+                .any(|(name, _, _)| name == "Calendar Integration")
+        );
+    }
+
+    #[test]
+    fn detect_skill_opportunities_with_policy_supports_custom_email_patterns() {
+        let tmp = TempDir::new().expect("tempdir");
+        let repo = SqliteMemoryRepository::new(tmp.path()).expect("sqlite repo");
+        repo.ensure_layout().expect("ensure_layout");
+
+        seed_active_record(
+            &repo,
+            "email-1",
+            MemoryKind::Fact,
+            "Please check dispatch queue delta",
+            vec!["communications".to_owned()],
+        );
+
+        let without_custom_pattern = detect_skill_opportunities_with_policy(
+            tmp.path(),
+            SkillOpportunityPolicy {
+                calendar_min_event_mentions: 99,
+                email_min_mentions: 1,
+                topic_min_research_mentions: 99,
+                ..SkillOpportunityPolicy::default()
+            },
+        );
+        assert!(
+            !without_custom_pattern
+                .iter()
+                .any(|(name, _, _)| name == "Email Integration")
+        );
+
+        let with_custom_pattern = detect_skill_opportunities_with_policy(
+            tmp.path(),
+            SkillOpportunityPolicy {
+                calendar_min_event_mentions: 99,
+                email_min_mentions: 1,
+                topic_min_research_mentions: 99,
+                email_text_keywords: vec!["dispatch queue delta".to_owned()],
+                email_tag_keywords: vec!["communications".to_owned()],
+                ..SkillOpportunityPolicy::default()
+            },
+        );
+        assert!(
+            with_custom_pattern
+                .iter()
+                .any(|(name, _, _)| name == "Email Integration")
+        );
+    }
+
+    #[test]
+    fn detect_skill_opportunities_with_policy_supports_custom_topic_prefix() {
+        let tmp = TempDir::new().expect("tempdir");
+        let repo = SqliteMemoryRepository::new(tmp.path()).expect("sqlite repo");
+        repo.ensure_layout().expect("ensure_layout");
+
+        for idx in 0..3 {
+            seed_active_record(
+                &repo,
+                &format!("fact-{idx}"),
+                MemoryKind::Fact,
+                "new gardening source",
+                vec!["research".to_owned(), "subject:gardening".to_owned()],
+            );
+        }
+
+        let defaults = detect_skill_opportunities_with_policy(
+            tmp.path(),
+            SkillOpportunityPolicy {
+                calendar_min_event_mentions: 99,
+                email_min_mentions: 99,
+                topic_min_research_mentions: 3,
+                ..SkillOpportunityPolicy::default()
+            },
+        );
+        assert!(
+            !defaults
+                .iter()
+                .any(|(name, _, _)| name == "Gardening Expert")
+        );
+
+        let custom = detect_skill_opportunities_with_policy(
+            tmp.path(),
+            SkillOpportunityPolicy {
+                calendar_min_event_mentions: 99,
+                email_min_mentions: 99,
+                topic_min_research_mentions: 3,
+                topic_tag_prefixes: vec!["subject:".to_owned()],
+                ..SkillOpportunityPolicy::default()
+            },
+        );
+        assert!(
+            custom.iter().any(|(name, _, _)| name == "Gardening Expert"),
+            "custom topic prefix should drive topic extraction"
+        );
+    }
+
+    #[test]
+    fn load_skill_opportunity_policy_defaults_when_file_missing() {
+        let tmp = TempDir::new().expect("tempdir");
+        let loaded = load_skill_opportunity_policy(tmp.path());
+        assert_eq!(loaded, SkillOpportunityPolicy::default());
+    }
+
+    #[test]
+    fn load_skill_opportunity_policy_from_file() {
+        let tmp = TempDir::new().expect("tempdir");
+        let policy_path = tmp.path().join(SKILL_OPPORTUNITY_POLICY_RELATIVE_PATH);
+        let parent = policy_path.parent().expect("policy parent directory");
+        std::fs::create_dir_all(parent).expect("create policy directory");
+        std::fs::write(
+            &policy_path,
+            r#"
+calendar_min_event_mentions = 5
+email_min_mentions = 4
+topic_min_research_mentions = 7
+calendar_text_keywords = ["agenda"]
+email_text_keywords = ["mailbox"]
+topic_tag_prefixes = ["subject:"]
+"#,
+        )
+        .expect("write policy file");
+
+        let loaded = load_skill_opportunity_policy(tmp.path());
+        let expected = SkillOpportunityPolicy {
+            calendar_min_event_mentions: 5,
+            email_min_mentions: 4,
+            topic_min_research_mentions: 7,
+            calendar_text_keywords: vec!["agenda".to_owned()],
+            email_text_keywords: vec!["mailbox".to_owned()],
+            topic_tag_prefixes: vec!["subject:".to_owned()],
+            ..SkillOpportunityPolicy::default()
+        };
+        assert_eq!(loaded, expected);
     }
 
     #[test]

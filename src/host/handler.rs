@@ -2,7 +2,8 @@
 
 use crate::approval::ToolApprovalRequest;
 use crate::config::{
-    AgentToolMode, LlmBackend, RuntimeProfile, RuntimeRescueSavedLlmConfig, SpeechConfig,
+    AgentToolMode, LlmBackend, RuntimeConfig, RuntimeProfile, RuntimeRescueSavedLlmConfig,
+    SpeechConfig,
 };
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
@@ -13,6 +14,7 @@ use crate::pipeline::coordinator::PipelineCoordinator;
 use crate::pipeline::messages::{GateCommand, TextInjection};
 use crate::progress::ProgressEvent;
 use crate::runtime::RuntimeEvent;
+use crate::runtime_audit::{RuntimeAuditEntry, RuntimeAuditSource};
 use crate::startup::initialize_models_with_progress;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,6 +51,17 @@ struct SkillDiscoveryCacheState {
     signature: Option<String>,
     #[cfg(test)]
     rebuild_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RescueHealthInputs {
+    profile: RuntimeProfile,
+    restart_count: u32,
+    restart_count_fail_safe: bool,
+    restart_threshold: u32,
+    timeout_minutes: u32,
+    entered_at_secs: Option<u64>,
+    pipeline_error: bool,
 }
 
 /// Production device transfer handler that persists permission grants and
@@ -197,6 +210,25 @@ impl FaeDeviceTransferHandler {
         let _ = self.event_tx.send(envelope);
     }
 
+    /// Best-effort mutation-manifest sync.
+    ///
+    /// Failures are logged but never block command handling.
+    fn sync_mutation_manifest(&self, source: &str, action: &str, reason: Option<&str>) {
+        let event = crate::mutation_manifest::MutationSyncEvent::new(
+            source,
+            action,
+            reason.map(str::to_owned),
+        );
+        if let Err(e) = crate::mutation_manifest::sync_mutation_manifest(event) {
+            warn!(
+                source,
+                action,
+                error = %e,
+                "failed to sync mutation manifest"
+            );
+        }
+    }
+
     /// Read the current pipeline state.
     pub(crate) fn pipeline_state(&self) -> PipelineState {
         self.pipeline_state
@@ -317,7 +349,10 @@ impl FaeDeviceTransferHandler {
         if config.runtime.profile == profile {
             if profile == RuntimeProfile::Rescue {
                 config.llm.backend = LlmBackend::Local;
-                config.llm.tool_mode = AgentToolMode::ReadWrite;
+                config.llm.tool_mode = AgentToolMode::ReadOnly;
+                if config.runtime.rescue_entered_at_secs.is_none() {
+                    config.runtime.rescue_entered_at_secs = Some(Self::now_epoch_secs());
+                }
             }
             return false;
         }
@@ -331,11 +366,13 @@ impl FaeDeviceTransferHandler {
                     });
                 }
                 config.runtime.profile = RuntimeProfile::Rescue;
+                config.runtime.rescue_entered_at_secs = Some(Self::now_epoch_secs());
                 config.llm.backend = LlmBackend::Local;
-                config.llm.tool_mode = AgentToolMode::ReadWrite;
+                config.llm.tool_mode = AgentToolMode::ReadOnly;
             }
             RuntimeProfile::Standard => {
                 config.runtime.profile = RuntimeProfile::Standard;
+                config.runtime.rescue_entered_at_secs = None;
                 if let Some(saved) = config.runtime.rescue_saved_llm.take() {
                     config.llm.backend = saved.backend;
                     config.llm.tool_mode = saved.tool_mode;
@@ -346,6 +383,110 @@ impl FaeDeviceTransferHandler {
         true
     }
 
+    fn now_epoch_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    fn rescue_health_json(inputs: RescueHealthInputs, now_secs: u64) -> serde_json::Value {
+        let mut score: i32 = 100;
+        let mut reasons: Vec<&'static str> = Vec::new();
+
+        if inputs.restart_count_fail_safe {
+            score -= 30;
+            reasons.push("restart_count_fail_safe");
+        }
+
+        if inputs.pipeline_error {
+            score -= 35;
+            reasons.push("pipeline_error");
+        }
+
+        let threshold = inputs.restart_threshold.max(1);
+        if inputs.restart_count >= threshold {
+            score -= 40;
+            reasons.push("restart_threshold_reached");
+        } else if inputs.restart_count.saturating_mul(100) >= threshold.saturating_mul(66) {
+            score -= 25;
+            reasons.push("restart_pressure_high");
+        } else if inputs.restart_count > 0 {
+            score -= 10;
+            reasons.push("restart_pressure_present");
+        }
+
+        if inputs.profile == RuntimeProfile::Rescue {
+            score = score.min(35);
+            reasons.push("rescue_mode_active");
+        }
+
+        let timeout_secs = u64::from(inputs.timeout_minutes).saturating_mul(60);
+        let auto_exit_in_secs = if inputs.profile == RuntimeProfile::Rescue && timeout_secs > 0 {
+            inputs.entered_at_secs.map(|entered| {
+                let elapsed = now_secs.saturating_sub(entered);
+                timeout_secs.saturating_sub(elapsed)
+            })
+        } else {
+            None
+        };
+
+        let should_enter_rescue = inputs.profile == RuntimeProfile::Standard
+            && inputs.restart_threshold > 0
+            && inputs.restart_count >= inputs.restart_threshold;
+        let should_exit_rescue = inputs.profile == RuntimeProfile::Rescue
+            && timeout_secs > 0
+            && inputs
+                .entered_at_secs
+                .is_some_and(|entered| now_secs.saturating_sub(entered) >= timeout_secs);
+
+        let state = if inputs.profile == RuntimeProfile::Rescue {
+            "rescue"
+        } else if score >= 80 {
+            "stable"
+        } else if score >= 50 {
+            "degraded"
+        } else {
+            "critical"
+        };
+
+        let score = score.clamp(0, 100);
+        serde_json::json!({
+            "score": score,
+            "state": state,
+            "profile": inputs.profile.as_str(),
+            "restart_count": inputs.restart_count,
+            "restart_count_fail_safe": inputs.restart_count_fail_safe,
+            "restart_threshold": inputs.restart_threshold,
+            "should_enter_rescue": should_enter_rescue,
+            "should_exit_rescue": should_exit_rescue,
+            "timeout_minutes": inputs.timeout_minutes,
+            "entered_at_secs": inputs.entered_at_secs,
+            "auto_exit_in_secs": auto_exit_in_secs,
+            "reasons": reasons,
+        })
+    }
+
+    /// Persist a runtime profile transition audit record.
+    ///
+    /// Errors are non-fatal and only logged so rescue/profile transitions are
+    /// never blocked by audit I/O failures.
+    fn append_runtime_profile_audit(&self, entry: RuntimeAuditEntry) {
+        if entry.from_profile == entry.to_profile {
+            return;
+        }
+        if let Err(e) =
+            crate::runtime_audit::append_runtime_audit_for_config(&self.config_path, &entry)
+        {
+            warn!(
+                error = %e,
+                from_profile = entry.from_profile.as_str(),
+                to_profile = entry.to_profile.as_str(),
+                "failed to append runtime profile audit entry"
+            );
+        }
+    }
+
     /// Auto-enable rescue runtime profile when crash restart pressure is high.
     ///
     /// Returns `true` when the profile was switched during this call.
@@ -353,16 +494,28 @@ impl FaeDeviceTransferHandler {
         &self,
         restart_count: u32,
     ) -> Result<bool> {
-        let (auto_activated_rescue, rescue_threshold) = {
+        let (auto_activated_rescue, rescue_threshold, from_profile, to_profile) = {
             let mut guard = self.lock_config()?;
             let rescue_threshold = guard.runtime.rescue_restart_threshold;
+            let from_profile = guard.runtime.profile;
             let auto_activated_rescue = guard.runtime.profile != RuntimeProfile::Rescue
                 && restart_count >= guard.runtime.rescue_restart_threshold
                 && Self::apply_runtime_profile(&mut guard, RuntimeProfile::Rescue);
-            (auto_activated_rescue, rescue_threshold)
+            let to_profile = guard.runtime.profile;
+            (
+                auto_activated_rescue,
+                rescue_threshold,
+                from_profile,
+                to_profile,
+            )
         };
         if auto_activated_rescue {
-            self.save_config()?;
+            if let Err(e) = self.save_config() {
+                warn!(
+                    error = %e,
+                    "failed to persist rescue activation; continuing with in-memory rescue profile"
+                );
+            }
             self.emit_event(
                 "runtime.rescue_mode_activated",
                 serde_json::json!({
@@ -375,8 +528,78 @@ impl FaeDeviceTransferHandler {
                 restart_count,
                 rescue_threshold, "runtime profile auto-switched to rescue mode"
             );
+            self.append_runtime_profile_audit(RuntimeAuditEntry::new(
+                RuntimeAuditSource::AutoRecovery,
+                from_profile,
+                to_profile,
+                "restart_threshold_reached",
+                Some(restart_count),
+                Some(rescue_threshold),
+                None,
+            ));
         }
         Ok(auto_activated_rescue)
+    }
+
+    /// Auto-exit rescue profile when configured timeout has elapsed.
+    ///
+    /// Returns `true` if profile changed from `rescue` to `standard`.
+    fn maybe_exit_rescue_profile_for_timeout(&self) -> Result<bool> {
+        let now_secs = Self::now_epoch_secs();
+        let (auto_recovered, timeout_minutes, entered_at, from_profile, to_profile) = {
+            let mut guard = self.lock_config()?;
+            let timeout_minutes = guard.runtime.rescue_auto_exit_minutes;
+            let entered_at = guard.runtime.rescue_entered_at_secs;
+            let from_profile = guard.runtime.profile;
+            let timeout_secs = u64::from(timeout_minutes).saturating_mul(60);
+            let timed_out = guard.runtime.profile == RuntimeProfile::Rescue
+                && timeout_minutes > 0
+                && entered_at
+                    .is_some_and(|entered| now_secs.saturating_sub(entered) >= timeout_secs);
+            let auto_recovered =
+                timed_out && Self::apply_runtime_profile(&mut guard, RuntimeProfile::Standard);
+            let to_profile = guard.runtime.profile;
+            (
+                auto_recovered,
+                timeout_minutes,
+                entered_at,
+                from_profile,
+                to_profile,
+            )
+        };
+
+        if auto_recovered {
+            if let Err(e) = self.save_config() {
+                warn!(
+                    error = %e,
+                    "failed to persist rescue auto-recovery; continuing with in-memory standard profile"
+                );
+            }
+            self.emit_event(
+                "runtime.rescue_mode_auto_recovered",
+                serde_json::json!({
+                    "reason": "timeout_elapsed",
+                    "timeout_minutes": timeout_minutes,
+                    "entered_at_secs": entered_at,
+                }),
+            );
+            info!(
+                timeout_minutes,
+                entered_at = entered_at.unwrap_or(0),
+                "runtime profile auto-switched to standard after rescue timeout elapsed"
+            );
+            self.append_runtime_profile_audit(RuntimeAuditEntry::new(
+                RuntimeAuditSource::AutoRecovery,
+                from_profile,
+                to_profile,
+                "rescue_timeout_elapsed",
+                None,
+                None,
+                None,
+            ));
+        }
+
+        Ok(auto_recovered)
     }
 
     /// Read the restart counter for startup decisions.
@@ -1023,6 +1246,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
     fn reload_skills(&self) -> Result<()> {
         info!("skills.reload — re-scanning custom skills directory");
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skills.reload", None);
         Ok(())
     }
 
@@ -1104,6 +1328,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let info = crate::skills::install_python_skill(package_dir)
             .map_err(|e| SpeechError::Config(format!("skill.python.install failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.install", None);
         Ok(info)
     }
 
@@ -1113,6 +1338,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::disable_python_skill(skill_id)
             .map_err(|e| SpeechError::Config(format!("skill.python.disable failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.disable", None);
         Ok(())
     }
 
@@ -1122,6 +1348,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::activate_python_skill(skill_id)
             .map_err(|e| SpeechError::Config(format!("skill.python.activate failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.activate", None);
         Ok(())
     }
 
@@ -1131,6 +1358,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::quarantine_python_skill(skill_id, reason)
             .map_err(|e| SpeechError::Config(format!("skill.python.quarantine failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.quarantine", Some(reason));
         Ok(())
     }
 
@@ -1140,6 +1368,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::rollback_python_skill(skill_id)
             .map_err(|e| SpeechError::Config(format!("skill.python.rollback failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest("host.command", "skill.python.rollback", None);
         Ok(())
     }
 
@@ -1153,6 +1382,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         crate::skills::advance_python_skill_status(skill_id, status)
             .map_err(|e| SpeechError::Config(format!("skill.python.advance_status failed: {e}")))?;
         self.invalidate_skill_discovery_cache();
+        self.sync_mutation_manifest(
+            "host.command",
+            "skill.python.advance_status",
+            Some(&status.to_string()),
+        );
         Ok(())
     }
 
@@ -1312,6 +1546,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     )
                     .map_err(|e| SpeechError::Config(format!("skill install failed: {e}")))?;
                     self.invalidate_skill_discovery_cache();
+                    self.sync_mutation_manifest(
+                        "host.command",
+                        "skill.generate.install",
+                        Some("proposal_confirmed"),
+                    );
                     Ok(serde_json::json!({
                         "status": "installed",
                         "skill_id": info.id,
@@ -1319,6 +1558,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     }))
                 } else {
                     // Return proposal for review.
+                    self.sync_mutation_manifest(
+                        "host.command",
+                        "skill.generate.propose",
+                        Some("proposal_staged"),
+                    );
                     let proposal_json = serde_json::to_value(&proposal).map_err(|e| {
                         SpeechError::Config(format!("failed to serialize proposal: {e}"))
                     })?;
@@ -1467,6 +1711,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let python_skills_dir = crate::fae_dirs::python_skills_dir();
         let info = channel_templates::install_channel_skill(ct, &python_skills_dir)
             .map_err(|e| SpeechError::Config(format!("failed to install channel skill: {e}")))?;
+        self.sync_mutation_manifest("host.command", "skill.channel.install", Some(channel_type));
 
         Ok(serde_json::json!({
             "installed": true,
@@ -1551,9 +1796,12 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             _ => {}
         }
 
+        let _ = self.maybe_exit_rescue_profile_for_timeout()?;
+
         // Auto-activate rescue profile after repeated crash restarts.
         let restart_count = self.restart_count_for_start();
         let _ = self.maybe_activate_rescue_profile_for_restart_pressure(restart_count)?;
+        self.sync_mutation_manifest("host.runtime", "runtime.start_scan", None);
 
         if let Ok(mut guard) = self.pipeline_state.lock() {
             *guard = PipelineState::Starting;
@@ -2051,12 +2299,78 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             result["uptime_secs"] = serde_json::json!(started.elapsed().as_secs());
         }
 
-        if let Ok(cnt) = self.restart_count.lock() {
-            result["restart_count"] = serde_json::json!(*cnt);
-        }
+        let (restart_count, restart_count_fail_safe) = match self.restart_count.lock() {
+            Ok(count) => (*count, false),
+            Err(_) => (u32::MAX, true),
+        };
+        result["restart_count"] = serde_json::json!(restart_count);
 
         if let Ok(mode) = self.pipeline_mode.lock() {
             result["pipeline_mode"] = serde_json::json!(mode.to_string());
+        }
+
+        let runtime_config = self
+            .config
+            .lock()
+            .map(|g| g.runtime.clone())
+            .unwrap_or_else(|_| RuntimeConfig::default());
+
+        let profile = runtime_config.profile;
+        let restart_threshold = runtime_config.rescue_restart_threshold;
+        let timeout_minutes = runtime_config.rescue_auto_exit_minutes;
+        let entered_at_secs = runtime_config.rescue_entered_at_secs;
+        let rescue_health = Self::rescue_health_json(
+            RescueHealthInputs {
+                profile,
+                restart_count,
+                restart_count_fail_safe,
+                restart_threshold,
+                timeout_minutes,
+                entered_at_secs,
+                pipeline_error: matches!(state, PipelineState::Error(_)),
+            },
+            Self::now_epoch_secs(),
+        );
+        result["rescue_health"] = rescue_health;
+
+        match crate::kernel_signature::run_kernel_signature_check(&runtime_config) {
+            Ok(report) => match serde_json::to_value(report) {
+                Ok(value) => {
+                    result["kernel_signature"] = value;
+                }
+                Err(e) => {
+                    result["kernel_signature"] = serde_json::json!({
+                        "status": "serialization_error",
+                        "error": format!("{e}"),
+                    });
+                }
+            },
+            Err(e) => {
+                result["kernel_signature"] = serde_json::json!({
+                    "status": "error",
+                    "error": format!("{e}"),
+                });
+            }
+        }
+
+        match crate::mutation_manifest::summarize_mutation_manifest() {
+            Ok(summary) => match serde_json::to_value(summary) {
+                Ok(value) => {
+                    result["mutation_manifest"] = value;
+                }
+                Err(e) => {
+                    result["mutation_manifest"] = serde_json::json!({
+                        "status": "serialization_error",
+                        "error": format!("{e}"),
+                    });
+                }
+            },
+            Err(e) => {
+                result["mutation_manifest"] = serde_json::json!({
+                    "status": "error",
+                    "error": format!("{e}"),
+                });
+            }
         }
 
         Ok(result)
@@ -2279,10 +2593,21 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     )) {
                         Ok(profile) => {
                             let mut guard = self.lock_config()?;
+                            let from_profile = guard.runtime.profile;
                             let changed = Self::apply_runtime_profile(&mut guard, profile);
+                            let to_profile = guard.runtime.profile;
                             drop(guard);
                             if changed {
                                 self.save_config()?;
+                                self.append_runtime_profile_audit(RuntimeAuditEntry::new(
+                                    RuntimeAuditSource::ConfigPatch,
+                                    from_profile,
+                                    to_profile,
+                                    "manual_config_patch_runtime_profile",
+                                    None,
+                                    None,
+                                    None,
+                                ));
                             }
                             info!(?profile, "config.patch applied: runtime.profile");
                         }
@@ -2341,6 +2666,21 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
         let (event_tx, _) = broadcast::channel(16);
         let handler = FaeDeviceTransferHandler::new(config, path, rt.handle().clone(), event_tx);
+        (handler, dir, rt)
+    }
+
+    fn handler_with_unwritable_config_path() -> (
+        FaeDeviceTransferHandler,
+        tempfile::TempDir,
+        tokio::runtime::Runtime,
+    ) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config_path = dir.path().to_path_buf();
+        let config = SpeechConfig::default();
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let (event_tx, _) = broadcast::channel(16);
+        let handler =
+            FaeDeviceTransferHandler::new(config, config_path, rt.handle().clone(), event_tx);
         (handler, dir, rt)
     }
 
@@ -2457,7 +2797,8 @@ mod tests {
         let guard = handler.config.lock().unwrap();
         assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
         assert_eq!(guard.llm.backend, LlmBackend::Local);
-        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
+        assert!(guard.runtime.rescue_entered_at_secs.is_some());
     }
 
     #[test]
@@ -2475,7 +2816,7 @@ mod tests {
         {
             let guard = handler.config.lock().unwrap();
             assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
-            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
             let saved = guard
                 .runtime
                 .rescue_saved_llm
@@ -2491,10 +2832,38 @@ mod tests {
         assert_eq!(guard.runtime.profile, RuntimeProfile::Standard);
         assert_eq!(guard.llm.tool_mode, AgentToolMode::Full);
         assert_eq!(guard.llm.backend, LlmBackend::Local);
+        assert!(guard.runtime.rescue_entered_at_secs.is_none());
         assert!(
             guard.runtime.rescue_saved_llm.is_none(),
             "saved rescue settings should be cleared after restore"
         );
+    }
+
+    #[test]
+    fn runtime_profile_patch_writes_transition_audit_entries() {
+        let (handler, dir, _rt) = temp_handler();
+        let config_path = dir.path().join("config.toml");
+
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("rescue"))
+            .unwrap();
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("standard"))
+            .unwrap();
+
+        let entries =
+            crate::runtime_audit::read_recent_runtime_audit_for_config(&config_path, 10).unwrap();
+        assert_eq!(entries.len(), 2, "expected two profile transition audits");
+
+        assert_eq!(entries[0].source, RuntimeAuditSource::ConfigPatch);
+        assert_eq!(entries[0].from_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[0].to_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[0].reason, "manual_config_patch_runtime_profile");
+
+        assert_eq!(entries[1].source, RuntimeAuditSource::ConfigPatch);
+        assert_eq!(entries[1].from_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[1].to_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[1].reason, "manual_config_patch_runtime_profile");
     }
 
     #[test]
@@ -2524,7 +2893,8 @@ mod tests {
 
     #[test]
     fn rescue_profile_auto_activates_after_restart_threshold() {
-        let (handler, _dir, _rt) = temp_handler();
+        let (handler, dir, _rt) = temp_handler();
+        let config_path = dir.path().join("config.toml");
         {
             let mut guard = handler.config.lock().unwrap();
             guard.llm.tool_mode = AgentToolMode::FullNoApproval;
@@ -2540,12 +2910,35 @@ mod tests {
             let guard = handler.config.lock().unwrap();
             assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
             assert_eq!(guard.llm.backend, LlmBackend::Local);
-            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
             assert_eq!(
                 guard.runtime.rescue_saved_llm.map(|saved| saved.tool_mode),
                 Some(AgentToolMode::FullNoApproval)
             );
         }
+
+        let entries =
+            crate::runtime_audit::read_recent_runtime_audit_for_config(&config_path, 10).unwrap();
+        assert_eq!(entries.len(), 1, "expected one auto rescue audit");
+        assert_eq!(entries[0].source, RuntimeAuditSource::AutoRecovery);
+        assert_eq!(entries[0].from_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[0].to_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[0].reason, "restart_threshold_reached");
+        assert_eq!(entries[0].restart_count, Some(3));
+        assert_eq!(entries[0].threshold, Some(3));
+    }
+
+    #[test]
+    fn rescue_profile_auto_activation_succeeds_even_if_config_save_fails() {
+        let (handler, _dir, _rt) = handler_with_unwritable_config_path();
+        let activated = handler
+            .maybe_activate_rescue_profile_for_restart_pressure(3)
+            .expect("rescue activation should still succeed");
+        assert!(activated, "rescue should activate despite save failure");
+
+        let guard = handler.config.lock().unwrap();
+        assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
     }
 
     #[test]
@@ -2588,7 +2981,74 @@ mod tests {
             RuntimeProfile::Rescue,
             "poisoned restart_count should force rescue profile"
         );
-        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadOnly);
+    }
+
+    #[test]
+    fn rescue_profile_auto_recovers_after_timeout() {
+        let (handler, dir, _rt) = temp_handler();
+        let config_path = dir.path().join("config.toml");
+        {
+            let mut guard = handler.config.lock().unwrap();
+            guard.llm.tool_mode = AgentToolMode::FullNoApproval;
+            guard.runtime.profile = RuntimeProfile::Rescue;
+            guard.runtime.rescue_saved_llm = Some(RuntimeRescueSavedLlmConfig {
+                backend: LlmBackend::Local,
+                tool_mode: AgentToolMode::FullNoApproval,
+            });
+            guard.runtime.rescue_auto_exit_minutes = 10;
+            guard.runtime.rescue_entered_at_secs =
+                Some(FaeDeviceTransferHandler::now_epoch_secs().saturating_sub(10 * 60));
+        }
+
+        let recovered = handler
+            .maybe_exit_rescue_profile_for_timeout()
+            .expect("rescue timeout recovery should succeed");
+        assert!(recovered, "rescue timeout should auto-recover");
+
+        {
+            let guard = handler.config.lock().unwrap();
+            assert_eq!(guard.runtime.profile, RuntimeProfile::Standard);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::FullNoApproval);
+            assert!(guard.runtime.rescue_entered_at_secs.is_none());
+            assert!(guard.runtime.rescue_saved_llm.is_none());
+        }
+
+        let entries =
+            crate::runtime_audit::read_recent_runtime_audit_for_config(&config_path, 10).unwrap();
+        assert_eq!(entries.len(), 1, "expected one timeout recovery audit");
+        assert_eq!(entries[0].source, RuntimeAuditSource::AutoRecovery);
+        assert_eq!(entries[0].from_profile, RuntimeProfile::Rescue);
+        assert_eq!(entries[0].to_profile, RuntimeProfile::Standard);
+        assert_eq!(entries[0].reason, "rescue_timeout_elapsed");
+    }
+
+    #[test]
+    fn rescue_timeout_auto_recovery_succeeds_even_if_config_save_fails() {
+        let (handler, _dir, _rt) = handler_with_unwritable_config_path();
+        {
+            let mut guard = handler.config.lock().unwrap();
+            guard.runtime.profile = RuntimeProfile::Rescue;
+            guard.runtime.rescue_saved_llm = Some(RuntimeRescueSavedLlmConfig {
+                backend: LlmBackend::Local,
+                tool_mode: AgentToolMode::FullNoApproval,
+            });
+            guard.runtime.rescue_auto_exit_minutes = 1;
+            guard.runtime.rescue_entered_at_secs =
+                Some(FaeDeviceTransferHandler::now_epoch_secs().saturating_sub(60));
+        }
+
+        let recovered = handler
+            .maybe_exit_rescue_profile_for_timeout()
+            .expect("rescue timeout recovery should still succeed");
+        assert!(
+            recovered,
+            "rescue timeout should recover despite save failure"
+        );
+
+        let guard = handler.config.lock().unwrap();
+        assert_eq!(guard.runtime.profile, RuntimeProfile::Standard);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::FullNoApproval);
     }
 
     #[test]
@@ -2856,6 +3316,149 @@ mod tests {
     }
 
     #[test]
+    fn runtime_status_includes_rescue_health() {
+        let (handler, _dir, _rt) = temp_handler();
+        let status = handler.query_runtime_status().unwrap();
+        let rescue_health = status
+            .get("rescue_health")
+            .expect("runtime status should include rescue_health");
+        let kernel_signature = status
+            .get("kernel_signature")
+            .expect("runtime status should include kernel_signature");
+        let mutation_manifest = status
+            .get("mutation_manifest")
+            .expect("runtime status should include mutation_manifest");
+
+        assert_eq!(rescue_health["profile"], "standard");
+        assert_eq!(rescue_health["state"], "stable");
+        assert_eq!(rescue_health["score"], 100);
+        assert_eq!(rescue_health["restart_count_fail_safe"], false);
+        assert_eq!(rescue_health["should_enter_rescue"], false);
+        assert_eq!(rescue_health["should_exit_rescue"], false);
+        assert_eq!(kernel_signature["status"], "disabled");
+        assert!(
+            mutation_manifest.get("artifact_count").is_some(),
+            "mutation manifest summary should include artifact_count"
+        );
+    }
+
+    #[test]
+    fn rescue_health_marks_threshold_pressure_in_standard_profile() {
+        let health = FaeDeviceTransferHandler::rescue_health_json(
+            RescueHealthInputs {
+                profile: RuntimeProfile::Standard,
+                restart_count: 3,
+                restart_count_fail_safe: false,
+                restart_threshold: 3,
+                timeout_minutes: 10,
+                entered_at_secs: None,
+                pipeline_error: false,
+            },
+            1_000,
+        );
+
+        assert_eq!(health["state"], "degraded");
+        assert_eq!(health["score"], 60);
+        assert_eq!(health["should_enter_rescue"], true);
+        assert_eq!(health["should_exit_rescue"], false);
+
+        let reasons = health["reasons"]
+            .as_array()
+            .expect("reasons should be an array");
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.as_str() == Some("restart_threshold_reached")),
+            "threshold pressure reason should be present"
+        );
+    }
+
+    #[test]
+    fn rescue_health_marks_timeout_exit_in_rescue_profile() {
+        let health = FaeDeviceTransferHandler::rescue_health_json(
+            RescueHealthInputs {
+                profile: RuntimeProfile::Rescue,
+                restart_count: 0,
+                restart_count_fail_safe: false,
+                restart_threshold: 3,
+                timeout_minutes: 10,
+                entered_at_secs: Some(1_000),
+                pipeline_error: false,
+            },
+            1_700,
+        );
+
+        assert_eq!(health["state"], "rescue");
+        assert_eq!(health["score"], 35);
+        assert_eq!(health["should_enter_rescue"], false);
+        assert_eq!(health["should_exit_rescue"], true);
+        assert_eq!(health["auto_exit_in_secs"], 0);
+
+        let reasons = health["reasons"]
+            .as_array()
+            .expect("reasons should be an array");
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.as_str() == Some("rescue_mode_active")),
+            "rescue reason should be present"
+        );
+    }
+
+    #[test]
+    fn rescue_health_marks_restart_count_fail_safe() {
+        let health = FaeDeviceTransferHandler::rescue_health_json(
+            RescueHealthInputs {
+                profile: RuntimeProfile::Standard,
+                restart_count: u32::MAX,
+                restart_count_fail_safe: true,
+                restart_threshold: 3,
+                timeout_minutes: 10,
+                entered_at_secs: None,
+                pipeline_error: false,
+            },
+            1_000,
+        );
+
+        assert_eq!(health["restart_count_fail_safe"], true);
+        assert_eq!(health["should_enter_rescue"], true);
+        assert_eq!(health["state"], "critical");
+
+        let reasons = health["reasons"]
+            .as_array()
+            .expect("reasons should be an array");
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.as_str() == Some("restart_count_fail_safe")),
+            "restart_count_fail_safe reason should be present"
+        );
+    }
+
+    #[test]
+    fn runtime_status_reports_restart_count_fail_safe_when_lock_poisoned() {
+        let (handler, _dir, _rt) = temp_handler();
+
+        {
+            let restart_count = Arc::clone(&handler.restart_count);
+            let _ = std::thread::spawn(move || {
+                let _guard = restart_count
+                    .lock()
+                    .expect("restart_count lock should be acquired");
+                panic!("poison restart_count");
+            })
+            .join();
+        }
+
+        let status = handler
+            .query_runtime_status()
+            .expect("runtime status query");
+        assert_eq!(status["restart_count"], u32::MAX);
+        assert_eq!(status["rescue_health"]["restart_count_fail_safe"], true);
+        assert_eq!(status["rescue_health"]["should_enter_rescue"], true);
+    }
+
+    #[test]
     fn rescue_mode_scheduler_trigger_only_allows_builtin_tasks() {
         let mut builtin = crate::scheduler::ScheduledTask::new(
             "memory_gc",
@@ -3033,6 +3636,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires ML model download — run locally with cached models"]
     fn clean_stop_does_not_increment_restart_count() {
         let (handler, _dir, _rt) = temp_handler();
 

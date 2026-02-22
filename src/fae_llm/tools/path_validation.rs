@@ -121,10 +121,35 @@ fn is_protected_kernel_path(path: &Path, workspace_root: &Path) -> bool {
         return false;
     };
 
-    PROTECTED_KERNEL_FILES.iter().any(|p| *p == relative)
+    PROTECTED_KERNEL_FILES
+        .iter()
+        .any(|p| protected_component_eq(p, &relative))
         || PROTECTED_KERNEL_PREFIXES
             .iter()
-            .any(|prefix| relative.starts_with(prefix))
+            .any(|prefix| protected_component_starts_with(&relative, prefix))
+}
+
+#[cfg(target_os = "macos")]
+fn protected_component_eq(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn protected_component_eq(left: &str, right: &str) -> bool {
+    left == right
+}
+
+#[cfg(target_os = "macos")]
+fn protected_component_starts_with(path: &str, prefix: &str) -> bool {
+    let path_bytes = path.as_bytes();
+    let prefix_bytes = prefix.as_bytes();
+    path_bytes.len() >= prefix_bytes.len()
+        && path_bytes[..prefix_bytes.len()].eq_ignore_ascii_case(prefix_bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn protected_component_starts_with(path: &str, prefix: &str) -> bool {
+    path.starts_with(prefix)
 }
 
 /// Resolve and canonicalize the current workspace root.
@@ -240,6 +265,15 @@ pub fn validate_write_path_in_workspace(
         return Err(FaeLlmError::ToolValidationError(
             "cannot write to system directory".into(),
         ));
+    }
+
+    if let Ok(metadata) = std::fs::symlink_metadata(&absolute)
+        && metadata.file_type().is_symlink()
+    {
+        let safe_path = sanitize_path_for_error(&absolute, &root);
+        return Err(FaeLlmError::ToolValidationError(format!(
+            "cannot write through symlink path: {safe_path}"
+        )));
     }
 
     if is_protected_kernel_path(&absolute, &root) {
@@ -506,6 +540,37 @@ mod tests {
         assert!(
             result.is_err(),
             "absolute path with parent-dir traversal should be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_path_rejects_symlink_target() {
+        let workspace = setup_workspace();
+        let real = workspace.path().join("real.txt");
+        write_file(&real, "ok");
+        let link = workspace.path().join("link.txt");
+        std::os::unix::fs::symlink(&real, &link).unwrap_or_else(|_| unreachable!());
+
+        let result =
+            validate_write_path_in_workspace(link.to_str().unwrap_or(""), workspace.path());
+        assert!(result.is_err(), "symlink target should be rejected");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn write_path_rejects_case_variant_of_protected_kernel_path() {
+        let workspace = setup_workspace();
+        let protected = workspace.path().join("SRC/PIPELINE/CoOrDiNaToR.rs");
+        let parent = protected.parent().unwrap_or_else(|| unreachable!("parent"));
+        std::fs::create_dir_all(parent).unwrap_or_else(|_| unreachable!("mkdir should succeed"));
+        write_file(&protected, "kernel");
+
+        let result =
+            validate_write_path_in_workspace(protected.to_str().unwrap_or(""), workspace.path());
+        assert!(
+            result.is_err(),
+            "case-variant protected kernel path should be rejected on macOS"
         );
     }
 }

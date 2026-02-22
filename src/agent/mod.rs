@@ -738,8 +738,10 @@ mod tests {
 
     #[test]
     fn full_mode_registers_python_skill_tool() {
-        let mut config = LlmConfig::default();
-        config.tool_mode = AgentToolMode::Full;
+        let config = LlmConfig {
+            tool_mode: AgentToolMode::Full,
+            ..LlmConfig::default()
+        };
 
         let registry = build_registry(&config, None, None, None);
         assert!(

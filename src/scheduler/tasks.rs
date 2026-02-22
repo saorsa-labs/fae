@@ -709,7 +709,10 @@ fn run_morning_briefing_check(memory_root: &Path) -> TaskResult {
 
 /// Check for skill proposal opportunities.
 fn run_skill_proposal_check(memory_root: &Path) -> TaskResult {
-    let opportunities = crate::intelligence::detect_skill_opportunities(memory_root);
+    let fae_root = memory_root.parent().unwrap_or(memory_root);
+    let policy = crate::intelligence::load_skill_opportunity_policy(fae_root);
+    let opportunities =
+        crate::intelligence::detect_skill_opportunities_with_policy(memory_root, policy);
     if opportunities.is_empty() {
         TaskResult::Success("no new skill opportunities detected".into())
     } else {
@@ -951,6 +954,33 @@ mod tests {
         repo.insert_record_raw(&record).expect("insert old record");
     }
 
+    fn seed_active_event_record(root: &std::path::Path, id: &str) {
+        use crate::memory::{MemoryKind, MemoryRecord, MemoryStatus};
+
+        let repo =
+            crate::memory::SqliteMemoryRepository::new(root).expect("sqlite repo for seeding");
+        repo.ensure_layout().expect("ensure memory layout");
+
+        let now = super::now_epoch_secs();
+        let record = MemoryRecord {
+            id: id.to_owned(),
+            kind: MemoryKind::Event,
+            status: MemoryStatus::Active,
+            text: "date reminder".to_owned(),
+            confidence: 0.8,
+            source_turn_id: Some("turn-event".to_owned()),
+            tags: vec!["calendar".to_owned()],
+            supersedes: None,
+            created_at: now,
+            updated_at: now,
+            importance_score: None,
+            stale_after_secs: None,
+            metadata: None,
+        };
+        repo.insert_record_raw(&record)
+            .expect("insert event record");
+    }
+
     #[test]
     fn new_task_has_correct_defaults() {
         let task = ScheduledTask::new("test", "Test Task", Schedule::Interval { secs: 3600 });
@@ -1112,6 +1142,48 @@ mod tests {
     fn execute_builtin_unknown_task_returns_error() {
         let result = execute_builtin("nonexistent_task");
         assert!(matches!(result, TaskResult::Error(_)));
+    }
+
+    #[test]
+    fn run_skill_proposal_check_uses_mutable_policy_pack() {
+        let root = temp_root("skill-proposal-policy");
+        let memory_root = root.join("memory");
+        std::fs::create_dir_all(&memory_root).expect("create memory root");
+
+        for idx in 0..3 {
+            seed_active_event_record(&memory_root, &format!("event-{idx}"));
+        }
+
+        let policy_path = root.join("skills/intelligence/skill-opportunity-policy.toml");
+        std::fs::create_dir_all(
+            policy_path
+                .parent()
+                .expect("policy should have a parent directory"),
+        )
+        .expect("create policy dir");
+        std::fs::write(
+            &policy_path,
+            "calendar_min_event_mentions = 4\nemail_min_mentions = 99\ntopic_min_research_mentions = 99\n",
+        )
+        .expect("write strict policy");
+
+        let strict = run_skill_proposal_check(&memory_root);
+        assert!(matches!(strict, TaskResult::Success(_)));
+        assert_eq!(strict.summary(), "no new skill opportunities detected");
+
+        std::fs::write(
+            &policy_path,
+            "calendar_min_event_mentions = 3\nemail_min_mentions = 99\ntopic_min_research_mentions = 99\n",
+        )
+        .expect("write relaxed policy");
+
+        let relaxed = run_skill_proposal_check(&memory_root);
+        assert!(matches!(relaxed, TaskResult::Success(_)));
+        assert!(
+            relaxed.summary().contains("Calendar Integration"),
+            "expected Calendar Integration in summary, got: {}",
+            relaxed.summary()
+        );
     }
 
     #[test]

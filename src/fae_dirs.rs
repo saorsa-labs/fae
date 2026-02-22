@@ -118,6 +118,24 @@ pub fn scheduler_file() -> PathBuf {
     config_dir().join("scheduler.json")
 }
 
+/// Runtime profile audit log path (`config_dir()/runtime_audit.jsonl`).
+#[must_use]
+pub fn runtime_audit_file() -> PathBuf {
+    config_dir().join("runtime_audit.jsonl")
+}
+
+/// Mutable-artifact mutation manifest path (`config_dir()/mutation_manifest.json`).
+#[must_use]
+pub fn mutation_manifest_file() -> PathBuf {
+    config_dir().join("mutation_manifest.json")
+}
+
+/// Kernel signature manifest path (`config_dir()/kernel-signatures.toml`).
+#[must_use]
+pub fn kernel_signatures_file() -> PathBuf {
+    config_dir().join("kernel-signatures.toml")
+}
+
 /// Diagnostics output directory (`data_dir()/diagnostics/`).
 #[must_use]
 pub fn diagnostics_dir() -> PathBuf {
@@ -241,7 +259,41 @@ mod tests {
     }
 
     #[test]
+    fn runtime_audit_file_ends_with_runtime_audit_jsonl() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = runtime_audit_file();
+        let s = path.to_string_lossy();
+        assert!(
+            s.ends_with("runtime_audit.jsonl"),
+            "runtime_audit_file: {s}"
+        );
+    }
+
+    #[test]
+    fn mutation_manifest_file_ends_with_mutation_manifest_json() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = mutation_manifest_file();
+        let s = path.to_string_lossy();
+        assert!(
+            s.ends_with("mutation_manifest.json"),
+            "mutation_manifest_file: {s}"
+        );
+    }
+
+    #[test]
+    fn kernel_signatures_file_ends_with_kernel_signatures_toml() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = kernel_signatures_file();
+        let s = path.to_string_lossy();
+        assert!(
+            s.ends_with("kernel-signatures.toml"),
+            "kernel_signatures_file: {s}"
+        );
+    }
+
+    #[test]
     fn logs_dir_is_subpath_of_data_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let logs = logs_dir();
         let data = data_dir();
         assert!(
@@ -254,6 +306,7 @@ mod tests {
 
     #[test]
     fn skills_dir_is_subpath_of_data_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let skills = skills_dir();
         let data = data_dir();
         assert!(
@@ -266,6 +319,7 @@ mod tests {
 
     #[test]
     fn diagnostics_dir_is_subpath_of_data_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let diag = diagnostics_dir();
         let data = data_dir();
         assert!(
@@ -278,6 +332,7 @@ mod tests {
 
     #[test]
     fn hf_cache_dir_is_subpath_of_cache_dir() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let hf = hf_cache_dir();
         let cache = cache_dir();
         assert!(

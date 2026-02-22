@@ -2,6 +2,8 @@
 
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
+use std::fs::OpenOptions;
+use std::io::{Read as _, Seek as _, Write as _};
 use std::path::PathBuf;
 
 use super::path_validation::{resolve_workspace_root, validate_write_path_in_workspace};
@@ -112,9 +114,13 @@ impl Tool for EditTool {
 
         let path = validate_write_path_in_workspace(path_str, &self.workspace_root)?;
 
-        // Read existing file
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
+        let path = match canonicalize_for_mutation(&path, &self.workspace_root) {
+            Ok(path) => path,
+            Err(message) => return Ok(ToolResult::failure(message)),
+        };
+
+        let mut file = match open_existing_rw_nofollow(&path) {
+            Ok(file) => file,
             Err(e) => {
                 return Ok(ToolResult::failure(format!(
                     "failed to read {}: {e}",
@@ -122,6 +128,16 @@ impl Tool for EditTool {
                 )));
             }
         };
+
+        // Read existing file from the opened descriptor so content and writeback
+        // apply to the same inode.
+        let mut content = String::new();
+        if let Err(e) = file.read_to_string(&mut content) {
+            return Ok(ToolResult::failure(format!(
+                "failed to read {}: {e}",
+                path.display()
+            )));
+        }
 
         // Check file size
         if content.len() > self.max_bytes {
@@ -150,8 +166,26 @@ impl Tool for EditTool {
         // Perform replacement
         let new_content = content.replacen(old_string, new_string, 1);
 
-        // Write back
-        if let Err(e) = std::fs::write(&path, &new_content) {
+        // Rewrite in place through the same opened descriptor.
+        if let Err(e) = file.set_len(0) {
+            return Ok(ToolResult::failure(format!(
+                "failed to write {}: {e}",
+                path.display()
+            )));
+        }
+        if let Err(e) = file.rewind() {
+            return Ok(ToolResult::failure(format!(
+                "failed to write {}: {e}",
+                path.display()
+            )));
+        }
+        if let Err(e) = file.write_all(new_content.as_bytes()) {
+            return Ok(ToolResult::failure(format!(
+                "failed to write {}: {e}",
+                path.display()
+            )));
+        }
+        if let Err(e) = file.sync_all() {
             return Ok(ToolResult::failure(format!(
                 "failed to write {}: {e}",
                 path.display()
@@ -169,6 +203,39 @@ impl Tool for EditTool {
     fn allowed_in_mode(&self, mode: ToolMode) -> bool {
         mode == ToolMode::Full
     }
+}
+
+fn canonicalize_for_mutation(
+    path: &std::path::Path,
+    workspace_root: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let root = workspace_root
+        .canonicalize()
+        .map_err(|e| format!("invalid workspace root: {e}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "path has no parent directory".to_string())?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve path parent: {e}"))?;
+    if !canonical_parent.starts_with(&root) {
+        return Err("path parent escapes workspace boundary".to_string());
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "path has no filename".to_string())?;
+    Ok(canonical_parent.join(file_name))
+}
+
+fn open_existing_rw_nofollow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path)
 }
 
 #[cfg(test)]
@@ -337,5 +404,24 @@ mod tests {
             "new_string": "y"
         }));
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edit_rejects_symlink_target() {
+        let workspace = tempfile::tempdir()
+            .unwrap_or_else(|_| unreachable!("tempdir creation should not fail"));
+        let real = workspace.path().join("real.txt");
+        std::fs::write(&real, "hello world").unwrap_or_default();
+        let link = workspace.path().join("link.txt");
+        std::os::unix::fs::symlink(&real, &link).unwrap_or_else(|_| unreachable!());
+
+        let tool = EditTool::with_workspace_root(workspace.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({
+            "path": link.to_str(),
+            "old_string": "world",
+            "new_string": "rust"
+        }));
+        assert!(result.is_err(), "symlink edits should be rejected");
     }
 }

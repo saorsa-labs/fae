@@ -2,6 +2,8 @@
 
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
+use std::fs::OpenOptions;
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use super::path_validation::{resolve_workspace_root, validate_write_path_in_workspace};
@@ -119,8 +121,14 @@ impl Tool for WriteTool {
             )));
         }
 
-        // Write file
-        if let Err(e) = std::fs::write(&path, content) {
+        // Re-anchor to the canonical parent path and open with nofollow to
+        // reduce symlink race windows between validation and mutation.
+        let path = match canonicalize_for_mutation(&path, &self.workspace_root) {
+            Ok(path) => path,
+            Err(message) => return Ok(ToolResult::failure(message)),
+        };
+
+        if let Err(e) = write_all_nofollow(&path, content.as_bytes()) {
             return Ok(ToolResult::failure(format!(
                 "failed to write {}: {e}",
                 path.display()
@@ -137,6 +145,43 @@ impl Tool for WriteTool {
     fn allowed_in_mode(&self, mode: ToolMode) -> bool {
         mode == ToolMode::Full
     }
+}
+
+fn canonicalize_for_mutation(
+    path: &std::path::Path,
+    workspace_root: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let root = workspace_root
+        .canonicalize()
+        .map_err(|e| format!("invalid workspace root: {e}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "path has no parent directory".to_string())?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve path parent: {e}"))?;
+    if !canonical_parent.starts_with(&root) {
+        return Err("path parent escapes workspace boundary".to_string());
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "path has no filename".to_string())?;
+    Ok(canonical_parent.join(file_name))
+}
+
+fn write_all_nofollow(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+
+    let mut file = options.open(path)?;
+    file.write_all(content)?;
+    file.sync_all()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -301,5 +346,22 @@ mod tests {
         };
         assert!(result.success);
         assert!(result.content.contains("5 bytes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_rejects_symlink_target() {
+        let dir = temp_dir();
+        let real = dir.path().join("real.txt");
+        std::fs::write(&real, "old").unwrap_or_default();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&real, &link).unwrap_or_else(|_| unreachable!());
+
+        let tool = WriteTool::with_workspace_root(dir.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({
+            "path": link.to_str(),
+            "content": "new content"
+        }));
+        assert!(result.is_err(), "symlink writes should be rejected");
     }
 }
