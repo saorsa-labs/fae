@@ -21,6 +21,10 @@
 //! (description text) is indexed.
 
 use std::path::Path;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 
 use rusqlite::{Connection, params};
 
@@ -316,6 +320,21 @@ impl SkillDiscoveryIndex {
             .map_err(|e| PythonSkillError::DatabaseError(e.to_string()))?;
         Ok(count as usize)
     }
+
+    /// Remove all indexed skills from metadata and vector tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PythonSkillError::DatabaseError`] on storage failure.
+    pub fn clear(&self) -> Result<(), PythonSkillError> {
+        self.conn
+            .execute("DELETE FROM skill_metadata", [])
+            .map_err(|e| PythonSkillError::DatabaseError(e.to_string()))?;
+        self.conn
+            .execute("DELETE FROM skill_embeddings", [])
+            .map_err(|e| PythonSkillError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
 }
 
 // ── Text extraction helpers ─────────────────────────────────────────────────
@@ -389,26 +408,53 @@ fn extract_first_paragraph(content: &str) -> String {
     paragraph
 }
 
+/// Generate a deterministic normalized embedding without external model files.
+///
+/// This is a lightweight lexical embedding used as a resilient fallback when
+/// model-backed embeddings are unavailable. It is stable across runs and keeps
+/// discovery functional in constrained or offline recovery modes.
+#[must_use]
+pub fn deterministic_embedding(text: &str) -> Vec<f32> {
+    let mut embedding = vec![0.0_f32; EMBEDDING_DIM];
+    for token in text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+    {
+        let lower = token.to_ascii_lowercase();
+        let mut hasher = DefaultHasher::new();
+        lower.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let idx_primary = (hash as usize) % EMBEDDING_DIM;
+        let idx_secondary = ((hash >> 32) as usize) % EMBEDDING_DIM;
+        let sign = if (hash & 1) == 0 { 1.0 } else { -1.0 };
+
+        embedding[idx_primary] += sign;
+        embedding[idx_secondary] += sign * 0.5;
+    }
+
+    let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for value in &mut embedding {
+            *value /= norm;
+        }
+    }
+    embedding
+}
+
 // ── Index rebuild ───────────────────────────────────────────────────────────
 
-/// Rebuilds the skill discovery index by scanning all skill sources.
-///
-/// Iterates over Python skills (from `python_skills_dir`), markdown skills
-/// (from `skills_dir`), and builtins. For each, extracts description text,
-/// generates an embedding, and stores it in the index.
-///
-/// Returns the number of skills indexed.
-///
-/// # Errors
-///
-/// Returns [`PythonSkillError::DatabaseError`] on storage failure, or
-/// propagates embedding engine errors.
-pub fn rebuild_skill_index(
+fn rebuild_skill_index_with_embedder<F, E>(
     index: &SkillDiscoveryIndex,
-    engine: &mut crate::memory::embedding::EmbeddingEngine,
     skills_dir: &Path,
     python_skills_dir: &Path,
-) -> Result<usize, PythonSkillError> {
+    mut embed_text: F,
+) -> Result<usize, PythonSkillError>
+where
+    F: FnMut(&str) -> std::result::Result<Vec<f32>, E>,
+    E: std::fmt::Display,
+{
+    index.clear()?;
     let mut count = 0;
 
     // 1. Index Python skills.
@@ -428,7 +474,7 @@ pub fn rebuild_skill_index(
                 extract_python_skill_text(python_skills_dir, skill_id)
             {
                 let text = format!("{name}: {description}");
-                match engine.embed(&text) {
+                match embed_text(&text) {
                     Ok(embedding) => {
                         index.index_skill(skill_id, &name, &description, "python", &embedding)?;
                         count += 1;
@@ -461,7 +507,7 @@ pub fn rebuild_skill_index(
 
             if let Some((name, description)) = extract_markdown_skill_text(&path) {
                 let text = format!("{name}: {description}");
-                match engine.embed(&text) {
+                match embed_text(&text) {
                     Ok(embedding) => {
                         index.index_skill(&name, &name, &description, "markdown", &embedding)?;
                         count += 1;
@@ -486,7 +532,7 @@ pub fn rebuild_skill_index(
     for (name, content) in builtins {
         let (_, description) = extract_builtin_skill_text(name, content);
         let text = format!("{name}: {description}");
-        match engine.embed(&text) {
+        match embed_text(&text) {
             Ok(embedding) => {
                 index.index_skill(name, name, &description, "builtin", &embedding)?;
                 count += 1;
@@ -499,6 +545,43 @@ pub fn rebuild_skill_index(
 
     tracing::info!(count, "skill discovery index rebuilt");
     Ok(count)
+}
+
+/// Rebuilds the skill discovery index by scanning all skill sources.
+///
+/// Iterates over Python skills (from `python_skills_dir`), markdown skills
+/// (from `skills_dir`), and builtins. For each, extracts description text,
+/// generates an embedding, and stores it in the index.
+///
+/// Returns the number of skills indexed.
+///
+/// # Errors
+///
+/// Returns [`PythonSkillError::DatabaseError`] on storage failure, or
+/// propagates embedding engine errors.
+pub fn rebuild_skill_index(
+    index: &SkillDiscoveryIndex,
+    engine: &mut crate::memory::embedding::EmbeddingEngine,
+    skills_dir: &Path,
+    python_skills_dir: &Path,
+) -> Result<usize, PythonSkillError> {
+    rebuild_skill_index_with_embedder(index, skills_dir, python_skills_dir, |text| {
+        engine.embed(text)
+    })
+}
+
+/// Rebuilds the index using deterministic lexical embeddings (no model download).
+///
+/// Useful for fallback/recovery flows where semantic embedding models are not
+/// available but skill discovery still needs to function.
+pub fn rebuild_skill_index_deterministic(
+    index: &SkillDiscoveryIndex,
+    skills_dir: &Path,
+    python_skills_dir: &Path,
+) -> Result<usize, PythonSkillError> {
+    rebuild_skill_index_with_embedder(index, skills_dir, python_skills_dir, |text| {
+        Ok::<Vec<f32>, std::convert::Infallible>(deterministic_embedding(text))
+    })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

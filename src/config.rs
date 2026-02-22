@@ -79,6 +79,9 @@ pub struct SpeechConfig {
     /// ```
     #[serde(default)]
     pub model_checksums: std::collections::HashMap<String, String>,
+    /// Runtime safety profile and rescue-mode activation criteria.
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
     /// Python skill subprocess runtime settings.
     #[serde(default)]
     pub python_skills: PythonSkillsConfig,
@@ -235,6 +238,71 @@ pub enum AgentToolMode {
     Full,
     /// Full tools without approval (LLM uses tools freely).
     FullNoApproval,
+}
+
+/// Runtime safety profile.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeProfile {
+    /// Normal operation with full command surface.
+    #[default]
+    Standard,
+    /// Emergency fallback profile with restricted host command surface.
+    Rescue,
+}
+
+impl RuntimeProfile {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Rescue => "rescue",
+        }
+    }
+}
+
+/// Runtime safety configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RuntimeConfig {
+    /// Current runtime profile.
+    pub profile: RuntimeProfile,
+    /// Auto-activate rescue profile when crash restart count reaches this value.
+    pub rescue_restart_threshold: u32,
+    /// Last known LLM settings before entering rescue mode.
+    ///
+    /// Persisted so returning to `standard` can restore the user's choices.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rescue_saved_llm: Option<RuntimeRescueSavedLlmConfig>,
+}
+
+/// Saved LLM settings captured before rescue mode overrides are applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RuntimeRescueSavedLlmConfig {
+    /// Previous backend selected by the user.
+    pub backend: LlmBackend,
+    /// Previous tool mode selected by the user.
+    pub tool_mode: AgentToolMode,
+}
+
+impl Default for RuntimeRescueSavedLlmConfig {
+    fn default() -> Self {
+        Self {
+            backend: LlmBackend::Local,
+            tool_mode: AgentToolMode::ReadOnly,
+        }
+    }
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            profile: RuntimeProfile::Standard,
+            rescue_restart_threshold: 3,
+            rescue_saved_llm: None,
+        }
+    }
 }
 
 /// Behaviour when user messages arrive during an active LLM run.
@@ -1929,5 +1997,46 @@ enabled = true
         // None fields should not appear in output.
         assert!(!serialized.contains("uv_path"));
         assert!(!serialized.contains("python_version"));
+    }
+
+    #[test]
+    fn runtime_config_defaults_to_standard_profile() {
+        let cfg = SpeechConfig::default();
+        assert_eq!(cfg.runtime.profile, RuntimeProfile::Standard);
+        assert_eq!(cfg.runtime.rescue_restart_threshold, 3);
+        assert!(cfg.runtime.rescue_saved_llm.is_none());
+    }
+
+    #[test]
+    fn runtime_profile_section_parses_from_toml() {
+        let toml_str = r#"
+[runtime]
+profile = "rescue"
+rescue_restart_threshold = 4
+"#;
+        let cfg: SpeechConfig = toml::from_str(toml_str).expect("parse runtime config");
+        assert_eq!(cfg.runtime.profile, RuntimeProfile::Rescue);
+        assert_eq!(cfg.runtime.rescue_restart_threshold, 4);
+        assert!(cfg.runtime.rescue_saved_llm.is_none());
+    }
+
+    #[test]
+    fn runtime_profile_parses_saved_llm_state() {
+        let toml_str = r#"
+[runtime]
+profile = "rescue"
+rescue_restart_threshold = 4
+[runtime.rescue_saved_llm]
+backend = "local"
+tool_mode = "full"
+"#;
+        let cfg: SpeechConfig = toml::from_str(toml_str).expect("parse runtime config");
+        assert_eq!(cfg.runtime.profile, RuntimeProfile::Rescue);
+        let saved = cfg
+            .runtime
+            .rescue_saved_llm
+            .expect("saved llm state should deserialize");
+        assert_eq!(saved.backend, LlmBackend::Local);
+        assert_eq!(saved.tool_mode, AgentToolMode::Full);
     }
 }

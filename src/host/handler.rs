@@ -1,7 +1,9 @@
 //! Production host command handler for the embedded Fae runtime.
 
 use crate::approval::ToolApprovalRequest;
-use crate::config::{AgentToolMode, SpeechConfig};
+use crate::config::{
+    AgentToolMode, LlmBackend, RuntimeProfile, RuntimeRescueSavedLlmConfig, SpeechConfig,
+};
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
 use crate::host::contract::EventEnvelope;
@@ -13,7 +15,7 @@ use crate::progress::ProgressEvent;
 use crate::runtime::RuntimeEvent;
 use crate::startup::initialize_models_with_progress;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc};
@@ -40,6 +42,13 @@ pub(crate) enum PipelineState {
     Running,
     Stopping,
     Error(String),
+}
+
+#[derive(Debug, Default)]
+struct SkillDiscoveryCacheState {
+    signature: Option<String>,
+    #[cfg(test)]
+    rebuild_count: u64,
 }
 
 /// Production device transfer handler that persists permission grants and
@@ -105,6 +114,8 @@ pub struct FaeDeviceTransferHandler {
     memory_pressure_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Current pipeline operating mode (updated on degraded mode transitions).
     pipeline_mode: Mutex<crate::pipeline::coordinator::PipelineMode>,
+    /// Cache state for skill discovery index rebuild decisions.
+    skill_discovery_cache: Mutex<SkillDiscoveryCacheState>,
 }
 
 impl std::fmt::Debug for FaeDeviceTransferHandler {
@@ -150,6 +161,7 @@ impl FaeDeviceTransferHandler {
             device_watcher_handle: Mutex::new(None),
             memory_pressure_handle: Mutex::new(None),
             pipeline_mode: Mutex::new(crate::pipeline::coordinator::PipelineMode::Conversation),
+            skill_discovery_cache: Mutex::new(SkillDiscoveryCacheState::default()),
         }
     }
 
@@ -218,6 +230,181 @@ impl FaeDeviceTransferHandler {
                     .collect::<Vec<_>>()
                     .join(", ")
             ))
+        })
+    }
+
+    fn invalidate_skill_discovery_cache(&self) {
+        if let Ok(mut cache) = self.skill_discovery_cache.lock() {
+            cache.signature = None;
+        }
+    }
+
+    #[cfg(test)]
+    fn skill_discovery_rebuild_count(&self) -> u64 {
+        self.skill_discovery_cache
+            .lock()
+            .map(|cache| cache.rebuild_count)
+            .unwrap_or(0)
+    }
+
+    fn skill_discovery_db_path(memory_root: &Path) -> PathBuf {
+        memory_root.join("skill-discovery.sqlite")
+    }
+
+    fn collect_skill_signature_inputs(
+        root: &Path,
+        hasher: &mut blake3::Hasher,
+        include_hidden: bool,
+        ext_filter: Option<&str>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+
+        for path in paths {
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !include_hidden && name.starts_with('.') {
+                continue;
+            }
+
+            if path.is_dir() {
+                Self::collect_skill_signature_inputs(&path, hasher, include_hidden, ext_filter);
+                continue;
+            }
+
+            if let Some(ext) = ext_filter
+                && path.extension().and_then(|e| e.to_str()) != Some(ext)
+            {
+                continue;
+            }
+
+            hasher.update(path.to_string_lossy().as_bytes());
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                hasher.update(metadata.len().to_le_bytes().as_slice());
+                if let Ok(modified) = metadata.modified()
+                    && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+                {
+                    hasher.update(since_epoch.as_secs().to_le_bytes().as_slice());
+                    hasher.update(since_epoch.subsec_nanos().to_le_bytes().as_slice());
+                }
+            }
+        }
+    }
+
+    fn compute_skill_discovery_signature(skills_dir: &Path, python_skills_dir: &Path) -> String {
+        let mut hasher = blake3::Hasher::new();
+        // Python skills are indexed from manifest.toml metadata.
+        Self::collect_skill_signature_inputs(python_skills_dir, &mut hasher, false, Some("toml"));
+        // Markdown skills are indexed from .md files.
+        Self::collect_skill_signature_inputs(skills_dir, &mut hasher, false, Some("md"));
+        // Built-in skill content contributes to the signature.
+        hasher.update(crate::skills::APPLE_ECOSYSTEM_SKILL.as_bytes());
+        hasher.update(crate::skills::CANVAS_SKILL.as_bytes());
+        hasher.update(crate::skills::DESKTOP_SKILL.as_bytes());
+        hasher.update(crate::skills::EXTERNAL_LLM_SKILL.as_bytes());
+        hasher.update(crate::skills::UV_SCRIPTS_SKILL.as_bytes());
+        hasher.finalize().to_hex().to_string()
+    }
+
+    /// Apply a runtime-profile transition, including rescue-mode LLM overrides
+    /// and restoration of previously saved LLM settings when returning to standard.
+    fn apply_runtime_profile(config: &mut SpeechConfig, profile: RuntimeProfile) -> bool {
+        if config.runtime.profile == profile {
+            if profile == RuntimeProfile::Rescue {
+                config.llm.backend = LlmBackend::Local;
+                config.llm.tool_mode = AgentToolMode::ReadWrite;
+            }
+            return false;
+        }
+
+        match profile {
+            RuntimeProfile::Rescue => {
+                if config.runtime.rescue_saved_llm.is_none() {
+                    config.runtime.rescue_saved_llm = Some(RuntimeRescueSavedLlmConfig {
+                        backend: config.llm.backend,
+                        tool_mode: config.llm.tool_mode,
+                    });
+                }
+                config.runtime.profile = RuntimeProfile::Rescue;
+                config.llm.backend = LlmBackend::Local;
+                config.llm.tool_mode = AgentToolMode::ReadWrite;
+            }
+            RuntimeProfile::Standard => {
+                config.runtime.profile = RuntimeProfile::Standard;
+                if let Some(saved) = config.runtime.rescue_saved_llm.take() {
+                    config.llm.backend = saved.backend;
+                    config.llm.tool_mode = saved.tool_mode;
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Auto-enable rescue runtime profile when crash restart pressure is high.
+    ///
+    /// Returns `true` when the profile was switched during this call.
+    fn maybe_activate_rescue_profile_for_restart_pressure(
+        &self,
+        restart_count: u32,
+    ) -> Result<bool> {
+        let (auto_activated_rescue, rescue_threshold) = {
+            let mut guard = self.lock_config()?;
+            let rescue_threshold = guard.runtime.rescue_restart_threshold;
+            let auto_activated_rescue = guard.runtime.profile != RuntimeProfile::Rescue
+                && restart_count >= guard.runtime.rescue_restart_threshold
+                && Self::apply_runtime_profile(&mut guard, RuntimeProfile::Rescue);
+            (auto_activated_rescue, rescue_threshold)
+        };
+        if auto_activated_rescue {
+            self.save_config()?;
+            self.emit_event(
+                "runtime.rescue_mode_activated",
+                serde_json::json!({
+                    "reason": "restart_threshold_reached",
+                    "restart_count": restart_count,
+                    "threshold": rescue_threshold,
+                }),
+            );
+            info!(
+                restart_count,
+                rescue_threshold, "runtime profile auto-switched to rescue mode"
+            );
+        }
+        Ok(auto_activated_rescue)
+    }
+
+    /// Read the restart counter for startup decisions.
+    ///
+    /// If the mutex is poisoned, return a fail-safe max value so startup
+    /// forces rescue mode instead of silently skipping protection.
+    fn restart_count_for_start(&self) -> u32 {
+        match self.restart_count.lock() {
+            Ok(guard) => *guard,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "restart_count lock poisoned; forcing rescue profile activation"
+                );
+                u32::MAX
+            }
+        }
+    }
+
+    /// Returns whether a scheduler task can be manually triggered in rescue mode.
+    ///
+    /// Rescue mode only permits built-in maintenance tasks.
+    fn rescue_mode_allows_scheduler_trigger(
+        snapshot: &crate::scheduler::SchedulerSnapshot,
+        task_id: &str,
+    ) -> bool {
+        snapshot.tasks.iter().any(|task| {
+            task.id == task_id && task.kind == crate::scheduler::tasks::TaskKind::Builtin
         })
     }
 
@@ -835,9 +1022,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
     fn reload_skills(&self) -> Result<()> {
         info!("skills.reload — re-scanning custom skills directory");
-        // The skill directory is scanned at pipeline start. For a live reload
-        // we simply log the intent; the next pipeline restart picks up changes.
-        // A future enhancement could push a reload event to the running pipeline.
+        self.invalidate_skill_discovery_cache();
         Ok(())
     }
 
@@ -916,36 +1101,46 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         package_dir: &std::path::Path,
     ) -> Result<crate::skills::PythonSkillInfo> {
         info!(package_dir = %package_dir.display(), "skill.python.install");
-        crate::skills::install_python_skill(package_dir)
-            .map_err(|e| SpeechError::Config(format!("skill.python.install failed: {e}")))
+        let info = crate::skills::install_python_skill(package_dir)
+            .map_err(|e| SpeechError::Config(format!("skill.python.install failed: {e}")))?;
+        self.invalidate_skill_discovery_cache();
+        Ok(info)
     }
 
     /// Handle `skill.python.disable` — moves a skill to the Disabled state.
     fn python_skill_disable(&self, skill_id: &str) -> Result<()> {
         info!(skill_id, "skill.python.disable");
         crate::skills::disable_python_skill(skill_id)
-            .map_err(|e| SpeechError::Config(format!("skill.python.disable failed: {e}")))
+            .map_err(|e| SpeechError::Config(format!("skill.python.disable failed: {e}")))?;
+        self.invalidate_skill_discovery_cache();
+        Ok(())
     }
 
     /// Handle `skill.python.activate` — restores a disabled or quarantined skill.
     fn python_skill_activate(&self, skill_id: &str) -> Result<()> {
         info!(skill_id, "skill.python.activate");
         crate::skills::activate_python_skill(skill_id)
-            .map_err(|e| SpeechError::Config(format!("skill.python.activate failed: {e}")))
+            .map_err(|e| SpeechError::Config(format!("skill.python.activate failed: {e}")))?;
+        self.invalidate_skill_discovery_cache();
+        Ok(())
     }
 
     /// Handle `skill.python.quarantine` — quarantines a skill with an error reason.
     fn python_skill_quarantine(&self, skill_id: &str, reason: &str) -> Result<()> {
         info!(skill_id, reason, "skill.python.quarantine");
         crate::skills::quarantine_python_skill(skill_id, reason)
-            .map_err(|e| SpeechError::Config(format!("skill.python.quarantine failed: {e}")))
+            .map_err(|e| SpeechError::Config(format!("skill.python.quarantine failed: {e}")))?;
+        self.invalidate_skill_discovery_cache();
+        Ok(())
     }
 
     /// Handle `skill.python.rollback` — rolls a skill back to its last known good snapshot.
     fn python_skill_rollback(&self, skill_id: &str) -> Result<()> {
         info!(skill_id, "skill.python.rollback");
         crate::skills::rollback_python_skill(skill_id)
-            .map_err(|e| SpeechError::Config(format!("skill.python.rollback failed: {e}")))
+            .map_err(|e| SpeechError::Config(format!("skill.python.rollback failed: {e}")))?;
+        self.invalidate_skill_discovery_cache();
+        Ok(())
     }
 
     /// Handle `skill.python.advance_status` — advances a skill to the next lifecycle status.
@@ -956,7 +1151,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
     ) -> Result<()> {
         info!(skill_id, %status, "skill.python.advance_status");
         crate::skills::advance_python_skill_status(skill_id, status)
-            .map_err(|e| SpeechError::Config(format!("skill.python.advance_status failed: {e}")))
+            .map_err(|e| SpeechError::Config(format!("skill.python.advance_status failed: {e}")))?;
+        self.invalidate_skill_discovery_cache();
+        Ok(())
     }
 
     /// Handle `skill.credential.collect` — stores skill credentials in the Keychain.
@@ -1035,12 +1232,55 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
     ) -> Result<Vec<crate::skills::discovery::SkillSearchResult>> {
         info!(query, limit, "skill.discovery.search");
 
-        // Discovery search requires the embedding engine and a discovery index.
-        // For now, return empty results — full wiring will happen when the
-        // runtime owns a SkillDiscoveryIndex instance (Phase 8.7+).
-        // The handler infrastructure and command routing are in place.
-        let _ = (query, limit);
-        Ok(Vec::new())
+        let trimmed_query = query.trim();
+        if trimmed_query.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let (python_skills_dir, memory_root) = {
+            let config = self
+                .config
+                .lock()
+                .map_err(|e| SpeechError::Config(format!("config lock poisoned: {e}")))?;
+            (
+                config.python_skills.skills_dir.clone(),
+                config.memory.root_dir.clone(),
+            )
+        };
+
+        let skills_dir = crate::skills::skills_dir();
+        let signature = Self::compute_skill_discovery_signature(&skills_dir, &python_skills_dir);
+        let db_path = Self::skill_discovery_db_path(&memory_root);
+        let index = crate::skills::discovery::SkillDiscoveryIndex::open(&db_path)
+            .map_err(|e| SpeechError::Config(format!("skill discovery index init failed: {e}")))?;
+
+        let should_rebuild = self
+            .skill_discovery_cache
+            .lock()
+            .map(|cache| cache.signature.as_deref() != Some(signature.as_str()))
+            .unwrap_or(true);
+
+        if should_rebuild {
+            crate::skills::discovery::rebuild_skill_index_deterministic(
+                &index,
+                &skills_dir,
+                &python_skills_dir,
+            )
+            .map_err(|e| SpeechError::Config(format!("skill discovery rebuild failed: {e}")))?;
+
+            if let Ok(mut cache) = self.skill_discovery_cache.lock() {
+                cache.signature = Some(signature);
+                #[cfg(test)]
+                {
+                    cache.rebuild_count = cache.rebuild_count.saturating_add(1);
+                }
+            }
+        }
+
+        let query_embedding = crate::skills::discovery::deterministic_embedding(trimmed_query);
+        index
+            .search(&query_embedding, limit)
+            .map_err(|e| SpeechError::Config(format!("skill discovery search failed: {e}")))
     }
 
     fn skill_generate(&self, intent: &str, confirm: bool) -> Result<serde_json::Value> {
@@ -1071,6 +1311,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                         &python_skills_dir,
                     )
                     .map_err(|e| SpeechError::Config(format!("skill install failed: {e}")))?;
+                    self.invalidate_skill_discovery_cache();
                     Ok(serde_json::json!({
                         "status": "installed",
                         "skill_id": info.id,
@@ -1309,6 +1550,10 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             }
             _ => {}
         }
+
+        // Auto-activate rescue profile after repeated crash restarts.
+        let restart_count = self.restart_count_for_start();
+        let _ = self.maybe_activate_rescue_profile_for_restart_pressure(restart_count)?;
 
         if let Ok(mut guard) = self.pipeline_state.lock() {
             *guard = PipelineState::Starting;
@@ -1927,6 +2172,20 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
     fn request_scheduler_trigger_now(&self, id: &str) -> Result<()> {
         info!(id, "scheduler.trigger_now requested");
+
+        if self.rescue_mode_active() {
+            let snapshot = crate::scheduler::load_persisted_snapshot().map_err(|e| {
+                SpeechError::Scheduler(format!(
+                    "scheduler.trigger_now: cannot verify rescue-safe task: {e}"
+                ))
+            })?;
+            if !Self::rescue_mode_allows_scheduler_trigger(&snapshot, id) {
+                return Err(SpeechError::Pipeline(format!(
+                    "scheduler.trigger_now `{id}` is blocked in rescue mode (only built-in maintenance tasks are allowed)"
+                )));
+            }
+        }
+
         // If state is corrupt, treat trigger as a no-op success.
         match crate::scheduler::mark_persisted_task_due_now(id) {
             Ok(found) => {
@@ -1959,12 +2218,29 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 Ok(serde_json::json!({"permissions": granted}))
             }
             Some("onboarded") => Ok(serde_json::json!({"onboarded": guard.onboarded})),
+            Some("runtime.profile") => Ok(serde_json::json!({
+                "runtime": {
+                    "profile": guard.runtime.profile.as_str()
+                }
+            })),
             _ => Ok(serde_json::json!({})),
         }
     }
 
     fn request_config_patch(&self, key: &str, value: &serde_json::Value) -> Result<()> {
         info!(key, ?value, "config.patch requested");
+
+        let rescue_mode_active = self
+            .config
+            .lock()
+            .map(|g| g.runtime.profile == RuntimeProfile::Rescue)
+            .unwrap_or(false);
+        if rescue_mode_active && key != "runtime.profile" {
+            return Err(SpeechError::Pipeline(format!(
+                "config.patch `{key}` is blocked in rescue mode"
+            )));
+        }
+
         match key {
             "onboarded" => {
                 if let Some(v) = value.as_bool() {
@@ -1996,6 +2272,30 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     }
                 }
             }
+            "runtime.profile" => {
+                if let Some(s) = value.as_str() {
+                    match serde_json::from_value::<RuntimeProfile>(serde_json::Value::String(
+                        s.to_owned(),
+                    )) {
+                        Ok(profile) => {
+                            let mut guard = self.lock_config()?;
+                            let changed = Self::apply_runtime_profile(&mut guard, profile);
+                            drop(guard);
+                            if changed {
+                                self.save_config()?;
+                            }
+                            info!(?profile, "config.patch applied: runtime.profile");
+                        }
+                        Err(_) => {
+                            warn!(
+                                key,
+                                value = s,
+                                "config.patch: invalid runtime.profile value"
+                            );
+                        }
+                    }
+                }
+            }
             "channels.enabled" => {
                 if let Some(v) = value.as_bool() {
                     let mut guard = self.lock_config()?;
@@ -2014,6 +2314,13 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         }
         Ok(())
     }
+
+    fn rescue_mode_active(&self) -> bool {
+        self.config
+            .lock()
+            .map(|g| g.runtime.profile == RuntimeProfile::Rescue)
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -2021,6 +2328,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use std::sync::Arc;
 
     fn temp_handler() -> (
         FaeDeviceTransferHandler,
@@ -2136,6 +2444,151 @@ mod tests {
         let result = handler.query_config_get(Some("permissions")).unwrap();
         let perms = result["permissions"].as_array().unwrap();
         assert_eq!(perms.len(), 2);
+    }
+
+    #[test]
+    fn runtime_profile_patch_sets_rescue_and_local_defaults() {
+        let (handler, _dir, _rt) = temp_handler();
+
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("rescue"))
+            .unwrap();
+
+        let guard = handler.config.lock().unwrap();
+        assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
+        assert_eq!(guard.llm.backend, LlmBackend::Local);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+    }
+
+    #[test]
+    fn runtime_profile_roundtrip_restores_previous_llm_settings() {
+        let (handler, _dir, _rt) = temp_handler();
+
+        {
+            let mut guard = handler.config.lock().unwrap();
+            guard.llm.tool_mode = AgentToolMode::Full;
+        }
+
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("rescue"))
+            .unwrap();
+        {
+            let guard = handler.config.lock().unwrap();
+            assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+            let saved = guard
+                .runtime
+                .rescue_saved_llm
+                .expect("rescue mode should save previous llm settings");
+            assert_eq!(saved.tool_mode, AgentToolMode::Full);
+            assert_eq!(saved.backend, LlmBackend::Local);
+        }
+
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("standard"))
+            .unwrap();
+        let guard = handler.config.lock().unwrap();
+        assert_eq!(guard.runtime.profile, RuntimeProfile::Standard);
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::Full);
+        assert_eq!(guard.llm.backend, LlmBackend::Local);
+        assert!(
+            guard.runtime.rescue_saved_llm.is_none(),
+            "saved rescue settings should be cleared after restore"
+        );
+    }
+
+    #[test]
+    fn rescue_mode_blocks_non_runtime_config_patch() {
+        let (handler, _dir, _rt) = temp_handler();
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("rescue"))
+            .unwrap();
+
+        let result = handler.request_config_patch("channels.enabled", &serde_json::json!(true));
+        assert!(
+            result.is_err(),
+            "channels patch should be blocked in rescue"
+        );
+    }
+
+    #[test]
+    fn config_get_runtime_profile_returns_current_profile() {
+        let (handler, _dir, _rt) = temp_handler();
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("rescue"))
+            .unwrap();
+
+        let result = handler.query_config_get(Some("runtime.profile")).unwrap();
+        assert_eq!(result["runtime"]["profile"], "rescue");
+    }
+
+    #[test]
+    fn rescue_profile_auto_activates_after_restart_threshold() {
+        let (handler, _dir, _rt) = temp_handler();
+        {
+            let mut guard = handler.config.lock().unwrap();
+            guard.llm.tool_mode = AgentToolMode::FullNoApproval;
+        }
+        let activated = handler
+            .maybe_activate_rescue_profile_for_restart_pressure(3)
+            .expect("activate rescue profile");
+        assert!(
+            activated,
+            "rescue profile should auto-activate at threshold"
+        );
+        {
+            let guard = handler.config.lock().unwrap();
+            assert_eq!(guard.runtime.profile, RuntimeProfile::Rescue);
+            assert_eq!(guard.llm.backend, LlmBackend::Local);
+            assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
+            assert_eq!(
+                guard.runtime.rescue_saved_llm.map(|saved| saved.tool_mode),
+                Some(AgentToolMode::FullNoApproval)
+            );
+        }
+    }
+
+    #[test]
+    fn poisoned_restart_count_lock_forces_rescue_activation() {
+        let (handler, _dir, _rt) = temp_handler();
+
+        {
+            let restart_count = Arc::clone(&handler.restart_count);
+            let _ = std::thread::spawn(move || {
+                let _guard = restart_count
+                    .lock()
+                    .expect("restart_count lock should be acquired");
+                panic!("poison restart_count");
+            })
+            .join();
+        }
+        assert!(
+            handler.restart_count.lock().is_err(),
+            "restart_count lock should be poisoned"
+        );
+
+        let fail_safe_count = handler.restart_count_for_start();
+        assert_eq!(
+            fail_safe_count,
+            u32::MAX,
+            "poisoned restart_count lock should map to fail-safe max count"
+        );
+
+        let activated = handler
+            .maybe_activate_rescue_profile_for_restart_pressure(fail_safe_count)
+            .expect("rescue activation should succeed");
+        assert!(
+            activated,
+            "fail-safe restart count should force rescue activation"
+        );
+
+        let guard = handler.config.lock().unwrap();
+        assert_eq!(
+            guard.runtime.profile,
+            RuntimeProfile::Rescue,
+            "poisoned restart_count should force rescue profile"
+        );
+        assert_eq!(guard.llm.tool_mode, AgentToolMode::ReadWrite);
     }
 
     #[test]
@@ -2403,7 +2856,183 @@ mod tests {
     }
 
     #[test]
+    fn rescue_mode_scheduler_trigger_only_allows_builtin_tasks() {
+        let mut builtin = crate::scheduler::ScheduledTask::new(
+            "memory_gc",
+            "Memory GC",
+            crate::scheduler::Schedule::Interval { secs: 60 },
+        );
+        builtin.kind = crate::scheduler::tasks::TaskKind::Builtin;
+
+        let user = crate::scheduler::ScheduledTask::user_task(
+            "user-task",
+            "User Task",
+            crate::scheduler::Schedule::Interval { secs: 60 },
+        );
+
+        let snapshot = crate::scheduler::SchedulerSnapshot {
+            tasks: vec![builtin, user],
+            history: Vec::new(),
+        };
+
+        assert!(
+            FaeDeviceTransferHandler::rescue_mode_allows_scheduler_trigger(&snapshot, "memory_gc")
+        );
+        assert!(
+            !FaeDeviceTransferHandler::rescue_mode_allows_scheduler_trigger(&snapshot, "user-task")
+        );
+        assert!(
+            !FaeDeviceTransferHandler::rescue_mode_allows_scheduler_trigger(
+                &snapshot,
+                "missing-task"
+            )
+        );
+    }
+
+    #[test]
+    fn rescue_mode_blocks_scheduler_trigger_for_unknown_task() {
+        let (handler, _dir, _rt) = temp_handler();
+        handler
+            .request_config_patch("runtime.profile", &serde_json::json!("rescue"))
+            .unwrap();
+
+        let result = handler.request_scheduler_trigger_now("nonexistent-task");
+        assert!(
+            result.is_err(),
+            "rescue mode should block trigger_now for non-builtin tasks"
+        );
+    }
+
+    #[test]
     #[ignore = "requires ML model download — run locally with cached models"]
+    fn skill_discovery_search_returns_indexed_python_skill() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        let python_skills_dir = dir.path().join("python-skills");
+        let memory_root = dir.path().join("memory");
+        std::fs::create_dir_all(&python_skills_dir).expect("create python skills dir");
+        std::fs::create_dir_all(&memory_root).expect("create memory root");
+
+        let skill_dir = python_skills_dir.join("discord-bot");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("manifest.toml"),
+            "id = \"discord-bot\"\nname = \"Discord Bot\"\nversion = \"0.1.0\"\ndescription = \"Send Discord messages\"\nentry_file = \"skill.py\"\n",
+        )
+        .expect("write manifest");
+
+        let mut config = SpeechConfig::default();
+        config.python_skills.enabled = true;
+        config.python_skills.skills_dir = python_skills_dir;
+        config.memory.root_dir = memory_root;
+
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let (event_tx, _) = broadcast::channel(16);
+        let handler =
+            FaeDeviceTransferHandler::new(config, config_path, rt.handle().clone(), event_tx);
+
+        let results = handler
+            .skill_discovery_search("discord", 5)
+            .expect("search");
+        assert!(
+            !results.is_empty(),
+            "search should return at least one indexed skill"
+        );
+        assert_eq!(results[0].skill_id, "discord-bot");
+    }
+
+    #[test]
+    fn skill_discovery_search_reuses_index_when_signature_unchanged() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        let python_skills_dir = dir.path().join("python-skills");
+        let memory_root = dir.path().join("memory");
+        std::fs::create_dir_all(&python_skills_dir).expect("create python skills dir");
+        std::fs::create_dir_all(&memory_root).expect("create memory root");
+
+        let skill_dir = python_skills_dir.join("discord-bot");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("manifest.toml"),
+            "id = \"discord-bot\"\nname = \"Discord Bot\"\nversion = \"0.1.0\"\ndescription = \"Send Discord messages\"\nentry_file = \"skill.py\"\n",
+        )
+        .expect("write manifest");
+
+        let mut config = SpeechConfig::default();
+        config.python_skills.enabled = true;
+        config.python_skills.skills_dir = python_skills_dir;
+        config.memory.root_dir = memory_root;
+
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let (event_tx, _) = broadcast::channel(16);
+        let handler =
+            FaeDeviceTransferHandler::new(config, config_path, rt.handle().clone(), event_tx);
+
+        let first = handler
+            .skill_discovery_search("discord", 5)
+            .expect("first search");
+        assert!(!first.is_empty(), "first search should index skill");
+        assert_eq!(handler.skill_discovery_rebuild_count(), 1);
+
+        let second = handler
+            .skill_discovery_search("discord", 5)
+            .expect("second search");
+        assert!(
+            !second.is_empty(),
+            "second search should still return skill"
+        );
+        assert_eq!(
+            handler.skill_discovery_rebuild_count(),
+            1,
+            "second search should reuse cached index when signature is unchanged"
+        );
+    }
+
+    #[test]
+    fn reload_skills_invalidates_skill_discovery_cache() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        let python_skills_dir = dir.path().join("python-skills");
+        let memory_root = dir.path().join("memory");
+        std::fs::create_dir_all(&python_skills_dir).expect("create python skills dir");
+        std::fs::create_dir_all(&memory_root).expect("create memory root");
+
+        let skill_dir = python_skills_dir.join("discord-bot");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("manifest.toml"),
+            "id = \"discord-bot\"\nname = \"Discord Bot\"\nversion = \"0.1.0\"\ndescription = \"Send Discord messages\"\nentry_file = \"skill.py\"\n",
+        )
+        .expect("write manifest");
+
+        let mut config = SpeechConfig::default();
+        config.python_skills.enabled = true;
+        config.python_skills.skills_dir = python_skills_dir;
+        config.memory.root_dir = memory_root;
+
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let (event_tx, _) = broadcast::channel(16);
+        let handler =
+            FaeDeviceTransferHandler::new(config, config_path, rt.handle().clone(), event_tx);
+
+        handler
+            .skill_discovery_search("discord", 5)
+            .expect("first search");
+        assert_eq!(handler.skill_discovery_rebuild_count(), 1);
+
+        handler.reload_skills().expect("reload skills");
+
+        handler
+            .skill_discovery_search("discord", 5)
+            .expect("second search after reload");
+        assert_eq!(
+            handler.skill_discovery_rebuild_count(),
+            2,
+            "cache should rebuild after invalidation"
+        );
+    }
+
+    #[test]
     fn clean_stop_does_not_increment_restart_count() {
         let (handler, _dir, _rt) = temp_handler();
 
