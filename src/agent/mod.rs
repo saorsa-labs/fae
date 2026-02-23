@@ -37,6 +37,9 @@ const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 static NEXT_APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Maximum number of recent responses to track for duplicate detection.
+const RECENT_RESPONSE_WINDOW: usize = 5;
+
 pub struct FaeAgentLlm {
     provider: Arc<dyn ProviderAdapter>,
     registry: Arc<ToolRegistry>,
@@ -49,6 +52,10 @@ pub struct FaeAgentLlm {
     /// When true, tool schemas are never advertised to the model.
     /// Used for the voice conversation engine in multi-channel mode.
     tools_disabled: bool,
+    /// Ring buffer of recent assistant response texts for duplicate detection.
+    recent_responses: Vec<String>,
+    /// Counter for consecutive duplicate detections (for varied fallbacks).
+    consecutive_duplicates: usize,
 }
 
 impl FaeAgentLlm {
@@ -118,8 +125,10 @@ impl FaeAgentLlm {
             history,
             max_history_messages: config.max_history_messages,
             context_size_tokens: config.context_size_tokens,
-            compaction_threshold: 0.95,
+            compaction_threshold: 0.70,
             tools_disabled: false,
+            recent_responses: Vec::with_capacity(RECENT_RESPONSE_WINDOW),
+            consecutive_duplicates: 0,
         })
     }
 
@@ -272,8 +281,30 @@ impl FaeAgentLlm {
             return Err(SpeechError::Llm(format!("agent error: {message}")));
         }
 
-        self.append_result_messages(&result);
-        self.trim_history();
+        // Duplicate detection: if the model produced the same response as
+        // one of the last N turns, replace the history entry with a varied
+        // fallback and notify via logging. The streamed clauses already went
+        // to TTS so this only prevents the loop from reinforcing the pattern
+        // in future context windows.
+        if self.is_duplicate_response(&result.final_text) {
+            self.consecutive_duplicates += 1;
+            tracing::warn!(
+                consecutive = self.consecutive_duplicates,
+                text = %result.final_text.chars().take(80).collect::<String>(),
+                "duplicate response detected — suppressing history reinforcement"
+            );
+            // Don't add the duplicate to history — it reinforces the loop.
+            // Instead, add a brief note so the model has context.
+            self.history.push(Message::assistant(
+                "[I just repeated myself — I should vary my response next time.]".to_owned(),
+            ));
+            self.trim_history();
+        } else {
+            self.consecutive_duplicates = 0;
+            self.append_result_messages(&result);
+            self.trim_history();
+        }
+        self.track_response(&result.final_text);
 
         // All clause chunks were streamed during generation; send the
         // final marker so the TTS stage knows the response is complete.
@@ -346,6 +377,29 @@ impl FaeAgentLlm {
         )));
         compacted.extend_from_slice(&self.history[split_at..]);
         self.history = compacted;
+    }
+
+    /// Check if the response text is a duplicate of recent responses.
+    ///
+    /// Uses normalized comparison (trimmed, lowercased) to detect both exact
+    /// and near-duplicates. Returns `true` if the response closely matches
+    /// any of the last `RECENT_RESPONSE_WINDOW` assistant responses.
+    fn is_duplicate_response(&self, response_text: &str) -> bool {
+        let normalized = response_text.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return false;
+        }
+        self.recent_responses
+            .iter()
+            .any(|prev| prev.trim().to_ascii_lowercase() == normalized)
+    }
+
+    /// Track a new response in the recent response ring buffer.
+    fn track_response(&mut self, response_text: &str) {
+        if self.recent_responses.len() >= RECENT_RESPONSE_WINDOW {
+            self.recent_responses.remove(0);
+        }
+        self.recent_responses.push(response_text.to_owned());
     }
 }
 
@@ -771,7 +825,9 @@ async fn build_provider(
             LocalMistralrsConfig::new(local_llm.shared_model(), config.model_id.clone())
                 .with_temperature(config.temperature as f32)
                 .with_top_p(config.top_p as f32)
-                .with_max_tokens(config.max_tokens);
+                .with_max_tokens(config.max_tokens)
+                .with_frequency_penalty(config.repeat_penalty)
+                .with_presence_penalty(config.repeat_penalty * 0.5);
         return Arc::new(LocalMistralrsAdapter::new(provider_cfg));
     }
     let reason = "local backend selected but no preloaded local model is available. \
