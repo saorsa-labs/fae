@@ -21,7 +21,7 @@ use crate::fae_llm::providers::message::{Message, Role};
 use crate::fae_llm::tools::{
     BashTool, EditTool, PythonSkillTool, ReadTool, Tool, ToolRegistry, ToolResult, WriteTool,
 };
-use crate::fae_llm::types::RequestOptions;
+use crate::fae_llm::types::{ReasoningLevel, RequestOptions};
 use crate::llm::LocalLlm;
 use crate::permissions::SharedPermissionStore;
 use crate::pipeline::messages::SentenceChunk;
@@ -131,6 +131,14 @@ impl FaeAgentLlm {
     /// multi-channel mode, where tool work is delegated to background agents.
     pub fn disable_tools(&mut self) {
         self.tools_disabled = true;
+    }
+
+    /// Temporarily change the reasoning level for the next generation.
+    ///
+    /// Used by the coordinator to enable thinking mode on the voice engine
+    /// for complex conversational queries, then reset it to `Off` afterwards.
+    pub fn set_reasoning_level(&mut self, level: ReasoningLevel) {
+        self.agent_config = self.agent_config.clone().with_reasoning_level(level);
     }
 
     /// Inject a background agent result into the conversation history.
@@ -462,12 +470,18 @@ pub struct IntentClassification {
     pub task_description: String,
     /// Whether this message needs tool use (true) or is purely conversational (false).
     pub needs_tools: bool,
+    /// Whether this message is complex enough to benefit from deeper reasoning,
+    /// even when no tools are needed. Triggers thinking acknowledgment and
+    /// temporarily enables reasoning mode on the voice engine.
+    pub needs_thinking: bool,
 }
 
 /// Classify user intent and determine routing.
 ///
 /// Enhanced version of `select_tool_allowlist()` that also produces a
-/// task description for the background agent.
+/// task description for the background agent. Also detects complex
+/// conversational queries that benefit from deeper reasoning (thinking mode)
+/// even when no tools are needed.
 pub fn classify_intent(user_text: &str) -> IntentClassification {
     let tools = select_tool_allowlist(user_text);
     let needs_tools = !tools.is_empty();
@@ -481,11 +495,79 @@ pub fn classify_intent(user_text: &str) -> IntentClassification {
         String::new()
     };
 
+    // Detect complex conversational queries that benefit from thinking mode.
+    // These don't need tools but are analytical / reasoning-heavy enough that
+    // the model produces better answers with its internal reasoning chain.
+    let needs_thinking = if needs_tools {
+        // Tool path already uses thinking via background agent.
+        false
+    } else {
+        needs_deeper_reasoning(user_text)
+    };
+
     IntentClassification {
         tool_allowlist: tools,
         task_description,
         needs_tools,
+        needs_thinking,
     }
+}
+
+/// Heuristic: does this conversational query benefit from deeper reasoning?
+///
+/// Checks for analytical, comparative, explanatory, or planning keywords
+/// that suggest the model should engage its internal reasoning chain rather
+/// than producing a quick surface-level response.
+fn needs_deeper_reasoning(user_text: &str) -> bool {
+    let lower = user_text.to_ascii_lowercase();
+
+    // Minimum length filter — very short messages are rarely complex.
+    if lower.split_whitespace().count() < 5 {
+        return false;
+    }
+
+    contains_any(
+        &lower,
+        &[
+            "explain",
+            "analyze",
+            "analyse",
+            "compare",
+            "contrast",
+            "pros and cons",
+            "advantages and disadvantages",
+            "trade-off",
+            "tradeoff",
+            "think about",
+            "think through",
+            "reason about",
+            "help me understand",
+            "break down",
+            "walk me through",
+            "step by step",
+            "why does",
+            "why would",
+            "why is it",
+            "how does",
+            "how would",
+            "what if",
+            "what would happen",
+            "implications of",
+            "consequences of",
+            "difference between",
+            "summarize",
+            "summarise",
+            "evaluate",
+            "assessment",
+            "critique",
+            "recommend",
+            "should i",
+            "plan for",
+            "strategy for",
+            "design a",
+            "architect",
+        ],
+    )
 }
 
 /// A background agent task spawned from the voice conversation.
@@ -559,7 +641,8 @@ pub async fn spawn_background_agent(
     let parallel_tool_calls = matches!(config.tool_mode, AgentToolMode::ReadOnly);
     let agent_config = FaeAgentConfig::new()
         .with_parallel_tool_calls(parallel_tool_calls)
-        .with_max_parallel_tool_calls(4);
+        .with_max_parallel_tool_calls(4)
+        .with_reasoning_level(ReasoningLevel::Medium);
 
     // Build the input prompt with conversation context.
     let input = if task.conversation_context.is_empty() {
@@ -1141,5 +1224,62 @@ mod tests {
             tools.contains(&"list_reminders".to_string()),
             "plural 'reminders' should match substring 'reminder'"
         );
+    }
+
+    #[test]
+    fn needs_deeper_reasoning_short_messages_false() {
+        // Very short messages should never trigger thinking mode.
+        assert!(!needs_deeper_reasoning("hi"));
+        assert!(!needs_deeper_reasoning("how are you?"));
+        assert!(!needs_deeper_reasoning("thanks"));
+    }
+
+    #[test]
+    fn needs_deeper_reasoning_analytical_queries() {
+        assert!(needs_deeper_reasoning(
+            "can you explain how quantum computing works?"
+        ));
+        assert!(needs_deeper_reasoning(
+            "what are the pros and cons of remote work?"
+        ));
+        assert!(needs_deeper_reasoning(
+            "help me understand why this design pattern is useful"
+        ));
+        assert!(needs_deeper_reasoning(
+            "walk me through the process of building a compiler"
+        ));
+        assert!(needs_deeper_reasoning(
+            "what would happen if we switched to a microservices architecture?"
+        ));
+    }
+
+    #[test]
+    fn needs_deeper_reasoning_simple_conversations_false() {
+        assert!(!needs_deeper_reasoning(
+            "what is the weather like today in Dublin?"
+        ));
+        assert!(!needs_deeper_reasoning(
+            "tell me a joke about programmers please"
+        ));
+        assert!(!needs_deeper_reasoning(
+            "good morning Fae, hope you're well"
+        ));
+    }
+
+    #[test]
+    fn classify_intent_sets_needs_thinking() {
+        let intent = classify_intent("can you explain the difference between TCP and UDP?");
+        assert!(!intent.needs_tools);
+        assert!(intent.needs_thinking);
+
+        // Tool intent should not set needs_thinking (background agent handles that).
+        let intent = classify_intent("search the web for latest Rust news");
+        assert!(intent.needs_tools);
+        assert!(!intent.needs_thinking);
+
+        // Simple conversation: neither.
+        let intent = classify_intent("hi Fae, how are you today?");
+        assert!(!intent.needs_tools);
+        assert!(!intent.needs_thinking);
     }
 }

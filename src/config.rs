@@ -165,36 +165,56 @@ impl Default for AecConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VadConfig {
-    /// RMS energy threshold for speech detection.
+    /// RMS energy threshold for speech detection (start of speech).
     ///
     /// Audio chunks with RMS above this value are classified as speech.
     /// Typical values for f32 samples in \[-1, 1\]:
     ///   - 0.005: very sensitive (picks up quiet speech and some noise)
-    ///   - 0.01:  normal sensitivity (default, good for most environments)
+    ///   - 0.008: balanced sensitivity (default, catches moderate-volume speech)
+    ///   - 0.01:  normal sensitivity (good for close-mic environments)
     ///   - 0.02:  reduced sensitivity (noisy environments)
     ///   - 0.05:  low sensitivity (only loud/close speech)
     pub threshold: f32,
+    /// Hysteresis ratio for staying in speech mode once detected.
+    ///
+    /// Once speech starts, the effective threshold drops to
+    /// `threshold * hysteresis_ratio` to track the speaker through
+    /// quiet consonants and volume dips.  Set to 1.0 to disable
+    /// hysteresis (same threshold for enter and exit).
+    pub hysteresis_ratio: f32,
     /// Minimum silence duration in ms to end a speech segment.
     pub min_silence_duration_ms: u32,
     /// Padding added around detected speech in ms.
     pub speech_pad_ms: u32,
     /// Minimum speech duration in ms to consider valid.
     pub min_speech_duration_ms: u32,
+    /// Maximum speech duration in ms before force-emitting a segment.
+    ///
+    /// Prevents runaway accumulation when ambient noise keeps the VAD
+    /// in speech mode indefinitely.  When a segment reaches this limit,
+    /// the VAD force-emits whatever it has accumulated and resets.
+    /// Set to 0 to disable (not recommended).
+    pub max_speech_duration_ms: u32,
 }
 
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
-            threshold: 0.01,
-            // 800ms balances responsiveness vs natural speech pauses.
+            threshold: 0.008,
+            hysteresis_ratio: 0.6,
+            // 1000ms balances responsiveness vs natural speech pauses.
             // - Too low (500ms): fragments mid-sentence pauses
-            // - Too high (1200ms+): adds noticeable delay before Fae responds
-            // - 800ms: covers most inter-word pauses (typically 200-600ms) while
-            //   keeping response latency under ~1s from when the user stops speaking.
-            //   Reduced from 1000ms to shave 200ms off end-of-utterance latency.
-            min_silence_duration_ms: 800,
+            // - Too high (1500ms+): adds noticeable delay before Fae responds
+            // - 1000ms: covers most inter-word and inter-sentence pauses
+            //   (typically 200-800ms) while keeping response latency
+            //   around 1s from when the user stops speaking.
+            min_silence_duration_ms: 1000,
             speech_pad_ms: 30,
-            min_speech_duration_ms: 300,
+            min_speech_duration_ms: 250,
+            // 15s cap prevents runaway accumulation from ambient noise
+            // or speaker-to-mic bleedthrough keeping the VAD in speech mode.
+            // No natural utterance exceeds 15s in conversational speech.
+            max_speech_duration_ms: 15_000,
         }
     }
 }

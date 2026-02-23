@@ -80,6 +80,7 @@ Core style:\n\
 - Be concise by default (1-3 short sentences) unless the user asks for depth.\n\
 - Be direct, practical, and calm.\n\
 - Do not expose hidden chain-of-thought.\n\
+- NEVER use emojis, emoticons, or special symbols — your output is spoken aloud via TTS.\n\
 \n\
 Greeting style:\n\
 - Greet warmly but never the same way twice. You are a companion, not a product demo.\n\
@@ -128,6 +129,48 @@ Rules:\n\
 - Include specific details (times, names, numbers) — the user is listening, not reading.\n\
 - Do not use markdown formatting, bullet points, or numbered lists — speak naturally.\n\
 - Keep the total response under 4 sentences unless the task requires more detail.";
+
+/// Canned acknowledgment phrases for when a background tool task is spawned.
+///
+/// Rotated to avoid repetition. Spoken immediately via TTS while the
+/// background agent works asynchronously.
+pub const TOOL_ACKNOWLEDGMENTS: &[&str] = &[
+    "Checking that now.",
+    "On it.",
+    "Let me look into that.",
+    "One moment.",
+    "Working on that.",
+    "Give me a second.",
+    "Looking that up.",
+    "Let me see.",
+];
+
+/// Acknowledgment phrases for when Fae needs to engage deeper thinking.
+///
+/// Used when the voice pipeline detects a complex question that benefits
+/// from reasoning mode. Spoken before the model starts its internal
+/// deliberation so the user knows Fae is working.
+pub const THINKING_ACKNOWLEDGMENTS: &[&str] = &[
+    "Let me think about that.",
+    "Thinking.",
+    "Give me a moment to work that out.",
+    "That's a good question, let me reason through it.",
+    "Let me consider that carefully.",
+    "Hmm, let me think.",
+    "Working through that now.",
+    "Hold on, I need to think this through.",
+];
+
+/// Pick the next acknowledgment phrase, rotating through the list.
+///
+/// Uses the `counter` value (typically an `AtomicU64`) to cycle through
+/// phrases so Fae never repeats the same one back-to-back.
+pub fn next_acknowledgment<'a>(phrases: &'a [&'a str], counter: u64) -> &'a str {
+    if phrases.is_empty() {
+        return "";
+    }
+    phrases[(counter as usize) % phrases.len()]
+}
 
 /// Vision understanding section injected when the local model supports images.
 const VISION_PROMPT: &str = "\

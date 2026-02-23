@@ -98,6 +98,8 @@ impl KokoroTts {
     ///
     /// Returns an error if phonemization, tokenization, or inference fails.
     pub async fn synthesize(&mut self, text: &str) -> Result<Vec<f32>> {
+        // Strip emojis and non-speech symbols — they phonemize as garbage.
+        let text = strip_non_speech_chars(text);
         if text.is_empty() {
             return Ok(Vec::new());
         }
@@ -106,7 +108,7 @@ impl KokoroTts {
         let start = std::time::Instant::now();
 
         // 1. Phonemize
-        let ipa = self.phonemizer.phonemize(text)?;
+        let ipa = self.phonemizer.phonemize(&text)?;
         if ipa.is_empty() {
             return Ok(Vec::new());
         }
@@ -363,4 +365,98 @@ fn load_voice_styles(path: &std::path::Path) -> Result<Vec<f32>> {
     );
 
     Ok(floats)
+}
+
+/// Strip emojis, pictographs, and other non-speech Unicode characters from
+/// text before TTS synthesis.  Keeps ASCII, Latin extended, common
+/// punctuation, and whitespace — everything the phonemizer can handle.
+///
+/// Used both inside `synthesize()` as a safety net and at the TTS pipeline
+/// entrance in the coordinator to skip pure-emoji chunks entirely.
+pub fn strip_non_speech_chars(text: &str) -> String {
+    let cleaned: String = text
+        .chars()
+        .filter(|&c| {
+            // Keep basic ASCII (letters, digits, punctuation, whitespace)
+            if c.is_ascii() {
+                return true;
+            }
+            // Keep Latin extended, accented chars, IPA symbols
+            let cp = c as u32;
+            matches!(cp,
+                0x00C0..=0x024F  // Latin Extended-A/B
+                | 0x0250..=0x02AF // IPA Extensions
+                | 0x2000..=0x206F // General Punctuation (em-dash, quotes, etc.)
+            )
+        })
+        .collect();
+
+    // Collapse runs of whitespace and trim
+    let mut result = String::with_capacity(cleaned.len());
+    let mut prev_space = false;
+    for c in cleaned.chars() {
+        if c.is_whitespace() {
+            if !prev_space {
+                result.push(' ');
+            }
+            prev_space = true;
+        } else {
+            result.push(c);
+            prev_space = false;
+        }
+    }
+    result.trim().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn strip_removes_emoji() {
+        assert_eq!(strip_non_speech_chars("\u{1F31F}"), ""); // 🌟
+        assert_eq!(strip_non_speech_chars("\u{2728}"), ""); // ✨
+        assert_eq!(strip_non_speech_chars("\u{2753}"), ""); // ❓
+        assert_eq!(strip_non_speech_chars("\u{1F60A}"), ""); // 😊
+    }
+
+    #[test]
+    fn strip_keeps_speech_text() {
+        assert_eq!(strip_non_speech_chars("Hello world"), "Hello world");
+        assert_eq!(strip_non_speech_chars("What's up?"), "What's up?");
+        assert_eq!(
+            strip_non_speech_chars("caf\u{00E9}"),
+            "caf\u{00E9}"
+        ); // café
+    }
+
+    #[test]
+    fn strip_mixed_emoji_and_text() {
+        assert_eq!(strip_non_speech_chars("Hello 🌟"), "Hello");
+        assert_eq!(strip_non_speech_chars("What? 🌟"), "What?");
+        assert_eq!(
+            strip_non_speech_chars("Good morning ☀️ how are you?"),
+            "Good morning how are you?"
+        );
+    }
+
+    #[test]
+    fn strip_collapses_whitespace() {
+        assert_eq!(
+            strip_non_speech_chars("Hello   world"),
+            "Hello world"
+        );
+        assert_eq!(
+            strip_non_speech_chars("  Hello  🌟  world  "),
+            "Hello world"
+        );
+    }
+
+    #[test]
+    fn strip_pure_emoji_returns_empty() {
+        assert!(strip_non_speech_chars("🌟✨🎉").is_empty());
+        assert!(strip_non_speech_chars("❓ ❓ ❓").is_empty());
+    }
 }

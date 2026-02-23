@@ -18,7 +18,7 @@ use crate::fae_llm::error::FaeLlmError;
 use crate::fae_llm::events::{FinishReason, LlmEvent};
 use crate::fae_llm::provider::ProviderAdapter;
 use crate::fae_llm::providers::message::Message;
-use crate::fae_llm::types::{EndpointType, ModelRef, RequestOptions};
+use crate::fae_llm::types::{EndpointType, ModelRef, ReasoningLevel, RequestOptions};
 
 /// Configuration for the local mistralrs provider.
 #[derive(Clone)]
@@ -117,10 +117,19 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             messages.len()
         );
 
-        // Inject /no_think into the first system message to suppress Qwen3
-        // internal reasoning. The enable_thinking(false) API flag alone is
-        // insufficient for some GGUF model templates.
-        let mut injected_no_think = false;
+        // Inject /no_think or /think into the first system message based on
+        // the requested reasoning level. The enable_thinking API flag alone
+        // is insufficient for some GGUF model templates.
+        let thinking_enabled = matches!(
+            options.reasoning,
+            Some(ReasoningLevel::Medium) | Some(ReasoningLevel::High)
+        );
+        let mut injected_think_prefix = false;
+        tracing::info!(
+            reasoning = ?options.reasoning,
+            thinking_enabled,
+            "thinking mode for this request"
+        );
         for msg in messages {
             tracing::debug!(role = ?msg.role, content_type = ?std::mem::discriminant(&msg.content), "adding message");
             match (&msg.role, &msg.content) {
@@ -189,15 +198,39 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                             ..
                         } => content.clone(),
                     };
-                    // Prepend /no_think to the first system message.
-                    if mistral_role == mistralrs::TextMessageRole::System && !injected_no_think {
-                        text = format!("/no_think\n\n{text}");
-                        injected_no_think = true;
+                    // Prepend /no_think or /think to the first system message.
+                    if mistral_role == mistralrs::TextMessageRole::System && !injected_think_prefix
+                    {
+                        let prefix = if thinking_enabled {
+                            "/think"
+                        } else {
+                            "/no_think"
+                        };
+                        text = format!("{prefix}\n\n{text}");
+                        injected_think_prefix = true;
                     }
                     request = request.add_message(mistral_role, &text);
                 }
             }
         }
+
+        // Log prompt size for performance diagnosis.
+        let approx_chars: usize = messages
+            .iter()
+            .map(|m| match &m.content {
+                crate::fae_llm::providers::message::MessageContent::Text { text } => text.len(),
+                crate::fae_llm::providers::message::MessageContent::ToolResult {
+                    content, ..
+                } => content.len(),
+            })
+            .sum();
+        tracing::info!(
+            messages = messages.len(),
+            approx_chars,
+            approx_tokens = approx_chars / 4,
+            tools = tools.len(),
+            "prompt size estimate"
+        );
 
         // Apply per-request sampling, falling back to provider defaults.
         let temperature = options
@@ -213,7 +246,7 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             .set_sampler_temperature(temperature)
             .set_sampler_topp(top_p)
             .set_sampler_max_len(max_tokens)
-            .enable_thinking(false);
+            .enable_thinking(thinking_enabled);
 
         // Convert fae_llm tool definitions to mistralrs format
         let mistral_tools: Vec<mistralrs::Tool> = tools
@@ -309,8 +342,18 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             let gen_start = Instant::now();
             let mut first_visible = false;
             let mut reasoning_events: usize = 0;
+            let mut chunk_count: usize = 0;
+            let mut first_chunk_time: Option<Instant> = None;
 
             while let Some(response) = mistral_stream.next().await {
+                chunk_count += 1;
+                if first_chunk_time.is_none() {
+                    first_chunk_time = Some(Instant::now());
+                    tracing::info!(
+                        "mistralrs first chunk in {:.1}ms",
+                        gen_start.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
                 match response {
                     mistralrs::Response::Chunk(chunk) => {
                         if let Some(choice) = chunk.choices.first() {
@@ -326,10 +369,14 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                             if has_reasoning && !has_content {
                                 reasoning_events += 1;
                                 if reasoning_events == 1 {
-                                    tracing::info!(
-                                        "model started emitting reasoning tokens \
-                                         (thinking mode active despite enable_thinking=false)"
-                                    );
+                                    if thinking_enabled {
+                                        tracing::info!("model started reasoning (thinking mode ON)");
+                                    } else {
+                                        tracing::warn!(
+                                            "model emitting reasoning tokens \
+                                             despite thinking mode OFF"
+                                        );
+                                    }
                                 }
                             }
 
@@ -504,11 +551,24 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                 }
             };
 
+            let total_s = gen_start.elapsed().as_secs_f64();
+            let decode_s = first_chunk_time
+                .map(|t| t.elapsed().as_secs_f64())
+                .unwrap_or(total_s);
+            let decode_tps = if decode_s > 0.0 {
+                chunk_count as f64 / decode_s
+            } else {
+                0.0
+            };
             tracing::info!(
-                "mistralrs response complete: {} events in {:.1}s, \
+                "mistralrs response complete: {} events ({} chunks) in {:.1}s, \
+                 decode={:.1}s ({:.1} chunks/s), \
                  finish_reason={}, has_tool_calls={}, reasoning_events={}",
                 event_count,
-                gen_start.elapsed().as_secs_f64(),
+                chunk_count,
+                total_s,
+                decode_s,
+                decode_tps,
                 finish_reason,
                 has_tool_calls,
                 reasoning_events,

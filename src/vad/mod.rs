@@ -22,7 +22,12 @@ pub struct VadOutput {
     pub rms: f32,
 }
 
-/// Voice activity detector using RMS energy thresholding.
+/// Voice activity detector using RMS energy thresholding with hysteresis.
+///
+/// Uses a higher threshold to enter speech mode and a lower threshold
+/// (controlled by `hysteresis_ratio`) to stay in speech mode.  This
+/// prevents the detector from cutting out during quiet consonants or
+/// brief volume dips within continuous speech.
 pub struct SileroVad {
     /// Pre-roll audio buffer for `speech_pad_ms`.
     pre_roll: VecDeque<f32>,
@@ -40,10 +45,14 @@ pub struct SileroVad {
     speech_start: Option<Instant>,
     /// Configured sample rate.
     sample_rate: u32,
-    /// VAD threshold.
+    /// RMS threshold for *entering* speech mode.
     threshold: f32,
+    /// RMS threshold for *staying* in speech mode (lower than `threshold`).
+    sustain_threshold: f32,
     /// Minimum speech duration in samples.
     min_speech_samples: usize,
+    /// Maximum speech duration in samples (force-emit if exceeded).
+    max_speech_samples: usize,
 }
 
 impl SileroVad {
@@ -58,13 +67,22 @@ impl SileroVad {
         let pre_roll_max = (config.speech_pad_ms as usize * sample_rate as usize) / 1000;
         let min_speech_samples =
             (config.min_speech_duration_ms as usize * sample_rate as usize) / 1000;
+        let max_speech_samples = if config.max_speech_duration_ms > 0 {
+            (config.max_speech_duration_ms as usize * sample_rate as usize) / 1000
+        } else {
+            usize::MAX // effectively disabled
+        };
 
+        let sustain_threshold = config.threshold * config.hysteresis_ratio.clamp(0.1, 1.0);
         info!(
-            "VAD initialized: threshold={}, silence_threshold={}ms, pad={}ms, min_speech={}ms",
+            "VAD initialized: threshold={}, sustain_threshold={:.4}, hysteresis={}, silence_threshold={}ms, pad={}ms, min_speech={}ms, max_speech={}ms",
             config.threshold,
+            sustain_threshold,
+            config.hysteresis_ratio,
             config.min_silence_duration_ms,
             config.speech_pad_ms,
-            config.min_speech_duration_ms
+            config.min_speech_duration_ms,
+            config.max_speech_duration_ms,
         );
 
         Ok(Self {
@@ -79,7 +97,9 @@ impl SileroVad {
             speech_start: None,
             sample_rate,
             threshold: config.threshold,
+            sustain_threshold,
             min_speech_samples,
+            max_speech_samples,
         })
     }
 
@@ -91,7 +111,16 @@ impl SileroVad {
     /// Returns an error if audio processing fails.
     pub fn process_chunk(&mut self, chunk: &AudioChunk) -> Result<VadOutput> {
         let rms = compute_rms_energy(&chunk.samples);
-        let is_speech = rms > self.threshold;
+
+        // Hysteresis: use a higher threshold to enter speech mode and a
+        // lower threshold to stay in it.  This prevents cutting out during
+        // quiet consonants or brief volume dips within continuous speech.
+        let effective_threshold = if self.in_speech {
+            self.sustain_threshold
+        } else {
+            self.threshold
+        };
+        let is_speech = rms > effective_threshold;
 
         // Update pre-roll buffer (for future speech starts)
         if self.pre_roll_max > 0 {
@@ -143,6 +172,36 @@ impl SileroVad {
                     self.speech_buffer.clear();
                 }
             }
+        }
+
+        // Safety cap: force-emit if the segment has been accumulating too long.
+        // This prevents runaway VAD (e.g. ambient noise holding sustain threshold)
+        // from creating 200+ second segments that consume all memory.
+        if self.in_speech
+            && self.max_speech_samples < usize::MAX
+            && self.speech_buffer.len() >= self.max_speech_samples
+        {
+            info!(
+                "VAD max duration cap reached ({:.1}s) — force-emitting segment",
+                self.speech_buffer.len() as f32 / self.sample_rate as f32
+            );
+            self.in_speech = false;
+            self.silence_samples = 0;
+
+            if self.speech_buffer.len() >= self.min_speech_samples {
+                let started_at = match self.speech_start {
+                    Some(t) => t,
+                    None => Instant::now(),
+                };
+                completed = Some(SpeechSegment {
+                    samples: std::mem::take(&mut self.speech_buffer),
+                    sample_rate: self.sample_rate,
+                    started_at,
+                });
+            } else {
+                self.speech_buffer.clear();
+            }
+            self.speech_start = None;
         }
 
         Ok(VadOutput {

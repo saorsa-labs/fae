@@ -254,7 +254,9 @@ impl AgentLoop {
         let mut turns = Vec::new();
         let total_usage = TokenUsage::default();
         let request_timeout = tokio::time::Duration::from_secs(self.config.request_timeout_secs);
-        let mut options = RequestOptions::new().with_stream(true);
+        let mut options = RequestOptions::new()
+            .with_stream(true)
+            .with_reasoning(self.config.reasoning_level);
         if !self.tool_definitions.is_empty() {
             options = options.with_temperature(TOOL_JUDGMENT_TEMPERATURE);
         }
@@ -320,44 +322,47 @@ impl AgentLoop {
             let mut stream = stream;
 
             loop {
-                if self.cancel.is_cancelled() {
-                    let turn = acc.finish();
-                    turns.push(TurnResult {
-                        text: turn.text,
-                        thinking: turn.thinking,
-                        tool_calls: Vec::new(),
-                        finish_reason: FinishReason::Cancelled,
-                        usage: None,
-                    });
-                    return Ok(AgentLoopResult {
-                        final_text: last_text(&turns),
-                        turns,
-                        total_usage,
-                        stop_reason: StopReason::Cancelled,
-                    });
-                }
+                tokio::select! {
+                    biased;
 
-                match tokio::time::timeout(tokio::time::Duration::from_millis(25), stream.next())
-                    .await
-                {
-                    Ok(Some(event)) => {
-                        // Buffer TextDelta tokens for clause-level streaming.
-                        if let Some(ref ctx) = clause_tx
-                            && let LlmEvent::TextDelta { ref text } = event
-                        {
-                            clause_buffer.push_str(text);
-                            while let Some(pos) = crate::llm::find_clause_boundary(&clause_buffer) {
-                                let clause = clause_buffer[..=pos].trim().to_owned();
-                                clause_buffer = clause_buffer[pos + 1..].to_owned();
-                                if !clause.is_empty() {
-                                    let _ = ctx.send(clause).await;
-                                }
-                            }
-                        }
-                        acc.push(event);
+                    _ = self.cancel.cancelled() => {
+                        let turn = acc.finish();
+                        turns.push(TurnResult {
+                            text: turn.text,
+                            thinking: turn.thinking,
+                            tool_calls: Vec::new(),
+                            finish_reason: FinishReason::Cancelled,
+                            usage: None,
+                        });
+                        return Ok(AgentLoopResult {
+                            final_text: last_text(&turns),
+                            turns,
+                            total_usage,
+                            stop_reason: StopReason::Cancelled,
+                        });
                     }
-                    Ok(None) => break,
-                    Err(_) => continue,
+
+                    event = stream.next() => {
+                        match event {
+                            Some(event) => {
+                                // Buffer TextDelta tokens for clause-level streaming.
+                                if let Some(ref ctx) = clause_tx
+                                    && let LlmEvent::TextDelta { ref text } = event
+                                {
+                                    clause_buffer.push_str(text);
+                                    while let Some(pos) = crate::llm::find_clause_boundary(&clause_buffer) {
+                                        let clause = clause_buffer[..=pos].trim().to_owned();
+                                        clause_buffer = clause_buffer[pos + 1..].to_owned();
+                                        if !clause.is_empty() {
+                                            let _ = ctx.send(clause).await;
+                                        }
+                                    }
+                                }
+                                acc.push(event);
+                            }
+                            None => break,
+                        }
+                    }
                 }
             }
 

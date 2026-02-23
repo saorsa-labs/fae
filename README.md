@@ -207,14 +207,16 @@ Fae always runs through the internal agent loop (tool calling + sandboxing). The
 
 ### Local Model Selection
 
-Fae automatically selects the best local model based on your system RAM:
+Fae uses a dual-channel architecture with separate models for voice and background tasks:
 
-| System RAM | Model | Capabilities |
-|---|---|---|
-| 24 GiB+ | Qwen3-VL-8B-Instruct | Vision + text, stronger tool calling and coding |
-| < 24 GiB | Qwen3-VL-4B-Instruct | Vision + text, lighter footprint |
+| Channel | Model | Context Budget | Speed | Purpose |
+|---|---|---|---|---|
+| Voice | Qwen3-1.7B (Q4_K_M) | ~1.5K tokens | ~80 T/s | Fast conversational responses |
+| Background | Qwen3-4B+ (Q4_K_M) | Full window | Async | Tool-heavy tasks (calendar, search, etc.) |
 
-Both models support vision (camera/image understanding) and are loaded via VisionModelBuilder with ISQ Q4K quantization. If a vision model fails to load, Fae falls back to Qwen3-4B text-only (GGUF).
+The voice channel stays fast by using a slim prompt with no tool schemas. When Fae detects a request that needs tools (calendar, reminders, web search), she gives an immediate spoken acknowledgment and dispatches the work to the background channel asynchronously.
+
+See [LLM Benchmarks](docs/llm-benchmarks.md) for detailed speed and memory measurements.
 
 Fae runs exclusively on local models — no API keys or remote servers required.
 
@@ -304,6 +306,7 @@ Runtime system prompt assembly:
 - [Channel Setup Guide](docs/channels-setup.md)
 - [Native macOS Swift App Shell](native/macos/Fae/README.md)
 - [Apple Companion Receiver Templates](native/apple/FaeCompanion/README.md)
+- [LLM Benchmarks — Local Inference on Apple Silicon](docs/llm-benchmarks.md)
 - [Native App Architecture v0](docs/architecture/native-app-v0.md)
 - [Native App Latency Validation Plan](docs/architecture/native-app-latency-plan.md)
 

@@ -264,6 +264,30 @@ cargo test
 
 When changing memory logic, add tests first (TDD), then implementation.
 
+## ⚠️ CLEAN BUILD POLICY — MANDATORY
+
+**ALWAYS use `cargo clean` before building when testing changes to Fae.**
+
+The static library build chain (Rust → `libfae.a` → Swift link) does NOT reliably
+detect all changes through incremental compilation. Stale binaries have repeatedly
+caused confusion where code changes appeared not to work.
+
+**MANDATORY build sequence for testing:**
+
+```bash
+cargo clean                    # Remove ALL cached Rust artifacts
+rm -rf native/macos/Fae/.build # Remove Swift SPM build cache too!
+just build-staticlib           # Rebuild libfae.a from scratch
+just build-native-swift        # Rebuild and RE-LINK Swift app
+just _bundle-app && just _sign-bundle  # Bundle and sign
+open "$FAE_APP" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+```
+
+**NEVER skip `cargo clean` AND Swift `.build` cleanup when testing changes.**
+Swift's SPM caches the linked binary — even a fresh `libfae.a` won't take effect
+unless the Swift `.build` directory is also removed. If something "isn't working"
+after a code change, the FIRST thing to check is whether the binary is stale.
+
 ## Build memory optimization
 
 Integration tests use the **matklad single-binary pattern** to avoid OOM during `cargo test`.
@@ -367,6 +391,83 @@ The pipeline emits `pipeline_timing` events at each stage boundary:
 - `pipeline_timing: playback completed` — `playback_ms`
 
 Echo suppression logs: `dropping N.Ns speech segment (echo suppression)` — these are correctly filtered.
+
+## LLM model evaluation
+
+Benchmarks and findings live in `docs/llm-benchmarks.md`. When evaluating a new model
+for Fae, follow this process.
+
+### Running the eval
+
+1. **Install mistral.rs CLI** (one-time): `cargo install mistralrs-cli --features metal`
+2. **Download the GGUF** + tokenizer via `huggingface_hub` (see benchmark doc for pattern)
+3. **Add the model** to the `MODELS` list in the benchmark script in `docs/llm-benchmarks.md`
+4. **Run the full benchmark** — the script tests 7 context sizes with `/no_think`, tracks
+   RAM, visible vs thinking chars, and T/s. Takes ~3 min per model.
+5. **Update `docs/llm-benchmarks.md`** with the new rows in all tables (summary, speed-by-context,
+   detailed results, compliance table)
+
+### What to measure
+
+| Metric | Why it matters |
+|--------|----------------|
+| T/s at short context (~20-200 tok) | Voice responsiveness — needs >60 T/s |
+| T/s at 1K-2K context | Realistic voice prompt with history |
+| T/s at 8.5K context | Background/tool channel feasibility |
+| `/no_think` compliance | Does the model respect the instruction? Check Think column for 0c |
+| Idle RSS RAM | Does it fit alongside TTS + STT + embedding models? |
+| Answer quality (subjective) | Send 5-10 voice-style questions, read the visible output |
+
+### Vision-capable models
+
+The 4B and 8B Qwen3 variants have VL (Vision-Language) counterparts that accept image
+inputs. This is significant for Fae — it gives her eyes. With a vision model, Fae can:
+
+- Describe what's on the user's screen (screenshot analysis)
+- Read documents, receipts, photos shared by the user
+- Understand visual context in conversations ("what's in this picture?")
+- Power the canvas rendering pipeline with visual understanding
+
+**Current vision support in code:**
+
+- `src/config.rs`: `enable_vision` field on `LlmConfig`, `recommended_local_model()` returns
+  `(model_id, gguf_file, tokenizer_id, enable_vision)` tuple
+- `src/llm/mod.rs`: Dual loading path — `VisionModelBuilder` (ISQ Q4K) for VL models,
+  `GgufModelBuilder` for text-only GGUF. Falls back to GGUF if vision load fails.
+- `src/llm/mod.rs:CapturedImage`: Image capture struct passed to the vision encoder
+- `src/personality.rs`: System prompt adapts when `vision_capable` is true
+
+**Vision model tradeoffs:**
+
+| Aspect | Text-only GGUF | Vision (VL + ISQ) |
+|--------|----------------|-------------------|
+| Loading | Fast (pre-quantized) | Slow (ISQ quantizes at startup) |
+| Speed | Higher T/s | ~10-20% slower (vision encoder overhead) |
+| RAM | Lower | Higher (vision encoder + cross-attention) |
+| Capabilities | Text only | Text + image understanding |
+
+**When evaluating a vision model**, additionally test:
+- Startup time (ISQ quantization can take 30-60s for larger models)
+- T/s with and without an image in the prompt
+- Image description quality (send a screenshot, check the response)
+- RAM overhead vs the text-only variant
+
+Vision models are currently off by default (`enable_vision = false` in managed presets).
+They can be enabled via `config.toml` (`enable_vision = true`) or a future Settings toggle.
+The architecture supports hot-switching — if vision load fails, it falls back to GGUF
+text-only automatically.
+
+### Model selection guidance (current)
+
+| System RAM | Voice (fast path) | Background (async) | Notes |
+|---|---|---|---|
+| 8-16 GB | 0.6B text | 0.6B text | Only option that fits |
+| 16-32 GB | 1.7B text | 1.7B text | Best voice quality at 85 T/s |
+| 32-64 GB | 1.7B text | 4B text or 4B-VL | Fast voice + stronger reasoning (+ vision) |
+| 64+ GB | 1.7B text | 8B text or 8B-VL | Fast voice + best capability (+ vision) |
+
+The voice channel always uses a small, fast text-only model. Vision models belong on the
+background channel where startup latency and slower T/s are acceptable.
 
 ## Completed milestones
 

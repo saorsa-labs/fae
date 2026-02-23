@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::fae_llm::events::FinishReason;
 use crate::fae_llm::tools::types::ToolResult;
+use crate::fae_llm::types::ReasoningLevel;
 use crate::fae_llm::usage::TokenUsage;
 
 /// Default maximum number of turns in the agent loop.
@@ -345,6 +346,13 @@ pub struct AgentConfig {
     /// Maximum number of concurrent tool executions when parallel mode is on.
     #[serde(default = "default_max_parallel_tool_calls")]
     pub max_parallel_tool_calls: usize,
+    /// Reasoning/thinking level for the LLM.
+    ///
+    /// Controls whether the model is allowed to use internal reasoning tokens.
+    /// `Off` suppresses thinking (fast voice path), `Medium`/`High` enables
+    /// it (background agent / complex reasoning path).
+    #[serde(default)]
+    pub reasoning_level: ReasoningLevel,
 }
 
 fn default_max_parallel_tool_calls() -> usize {
@@ -363,6 +371,7 @@ impl Default for AgentConfig {
             circuit_breaker: CircuitBreaker::default(),
             parallel_tool_calls: false,
             max_parallel_tool_calls: default_max_parallel_tool_calls(),
+            reasoning_level: ReasoningLevel::Off,
         }
     }
 }
@@ -424,6 +433,16 @@ impl AgentConfig {
     /// Set the max number of concurrent tool calls when parallel execution is enabled.
     pub fn with_max_parallel_tool_calls(mut self, max_parallel_tool_calls: usize) -> Self {
         self.max_parallel_tool_calls = max_parallel_tool_calls.max(1);
+        self
+    }
+
+    /// Set the reasoning/thinking level.
+    ///
+    /// Controls whether the model uses internal reasoning tokens.
+    /// `Off` is fastest (voice path), `Medium`/`High` enables deep
+    /// reasoning (background agent path).
+    pub fn with_reasoning_level(mut self, level: ReasoningLevel) -> Self {
+        self.reasoning_level = level;
         self
     }
 }

@@ -12,6 +12,7 @@ use crate::pipeline::messages::{
 };
 use crate::runtime::{ConversationSnapshotEntry, ConversationSnapshotEntryRole, RuntimeEvent};
 use crate::startup::InitializedModels;
+use crate::tts::kokoro::strip_non_speech_chars;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1085,15 +1086,17 @@ async fn run_vad_stage(
     let mut in_fast_mode = false;
 
     // Echo suppression tail: after assistant stops speaking, keep suppressing
-    // for a longer window so residual room echo/reverb does not leak through.
-    let echo_tail_ms: u64 = if state.aec_enabled { 3000 } else { 5000 };
+    // for a window so residual room echo/reverb does not leak through.
+    // Reduced from 3000/5000ms: overly aggressive tail was causing Fae to
+    // miss user speech that started shortly after her response ended.
+    let echo_tail_ms: u64 = if state.aec_enabled { 1500 } else { 3000 };
     let echo_tail = std::time::Duration::from_millis(echo_tail_ms);
     // Additional post-playback guard where very short utterances are rejected.
     // This targets ghost backchannels like "yeah"/"mm-hmm" that can appear
-    // right after long playback.
-    let short_utterance_guard_ms: u64 = if state.aec_enabled { 5000 } else { 7000 };
+    // right after long playback.  Reduced from 5000/7000ms.
+    let short_utterance_guard_ms: u64 = if state.aec_enabled { 3000 } else { 5000 };
     let short_utterance_guard = std::time::Duration::from_millis(short_utterance_guard_ms);
-    const MIN_POST_PLAYBACK_SEGMENT_SECS: f32 = 0.5;
+    const MIN_POST_PLAYBACK_SEGMENT_SECS: f32 = 0.4;
 
     let mut was_suppressing = false;
     let mut suppress_until: Option<std::time::Instant> = None;
@@ -1238,9 +1241,10 @@ async fn run_vad_stage(
 
                                     // Duration guard: very long segments are likely
                                     // accumulated playback that slipped past echo
-                                    // suppression. With the 1000ms silence threshold,
-                                    // most natural utterances fit within 20s.
-                                    const MAX_SEGMENT_SECS: f32 = 20.0;
+                                    // suppression.  Natural utterances rarely exceed
+                                    // 15s in conversational speech.  This matches
+                                    // the VAD's max_speech_duration_ms cap.
+                                    const MAX_SEGMENT_SECS: f32 = 15.0;
                                     if duration_s > MAX_SEGMENT_SECS {
                                         info!(
                                             "dropping {duration_s:.1}s speech segment (exceeds {MAX_SEGMENT_SECS}s cap — likely echo)"
@@ -1761,6 +1765,17 @@ impl LlmEngine {
             Self::Agent(llm) => llm.inject_background_result(result_text),
         }
     }
+
+    /// Temporarily change the reasoning level for the next generation.
+    ///
+    /// Used to enable thinking mode for complex conversational queries and
+    /// reset it afterwards. Does not affect background agents (they have
+    /// their own config).
+    fn set_reasoning_level(&mut self, level: crate::fae_llm::types::ReasoningLevel) {
+        match self {
+            Self::Agent(llm) => llm.set_reasoning_level(level),
+        }
+    }
 }
 
 async fn run_llm_stage(
@@ -1892,16 +1907,9 @@ async fn run_llm_stage(
     let cancel = cancel;
     let mut turn_counter: u64 = 0;
 
-    // Canned acknowledgments for tool-intent routing (instant TTS feedback
-    // while the background agent works).
-    const TOOL_ACKS: &[&str] = &[
-        "Checking that now.",
-        "On it.",
-        "Let me look into that.",
-        "One moment.",
-        "Working on that.",
-    ];
-    let mut ack_counter: usize = 0;
+    // Acknowledgment counter for rotating through canned phrases.
+    // Shared between tool acks and thinking acks for global rotation.
+    let mut ack_counter: u64 = 0;
 
     // Channel for receiving results from background agent tasks.
     let (bg_result_tx, mut bg_result_rx) = mpsc::channel::<crate::agent::BackgroundAgentResult>(4);
@@ -2178,7 +2186,10 @@ async fn run_llm_stage(
             );
 
             // 1. Send canned acknowledgment immediately via TTS.
-            let ack = TOOL_ACKS[ack_counter % TOOL_ACKS.len()];
+            let ack = crate::personality::next_acknowledgment(
+                crate::personality::TOOL_ACKNOWLEDGMENTS,
+                ack_counter,
+            );
             ack_counter += 1;
             let _ = tx
                 .send(SentenceChunk {
@@ -2242,7 +2253,27 @@ async fn run_llm_stage(
             );
             continue;
         }
-        // ── End multi-channel routing ────────────────────────────────────
+        // ── Thinking mode for complex conversational queries ─────────────
+        // When the classifier detects a complex question (analytical,
+        // comparative, planning), temporarily enable reasoning mode on the
+        // voice engine so the model can think more deeply. We speak a
+        // thinking acknowledgment so the user knows to expect a slight delay.
+        if intent.needs_thinking {
+            info!("complex query detected — enabling thinking mode for this turn");
+            let ack = crate::personality::next_acknowledgment(
+                crate::personality::THINKING_ACKNOWLEDGMENTS,
+                ack_counter,
+            );
+            ack_counter += 1;
+            let _ = tx
+                .send(SentenceChunk {
+                    text: ack.to_owned(),
+                    is_final: true,
+                })
+                .await;
+            engine.set_reasoning_level(crate::fae_llm::types::ReasoningLevel::Medium);
+        }
+        // ── End thinking mode routing ────────────────────────────────────
 
         let mut llm_input = format!("User message:\n{user_text}");
         if let Some(memory) = &memory_orchestrator {
@@ -2447,6 +2478,12 @@ async fn run_llm_stage(
         // Explicitly drop the pinned generation future to release the mutable
         // borrow on `engine`, allowing us to call `inject_background_result`.
         drop(generation);
+
+        // If we temporarily enabled thinking for a complex query, reset to Off
+        // so subsequent simple turns don't incur the reasoning overhead.
+        if intent.needs_thinking {
+            engine.set_reasoning_level(crate::fae_llm::types::ReasoningLevel::Off);
+        }
 
         let assistant_text = match forward_handle.await {
             Ok(Ok(text)) => text,
@@ -2882,20 +2919,27 @@ async fn run_tts_stage(
                             }
                             continue;
                         }
-                        if sentence.text.is_empty() {
-                            // End-of-response marker, forward it
-                            let synth = SynthesizedAudio {
-                                samples: Vec::new(),
-                                sample_rate: config.tts.sample_rate,
-                                is_final: true,
-                            };
-                            if tx.send(synth).await.is_err() {
-                                break;
+                        // Strip emojis and non-speech chars before TTS so the
+                        // phonemizer doesn't produce garbage audio for them.
+                        let clean_text = strip_non_speech_chars(&sentence.text);
+                        if clean_text.is_empty() {
+                            // Text was only emojis / non-speech chars, or the
+                            // end-of-response marker.  Forward a final marker
+                            // if needed and skip synthesis.
+                            if sentence.is_final || sentence.text.is_empty() {
+                                let synth = SynthesizedAudio {
+                                    samples: Vec::new(),
+                                    sample_rate: config.tts.sample_rate,
+                                    is_final: true,
+                                };
+                                if tx.send(synth).await.is_err() {
+                                    break;
+                                }
                             }
                             continue;
                         }
                         let tts_start = Instant::now();
-                        match engine.synthesize(&sentence.text).await {
+                        match engine.synthesize(&clean_text).await {
                             Ok(audio) => {
                                 let tts_duration = tts_start.elapsed();
                                 info!(
