@@ -1,6 +1,6 @@
 # Fae Memory
 
-This is the human-readable guide to how Fae memory works today.
+This is the consolidated guide to how Fae memory works — operational behavior, architecture decisions, and future roadmap.
 
 ## What Fae remembers
 
@@ -18,16 +18,14 @@ Only durable memories (`profile`, `fact`, `event`, `person`, `interest`, `commit
 
 ## Where memory lives
 
-Memory root is `~/.fae/memory/`.
-
 Storage:
 
-- `~/.fae/memory/fae.db` — SQLite database (WAL mode, sqlite-vec extension)
-- `~/.fae/memory/backups/` — daily automated backup files
+- `~/Library/Application Support/fae/fae.db` — SQLite database (WAL mode, sqlite-vec extension)
+- `~/Library/Application Support/fae/backups/` — daily automated backup files
 
 Voice samples:
 
-- `~/.fae/voices/`
+- `~/Library/Application Support/fae/voices/`
 
 ### Database schema
 
@@ -103,7 +101,7 @@ On database open, a `PRAGMA quick_check` validates page-level B-tree structure. 
 
 - Runs daily at 02:00 local time via the scheduler
 - Uses `VACUUM INTO` for atomic, consistent backup
-- Backup files: `fae-backup-YYYYMMDD-HHMMSS.db` in `~/.fae/memory/backups/`
+- Backup files: `fae-backup-YYYYMMDD-HHMMSS.db` in backups directory
 - Retains 7 most recent backups (configurable via `backup_keep_count`)
 - Old backups are rotated automatically
 
@@ -114,14 +112,16 @@ On startup, schema migrations run automatically when `schema_auto_migrate` is en
 ## Safety and quality controls
 
 - max record text length is enforced
-- oversized captured content is truncated safely
+- oversized captured content is truncated safely (never fails the turn)
 - confidence threshold (`memory.min_profile_confidence`) gates durable promotion and recall
 - basic false-positive guards are applied to name extraction
+- global write serialization for record/audit mutation
 - strict tests cover capture, recall, supersession, migration, and concurrency
+- no panic/unwrap/expect in production memory paths
 
 ## Operational knobs
 
-In `~/.fae/config.toml`:
+In `~/Library/Application Support/fae/config.toml`:
 
 ```toml
 [memory]
@@ -141,7 +141,9 @@ backup_keep_count = 7
 
 ## Background maintenance
 
-Scheduler tasks keep memory healthy:
+Scheduler tasks keep memory healthy and power proactive intelligence:
+
+**Memory tasks:**
 
 | Task | Schedule | Purpose |
 |------|----------|---------|
@@ -151,7 +153,79 @@ Scheduler tasks keep memory healthy:
 | `memory_gc` | Daily 03:30 | Retention policy for old episodes |
 | `memory_backup` | Daily 02:00 | Atomic backup with rotation |
 
+**Intelligence tasks** (use memory data for proactive features):
+
+| Task | Schedule | Purpose |
+|------|----------|---------|
+| `noise_budget_reset` | Daily 00:00 | Reset daily proactive delivery budget |
+| `stale_relationships` | Every 7d | Detect relationships needing check-in |
+| `morning_briefing` | Daily 08:00 | Prepare morning briefing from memory |
+| `skill_proposals` | Daily 11:00 | Detect skill opportunities from patterns |
+| `skill_health_check` | Every 5min | Python skill subprocess health checks |
+
+## Architecture decisions
+
+### Memory tiers
+
+- **Working memory**: short-lived turn state and queue context
+- **Durable profile memory**: stable user preferences/identity/constraints
+- **Durable fact memory**: reusable factual context
+- **Episodic memory**: source-linked history for traceability and promotion
+
+### Context-budget strategy
+
+Memory quality depends on context headroom:
+
+1. Keep durable recall bounded (`recall_max_items`, `recall_max_chars`)
+2. Keep conversation history bounded (`max_history_messages`)
+3. Compact older history near context pressure threshold
+4. Scale default context window from machine RAM (8K < 12 GiB, 16K < 20 GiB, 32K < 40 GiB, 64K >= 40 GiB)
+5. Future: adaptive policy to reduce recall breadth when compaction frequency spikes
+
+### Upgrade model
+
+- strict schema version gate at startup
+- migration chain by version
+- automatic backup snapshot before mutate
+- rollback on any failure
+- idempotent migration contracts tested with fixtures
+
+## Completed milestones
+
+### Phase 1 — Hardening
+
+- Strengthened extraction precision for names/preferences
+- Enforced confidence gating for durable promotion/recall
+- Improved oversized-turn resilience
+
+### Phase 2 — Retrieval quality (Milestone 7)
+
+- Added embedding index and hybrid ranker (sqlite-vec + all-MiniLM-L6-v2)
+- Added dedupe by semantic near-duplicate, not only exact text
+- JSONL to SQLite migration with backup preservation
+
+## Future roadmap
+
+### Phase 3 — Governance
+
+- Sensitivity classes and restricted recall policy
+- Explicit user namespace partitioning
+- Stronger deletion/audit compliance workflows
+
+### Phase 4 — Adaptive intelligence
+
+- Memory-context adaptive budget controller
+- Model-assisted extraction/validation pass
+- Reinforcement from correction signals over time
+- Recall observability dashboards (budget hit ratio, precision proxies)
+
+### Open gaps
+
+- **Extraction breadth**: capture currently relies on deterministic parsing; no dedicated structured extractor model pass yet
+- **Governance depth**: no per-memory sensitivity classes/ACL enforcement; no tenant namespace partitioning
+- **Context-budget adaptation**: prompt recall budget is char-bounded but static; no automatic adaptation from live context pressure signals
+
 ## Related docs
 
 - `SOUL.md`
-- `docs/architecture/native-app-v0.md`
+- `docs/adr/002-embedded-rust-core.md`

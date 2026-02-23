@@ -6,7 +6,7 @@ pipeline architecture.
 
 **Hardware:** Apple Silicon, 96 GB unified memory
 **Quantization:** Q4_K_M (GGUF)
-**Backend:** mistral.rs 0.7 with Metal GPU offload
+**Backend:** mistral.rs 0.7.1-alpha.1 (built from master) with Metal GPU offload
 **Date:** 2026-02-23
 
 ---
@@ -573,17 +573,237 @@ system prompt prefix.
 | Qwen3-4B | `unsloth/Qwen3-4B-Instruct-2507-GGUF` | `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` | `Qwen/Qwen3-4B-Instruct-2507` |
 | Qwen3-8B | `unsloth/Qwen3-8B-GGUF` | `Qwen3-8B-Q4_K_M.gguf` | `Qwen/Qwen3-8B` |
 
-### Models tested but incompatible with mistral.rs 0.7 + Metal
+### Models tested but incompatible or unusable with mistral.rs + Metal
 
-| Model | Architecture | GGUF Size | Error | Notes |
+We extensively tested every current-gen sub-4B model available as of Feb 2026. This table
+documents every model that was tested and why it didn't work for Fae.
+
+| Model | Architecture | GGUF Size | Error / Issue | Notes |
 |---|---|---:|---|---|
-| Phi-4-mini-instruct (3.8B) | phi3 | 2.5 GB | `Cannot find tensor info for output.weight` | Tied embeddings not handled by mistral.rs Phi3 GGUF loader |
-| Qwen3-30B-A3B MoE (3B active) | qwen3moe | 18.6 GB | `indexed_moe_forward is not implemented` | MoE kernel only exists for CUDA, not Metal |
-| Liquid LFM2 (all variants) | lfm2 | varies | Architecture not supported | Hybrid SSM — not in mistral.rs GGUF arch list |
+| **Ministral-3 3B** (Dec 2025) | mistral3 | 2.0 GB | **~5 T/s** (10x too slow) | Loads with patched mistral.rs (verify_arch_any bug fix), Metal kernels unoptimized for Mistral3 attention |
+| **SmolLM3 3B** (Feb 2026) | smollm3 | 1.8 GB | `Unknown GGUF architecture 'smollm3'` | smollm3 only in non-GGUF arch list; GGUF enum doesn't include it |
+| **Phi-4-mini-instruct** (3.8B) | phi3 | 2.5 GB | `Cannot find tensor info for output.weight` | Tied embeddings not handled by Phi3 GGUF loader |
+| **Qwen3-30B-A3B MoE** (3B active) | qwen3moe | 18.6 GB | `indexed_moe_forward is not implemented` | MoE kernel only exists for CUDA, not Metal |
+| **Liquid LFM2** (all variants) | lfm2 | varies | Architecture not supported | Hybrid SSM — not a transformer, not in any arch list |
+| **IBM Granite 3.2 2B** | granite | N/A | Architecture not supported | `granite` not in GGUF arch list |
+| **EXAONE 3.5 2.4B** | exaone | N/A | Architecture not supported | `exaone` not in GGUF arch list |
+| **Gemma 3 1B/4B** | gemma3 | N/A | Architecture not in GGUF list | `gemma3` only available via non-GGUF ISQ path |
 
-**mistral.rs 0.7 supported GGUF architectures:** Llama, Mistral3, Phi2, Phi3, Starcoder2,
-Qwen2, Qwen3, Qwen3MoE (MoE requires CUDA).
+**Ministral-3 benchmark detail** (loaded successfully, but generation is crippled):
 
-On Apple Silicon, only dense transformer models work. MoE models need NVIDIA GPUs.
-Check [mistral.rs releases](https://github.com/EricLBuehler/mistral.rs/releases) for
-future Metal MoE and Phi-4 tied-embedding support.
+| Ctx Target | Prompt Tok | Compl Tok | T/s | RAM MB |
+|---:|---:|---:|---:|---:|
+| 20 | 25 | 119 | 4.8 | 4,466 |
+| 100 | 25 | 88 | 5.7 | 4,466 |
+| 500 | 472 | 101 | 4.5 | 4,467 |
+| 1000 | 528 | 112 | 5.3 | 4,468 |
+| 4000 | 3,528 | 100 | 3.4 | 4,473 |
+
+The Llama GGUF loader handles Mistral3 tensor layout but the Metal kernels don't properly
+optimize for Mistral3-specific features (sliding window attention, `temperature_scale: 0.1`).
+Prompt processing is fast (~1,300 T/s) but generation is 10-20x slower than Qwen3 at the
+same parameter count. This makes Ministral-3 unusable for voice (needs >60 T/s).
+
+**mistral.rs 0.7.1-alpha.1 GGUF architecture list:** Llama, Mistral3, Phi2, Phi3,
+Starcoder2, Qwen2, Qwen3, Qwen3MoE (MoE requires CUDA). Non-GGUF (safetensors/ISQ)
+adds: SmolLM3, Gemma, Gemma2, GLM4, DeepSeekV2/V3, GraniteMoEHybrid, GPT-OSS, Qwen3Next.
+
+**Conclusion: Qwen3 is the only viable model family for Fae on mistral.rs + Metal.**
+No other current-gen small model (sub-4B) achieves usable voice-quality T/s on Apple
+Silicon through mistral.rs. Older models (Llama 3.2, Qwen2.5) use the `llama`/`qwen2`
+arch and would load, but are superseded by Qwen3 in quality and instruction following.
+
+### mistral.rs verify_arch_any bug
+
+While testing Ministral-3, we discovered a bug in mistral.rs 0.7.1-alpha.1 where
+`verify_arch_any()` used `try_for_each` (requiring ALL architectures to match) instead
+of `any()` (requiring ANY to match). The function at `mistralrs-core/src/utils/gguf_metadata.rs:153`
+was patched locally:
+
+```rust
+// BUG: try_for_each requires ALL to match — should be ANY
+pub fn verify_arch_any(&self, expected_archs: &[&str]) -> Result<()> {
+    let actual_arch: String = self.metadata.get("general.architecture")...;
+    if expected_archs.iter().any(|&arch| arch == actual_arch) {
+        Ok(())
+    } else {
+        anyhow::bail!("Expected one of {:?}, got `{actual_arch}`.", expected_archs)
+    }
+}
+```
+
+This fix was required to load any GGUF model whose architecture is listed alongside
+`llama` in `verify_arch_any` calls (e.g., Ministral-3 which reports `mistral3` but uses
+the Llama loader). Without this fix, the model fails with `Expected 'llama' architecture,
+got 'mistral3'`.
+
+---
+
+## Qwen3-1.7B Sampling Parameter Tuning
+
+Systematic benchmark testing 9 sampling configurations against 15 prompts to optimize
+voice quality, speed, conciseness, tool routing accuracy, and repetition avoidance.
+
+**Hardware:** Apple Silicon, 96 GB unified memory
+**Model:** Qwen3-1.7B Q4_K_M, server RAM: ~2.7 GB idle
+**Server:** mistral.rs 0.7.1-alpha.1, `--max-seq-len 16384 --prefix-cache-n 16`
+**Date:** 2026-02-23
+
+### Critical bug found: penalty parameter misuse
+
+`src/agent/mod.rs:863-864` feeds `repeat_penalty=1.15` as `frequency_penalty` and
+`repeat_penalty * 0.5 = 0.575` as `presence_penalty`. Standard range for these OpenAI-style
+penalties is 0.0-2.0 but typical values are 0.0-0.5. Using 1.15 as frequency_penalty is
+extremely aggressive and degrades output quality.
+
+The correct fix: zero out `frequency_penalty` and `presence_penalty`, use `repetition_penalty`
+(a separate mistralrs sampler that operates on token repeats directly) instead.
+
+### Sampling configurations tested
+
+| ID | temp | top_p | top_k | min_p | freq | pres | rep_pen | max_tok | Description |
+|----|------|-------|-------|-------|------|------|---------|---------|-------------|
+| **S0** | 0.9 | 0.9 | - | - | 1.15 | 0.575 | - | 200 | Current production (penalty bug) |
+| **S1** | 0.9 | 0.9 | - | - | 0.0 | 0.0 | 1.15 | 200 | Bug fix — proper repetition_penalty |
+| **S2** | 0.6 | 0.9 | - | - | 0.0 | 0.0 | 1.15 | 200 | Lower temp for predictable voice |
+| **S3** | 0.7 | 1.0 | - | 0.05 | 0.0 | 0.0 | 1.15 | 128 | min_p replaces top_p |
+| **S4** | 0.7 | 0.9 | 40 | - | 0.0 | 0.0 | 1.1 | 128 | top_k as diversity limiter |
+| **S5** | 0.8 | 1.0 | - | 0.1 | 0.0 | 0.0 | 1.1 | 128 | Aggressive min_p |
+| **S6** | 0.7 | 0.9 | - | 0.05 | 0.0 | 0.0 | 1.0 | 128 | DRY anti-repetition |
+| **S7** | 0.2 | 0.9 | - | - | 0.0 | 0.0 | 1.0 | 200 | TOOL_JUDGMENT_TEMPERATURE |
+| **S8** | 0.0 | - | 1 | - | 0.0 | 0.0 | - | 128 | Greedy (speed ceiling) |
+
+### Results: Overall performance
+
+| Config | Avg T/s | Med T/s | Avg Visible | Avg Time | Think Leaks |
+|--------|--------:|--------:|------------:|---------:|:-----------:|
+| S0 (bug) | 82.7 | 84.7 | 161c | 0.46s | 0/13 |
+| S1 (fix) | 83.3 | 86.2 | 143c | 0.43s | 0/14 |
+| S2 (low temp) | 80.0 | 82.6 | 125c | 0.41s | 0/14 |
+| S3 (min_p) | 81.9 | 85.0 | 150c | 0.48s | 0/14 |
+| **S4 (top_k)** | **96.5** | **98.9** | 148c | 0.39s | 0/14 |
+| S5 (min_p high) | 78.0 | 81.4 | 148c | 0.46s | 0/14 |
+| S6 (DRY) | 78.3 | 81.3 | 139c | 0.43s | 0/14 |
+| S7 (0.2 temp) | 92.1 | 95.9 | 139c | 0.37s | 0/14 |
+| S8 (greedy) | 104.4 | 105.8 | 124c | 0.36s | 0/15 |
+
+### Results: Quick voice (Category A — 5 factual questions)
+
+| Config | Avg T/s | Avg Visible | Avg Time |
+|--------|--------:|------------:|---------:|
+| S0 (bug) | 71.6 | 65c | 0.27s |
+| S1 (fix) | 77.3 | 70c | 0.31s |
+| S2 (low temp) | 77.6 | 66c | 0.29s |
+| S3 (min_p) | 76.0 | 77c | 0.34s |
+| **S4 (top_k)** | **91.1** | 69c | 0.26s |
+| S5 (min_p high) | 69.1 | 39c | 0.23s |
+| S6 (DRY) | 70.7 | 42c | 0.22s |
+| S7 (0.2 temp) | 80.4 | 44c | 0.20s |
+| S8 (greedy) | 89.7 | 44c | 0.18s |
+
+### Results: Repetition stress (D category)
+
+| Config | D1 Scotland | D2 Camping |
+|--------|------------:|-----------:|
+| S0 (bug) | 379c | 129c |
+| S1 (fix) | 243c | 157c |
+| S2 (low temp) | 233c | 130c |
+| S3 (min_p) | 352c | 168c |
+| **S4 (top_k)** | 361c | 158c |
+| S5 (min_p high) | 481c | 122c |
+| S6 (DRY) | 338c | 140c |
+| S7 (0.2 temp) | 444c | 168c |
+| S8 (greedy) | 441c | 141c |
+
+No repetition loops observed in any configuration. The 1.7B model handles free-form
+generation without degenerate repetition across all tested sampling strategies.
+
+### Results: Tool routing accuracy (Phase 3)
+
+10 prompts with tool schemas (calendar, email, web_search, reminders). Tested at voice
+temperature and at TOOL_JUDGMENT_TEMPERATURE (0.2).
+
+| Config | Correct | Total | Accuracy |
+|--------|--------:|------:|---------:|
+| S4 voice temp (0.7) | 9 | 10 | **90%** |
+| Tool temp (0.2) | 10 | 10 | **100%** |
+
+At voice temp (0.7), the model missed one ambiguous prompt ("Can you look something up
+for me about quantum computing?" — expected web_search, got no tool). At 0.2, all 10
+prompts routed correctly. This confirms the dual-temperature approach is correct:
+TOOL_JUDGMENT_TEMPERATURE=0.2 for tool decisions, higher temp for voice generation.
+
+### Key findings
+
+1. **Penalty bug impact is measurable but not catastrophic.** S0 (bug) vs S1 (fix):
+   82.7 vs 83.3 T/s, 161c vs 143c avg visible. The bugged penalties make output ~12%
+   more verbose but don't cause repetition loops. Still must be fixed — wrong parameters.
+
+2. **S4 (top_k=40) is the clear winner for voice.** 96.5 avg T/s (16% faster than S0),
+   91.1 T/s on quick voice (27% faster than S0), good conciseness, zero think leaks.
+   The `top_k=40` constraint limits the sampling space efficiently.
+
+3. **Greedy (S8) is the speed ceiling at 104 T/s** but produces deterministic output
+   unsuitable for conversational voice (identical responses every time, no variety).
+
+4. **Tool routing at 0.2 temp achieves 100% accuracy.** The dual-temperature approach
+   (0.2 for tool judgment, 0.7 for voice) is validated.
+
+5. **min_p and DRY don't help speed.** S5 (min_p=0.1) and S6 (DRY) both scored lower
+   T/s than S4. The overhead of these samplers negates any benefit for a 1.7B model.
+
+6. **Zero thinking leaks across all configs.** The `/no_think` injection works perfectly
+   with 1.7B — no config tested showed any thinking tokens.
+
+### Recommended defaults for Fae
+
+```
+# Voice channel (conversational generation)
+temperature = 0.7
+top_p = 0.9
+top_k = 40
+frequency_penalty = 0.0
+presence_penalty = 0.0
+repetition_penalty = 1.1
+max_tokens = 128
+
+# Tool judgment (already correct)
+TOOL_JUDGMENT_TEMPERATURE = 0.2
+```
+
+### Code changes needed
+
+1. **Fix penalty bug** in `src/agent/mod.rs:863-864`:
+   - Remove `.with_frequency_penalty(config.repeat_penalty)` (was 1.15)
+   - Remove `.with_presence_penalty(config.repeat_penalty * 0.5)` (was 0.575)
+   - Add `.with_repetition_penalty(config.repeat_penalty)` if/when mistralrs exposes it
+
+2. **Update defaults** in `src/config.rs`:
+   - `temperature: 0.7` (was 0.9)
+   - `repeat_penalty: 1.1` (was 1.15)
+   - `max_tokens: 128` (was 200)
+
+3. **Add `top_k` field** to `LlmConfig` and `LocalMistralrsConfig`:
+   - Default: 40
+   - Wire through to `set_sampler_topk()` in the request builder
+
+### Benchmark script
+
+The benchmark script is at `/tmp/fae_tuning_bench.py`. To re-run:
+
+```bash
+# Start the server
+mistralrs serve \
+  --format gguf \
+  -m unsloth/Qwen3-1.7B-GGUF \
+  -f Qwen3-1.7B-Q4_K_M.gguf \
+  --tok-model-id Qwen/Qwen3-1.7B \
+  --port 8787 \
+  --max-seq-len 16384 \
+  --prefix-cache-n 16
+
+# Run the benchmark
+python3 /tmp/fae_tuning_bench.py
+
+# Results saved to /tmp/fae_tuning_results.json
+```

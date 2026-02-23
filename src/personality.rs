@@ -172,6 +172,115 @@ pub fn next_acknowledgment<'a>(phrases: &'a [&'a str], counter: u64) -> &'a str 
     phrases[(counter as usize) % phrases.len()]
 }
 
+// ---------------------------------------------------------------------------
+// Approval prompt generation
+// ---------------------------------------------------------------------------
+
+/// Canned acknowledgment phrases after approval is granted.
+pub const APPROVAL_GRANTED: &[&str] = &[
+    "Got it, running that now.",
+    "On it.",
+    "Alright, going ahead.",
+    "Okay, executing that.",
+];
+
+/// Canned acknowledgment phrases after approval is denied.
+pub const APPROVAL_DENIED: &[&str] = &[
+    "Understood, I won't do that.",
+    "Okay, skipping that.",
+    "Alright, cancelled.",
+    "Got it, I'll leave that alone.",
+];
+
+/// Canned phrases for approval timeout.
+pub const APPROVAL_TIMEOUT: &[&str] = &[
+    "I'll skip that for now.",
+    "No response, so I'll move on.",
+    "Timed out waiting, I won't run that.",
+];
+
+/// Canned phrases for ambiguous responses during approval.
+pub const APPROVAL_AMBIGUOUS: &[&str] = &[
+    "Was that a yes or no?",
+    "Sorry, I didn't catch that. Yes or no?",
+    "I need a clear yes or no.",
+];
+
+/// Format a spoken approval prompt for a tool execution request.
+///
+/// Returns a natural-language sentence describing the tool action and ending
+/// with "Say yes or no." — this cue gives the user a clean signal.
+///
+/// # Examples
+///
+/// ```
+/// use fae::personality::format_approval_prompt;
+///
+/// let prompt = format_approval_prompt("bash", r#"{"command":"ls -la"}"#);
+/// assert!(prompt.contains("run a command"));
+/// assert!(prompt.ends_with("Say yes or no."));
+/// ```
+#[must_use]
+pub fn format_approval_prompt(tool_name: &str, input_json: &str) -> String {
+    let detail = extract_approval_detail(tool_name, input_json);
+    match tool_name {
+        "bash" => format!("I'd like to run a command: {detail}. Say yes or no."),
+        "write" => format!("I'd like to create the file {detail}. Say yes or no."),
+        "edit" => format!("I'd like to edit {detail}. Say yes or no."),
+        "desktop" | "desktop_automation" => {
+            "I'd like to use desktop automation. Say yes or no.".to_owned()
+        }
+        "python_skill" => "I'd like to run a Python skill. Say yes or no.".to_owned(),
+        _ => format!("I'd like to use the {tool_name} tool. Say yes or no."),
+    }
+}
+
+/// Extract a human-readable detail from tool arguments JSON.
+///
+/// Parses the JSON string to pull out the most relevant field for each tool
+/// type, truncating long values to keep TTS output manageable.
+fn extract_approval_detail(tool_name: &str, input_json: &str) -> String {
+    // Try to parse as JSON object
+    let parsed: Option<serde_json::Value> = serde_json::from_str(input_json).ok();
+
+    match (tool_name, parsed) {
+        ("bash", Some(ref v)) => {
+            let cmd = v
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("a shell command");
+            truncate_for_speech(cmd, 60)
+        }
+        ("write", Some(ref v)) => {
+            let path = v
+                .get("file_path")
+                .or_else(|| v.get("path"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("a file");
+            truncate_for_speech(path, 80)
+        }
+        ("edit", Some(ref v)) => {
+            let path = v
+                .get("file_path")
+                .or_else(|| v.get("path"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("a file");
+            truncate_for_speech(path, 80)
+        }
+        _ => tool_name.to_owned(),
+    }
+}
+
+/// Truncate a string to `max_chars`, appending ellipsis if needed.
+fn truncate_for_speech(s: &str, max_chars: usize) -> String {
+    if s.len() <= max_chars {
+        s.to_owned()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{truncated}...")
+    }
+}
+
 /// Vision understanding section injected when the local model supports images.
 const VISION_PROMPT: &str = "\
 Vision understanding:\n\

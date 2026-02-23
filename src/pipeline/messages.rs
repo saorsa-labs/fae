@@ -73,6 +73,14 @@ pub struct Transcription {
     /// This is computed from the original audio and is intended for lightweight
     /// "respond mostly to the primary user" behavior.
     pub voiceprint: Option<Vec<f32>>,
+    /// RMS energy of the source audio segment.
+    ///
+    /// Used for filtering low-quality transcriptions (background noise, distant
+    /// TV) before they reach the LLM.  Segments with very low RMS are likely
+    /// ambient sound rather than directed speech.
+    pub audio_rms: Option<f32>,
+    /// Duration of the source audio segment in seconds.
+    pub audio_duration_secs: Option<f32>,
     /// Time the original audio was captured.
     pub audio_captured_at: Instant,
     /// Time the transcription completed.
@@ -123,6 +131,21 @@ pub enum GateCommand {
         /// Display name of the new audio input device (for telemetry/events).
         device_name: Option<String>,
     },
+}
+
+/// A tool approval request forwarded to the pipeline coordinator.
+///
+/// When a tool requires explicit user consent, the handler bridge sends this
+/// notification so the coordinator can speak the approval prompt and listen
+/// for a voice response.
+#[derive(Debug, Clone)]
+pub struct ApprovalNotification {
+    /// Unique numeric identifier matching the [`ToolApprovalRequest::id`].
+    pub request_id: u64,
+    /// Tool name (e.g. `"bash"`, `"write"`, `"edit"`).
+    pub tool_name: String,
+    /// JSON-encoded tool arguments for generating a human-readable prompt.
+    pub input_json: String,
 }
 
 /// Synthesized audio from TTS, ready for playback.

@@ -76,6 +76,8 @@ fn bridge_routes_transcription_to_user_message() {
         text: "What is the weather?".into(),
         is_final: true,
         voiceprint: None,
+        audio_rms: None,
+        audio_duration_secs: None,
         audio_captured_at: Instant::now(),
         transcribed_at: Instant::now(),
     }));

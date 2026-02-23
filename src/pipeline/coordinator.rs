@@ -35,12 +35,32 @@ enum PlaybackCommand {
     Stop,
     /// Play a brief thinking acknowledgment tone so the user knows Fae heard them.
     ThinkingTone,
+    /// Play a short ascending two-note chime (C5→E5, ~200ms) to signal that Fae
+    /// is listening for a yes/no approval response. Distinct from `ThinkingTone`.
+    ListeningTone,
 }
 
 /// Commands sent to the LLM stage for queue control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LlmQueueCommand {
     ClearQueuedInputs,
+}
+
+/// State for a pending voice approval request in the LLM stage.
+///
+/// Created when an [`ApprovalNotification`] arrives; consumed when the user
+/// responds via voice or the request times out.
+struct PendingVoiceApproval {
+    request_id: u64,
+    tool_name: String,
+    /// Human-readable prompt that was spoken to the user.
+    description: String,
+    /// When the approval prompt finished playing (echo tail reference).
+    prompt_spoken_at: Option<Instant>,
+    /// When this approval was created (for timeout tracking).
+    created_at: Instant,
+    /// How many times we've re-prompted due to ambiguous responses.
+    reprompt_count: u8,
 }
 
 /// A user input item pending for the LLM stage.
@@ -322,6 +342,18 @@ pub struct PipelineCoordinator {
     ///
     /// Created during `run()` and passed to the LLM stage (Phase 2.2)
     voice_command_tx: Option<mpsc::UnboundedSender<crate::voice_command::VoiceCommand>>,
+    /// Receiver for approval notifications from the handler bridge.
+    ///
+    /// When a tool requires user consent, the handler sends an
+    /// [`ApprovalNotification`] here so the coordinator can speak the prompt
+    /// and listen for a voice yes/no.
+    approval_notification_rx:
+        Option<mpsc::UnboundedReceiver<super::messages::ApprovalNotification>>,
+    /// Sender for resolved approval responses back to the handler.
+    ///
+    /// The coordinator sends `(request_id, approved)` after the user responds
+    /// via voice (or after timeout).
+    approval_response_tx: Option<mpsc::UnboundedSender<(u64, bool)>>,
 }
 
 impl PipelineCoordinator {
@@ -341,6 +373,8 @@ impl PipelineCoordinator {
             console_output: true,
             shared_permissions: None,
             voice_command_tx: None,
+            approval_notification_rx: None,
+            approval_response_tx: None,
         }
     }
 
@@ -362,6 +396,8 @@ impl PipelineCoordinator {
             console_output: true,
             shared_permissions: None,
             voice_command_tx: None,
+            approval_notification_rx: None,
+            approval_response_tx: None,
         }
     }
 
@@ -442,6 +478,22 @@ impl PipelineCoordinator {
         self
     }
 
+    /// Attach voice-based approval channels.
+    ///
+    /// The `notification_rx` delivers [`ApprovalNotification`] messages from
+    /// the handler bridge when a tool requests consent.  The coordinator
+    /// speaks the prompt, listens for a voice yes/no, and sends
+    /// `(request_id, approved)` back through `response_tx`.
+    pub fn with_approval_voice(
+        mut self,
+        notification_rx: mpsc::UnboundedReceiver<super::messages::ApprovalNotification>,
+        response_tx: mpsc::UnboundedSender<(u64, bool)>,
+    ) -> Self {
+        self.approval_notification_rx = Some(notification_rx);
+        self.approval_response_tx = Some(response_tx);
+        self
+    }
+
     /// Run the full pipeline until cancelled.
     ///
     /// # Errors
@@ -480,6 +532,7 @@ impl PipelineCoordinator {
         let console_output = self.console_output;
         let assistant_speaking = Arc::new(AtomicBool::new(false));
         let assistant_generating = Arc::new(AtomicBool::new(false));
+        let awaiting_approval = Arc::new(AtomicBool::new(false));
 
         // AEC reference buffer: playback pushes speaker audio here so the AEC
         // stage can subtract it from the microphone signal.
@@ -529,6 +582,7 @@ impl PipelineCoordinator {
                 assistant_generating: Arc::clone(&assistant_generating),
                 aec_enabled,
                 runtime_tx: runtime_tx.clone(),
+                awaiting_approval: Arc::clone(&awaiting_approval),
             };
             tokio::spawn(async move {
                 run_vad_stage(
@@ -679,11 +733,14 @@ impl PipelineCoordinator {
                     let interrupt = Arc::clone(&interrupt);
                     let assistant_speaking = Arc::clone(&assistant_speaking);
                     let assistant_generating = Arc::clone(&assistant_generating);
+                    let awaiting_approval_for_llm = Arc::clone(&awaiting_approval);
                     let playback_cmd_tx = playback_cmd_tx.clone();
                     let runtime_tx = runtime_tx.clone();
                     let tool_approval_tx = tool_approval_tx.clone();
                     let canvas_registry = canvas_registry.clone();
                     let shared_permissions = self.shared_permissions.clone();
+                    let approval_notification_rx = self.approval_notification_rx.take();
+                    let approval_response_tx = self.approval_response_tx.take();
                     tokio::task::spawn_blocking(move || {
                         let runtime = match tokio::runtime::Builder::new_current_thread()
                             .enable_all()
@@ -710,6 +767,9 @@ impl PipelineCoordinator {
                                 cancel,
                                 voice_command_rx: Some(voice_cmd_rx),
                                 queue_cmd_rx: Some(llm_queue_cmd_rx),
+                                awaiting_approval: awaiting_approval_for_llm,
+                                approval_notification_rx,
+                                approval_response_tx,
                             };
                             run_llm_stage(
                                 config,
@@ -774,15 +834,45 @@ impl PipelineCoordinator {
                     let interrupt = Arc::clone(&interrupt);
                     let assistant_speaking = Arc::clone(&assistant_speaking);
                     let assistant_generating = Arc::clone(&assistant_generating);
+                    let awaiting_approval_ctl = Arc::clone(&awaiting_approval);
                     let playback_cmd_tx = playback_cmd_tx.clone();
                     let barge_in = self.config.barge_in.clone();
                     let runtime_tx = runtime_tx.clone();
                     let name_gated = aec_enabled && self.config.conversation.enabled;
+                    let echo_tail_for_tone = if aec_enabled {
+                        std::time::Duration::from_millis(1500)
+                    } else {
+                        std::time::Duration::from_millis(3000)
+                    };
                     tokio::spawn(async move {
                         let mut last_assistant_speech_start: Option<Instant> = None;
+                        // Pending listening tone: scheduled after echo tail when in approval mode.
+                        let mut listening_tone_at: Option<Instant> = None;
                         loop {
+                            // If a listening tone is scheduled, create a sleep future for it.
+                            let tone_sleep = async {
+                                match listening_tone_at {
+                                    Some(at) => {
+                                        let now = Instant::now();
+                                        if now >= at {
+                                            // Already past the scheduled time.
+                                        } else {
+                                            tokio::time::sleep(at - now).await;
+                                        }
+                                    }
+                                    None => std::future::pending().await,
+                                }
+                            };
+
                             tokio::select! {
                                 () = cancel.cancelled() => break,
+                                () = tone_sleep => {
+                                    // Echo tail expired and we're in approval mode — play listening tone.
+                                    listening_tone_at = None;
+                                    if awaiting_approval_ctl.load(Ordering::Relaxed) {
+                                        let _ = playback_cmd_tx.send(PlaybackCommand::ListeningTone);
+                                    }
+                                }
                                 ev = control_rx.recv() => {
                                     let Some(ev) = ev else { break };
                                     if let Some(rt) = &runtime_tx {
@@ -790,6 +880,13 @@ impl PipelineCoordinator {
                                     }
                                     if matches!(ev, ControlEvent::AssistantSpeechStart) {
                                         last_assistant_speech_start = Some(Instant::now());
+                                    }
+                                    // When assistant speech ends while awaiting approval,
+                                    // schedule a listening tone after the echo tail expires.
+                                    if matches!(ev, ControlEvent::AssistantSpeechEnd { .. })
+                                        && awaiting_approval_ctl.load(Ordering::Relaxed)
+                                    {
+                                        listening_tone_at = Some(Instant::now() + echo_tail_for_tone);
                                     }
                                     // Skip energy-based barge-in when name-gated: the
                                     // conversation gate will interrupt only when the user
@@ -1037,6 +1134,11 @@ struct VadStageState {
     aec_enabled: bool,
     /// Runtime event sender for mic status updates.
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    /// When true, the coordinator is awaiting a voice approval response.
+    ///
+    /// In this mode the short-utterance guard is bypassed for segments >= 0.15s
+    /// so that short "yes"/"no" responses can pass through after the echo tail.
+    awaiting_approval: Arc<AtomicBool>,
 }
 
 async fn run_vad_stage(
@@ -1230,13 +1332,33 @@ async fn run_vad_stage(
                                         continue;
                                     }
 
+                                    let in_approval_mode =
+                                        state.awaiting_approval.load(Ordering::Relaxed);
                                     if in_short_utterance_guard
                                         && duration_s < MIN_POST_PLAYBACK_SEGMENT_SECS
                                     {
-                                        info!(
-                                            "dropping {duration_s:.1}s speech segment (post-playback short-utterance guard)"
-                                        );
-                                        continue;
+                                        if in_approval_mode {
+                                            // Approval mode: accept segments down to 0.15s
+                                            // (enough for "yes"/"no"). Shorter segments
+                                            // are likely noise, not a deliberate response.
+                                            const MIN_APPROVAL_SEGMENT_SECS: f32 = 0.15;
+                                            if duration_s < MIN_APPROVAL_SEGMENT_SECS {
+                                                info!(
+                                                    "dropping {duration_s:.1}s speech segment (too short even for approval)"
+                                                );
+                                                continue;
+                                            }
+                                            info!(
+                                                "passing {duration_s:.1}s segment through (approval mode bypass)"
+                                            );
+                                            // Fall through to STT — the approval parser
+                                            // will validate content.
+                                        } else {
+                                            info!(
+                                                "dropping {duration_s:.1}s speech segment (post-playback short-utterance guard)"
+                                            );
+                                            continue;
+                                        }
                                     }
 
                                     // Duration guard: very long segments are likely
@@ -1336,6 +1458,17 @@ async fn run_stt_stage(
             segment = rx.recv() => {
                 match segment {
                     Some(segment) => {
+                        // Compute audio metrics before transcription for quality filtering.
+                        let duration_secs = segment.samples.len() as f32
+                            / segment.sample_rate as f32;
+                        let seg_rms: f32 = if segment.samples.is_empty() {
+                            0.0
+                        } else {
+                            (segment.samples.iter().map(|s| s * s).sum::<f32>()
+                                / segment.samples.len() as f32)
+                                .sqrt()
+                        };
+
                         let stt_start = Instant::now();
                         match stt.transcribe(&segment) {
                             Ok(transcription) => {
@@ -1354,6 +1487,10 @@ async fn run_stt_stage(
                                 }
 
                                 let mut transcription = transcription;
+                                // Attach audio metrics for downstream quality filtering.
+                                transcription.audio_rms = Some(seg_rms);
+                                transcription.audio_duration_secs = Some(duration_secs);
+
                                 if let Some(fixed) = canonicalize_wake_word_transcription(
                                     &config.conversation.wake_word,
                                     &transcription.text,
@@ -1735,6 +1872,13 @@ struct LlmStageControl {
     cancel: CancellationToken,
     voice_command_rx: Option<mpsc::UnboundedReceiver<crate::voice_command::VoiceCommand>>,
     queue_cmd_rx: Option<mpsc::UnboundedReceiver<LlmQueueCommand>>,
+    /// Shared flag: when true, the coordinator is awaiting a voice approval response.
+    awaiting_approval: Arc<AtomicBool>,
+    /// Receiver for approval notifications from the handler bridge.
+    approval_notification_rx:
+        Option<mpsc::UnboundedReceiver<super::messages::ApprovalNotification>>,
+    /// Sender for resolved approval responses back to the handler.
+    approval_response_tx: Option<mpsc::UnboundedSender<(u64, bool)>>,
 }
 
 impl LlmEngine {
@@ -1824,9 +1968,8 @@ async fn run_llm_stage(
     };
 
     // Stash dependencies for spawning background agents.
-    // Note: `preloaded` was consumed by engine creation above. Background
-    // agents create their own provider (reloading the same model weights
-    // from cache is fast since the OS pages are already warm).
+    // Background agents share the same model weights via `Arc<Model>`.
+    let bg_preloaded = preloaded.as_ref().map(crate::llm::LocalLlm::shallow_clone);
     let bg_config = config.clone();
     let bg_tool_approval_tx = ctl.tool_approval_tx.clone();
     let bg_canvas_registry = ctl.canvas_registry.clone();
@@ -1895,6 +2038,9 @@ async fn run_llm_stage(
         cancel,
         voice_command_rx,
         queue_cmd_rx,
+        awaiting_approval,
+        approval_notification_rx: mut approval_notif_rx,
+        approval_response_tx,
     } = ctl;
 
     // Voice command receiver (currently unused — was Pi-specific).
@@ -1910,6 +2056,12 @@ async fn run_llm_stage(
     // Acknowledgment counter for rotating through canned phrases.
     // Shared between tool acks and thinking acks for global rotation.
     let mut ack_counter: u64 = 0;
+
+    // Voice approval state machine.
+    let mut pending_voice_approval: Option<PendingVoiceApproval> = None;
+    let mut approval_queue: Vec<super::messages::ApprovalNotification> = Vec::new();
+    // Counter for rotating through approval canned responses.
+    let mut approval_ack_counter: u64 = 0;
 
     // Channel for receiving results from background agent tasks.
     let (bg_result_tx, mut bg_result_rx) = mpsc::channel::<crate::agent::BackgroundAgentResult>(4);
@@ -1948,6 +2100,37 @@ async fn run_llm_stage(
                         None => std::future::pending().await,
                     }
                 };
+                let recv_approval_notif = async {
+                    match approval_notif_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                };
+
+                // Approval timeout: if we have a pending approval, compute
+                // the time remaining until the 50s reprompt and 58s auto-deny.
+                let approval_timeout = async {
+                    match &pending_voice_approval {
+                        Some(pva) => {
+                            let elapsed = pva.created_at.elapsed();
+                            if elapsed >= std::time::Duration::from_secs(58) {
+                                // Already past auto-deny threshold.
+                                return "deny";
+                            }
+                            if elapsed >= std::time::Duration::from_secs(50) {
+                                // Past reprompt threshold — next tick is deny.
+                                let remaining = std::time::Duration::from_secs(58) - elapsed;
+                                tokio::time::sleep(remaining).await;
+                                return "deny";
+                            }
+                            // Wait until reprompt threshold.
+                            let remaining = std::time::Duration::from_secs(50) - elapsed;
+                            tokio::time::sleep(remaining).await;
+                            "reprompt"
+                        }
+                        None => std::future::pending::<&str>().await,
+                    }
+                };
 
                 enum Input {
                     Transcription(Option<Transcription>),
@@ -1955,6 +2138,8 @@ async fn run_llm_stage(
                     VoiceCommand(Option<crate::voice_command::VoiceCommand>),
                     QueueCommand(Option<LlmQueueCommand>),
                     BackgroundResult(crate::agent::BackgroundAgentResult),
+                    ApprovalNotification(Option<super::messages::ApprovalNotification>),
+                    ApprovalTimeout(&'static str),
                 }
 
                 let input = tokio::select! {
@@ -1964,12 +2149,142 @@ async fn run_llm_stage(
                     cmd = recv_voice_cmd => Input::VoiceCommand(cmd),
                     cmd = recv_queue_cmd => Input::QueueCommand(cmd),
                     Some(result) = bg_result_rx.recv() => Input::BackgroundResult(result),
+                    notif = recv_approval_notif => Input::ApprovalNotification(notif),
+                    action = approval_timeout => Input::ApprovalTimeout(action),
                 };
 
                 match input {
                     Input::Transcription(Some(transcription)) => {
                         if transcription.text.trim().is_empty() {
                             continue;
+                        }
+                        // If awaiting approval, intercept the transcription
+                        // for the approval parser instead of the LLM.
+                        if pending_voice_approval.is_some() {
+                            use crate::voice_command::{
+                                ApprovalVoiceResponse, parse_approval_response,
+                            };
+                            let response = parse_approval_response(&transcription.text);
+                            match response {
+                                ApprovalVoiceResponse::Approved => {
+                                    let ack = crate::personality::next_acknowledgment(
+                                        crate::personality::APPROVAL_GRANTED,
+                                        approval_ack_counter,
+                                    );
+                                    approval_ack_counter += 1;
+                                    resolve_voice_approval(
+                                        &mut pending_voice_approval,
+                                        true,
+                                        "voice",
+                                        &awaiting_approval,
+                                        &approval_response_tx,
+                                        &runtime_tx,
+                                    );
+                                    let _ = tx
+                                        .send(SentenceChunk {
+                                            text: ack.to_owned(),
+                                            is_final: true,
+                                        })
+                                        .await;
+                                    // Process any queued approvals.
+                                    if let Some(next) = approval_queue.pop() {
+                                        pending_voice_approval = Some(
+                                            start_voice_approval(
+                                                &next,
+                                                &tx,
+                                                &awaiting_approval,
+                                                &cancel,
+                                            )
+                                            .await,
+                                        );
+                                    }
+                                    continue;
+                                }
+                                ApprovalVoiceResponse::Denied => {
+                                    let ack = crate::personality::next_acknowledgment(
+                                        crate::personality::APPROVAL_DENIED,
+                                        approval_ack_counter,
+                                    );
+                                    approval_ack_counter += 1;
+                                    resolve_voice_approval(
+                                        &mut pending_voice_approval,
+                                        false,
+                                        "voice",
+                                        &awaiting_approval,
+                                        &approval_response_tx,
+                                        &runtime_tx,
+                                    );
+                                    let _ = tx
+                                        .send(SentenceChunk {
+                                            text: ack.to_owned(),
+                                            is_final: true,
+                                        })
+                                        .await;
+                                    if let Some(next) = approval_queue.pop() {
+                                        pending_voice_approval = Some(
+                                            start_voice_approval(
+                                                &next,
+                                                &tx,
+                                                &awaiting_approval,
+                                                &cancel,
+                                            )
+                                            .await,
+                                        );
+                                    }
+                                    continue;
+                                }
+                                ApprovalVoiceResponse::Ambiguous => {
+                                    if let Some(ref mut pva) = pending_voice_approval {
+                                        pva.reprompt_count += 1;
+                                        if pva.reprompt_count >= 2 {
+                                            // Too many ambiguous responses — deny.
+                                            let ack = crate::personality::next_acknowledgment(
+                                                crate::personality::APPROVAL_TIMEOUT,
+                                                approval_ack_counter,
+                                            );
+                                            approval_ack_counter += 1;
+                                            resolve_voice_approval(
+                                                &mut pending_voice_approval,
+                                                false,
+                                                "voice",
+                                                &awaiting_approval,
+                                                &approval_response_tx,
+                                                &runtime_tx,
+                                            );
+                                            let _ = tx
+                                                .send(SentenceChunk {
+                                                    text: ack.to_owned(),
+                                                    is_final: true,
+                                                })
+                                                .await;
+                                            if let Some(next) = approval_queue.pop() {
+                                                pending_voice_approval = Some(
+                                                    start_voice_approval(
+                                                        &next,
+                                                        &tx,
+                                                        &awaiting_approval,
+                                                        &cancel,
+                                                    )
+                                                    .await,
+                                                );
+                                            }
+                                        } else {
+                                            let reprompt = crate::personality::next_acknowledgment(
+                                                crate::personality::APPROVAL_AMBIGUOUS,
+                                                approval_ack_counter,
+                                            );
+                                            approval_ack_counter += 1;
+                                            let _ = tx
+                                                .send(SentenceChunk {
+                                                    text: reprompt.to_owned(),
+                                                    is_final: true,
+                                                })
+                                                .await;
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
                         }
                         break QueuedLlmInput::Transcription(transcription);
                     }
@@ -2066,6 +2381,74 @@ async fn run_llm_stage(
                                     is_final: true,
                                 })
                                 .await;
+                        }
+                        continue;
+                    }
+                    Input::ApprovalNotification(Some(notif)) => {
+                        // A tool is requesting user approval. If we're already
+                        // handling one, queue it; otherwise start immediately.
+                        if pending_voice_approval.is_some() {
+                            info!(
+                                request_id = notif.request_id,
+                                "queuing approval (another in progress)"
+                            );
+                            approval_queue.push(notif);
+                        } else {
+                            pending_voice_approval = Some(
+                                start_voice_approval(&notif, &tx, &awaiting_approval, &cancel)
+                                    .await,
+                            );
+                        }
+                        continue;
+                    }
+                    Input::ApprovalNotification(None) => {
+                        approval_notif_rx = None;
+                    }
+                    Input::ApprovalTimeout(action) => {
+                        match action {
+                            "reprompt" => {
+                                // 50s elapsed — remind the user.
+                                let reprompt = "I'm still waiting. Should I go ahead? Yes or no.";
+                                let _ = tx
+                                    .send(SentenceChunk {
+                                        text: reprompt.to_owned(),
+                                        is_final: true,
+                                    })
+                                    .await;
+                            }
+                            _ => {
+                                // 58s elapsed — auto-deny before the 60s tool timeout.
+                                let ack = crate::personality::next_acknowledgment(
+                                    crate::personality::APPROVAL_TIMEOUT,
+                                    approval_ack_counter,
+                                );
+                                approval_ack_counter += 1;
+                                resolve_voice_approval(
+                                    &mut pending_voice_approval,
+                                    false,
+                                    "timeout",
+                                    &awaiting_approval,
+                                    &approval_response_tx,
+                                    &runtime_tx,
+                                );
+                                let _ = tx
+                                    .send(SentenceChunk {
+                                        text: ack.to_owned(),
+                                        is_final: true,
+                                    })
+                                    .await;
+                                if let Some(next) = approval_queue.pop() {
+                                    pending_voice_approval = Some(
+                                        start_voice_approval(
+                                            &next,
+                                            &tx,
+                                            &awaiting_approval,
+                                            &cancel,
+                                        )
+                                        .await,
+                                    );
+                                }
+                            }
                         }
                         continue;
                     }
@@ -2220,6 +2603,7 @@ async fn run_llm_stage(
 
             let bg_tx = bg_result_tx.clone();
             let bg_cfg = bg_config.clone();
+            let bg_model = bg_preloaded.as_ref().map(crate::llm::LocalLlm::shallow_clone);
             let bg_approval = bg_tool_approval_tx.clone();
             let bg_canvas = bg_canvas_registry.clone();
             let bg_perms = bg_shared_permissions.clone();
@@ -2228,6 +2612,7 @@ async fn run_llm_stage(
                 let result = crate::agent::spawn_background_agent(
                     task,
                     bg_cfg.llm,
+                    bg_model.as_ref(),
                     bg_runtime,
                     bg_approval,
                     bg_canvas,
@@ -2288,7 +2673,14 @@ async fn run_llm_stage(
                 llm_input = format!("{memory_ctx}\n\n{llm_input}");
             }
 
-            if let Ok(Some(onboarding_ctx)) = memory.onboarding_context() {
+            // Only inject onboarding context if the user hasn't completed
+            // the onboarding flow. The 1.7B voice model is too small to
+            // handle interview-style probing gracefully; once the user
+            // finishes onboarding (config.onboarded == true) we rely on
+            // memory recall instead of a per-turn checklist prompt.
+            if !config.onboarded
+                && let Ok(Some(onboarding_ctx)) = memory.onboarding_context()
+            {
                 llm_input = format!("{onboarding_ctx}\n\n{llm_input}");
             }
         }
@@ -2473,6 +2865,24 @@ async fn run_llm_stage(
                         pending_bg_results.push(bg_result);
                     }
                 }
+                notif = async {
+                    match approval_notif_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    // Queue approval notifications during generation — will be
+                    // processed after the current response finishes.
+                    if let Some(notif) = notif {
+                        info!(
+                            request_id = notif.request_id,
+                            "queuing approval notification during generation"
+                        );
+                        approval_queue.push(notif);
+                    } else {
+                        approval_notif_rx = None;
+                    }
+                }
             }
         };
         // Explicitly drop the pinned generation future to release the mutable
@@ -2572,6 +2982,14 @@ async fn run_llm_stage(
                 .await;
         }
 
+        // Process any approval notifications that arrived during generation.
+        if pending_voice_approval.is_none()
+            && let Some(notif) = approval_queue.pop()
+        {
+            pending_voice_approval =
+                Some(start_voice_approval(&notif, &tx, &awaiting_approval, &cancel).await);
+        }
+
         // Concurrent sentiment analysis → orb mood (non-blocking).
         if let Some(rt) = runtime_tx.clone() {
             let text_for_sentiment = assistant_text.clone();
@@ -2627,6 +3045,34 @@ fn prepare_user_text(
             if transcription.text.trim().is_empty() {
                 return None;
             }
+
+            // ── Quality gate: reject likely background audio ──
+            //
+            // Background TV/podcast/music produces low-RMS, long-duration
+            // segments that the STT transcribes as gibberish.  Feeding these
+            // into the LLM pollutes conversation history and causes
+            // degenerate (repetitive) responses.
+            //
+            // Heuristic: segments with RMS < 0.008 that are also longer
+            // than 3 seconds are almost certainly ambient, not directed
+            // speech.  Short low-RMS segments (< 3s) may still be quiet
+            // "yes"/"no" replies and are allowed through.
+            const MIN_DIRECTED_SPEECH_RMS: f32 = 0.008;
+            const AMBIENT_DURATION_THRESHOLD_SECS: f32 = 3.0;
+            if let (Some(rms), Some(dur)) =
+                (transcription.audio_rms, transcription.audio_duration_secs)
+                && rms < MIN_DIRECTED_SPEECH_RMS
+                && dur > AMBIENT_DURATION_THRESHOLD_SECS
+            {
+                info!(
+                    rms,
+                    duration_secs = dur,
+                    text = %transcription.text,
+                    "dropping low-quality transcription (likely background audio)"
+                );
+                return None;
+            }
+
             if ctx.console_output {
                 if !ctx.config.conversation.enabled {
                     let latency = transcription
@@ -2670,6 +3116,8 @@ fn prepare_user_text(
                     text: injection.text.clone(),
                     is_final: true,
                     voiceprint: None,
+                    audio_rms: None,
+                    audio_duration_secs: None,
                     audio_captured_at: now,
                     transcribed_at: now,
                 }));
@@ -2806,6 +3254,75 @@ fn emit_panel_visibility_events(
             }
         }
         _ => {}
+    }
+}
+
+/// Initiate a voice approval prompt: speak the prompt, set the flag, create state.
+async fn start_voice_approval(
+    notification: &super::messages::ApprovalNotification,
+    tx: &mpsc::Sender<SentenceChunk>,
+    awaiting_approval: &Arc<AtomicBool>,
+    cancel: &CancellationToken,
+) -> PendingVoiceApproval {
+    let prompt = crate::personality::format_approval_prompt(
+        &notification.tool_name,
+        &notification.input_json,
+    );
+    info!(
+        request_id = notification.request_id,
+        tool = %notification.tool_name,
+        "speaking approval prompt"
+    );
+
+    // Speak the approval prompt via TTS.
+    let _ = speak(tx, &prompt, cancel.clone()).await;
+
+    awaiting_approval.store(true, Ordering::Relaxed);
+
+    PendingVoiceApproval {
+        request_id: notification.request_id,
+        tool_name: notification.tool_name.clone(),
+        description: prompt,
+        prompt_spoken_at: None, // set when AssistantSpeechEnd arrives
+        created_at: Instant::now(),
+        reprompt_count: 0,
+    }
+}
+
+/// Resolve a pending voice approval and send the response.
+fn resolve_voice_approval(
+    pending: &mut Option<PendingVoiceApproval>,
+    approved: bool,
+    source: &str,
+    awaiting_approval: &Arc<AtomicBool>,
+    approval_response_tx: &Option<mpsc::UnboundedSender<(u64, bool)>>,
+    runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
+) {
+    if let Some(pva) = pending.take() {
+        let latency_ms = pva
+            .prompt_spoken_at
+            .map(|t| t.elapsed().as_millis())
+            .unwrap_or(0);
+        info!(
+            request_id = pva.request_id,
+            tool = %pva.tool_name,
+            prompt = %pva.description,
+            latency_ms,
+            approved,
+            source,
+            "resolving voice approval"
+        );
+        if let Some(resp_tx) = approval_response_tx {
+            let _ = resp_tx.send((pva.request_id, approved));
+        }
+        if let Some(rt) = runtime_tx {
+            let _ = rt.send(RuntimeEvent::ApprovalResolved {
+                request_id: pva.request_id,
+                approved,
+                source: source.to_owned(),
+            });
+        }
+        awaiting_approval.store(false, Ordering::Relaxed);
     }
 }
 
@@ -3064,6 +3581,35 @@ async fn run_playback_stage(
                             .collect();
                         if let Err(e) = playback.enqueue(&tone, tone_sample_rate, true) {
                             error!("thinking tone playback error: {e}");
+                        }
+                    }
+                    Some(PlaybackCommand::ListeningTone) => {
+                        // Generate a short ascending two-note chime (C5→E5, ~200ms)
+                        // to signal that Fae is listening for a yes/no response.
+                        let tone_sample_rate = config.output_sample_rate;
+                        let note_duration = 0.10_f32; // 100ms per note
+                        let n_per_note = (tone_sample_rate as f32 * note_duration) as usize;
+                        let freq_c5 = 523.25_f32;
+                        let freq_e5 = 659.25_f32;
+                        let volume = 0.10_f32;
+                        let mut tone = Vec::with_capacity(n_per_note * 2);
+                        for (note_idx, freq) in [freq_c5, freq_e5].iter().enumerate() {
+                            for i in 0..n_per_note {
+                                let t = i as f32 / tone_sample_rate as f32;
+                                let fade_len = n_per_note / 5;
+                                let env = if i < fade_len {
+                                    i as f32 / fade_len as f32
+                                } else if i > n_per_note - fade_len {
+                                    (n_per_note - i) as f32 / fade_len as f32
+                                } else {
+                                    1.0
+                                };
+                                let _ = note_idx; // suppress unused warning
+                                tone.push(volume * env * (2.0 * std::f32::consts::PI * freq * t).sin());
+                            }
+                        }
+                        if let Err(e) = playback.enqueue(&tone, tone_sample_rate, true) {
+                            error!("listening tone playback error: {e}");
                         }
                     }
                     None => break,
@@ -4503,6 +5049,8 @@ mod tests {
                 text: "what is the weather today".to_string(),
                 is_final: true,
                 voiceprint: None,
+                audio_rms: None,
+                audio_duration_secs: None,
                 audio_captured_at: Instant::now(),
                 transcribed_at: Instant::now(),
             })
@@ -4573,6 +5121,8 @@ mod tests {
                 text: "this should be ignored".to_string(),
                 is_final: true,
                 voiceprint: None,
+                audio_rms: None,
+                audio_duration_secs: None,
                 audio_captured_at: Instant::now(),
                 transcribed_at: Instant::now(),
             })
@@ -4603,6 +5153,8 @@ mod tests {
                 text: "hello again".to_string(),
                 is_final: true,
                 voiceprint: None,
+                audio_rms: None,
+                audio_duration_secs: None,
                 audio_captured_at: Instant::now(),
                 transcribed_at: Instant::now(),
             })

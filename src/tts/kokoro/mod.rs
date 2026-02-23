@@ -4,4 +4,4 @@ pub mod download;
 mod engine;
 pub mod phonemize;
 
-pub use engine::{strip_non_speech_chars, KokoroTts};
+pub use engine::{KokoroTts, strip_non_speech_chars};

@@ -8,7 +8,7 @@ fn no_permissions_means_no_skills() {
     let set = builtin_skills();
     let store = PermissionStore::default();
     assert!(set.available(&store).is_empty());
-    assert_eq!(set.unavailable(&store).len(), 8);
+    assert_eq!(set.unavailable(&store).len(), 9);
 }
 
 #[test]
@@ -80,14 +80,14 @@ fn microphone_permission_does_not_match_any_builtin_skill() {
 }
 
 #[test]
-fn all_permissions_granted_activates_all_eight_skills() {
+fn all_permissions_granted_activates_all_nine_skills() {
     let set = builtin_skills();
     let mut store = PermissionStore::default();
     for kind in PermissionKind::all() {
         store.grant(*kind);
     }
 
-    assert_eq!(set.available(&store).len(), 8);
+    assert_eq!(set.available(&store).len(), 9);
     assert!(set.unavailable(&store).is_empty());
 }
 

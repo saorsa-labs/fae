@@ -28,7 +28,7 @@ Behavioral truth sources:
 - `Prompts/system_prompt.md`
 - `SOUL.md`
 - `~/.fae/memory/fae.db` (SQLite)
-- `docs/Memory.md`
+- `docs/guides/Memory.md`
 
 Implementation touchpoints (not behavioral truth):
 
@@ -44,13 +44,21 @@ Implementation touchpoints (not behavioral truth):
 
 ## Scheduler timing (actual current cadence)
 
-- Scheduler loop tick: every 60s
-- Update check: every 6h
-- Memory migrate: every 1h
-- Memory reindex: every 3h (includes integrity check)
-- Memory reflect: every 6h
-- Memory GC: daily at 03:30 local time
-- Memory backup: daily at 02:00 local time
+Scheduler loop tick: every 60s. All 11 built-in tasks:
+
+| Task | Schedule | Purpose |
+|------|----------|---------|
+| `check_fae_update` | every 6h | Check for Fae updates |
+| `memory_migrate` | every 1h | Schema migration checks |
+| `memory_reflect` | every 6h | Consolidate memory duplicates |
+| `memory_reindex` | every 3h | Health check + integrity verification |
+| `memory_gc` | daily 03:30 | Retention cleanup |
+| `memory_backup` | daily 02:00 | Atomic backup with rotation |
+| `noise_budget_reset` | daily 00:00 | Reset proactive noise budget |
+| `stale_relationships` | every 7d | Check stale relationships |
+| `morning_briefing` | daily 08:00 | Prepare morning briefing |
+| `skill_proposals` | daily 11:00 | Check skill opportunities |
+| `skill_health_check` | every 5min | Python skill health checks |
 
 ## Quiet operation policy
 
@@ -72,25 +80,70 @@ Implementation strategy:
 
 Detailed plan:
 
-- `docs/personalization-interviews-and-proactive-plan.md`
+- `docs/adr/004-fae-identity-and-personality.md`
 
 ## Tool system reality
 
-Current core toolset:
+Tools are registered dynamically based on permissions and tool mode. Full inventory:
 
-- `read`
-- `write`
-- `edit`
-- `bash`
-- canvas tools when registered
+- **Core**: `read`, `write`, `edit`, `bash`
+- **Web**: `web_search`, `fetch_url`
+- **Apple**: `calendar`, `contacts`, `mail`, `reminders`, `notes` (permission-gated)
+- **Desktop**: screenshots, window management, typing, clicks (via `desktop_automation` skill)
+- **Scheduler**: list/create/update/delete/trigger tasks
+- **Skills**: `python_skill` (JSON-RPC subprocess for Python skill packages)
+- **Canvas**: `canvas_render`, `canvas_interact`, `canvas_export` (when canvas enabled)
 
 Tool modes (configurable via Settings > Tools or `config.patch`):
 
-- `off`
-- `read_only`
-- `read_write`
-- `full`
-- `full_no_approval`
+- `off` — no tools
+- `read_only` — `ReadTool` only
+- `read_write` — Read + Write + Edit (Write/Edit approval-gated)
+- `full` — All tools, dangerous ones wrapped in `ApprovalTool` **(recommended default)**
+- `full_no_approval` — All tools, no approval prompts (trusted automation only)
+
+**Current default: `full`** — Fae has access to bash, write, edit, python, desktop but
+must ask the user for permission before executing each dangerous action.
+
+### Voice Privilege Escalation (approval system)
+
+Architecture ADR: `docs/adr/006-voice-privilege-escalation.md`
+
+In `full` mode, dangerous tools are wrapped in `ApprovalTool`. When the background
+agent tries to use one, the approval flow triggers:
+
+1. **Coordinator speaks prompt** — "I'd like to run a command: `date`. Say yes or no."
+2. **Swift overlay appears** — floating card with Yes/No buttons (Enter/Escape shortcuts)
+3. **User responds** via voice ("yes"/"no"), button tap, or timeout (58s → auto-deny)
+4. **Tool executes or is denied** — result spoken via TTS
+
+Key implementation files:
+
+| File | Role |
+|------|------|
+| `src/voice_command.rs` | `parse_approval_response()` — yes/no voice parser |
+| `src/pipeline/coordinator.rs` | Approval state machine, queue, echo bypass |
+| `src/personality.rs` | `format_approval_prompt()`, canned responses |
+| `src/agent/mod.rs` | `build_registry()` wraps tools in `ApprovalTool` |
+| `src/host/handler.rs` | Approval bridge + response drain |
+| `ApprovalOverlayController.swift` | Swift-side approval lifecycle |
+| `ApprovalOverlayView.swift` | SwiftUI overlay card |
+
+### Intent-based tool routing
+
+`classify_intent()` in `src/agent/mod.rs` detects tool-needing queries via keyword
+matching and routes them to background agents. The voice engine never sees tool schemas.
+
+| User says | Detected tools | Route |
+|-----------|---------------|-------|
+| "what time is it?" | `bash` | Background agent with bash |
+| "search for X" | `web_search`, `fetch_url` | Background agent with web |
+| "check my calendar" | calendar tools | Background agent |
+| "read this file" | `read` | Background agent |
+| "tell me a joke" | (none) | Voice engine directly |
+
+When `needs_tools = true`: canned ack → background agent spawned → approval on tool
+use → result spoken. When `needs_tools = false`: voice engine responds directly.
 
 ## Skills (builtin)
 
@@ -116,13 +169,24 @@ The `config.patch` command (Swift → Rust via HostCommandBridge) supports these
 
 ## Prompt/identity stack
 
-Prompt assembly order:
+Three prompt variants exist (`src/personality.rs`):
 
-1. system prompt (`Prompts/system_prompt.md`)
-2. SOUL contract (`SOUL.md`)
-3. memory context (from `~/.fae/memory/`)
-4. skills/tool instructions
-5. user message/add-on
+1. **CORE_PROMPT** (~18KB) — Full system prompt with tools, scheduler, skills, coding policy (`Prompts/system_prompt.md`)
+2. **VOICE_CORE_PROMPT** (~2KB) — Condensed for voice channel: identity, style, companion presence, memory usage only. Strips tool schemas, scheduler details, skill management, and coding policy.
+3. **BACKGROUND_AGENT_PROMPT** — Task-focused prompt for background tool agents. Spoken-friendly output, no follow-up questions, concise results.
+
+Full prompt assembly order (non-voice):
+
+1. Core system prompt (`Prompts/system_prompt.md`)
+2. Vision section (when `vision_capable` is true)
+3. SOUL contract (`SOUL.md`)
+4. User name context (when known)
+5. Skills (built-in `.md` + user skills)
+6. Builtin capability fragments (permission-gated)
+7. User add-on text
+8. Memory context (injected by memory orchestrator)
+
+Voice-optimized assembly skips steps 5-6 entirely, using `VOICE_CORE_PROMPT` instead of `CORE_PROMPT`.
 
 Human contract document:
 
@@ -133,8 +197,7 @@ Human contract document:
 Fae's macOS native app embeds the Rust core directly as a linked library (`libfae`),
 not as a subprocess. The app IS the brain — zero IPC overhead for the primary UI.
 
-Architecture doc: `docs/architecture/native-app-v0.md`
-Detailed embedding plan: `docs/architecture/embedded-core.md`
+Architecture ADR: `docs/adr/002-embedded-rust-core.md`
 
 ### Two integration modes
 
@@ -159,26 +222,101 @@ The Fae.app always uses Mode A. Mode B is for third-party UIs, CLI tools, or com
 `EmbeddedCoreSender.swift` calls `extern "C"` functions in `src/ffi.rs` directly.
 The Rust core runs in-process — no subprocess for the primary path.
 
-### Swift-side files
+### Swift-side files (50 files)
+
+All paths below are under `native/macos/Fae/Sources/Fae/`.
+
+**Core App**
 
 | File | Role |
 |------|------|
-| `native/macos/.../FaeApp.swift` | App entry, environment wiring, embedded core init |
-| `native/macos/.../EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
-| `native/macos/.../ContentView.swift` | Main view, window state, orb context menu |
-| `native/macos/.../ConversationWebView.swift` | WKWebView bridge (orb animation + input bar) |
-| `native/macos/.../ConversationController.swift` | Conversation state (messages, listening) |
-| `native/macos/.../ConversationBridgeController.swift` | Routes backend events to conversation WebView (JS injection) |
-| `native/macos/.../OrbStateBridgeController.swift` | Maps pipeline/runtime events to orb visual state |
-| `native/macos/.../PipelineAuxBridgeController.swift` | Routes voice commands to auxiliary windows (canvas/conversation) |
-| `native/macos/.../AuxiliaryWindowManager.swift` | Independent conversation & canvas NSPanels |
-| `native/macos/.../WindowStateController.swift` | Adaptive window (collapsed/compact), hide/show |
-| `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
-| `native/macos/.../SettingsView.swift` | TabView settings (General, Models, Tools, Channels, About, Developer) |
-| `native/macos/.../SettingsToolsTab.swift` | Tool mode picker with config.patch sync |
-| `native/macos/.../SettingsChannelsTab.swift` | Discord/WhatsApp channel configuration |
-| `native/macos/.../JitPermissionController.swift` | Just-in-time macOS permission requests |
-| `native/macos/.../HelpWindowController.swift` | Help HTML pages in native window |
+| `FaeApp.swift` | App entry, environment wiring, embedded core init |
+| `ContentView.swift` | Main view, window state, orb context menu |
+| `EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
+| `BackendEventRouter.swift` | Routes raw backend events to typed notifications |
+| `HostCommandBridge.swift` | NotificationCenter → command sender |
+
+**Orb & Window**
+
+| File | Role |
+|------|------|
+| `NativeOrbView.swift` | Native orb rendering (replaces WebView orb) |
+| `OrbAnimationState.swift` | Orb animation state machine |
+| `OrbTypes.swift` | OrbMode, OrbFeeling, OrbPalette enums |
+| `OrbStateBridgeController.swift` | Maps pipeline/runtime events to orb visual state |
+| `WindowStateController.swift` | Adaptive window (collapsed/compact), hide/show |
+| `NSWindowAccessor.swift` | NSWindow property access from SwiftUI |
+| `VisualEffectBlur.swift` | NSVisualEffectView wrapper for blur |
+
+**Conversation & Canvas**
+
+| File | Role |
+|------|------|
+| `ConversationController.swift` | Conversation state (messages, listening) |
+| `ConversationBridgeController.swift` | Routes backend events to conversation UI |
+| `ConversationWindowView.swift` | Conversation NSPanel content view |
+| `InputBarView.swift` | Text input bar for conversation |
+| `SubtitleOverlayView.swift` | Floating subtitle overlay |
+| `SubtitleStateController.swift` | Subtitle display state management |
+| `CanvasController.swift` | Canvas rendering controller |
+| `CanvasWindowView.swift` | Canvas NSPanel content view |
+| `LoadingCanvasContent.swift` | Canvas loading placeholder |
+
+**Auxiliary Windows & Approval**
+
+| File | Role |
+|------|------|
+| `AuxiliaryWindowManager.swift` | Independent conversation, canvas & approval NSPanels |
+| `PipelineAuxBridgeController.swift` | Routes voice commands to auxiliary windows |
+| `ProgressOverlayView.swift` | Model download/load progress overlay |
+| `ApprovalOverlayController.swift` | Tool approval lifecycle (observe/approve/deny) |
+| `ApprovalOverlayView.swift` | Floating approval card (Yes/No + keyboard shortcuts) |
+
+**Onboarding**
+
+| File | Role |
+|------|------|
+| `OnboardingController.swift` | Onboarding flow state machine |
+| `OnboardingNativeView.swift` | Onboarding native container view |
+| `OnboardingWelcomeScreen.swift` | Welcome screen |
+| `OnboardingPermissionsScreen.swift` | Permission grants screen |
+| `OnboardingReadyScreen.swift` | Ready/completion screen |
+| `OnboardingTTSHelper.swift` | TTS voice test during onboarding |
+| `OnboardingWindowController.swift` | Onboarding window management |
+
+**Settings**
+
+| File | Role |
+|------|------|
+| `SettingsView.swift` | TabView settings (General, Models, Tools, Skills, Channels, About, Developer) |
+| `SettingsGeneralTab.swift` | General settings (listening, theme, updates) |
+| `SettingsModelsTab.swift` | Model selection and download |
+| `SettingsToolsTab.swift` | Tool mode picker with config.patch sync |
+| `SettingsSkillsTab.swift` | Skill management and review |
+| `SettingsChannelsTab.swift` | Discord/WhatsApp channel configuration |
+| `SettingsAboutTab.swift` | About, version, reset onboarding |
+| `SettingsDeveloperTab.swift` | Developer diagnostics and debug |
+
+**Skills & Handoff**
+
+| File | Role |
+|------|------|
+| `SkillImportView.swift` | Skill file import UI |
+| `DeviceHandoff.swift` | Apple Handoff support |
+| `HandoffKVStore.swift` | Key-value store for Handoff state |
+| `HandoffToolbarButton.swift` | Toolbar button for Handoff status |
+
+**System**
+
+| File | Role |
+|------|------|
+| `AudioDevices.swift` | Audio input/output device enumeration |
+| `DockIconAnimator.swift` | Dock icon animation controller |
+| `SparkleUpdaterController.swift` | Sparkle auto-update integration |
+| `JitPermissionController.swift` | Just-in-time macOS permission requests |
+| `HelpWindowController.swift` | Help HTML pages in native window |
+| `ProcessCommandSender.swift` | Process-level command dispatch |
+| `ResourceBundle.swift` | Bundle resource access helpers |
 
 ### Rust-side host layer
 
@@ -189,6 +327,7 @@ The Rust core runs in-process — no subprocess for the primary path.
 | `src/host/contract.rs` | Command/event envelope schemas |
 | `src/host/handler.rs` | Runtime lifecycle, pipeline management |
 | `src/host/channel.rs` | Command channel, router, handler trait |
+| `src/host/latency.rs` | Latency instrumentation and timing metrics |
 | `src/host/stdio.rs` | Stdin/stdout JSON bridge (Mode B / IPC only) |
 | `src/bin/host_bridge.rs` | Headless bridge binary (Mode B / `faed` daemon) |
 
@@ -223,7 +362,7 @@ When adding a new subsystem, add a `black_box` reference in the `if black_box(fa
 
 Verification: `just check-binary-size` (asserts libfae.a > 50 MB).
 
-Full docs: `docs/linker-anchor.md`
+Full docs: `docs/guides/linker-anchor.md`
 
 ## Platform module (App Sandbox)
 
@@ -249,6 +388,9 @@ File picker flows call `bookmark_and_persist()` after user selection.
 | `.faeRuntimeProgress` | Model download/load progress |
 | `.faeAssistantGenerating` | LLM generation active/inactive |
 | `.faeAudioLevel` | Audio level updates for orb visualization |
+| `.faeApprovalRequested` | Tool approval request (shows overlay) |
+| `.faeApprovalResolved` | Tool approval resolved (dismisses overlay) |
+| `.faeApprovalRespond` | Button-based approval response (Swift → Rust) |
 
 ## Delivery quality requirements
 
@@ -394,18 +536,27 @@ Echo suppression logs: `dropping N.Ns speech segment (echo suppression)` — the
 
 ## LLM model evaluation
 
-Benchmarks and findings live in `docs/llm-benchmarks.md`. When evaluating a new model
+Benchmarks and findings live in `docs/benchmarks/llm-benchmarks.md`. When evaluating a new model
 for Fae, follow this process.
 
 ### Running the eval
 
-1. **Install mistral.rs CLI** (one-time): `cargo install mistralrs-cli --features metal`
-2. **Download the GGUF** + tokenizer via `huggingface_hub` (see benchmark doc for pattern)
-3. **Add the model** to the `MODELS` list in the benchmark script in `docs/llm-benchmarks.md`
-4. **Run the full benchmark** — the script tests 7 context sizes with `/no_think`, tracks
+1. **Install mistral.rs CLI** (one-time): `cargo install mistralrs-cli --features metal --git https://github.com/EricLBuehler/mistral.rs` (build from master for latest arch support)
+2. **Check GGUF compatibility** first — the model's `general.architecture` must be in mistral.rs GGUF enum (see incompatibility table in `docs/benchmarks/llm-benchmarks.md`)
+3. **Download the GGUF** + tokenizer via `huggingface_hub` (see benchmark doc for pattern)
+4. **Add the model** to the `MODELS` list in the benchmark script in `docs/benchmarks/llm-benchmarks.md`
+5. **Run the full benchmark** — the script tests 7 context sizes with `/no_think`, tracks
    RAM, visible vs thinking chars, and T/s. Takes ~3 min per model.
-5. **Update `docs/llm-benchmarks.md`** with the new rows in all tables (summary, speed-by-context,
+6. **Update `docs/benchmarks/llm-benchmarks.md`** with the new rows in all tables (summary, speed-by-context,
    detailed results, compliance table)
+
+### Important: mistral.rs GGUF arch limitations
+
+As of Feb 2026, mistral.rs GGUF only supports: Llama, Mistral3, Phi2, Phi3, Starcoder2,
+Qwen2, Qwen3, Qwen3MoE. On Metal (Apple Silicon), MoE models don't work. We exhaustively
+tested every current-gen sub-4B model and found **only Qwen3 delivers usable voice T/s
+on Metal**. See the full incompatibility table in `docs/benchmarks/llm-benchmarks.md` for details
+on Ministral-3, SmolLM3, Phi-4, Granite, EXAONE, Gemma 3, and Liquid LFM2.
 
 ### What to measure
 
@@ -459,15 +610,20 @@ text-only automatically.
 
 ### Model selection guidance (current)
 
-| System RAM | Voice (fast path) | Background (async) | Notes |
+**Auto mode** (`VoiceModelPreset::Auto` in `src/config.rs`): `recommended_local_model()` always returns text-only GGUF:
+- `>=32 GiB` RAM → Qwen3-4B (Q4_K_M)
+- `<32 GiB` RAM → Qwen3-1.7B (Q4_K_M)
+
+Forced presets: `Qwen3_4b`, `Qwen3_1_7b`, `Qwen3_0_6b` (ignores RAM).
+
+| System RAM | Voice (auto) | Background (async) | Notes |
 |---|---|---|---|
 | 8-16 GB | 0.6B text | 0.6B text | Only option that fits |
-| 16-32 GB | 1.7B text | 1.7B text | Best voice quality at 85 T/s |
-| 32-64 GB | 1.7B text | 4B text or 4B-VL | Fast voice + stronger reasoning (+ vision) |
-| 64+ GB | 1.7B text | 8B text or 8B-VL | Fast voice + best capability (+ vision) |
+| 16-32 GB | 1.7B text | 1.7B text | Best voice quality at ~85 T/s |
+| 32-64 GB | 4B text | 4B text | Auto selects 4B at >=32 GiB |
+| 64+ GB | 4B text | 4B text | Same auto selection |
 
-The voice channel always uses a small, fast text-only model. Vision models belong on the
-background channel where startup latency and slower T/s are acceptable.
+Vision is only enabled by explicit `enable_vision = true` in `config.toml`. Auto mode never selects a VL model. Vision models (Qwen3-VL-4B/8B) require ISQ quantization at startup and are better suited for the background channel.
 
 ## Completed milestones
 
@@ -484,3 +640,9 @@ background channel where startup latency and slower T/s are acceptable.
   - Phase 7.3: Embedding engine (all-MiniLM-L6-v2, 384-dim vectors via ort)
   - Phase 7.4: Hybrid retrieval (semantic 0.6 + confidence 0.2 + freshness 0.1 + kind bonus 0.1)
   - Phase 7.5: Backup, recovery & hardening (integrity check, VACUUM INTO backups, rotation)
+- **Voice Privilege Escalation (tool approval system):**
+  - 7-phase implementation: voice parser, notification channel, coordinator state machine, echo bypass, TTS prompts, Swift UI overlay, response drain
+  - `ApprovalTool` wrapping for bash/write/edit/python/desktop in `full` mode
+  - Intent-based routing: keyword classifier routes tool queries to background agents
+  - Default tool mode changed from `read_only` to `full` with approval gating
+  - ADR-006 documents the full architecture

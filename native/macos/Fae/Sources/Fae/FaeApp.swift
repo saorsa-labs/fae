@@ -64,6 +64,7 @@ struct FaeApp: App {
     /// Retained for the app lifetime — observes JIT capability.requested events and
     /// triggers native macOS permission dialogs mid-conversation.
     @StateObject private var jitPermissions = JitPermissionController()
+    @StateObject private var approvalOverlay = ApprovalOverlayController()
     /// Sparkle 2 auto-update controller (EdDSA-verified, gentle reminders).
     @StateObject private var sparkleUpdater = SparkleUpdaterController()
 
@@ -148,6 +149,8 @@ struct FaeApp: App {
                     auxiliaryWindows.conversationController = conversation
                     auxiliaryWindows.canvasController = canvasController
                     auxiliaryWindows.observeWindowState()
+                    auxiliaryWindows.approvalController = approvalOverlay
+                    auxiliaryWindows.observeApprovalController()
                     // Wire onboarding permission results to the backend via HostCommandBridge.
                     // Both onboarding and JIT paths converge on .faeCapabilityGranted → Rust.
                     onboarding.onPermissionResult = { capability, state in

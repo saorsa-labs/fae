@@ -138,6 +138,20 @@ impl LocalLlm {
         Arc::clone(&self.model)
     }
 
+    /// Create a lightweight clone that shares the underlying `Arc<Model>`.
+    ///
+    /// The clone shares the same model weights (cheap `Arc` clone) but has
+    /// its own empty history and config copy. Suitable for background agents
+    /// that need the same model without copying per-session state.
+    pub fn shallow_clone(&self) -> Self {
+        Self {
+            model: Arc::clone(&self.model),
+            config: self.config.clone(),
+            history: Vec::new(),
+            vision_capable: self.vision_capable,
+        }
+    }
+
     /// Load a vision-capable model via `VisionModelBuilder` with in-situ quantisation.
     ///
     /// Downloads full-precision HF weights on first run, then applies ISQ (Q4K)

@@ -224,7 +224,8 @@ impl CanvasBridge {
             | RuntimeEvent::OrbMoodUpdate { .. }
             | RuntimeEvent::PipelineTiming { .. }
             | RuntimeEvent::BackgroundTaskStarted { .. }
-            | RuntimeEvent::BackgroundTaskCompleted { .. } => {}
+            | RuntimeEvent::BackgroundTaskCompleted { .. }
+            | RuntimeEvent::ApprovalResolved { .. } => {}
         }
     }
 
@@ -381,6 +382,8 @@ mod tests {
             text: text.to_string(),
             is_final,
             voiceprint: None,
+            audio_rms: None,
+            audio_duration_secs: None,
             audio_captured_at: Instant::now(),
             transcribed_at: Instant::now(),
         })

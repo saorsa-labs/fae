@@ -426,10 +426,7 @@ mod tests {
     fn strip_keeps_speech_text() {
         assert_eq!(strip_non_speech_chars("Hello world"), "Hello world");
         assert_eq!(strip_non_speech_chars("What's up?"), "What's up?");
-        assert_eq!(
-            strip_non_speech_chars("caf\u{00E9}"),
-            "caf\u{00E9}"
-        ); // café
+        assert_eq!(strip_non_speech_chars("caf\u{00E9}"), "caf\u{00E9}"); // café
     }
 
     #[test]
@@ -444,10 +441,7 @@ mod tests {
 
     #[test]
     fn strip_collapses_whitespace() {
-        assert_eq!(
-            strip_non_speech_chars("Hello   world"),
-            "Hello world"
-        );
+        assert_eq!(strip_non_speech_chars("Hello   world"), "Hello world");
         assert_eq!(
             strip_non_speech_chars("  Hello  🌟  world  "),
             "Hello world"

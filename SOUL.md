@@ -61,4 +61,4 @@ It defines intent and principles.
 - System prompt: `Prompts/system_prompt.md`
 - SOUL contract: `SOUL.md`
 - Memory system data and state: `~/.fae/memory/`
-- Memory docs: `docs/Memory.md`
+- Memory docs: `docs/guides/Memory.md`

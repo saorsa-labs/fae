@@ -107,6 +107,8 @@ impl ParakeetStt {
             text: result.text,
             is_final: true,
             voiceprint,
+            audio_rms: None,
+            audio_duration_secs: None,
             audio_captured_at: segment.started_at,
             transcribed_at,
         })

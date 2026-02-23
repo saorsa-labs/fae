@@ -107,6 +107,16 @@ pub struct FaeDeviceTransferHandler {
     pending_approvals: Arc<Mutex<HashMap<u64, ToolApprovalRequest>>>,
     /// Handle for the task that drains `approval_rx` into `pending_approvals`.
     approval_bridge_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Sender for forwarding approval notifications to the pipeline coordinator.
+    ///
+    /// When the approval bridge receives a `ToolApprovalRequest`, it clones the
+    /// metadata into an [`ApprovalNotification`] and sends it through this channel
+    /// so the coordinator can speak the approval prompt via voice.
+    approval_notification_tx:
+        Mutex<Option<mpsc::UnboundedSender<crate::pipeline::messages::ApprovalNotification>>>,
+    /// Handle for the task that drains voice-resolved approval responses and
+    /// delivers them to the waiting `ToolApprovalRequest` oneshot channels.
+    approval_response_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// When the pipeline started running. Shared with the restart watcher.
     pipeline_started_at: Arc<Mutex<Option<Instant>>>,
     /// Number of automatic restart attempts since the last clean run.
@@ -166,6 +176,8 @@ impl FaeDeviceTransferHandler {
             tool_approval_tx: Mutex::new(None),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             approval_bridge_handle: Mutex::new(None),
+            approval_notification_tx: Mutex::new(None),
+            approval_response_handle: Mutex::new(None),
             pipeline_started_at: Arc::new(Mutex::new(None)),
             restart_count: Arc::new(Mutex::new(0)),
             last_restart_at: Arc::new(Mutex::new(None)),
@@ -980,6 +992,18 @@ fn map_runtime_event(event: &RuntimeEvent) -> (String, serde_json::Value) {
         } => (
             "background_task.completed".to_owned(),
             serde_json::json!({"task_id": task_id, "success": success, "summary": summary}),
+        ),
+        RuntimeEvent::ApprovalResolved {
+            request_id,
+            approved,
+            source,
+        } => (
+            "approval.resolved".to_owned(),
+            serde_json::json!({
+                "request_id": request_id.to_string(),
+                "approved": approved,
+                "source": source,
+            }),
         ),
     }
 }
@@ -1846,6 +1870,17 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let coordinator_approval_tx = approval_tx.clone();
         let (runtime_event_tx, mut runtime_event_rx) = broadcast::channel::<RuntimeEvent>(64);
 
+        // Voice approval channels: the approval bridge forwards metadata to the
+        // coordinator so it can speak the prompt; the coordinator sends back
+        // (request_id, approved) once the user responds via voice.
+        let (approval_notification_tx, approval_notification_rx) =
+            mpsc::unbounded_channel::<crate::pipeline::messages::ApprovalNotification>();
+        let (approval_response_tx, mut approval_response_rx) =
+            mpsc::unbounded_channel::<(u64, bool)>();
+        if let Ok(mut guard) = self.approval_notification_tx.lock() {
+            *guard = Some(approval_notification_tx.clone());
+        }
+
         // Store senders so other commands can use them.
         if let Ok(mut guard) = self.text_injection_tx.lock() {
             *guard = Some(text_tx);
@@ -1915,6 +1950,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 .with_text_injection(text_rx)
                 .with_gate_commands(gate_rx)
                 .with_tool_approvals(coordinator_approval_tx)
+                .with_approval_voice(approval_notification_rx, approval_response_tx)
                 .with_console_output(false)
                 .with_shared_permissions(shared_perms_for_pipeline);
 
@@ -1976,8 +2012,8 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
         // ── Approval bridge ─────────────────────────────────────
         // Drain ToolApprovalRequest messages from the pipeline into the
-        // pending_approvals map, and emit an event so Swift can show
-        // the approval dialog.
+        // pending_approvals map, emit an event so Swift can show the
+        // approval dialog, and forward to the coordinator for voice prompt.
         let approval_bridge_token = token.child_token();
         let approval_bridge_jh = self.tokio_handle.spawn(async move {
             loop {
@@ -2001,6 +2037,14 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                                     }),
                                 );
                                 let _ = event_tx_approval.send(envelope);
+                                // Forward to the pipeline coordinator for voice prompting.
+                                let _ = approval_notification_tx.send(
+                                    crate::pipeline::messages::ApprovalNotification {
+                                        request_id: id,
+                                        tool_name: name,
+                                        input_json,
+                                    },
+                                );
                                 if let Ok(mut map) = pending_approvals_clone.lock() {
                                     map.insert(id, req);
                                 }
@@ -2013,6 +2057,59 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         });
         if let Ok(mut guard) = self.approval_bridge_handle.lock() {
             *guard = Some(approval_bridge_jh);
+        }
+
+        // ── Approval response drain ──────────────────────────────
+        // Drains voice-resolved approval responses from the coordinator and
+        // delivers them to the waiting ToolApprovalRequest oneshot channels.
+        let approval_response_token = token.child_token();
+        let pending_approvals_for_response = Arc::clone(&self.pending_approvals);
+        let event_tx_resolution = self.event_tx.clone();
+        let approval_response_jh = self.tokio_handle.spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = approval_response_token.cancelled() => break,
+                    response = approval_response_rx.recv() => {
+                        match response {
+                            Some((request_id, approved)) => {
+                                let req = pending_approvals_for_response
+                                    .lock()
+                                    .ok()
+                                    .and_then(|mut map| map.remove(&request_id));
+                                if let Some(req) = req {
+                                    let delivered = req.respond(approved);
+                                    if !delivered {
+                                        warn!(
+                                            request_id,
+                                            "approval voice response: tool already timed out"
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        request_id,
+                                        "approval voice response: no pending request (already resolved by button?)"
+                                    );
+                                }
+                                // Emit resolution event for Swift UI dismissal.
+                                let envelope = EventEnvelope::new(
+                                    uuid::Uuid::new_v4().to_string(),
+                                    "approval.resolved".to_owned(),
+                                    serde_json::json!({
+                                        "request_id": request_id.to_string(),
+                                        "approved": approved,
+                                        "source": "voice",
+                                    }),
+                                );
+                                let _ = event_tx_resolution.send(envelope);
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+        });
+        if let Ok(mut guard) = self.approval_response_handle.lock() {
+            *guard = Some(approval_response_jh);
         }
 
         // ── Crash recovery watcher ───────────────────────────────
@@ -2243,6 +2340,13 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             jh.abort();
         }
 
+        // Abort approval response drain task
+        if let Ok(mut guard) = self.approval_response_handle.lock()
+            && let Some(jh) = guard.take()
+        {
+            jh.abort();
+        }
+
         // Abort restart watcher task
         if let Ok(mut guard) = self.restart_watcher_handle.lock()
             && let Some(jh) = guard.take()
@@ -2272,6 +2376,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             *guard = None;
         }
         if let Ok(mut guard) = self.tool_approval_tx.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.approval_notification_tx.lock() {
             *guard = None;
         }
         if let Ok(mut guard) = self.cancel_token.lock() {

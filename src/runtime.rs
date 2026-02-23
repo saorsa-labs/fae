@@ -232,4 +232,17 @@ pub enum RuntimeEvent {
         /// Summary text (may be truncated for event payload size).
         summary: String,
     },
+    /// A tool approval request was resolved (granted, denied, or timed out).
+    ///
+    /// Emitted by the pipeline coordinator after a voice or button response
+    /// resolves a pending approval. The Swift UI uses this to dismiss the
+    /// approval overlay.
+    ApprovalResolved {
+        /// Numeric request identifier (matches the `approval.requested` event).
+        request_id: u64,
+        /// Whether the tool execution was approved.
+        approved: bool,
+        /// How the approval was resolved: `"voice"`, `"button"`, or `"timeout"`.
+        source: String,
+    },
 }

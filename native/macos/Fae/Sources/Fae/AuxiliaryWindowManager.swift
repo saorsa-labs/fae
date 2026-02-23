@@ -20,11 +20,13 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     @Published private(set) var isConversationVisible: Bool = false
     @Published private(set) var isCanvasVisible: Bool = false
+    @Published private(set) var isApprovalVisible: Bool = false
 
     // MARK: - Private State
 
     private var conversationPanel: NSPanel?
     private var canvasPanel: NSPanel?
+    private var approvalPanel: NSPanel?
 
     private static let autoHideKey = "fae.windows.autoHideOnCollapse"
 
@@ -48,8 +50,10 @@ final class AuxiliaryWindowManager: ObservableObject {
     weak var conversationController: ConversationController?
     weak var canvasController: CanvasController?
     weak var windowState: WindowStateController?
+    var approvalController: ApprovalOverlayController?
 
     private var modeCancellable: AnyCancellable?
+    private var approvalCancellable: AnyCancellable?
     private var conversationPanelDelegate: PanelCloseDelegate?
     private var canvasPanelDelegate: PanelCloseDelegate?
 
@@ -72,6 +76,21 @@ final class AuxiliaryWindowManager: ObservableObject {
                 if newMode == .collapsed, self.autoHideOnCollapse {
                     self.hideConversation()
                     self.hideCanvas()
+                }
+            }
+    }
+
+    /// Wire up observation of approval controller state. Call once after
+    /// `approvalController` is set.
+    func observeApprovalController() {
+        guard let controller = approvalController else { return }
+        approvalCancellable = controller.$activeApproval
+            .receive(on: RunLoop.main)
+            .sink { [weak self] request in
+                if request != nil {
+                    self?.showApproval()
+                } else {
+                    self?.hideApproval()
                 }
             }
     }
@@ -118,6 +137,45 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     func toggleConversation() {
         isConversationVisible ? hideConversation() : showConversation()
+    }
+
+    // MARK: - Approval Overlay
+
+    func showApproval() {
+        guard let controller = approvalController else { return }
+        if approvalPanel == nil { approvalPanel = makeApprovalPanel(controller: controller) }
+        guard let panel = approvalPanel, let orbWindow = windowState?.window else { return }
+
+        let orbFrame = orbWindow.frame
+        let panelSize = NSSize(width: 240, height: 120)
+        let y = orbFrame.minY - panelSize.height - 8
+        let x = orbFrame.midX - panelSize.width / 2
+        let frame = clampToScreen(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height))
+
+        panel.setFrame(frame, display: false)
+        panel.alphaValue = 0
+        panel.orderFront(nil)
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = 1
+        }
+        isApprovalVisible = true
+    }
+
+    func hideApproval() {
+        guard let panel = approvalPanel else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            Task { @MainActor in
+                panel.orderOut(nil)
+            }
+        })
+        isApprovalVisible = false
     }
 
     // MARK: - Positioning (external)
@@ -377,6 +435,27 @@ final class AuxiliaryWindowManager: ObservableObject {
             hosting.trailingAnchor.constraint(equalTo: panelContentView.trailingAnchor),
         ])
 
+        return panel
+    }
+
+    private func makeApprovalPanel(controller: ApprovalOverlayController) -> NSPanel {
+        let size = NSSize(width: 240, height: 120)
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .utilityWindow, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Approval"
+        panel.isReleasedWhenClosed = false
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.level = .floating
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+
+        let view = ApprovalOverlayView(controller: controller)
+        embedSwiftUI(view.preferredColorScheme(.dark), in: panel)
         return panel
     }
 

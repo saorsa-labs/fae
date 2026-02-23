@@ -216,6 +216,26 @@ final class BackendEventRouter: Sendable {
                 userInfo: payload
             )
 
+        // MARK: - Tool Approval
+
+        case "approval.requested":
+            var userInfo: [String: Any] = ["event": event]
+            if let requestId = payload["request_id"] { userInfo["request_id"] = requestId }
+            if let toolName = payload["tool_name"] as? String { userInfo["tool_name"] = toolName }
+            if let inputJson = payload["input_json"] as? String { userInfo["input_json"] = inputJson }
+            NotificationCenter.default.post(
+                name: .faeApprovalRequested, object: nil, userInfo: userInfo
+            )
+
+        case "approval.resolved":
+            var userInfo: [String: Any] = ["event": event]
+            if let requestId = payload["request_id"] { userInfo["request_id"] = requestId }
+            if let approved = payload["approved"] as? Bool { userInfo["approved"] = approved }
+            if let source = payload["source"] as? String { userInfo["source"] = source }
+            NotificationCenter.default.post(
+                name: .faeApprovalResolved, object: nil, userInfo: userInfo
+            )
+
         // MARK: - Pipeline State (all remaining pipeline.* events)
 
         default:
@@ -247,7 +267,6 @@ final class BackendEventRouter: Sendable {
                 "capability.denied",
                 "onboarding.phase_advanced",
                 "onboarding.completed",
-                "approval.requested",
                 "scheduler.updated",
                 "scheduler.removed",
             ]
@@ -370,4 +389,24 @@ extension Notification.Name {
     /// - `progress: Double?` — 0.0–1.0 for `"aggregate_progress"`
     /// - `message: String?` — error description for `"error"`
     static let faeRuntimeProgress = Notification.Name("faeRuntimeProgress")
+
+    // MARK: Tool Approval
+
+    /// Posted when a tool requests approval before execution.
+    ///
+    /// userInfo keys:
+    /// - `event: String` — `"approval.requested"`
+    /// - `request_id: UInt64` — unique approval request identifier
+    /// - `tool_name: String` — the tool requesting approval
+    /// - `input_json: String?` — JSON-encoded tool arguments
+    static let faeApprovalRequested = Notification.Name("faeApprovalRequested")
+
+    /// Posted when a tool approval is resolved (voice, button, or timeout).
+    ///
+    /// userInfo keys:
+    /// - `event: String` — `"approval.resolved"`
+    /// - `request_id: UInt64` — the resolved request identifier
+    /// - `approved: Bool` — whether the tool was approved
+    /// - `source: String` — `"voice"`, `"button"`, or `"timeout"`
+    static let faeApprovalResolved = Notification.Name("faeApprovalResolved")
 }

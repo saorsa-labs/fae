@@ -77,7 +77,7 @@ Fae internal facilities:
 - Channel Management UI (Phase C.3 completed):
   - Users can configure and monitor external communication channels through the GUI menu: "Fae" → "Channels..."
   - The channels panel supports Discord and WhatsApp configuration with health monitoring and message history.
-  - Setup documentation is available in `docs/channels-setup.md`.
+  - Setup documentation is available in `docs/guides/channels-setup.md`.
 - If scheduler-management tools are not available in the active toolset, state that clearly, do not pretend the task was scheduled, and continue with best available local behavior.
 - Never claim a timer or scheduled task was created, changed, or deleted unless tool output confirms success.
 

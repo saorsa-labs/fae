@@ -33,6 +33,10 @@ pub struct LocalMistralrsConfig {
     pub temperature: f32,
     /// Nucleus sampling threshold.
     pub top_p: f32,
+    /// Frequency penalty to discourage repetition (0.0 = disabled).
+    pub frequency_penalty: f32,
+    /// Presence penalty to discourage repetition (0.0 = disabled).
+    pub presence_penalty: f32,
 }
 
 impl LocalMistralrsConfig {
@@ -44,6 +48,8 @@ impl LocalMistralrsConfig {
             max_tokens: 2048,
             temperature: 0.7,
             top_p: 0.9,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
         }
     }
 
@@ -62,6 +68,18 @@ impl LocalMistralrsConfig {
     /// Set top_p.
     pub fn with_top_p(mut self, top_p: f32) -> Self {
         self.top_p = top_p;
+        self
+    }
+
+    /// Set frequency penalty (discourages token repetition).
+    pub fn with_frequency_penalty(mut self, penalty: f32) -> Self {
+        self.frequency_penalty = penalty;
+        self
+    }
+
+    /// Set presence penalty (discourages topic repetition).
+    pub fn with_presence_penalty(mut self, penalty: f32) -> Self {
+        self.presence_penalty = penalty;
         self
     }
 }
@@ -246,6 +264,8 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             .set_sampler_temperature(temperature)
             .set_sampler_topp(top_p)
             .set_sampler_max_len(max_tokens)
+            .set_sampler_frequency_penalty(self.config.frequency_penalty)
+            .set_sampler_presence_penalty(self.config.presence_penalty)
             .enable_thinking(thinking_enabled);
 
         // Convert fae_llm tool definitions to mistralrs format
@@ -370,7 +390,9 @@ impl ProviderAdapter for LocalMistralrsAdapter {
                                 reasoning_events += 1;
                                 if reasoning_events == 1 {
                                     if thinking_enabled {
-                                        tracing::info!("model started reasoning (thinking mode ON)");
+                                        tracing::info!(
+                                            "model started reasoning (thinking mode ON)"
+                                        );
                                     } else {
                                         tracing::warn!(
                                             "model emitting reasoning tokens \

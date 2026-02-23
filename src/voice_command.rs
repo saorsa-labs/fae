@@ -276,6 +276,153 @@ fn parse_model_target(text: &str) -> ModelTarget {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Approval voice response parsing
+// ---------------------------------------------------------------------------
+
+/// Result of parsing a transcription as a yes/no approval response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalVoiceResponse {
+    /// User clearly approved (e.g. "yes", "go ahead", "do it").
+    Approved,
+    /// User clearly denied (e.g. "no", "stop", "cancel").
+    Denied,
+    /// Could not determine intent — needs re-prompt.
+    Ambiguous,
+}
+
+/// Approve words — exact-match first, then word-boundary fallback.
+const APPROVE_PHRASES: &[&str] = &[
+    "yes",
+    "yeah",
+    "yep",
+    "yup",
+    "sure",
+    "okay",
+    "ok",
+    "go ahead",
+    "do it",
+    "approved",
+    "proceed",
+    "yes please",
+    "go for it",
+    "yes go ahead",
+    "affirmative",
+];
+
+/// Deny words — exact-match first, then word-boundary fallback.
+const DENY_PHRASES: &[&str] = &[
+    "no",
+    "nope",
+    "nah",
+    "don't",
+    "stop",
+    "cancel",
+    "deny",
+    "denied",
+    "no thanks",
+    "cancel that",
+    "don't do that",
+    "no way",
+];
+
+/// Parse a transcription as a yes/no approval response.
+///
+/// Case-insensitive. Strips an optional "fae" prefix. For short
+/// transcriptions (<=5 words), uses word-boundary matching to prevent
+/// "yes" from matching "yesterday".
+///
+/// # Examples
+///
+/// ```
+/// use fae::voice_command::{parse_approval_response, ApprovalVoiceResponse};
+///
+/// assert_eq!(parse_approval_response("yes"), ApprovalVoiceResponse::Approved);
+/// assert_eq!(parse_approval_response("no"), ApprovalVoiceResponse::Denied);
+/// assert_eq!(parse_approval_response("yesterday"), ApprovalVoiceResponse::Ambiguous);
+/// ```
+pub fn parse_approval_response(text: &str) -> ApprovalVoiceResponse {
+    let text = text.trim().to_lowercase();
+    if text.is_empty() {
+        return ApprovalVoiceResponse::Ambiguous;
+    }
+
+    let stripped = strip_wake_prefix(&text);
+    let stripped = stripped
+        .trim_end_matches('.')
+        .trim_end_matches('!')
+        .trim_end_matches('?')
+        .trim_end_matches(',')
+        .trim();
+
+    if stripped.is_empty() {
+        return ApprovalVoiceResponse::Ambiguous;
+    }
+
+    // Exact match against full phrases
+    for phrase in APPROVE_PHRASES {
+        if stripped == *phrase {
+            return ApprovalVoiceResponse::Approved;
+        }
+    }
+    for phrase in DENY_PHRASES {
+        if stripped == *phrase {
+            return ApprovalVoiceResponse::Denied;
+        }
+    }
+
+    // For short transcriptions (<=5 words), try word-boundary matching.
+    // Check deny first — negation context ("not sure") should deny, not approve.
+    let word_count = stripped.split_whitespace().count();
+    if word_count <= 5 {
+        let has_negation = contains_word(stripped, "not")
+            || contains_word(stripped, "don't")
+            || contains_word(stripped, "no")
+            || contains_word(stripped, "never")
+            || contains_word(stripped, "nah");
+
+        // Check deny words first (before approve) so "not sure" → Denied.
+        for phrase in DENY_PHRASES {
+            if phrase.split_whitespace().count() == 1 && contains_word(stripped, phrase) {
+                return ApprovalVoiceResponse::Denied;
+            }
+        }
+        // Only check approve words if no negation context is present.
+        if !has_negation {
+            for phrase in APPROVE_PHRASES {
+                if phrase.split_whitespace().count() == 1 && contains_word(stripped, phrase) {
+                    return ApprovalVoiceResponse::Approved;
+                }
+            }
+        }
+    }
+
+    ApprovalVoiceResponse::Ambiguous
+}
+
+/// Check if `text` contains `word` as a whole word (not a substring).
+///
+/// Splits on whitespace, strips trailing punctuation from each token,
+/// and compares against the target. Prevents "yes" from matching
+/// "yesterday" or "no" from matching "nobody".
+///
+/// # Examples
+///
+/// ```
+/// use fae::voice_command::contains_word;
+///
+/// assert!(contains_word("I said yes", "yes"));
+/// assert!(!contains_word("yesterday was great", "yes"));
+/// ```
+pub fn contains_word(text: &str, word: &str) -> bool {
+    text.split_whitespace().any(|token| {
+        let cleaned = token
+            .trim_end_matches(|c: char| c.is_ascii_punctuation())
+            .trim_start_matches(|c: char| c.is_ascii_punctuation());
+        cleaned.eq_ignore_ascii_case(word)
+    })
+}
+
 /// The provider key used for the local on-device model.
 const LOCAL_PROVIDER: &str = "fae-local";
 
@@ -898,5 +1045,264 @@ mod tests {
         assert!(response.contains("local model"));
         assert!(response.contains("list models"));
         assert!(response.contains("what model"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Approval voice response tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn approval_yes_exact() {
+        assert_eq!(
+            parse_approval_response("yes"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_yeah_exact() {
+        assert_eq!(
+            parse_approval_response("yeah"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_yep_exact() {
+        assert_eq!(
+            parse_approval_response("yep"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_sure_exact() {
+        assert_eq!(
+            parse_approval_response("sure"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_go_ahead_exact() {
+        assert_eq!(
+            parse_approval_response("go ahead"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_do_it_exact() {
+        assert_eq!(
+            parse_approval_response("do it"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_yes_please_exact() {
+        assert_eq!(
+            parse_approval_response("yes please"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_go_for_it() {
+        assert_eq!(
+            parse_approval_response("go for it"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_no_exact() {
+        assert_eq!(parse_approval_response("no"), ApprovalVoiceResponse::Denied);
+    }
+
+    #[test]
+    fn approval_nope_exact() {
+        assert_eq!(
+            parse_approval_response("nope"),
+            ApprovalVoiceResponse::Denied
+        );
+    }
+
+    #[test]
+    fn approval_cancel_exact() {
+        assert_eq!(
+            parse_approval_response("cancel"),
+            ApprovalVoiceResponse::Denied
+        );
+    }
+
+    #[test]
+    fn approval_stop_exact() {
+        assert_eq!(
+            parse_approval_response("stop"),
+            ApprovalVoiceResponse::Denied
+        );
+    }
+
+    #[test]
+    fn approval_no_thanks() {
+        assert_eq!(
+            parse_approval_response("no thanks"),
+            ApprovalVoiceResponse::Denied
+        );
+    }
+
+    #[test]
+    fn approval_cancel_that() {
+        assert_eq!(
+            parse_approval_response("cancel that"),
+            ApprovalVoiceResponse::Denied
+        );
+    }
+
+    #[test]
+    fn approval_dont_do_that() {
+        assert_eq!(
+            parse_approval_response("don't do that"),
+            ApprovalVoiceResponse::Denied
+        );
+    }
+
+    #[test]
+    fn approval_case_insensitive() {
+        assert_eq!(
+            parse_approval_response("YES"),
+            ApprovalVoiceResponse::Approved
+        );
+        assert_eq!(parse_approval_response("No"), ApprovalVoiceResponse::Denied);
+    }
+
+    #[test]
+    fn approval_with_punctuation() {
+        assert_eq!(
+            parse_approval_response("yes!"),
+            ApprovalVoiceResponse::Approved
+        );
+        assert_eq!(
+            parse_approval_response("no."),
+            ApprovalVoiceResponse::Denied
+        );
+        assert_eq!(
+            parse_approval_response("sure?"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_with_wake_prefix() {
+        assert_eq!(
+            parse_approval_response("fae, yes"),
+            ApprovalVoiceResponse::Approved
+        );
+        assert_eq!(
+            parse_approval_response("fae no"),
+            ApprovalVoiceResponse::Denied
+        );
+        assert_eq!(
+            parse_approval_response("hey fae yes"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_yesterday_not_yes() {
+        assert_eq!(
+            parse_approval_response("yesterday"),
+            ApprovalVoiceResponse::Ambiguous
+        );
+    }
+
+    #[test]
+    fn approval_nobody_not_no() {
+        assert_eq!(
+            parse_approval_response("nobody"),
+            ApprovalVoiceResponse::Ambiguous
+        );
+    }
+
+    #[test]
+    fn approval_empty() {
+        assert_eq!(
+            parse_approval_response(""),
+            ApprovalVoiceResponse::Ambiguous
+        );
+    }
+
+    #[test]
+    fn approval_whitespace() {
+        assert_eq!(
+            parse_approval_response("   "),
+            ApprovalVoiceResponse::Ambiguous
+        );
+    }
+
+    #[test]
+    fn approval_ambiguous_sentence() {
+        assert_eq!(
+            parse_approval_response("I'm not sure about that"),
+            ApprovalVoiceResponse::Ambiguous
+        );
+    }
+
+    #[test]
+    fn approval_short_sentence_with_yes() {
+        // "I said yes" — 3 words, contains "yes" as whole word
+        assert_eq!(
+            parse_approval_response("I said yes"),
+            ApprovalVoiceResponse::Approved
+        );
+    }
+
+    #[test]
+    fn approval_short_sentence_with_no() {
+        assert_eq!(
+            parse_approval_response("I said no"),
+            ApprovalVoiceResponse::Denied
+        );
+    }
+
+    #[test]
+    fn approval_long_sentence_ignored() {
+        // > 5 words, word boundary fallback not used
+        assert_eq!(
+            parse_approval_response("well I think yes that could work out"),
+            ApprovalVoiceResponse::Ambiguous
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // contains_word tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn contains_word_basic() {
+        assert!(contains_word("I said yes", "yes"));
+        assert!(contains_word("yes please", "yes"));
+        assert!(contains_word("okay yes", "yes"));
+    }
+
+    #[test]
+    fn contains_word_no_substring() {
+        assert!(!contains_word("yesterday", "yes"));
+        assert!(!contains_word("nobody knows", "no"));
+        assert!(!contains_word("nope", "no"));
+    }
+
+    #[test]
+    fn contains_word_with_punctuation() {
+        assert!(contains_word("yes!", "yes"));
+        assert!(contains_word("yes.", "yes"));
+        assert!(contains_word("no,", "no"));
+    }
+
+    #[test]
+    fn contains_word_case_insensitive() {
+        assert!(contains_word("I said YES", "yes"));
+        assert!(contains_word("NO way", "no"));
     }
 }

@@ -79,7 +79,7 @@ Control what the LLM can do:
 
 ## Configuration
 
-Configure in `~/.config/fae/config.toml`:
+Configure in `~/Library/Application Support/fae/config.toml`:
 
 ```toml
 [llm]

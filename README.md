@@ -211,12 +211,14 @@ Fae uses a dual-channel architecture with separate models for voice and backgrou
 
 | Channel | Model | Context Budget | Speed | Purpose |
 |---|---|---|---|---|
-| Voice | Qwen3-1.7B (Q4_K_M) | ~1.5K tokens | ~80 T/s | Fast conversational responses |
+| Voice | Qwen3-1.7B (Q4_K_M) | ~1.5K tokens | ~85 T/s | Fast conversational responses |
 | Background | Qwen3-4B+ (Q4_K_M) | Full window | Async | Tool-heavy tasks (calendar, search, etc.) |
 
-The voice channel stays fast by using a slim prompt with no tool schemas. When Fae detects a request that needs tools (calendar, reminders, web search), she gives an immediate spoken acknowledgment and dispatches the work to the background channel asynchronously.
+Auto mode selects based on system RAM: `>=32 GiB` → Qwen3-4B, otherwise Qwen3-1.7B.
 
-See [LLM Benchmarks](docs/llm-benchmarks.md) for detailed speed and memory measurements.
+The voice channel stays fast by using a condensed ~2KB prompt with no tool schemas. When Fae detects a request that needs tools (calendar, reminders, web search), she gives an immediate spoken acknowledgment and dispatches the work to the background channel asynchronously. The dual-channel architecture lets Fae remain conversationally responsive while executing tool-heavy tasks in parallel.
+
+See [LLM Benchmarks](docs/benchmarks/llm-benchmarks.md) for detailed speed and memory measurements.
 
 Fae runs exclusively on local models — no API keys or remote servers required.
 
@@ -245,7 +247,7 @@ Fae runs exclusively on local models — no API keys or remote servers required.
 
 ## Configuration
 
-Config file: `~/.config/fae/config.toml`
+Config file: `~/Library/Application Support/fae/config.toml` (macOS)
 
 ```toml
 [llm]
@@ -300,15 +302,30 @@ Runtime system prompt assembly:
 
 ## Documentation
 
-- [Memory Guide](docs/Memory.md)
-- [Memory Architecture Plan](docs/memory-architecture-plan.md)
-- [Personalization and Proactive Plan](docs/personalization-interviews-and-proactive-plan.md)
-- [Channel Setup Guide](docs/channels-setup.md)
+### Architecture Decision Records
+
+- [ADR-001: Cascaded Voice Pipeline](docs/adr/001-cascaded-voice-pipeline.md)
+- [ADR-002: Embedded Rust Core](docs/adr/002-embedded-rust-core.md)
+- [ADR-003: Local-Only LLM Inference](docs/adr/003-local-llm-inference.md)
+- [ADR-004: Fae Identity and Personality](docs/adr/004-fae-identity-and-personality.md)
+- [ADR-005: Self-Modification Safety](docs/adr/005-self-modification-safety.md)
+
+### Guides
+
+- [Memory Guide](docs/guides/Memory.md)
+- [Channel Setup Guide](docs/guides/channels-setup.md)
+- [Model Switching](docs/guides/model-switching.md)
+- [Linker Anchor](docs/guides/linker-anchor.md)
+
+### Benchmarks
+
+- [LLM Benchmarks — Local Inference on Apple Silicon](docs/benchmarks/llm-benchmarks.md)
+- [Research — Tool Judgment & Voice Model Evaluation](docs/benchmarks/research.md)
+
+### Other
+
 - [Native macOS Swift App Shell](native/macos/Fae/README.md)
 - [Apple Companion Receiver Templates](native/apple/FaeCompanion/README.md)
-- [LLM Benchmarks — Local Inference on Apple Silicon](docs/llm-benchmarks.md)
-- [Native App Architecture v0](docs/architecture/native-app-v0.md)
-- [Native App Latency Validation Plan](docs/architecture/native-app-latency-plan.md)
 
 ## Developer Commands
 

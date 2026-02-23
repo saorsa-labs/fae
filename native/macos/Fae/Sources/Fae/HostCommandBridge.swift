@@ -148,6 +148,23 @@ final class HostCommandBridge: ObservableObject {
                 }
             }
         )
+        observations.append(
+            center.addObserver(
+                forName: .faeApprovalRespond,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let requestId = notification.userInfo?["request_id"],
+                      let approved = notification.userInfo?["approved"] as? Bool
+                else { return }
+                Task { @MainActor in
+                    self?.dispatch(
+                        "approval.respond",
+                        payload: ["request_id": requestId, "approved": approved]
+                    )
+                }
+            }
+        )
     }
 
     deinit {

@@ -19,7 +19,7 @@ Behavioral truth sources:
 - `Prompts/system_prompt.md`
 - `SOUL.md`
 - `~/.fae/memory/`
-- `docs/Memory.md`
+- `docs/guides/Memory.md`
 
 Implementation touchpoints (not behavioral truth):
 
@@ -183,9 +183,7 @@ Rust-side:
 
 Architecture docs:
 
-- `docs/architecture/native-app-v0.md` — full architecture spec
-- `docs/architecture/embedded-core.md` — embedding plan, FFI surface, migration path
-- `docs/architecture/native-app-latency-plan.md` — latency SLOs and benchmarks
+- `docs/adr/002-embedded-rust-core.md` — architecture spec, FFI surface, latency SLOs
 
 ## Testing guardrails
 

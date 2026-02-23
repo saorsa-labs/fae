@@ -170,6 +170,14 @@ impl FaeAgentLlm {
         }
     }
 
+    /// Generate a response from the LLM engine.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_input` — The full augmented input (memory context + user text).
+    ///   Passed to the model for this turn only (ephemeral).
+    /// * `tx` — Channel for streaming `SentenceChunk`s to TTS.
+    /// * `interrupt` — Flag to cancel generation mid-stream.
     pub async fn generate_response(
         &mut self,
         user_input: String,
@@ -190,7 +198,12 @@ impl FaeAgentLlm {
             "selected per-turn tool allowlist"
         );
 
-        self.history.push(Message::user(user_input));
+        // Only store the raw user utterance in persistent history — NOT the
+        // full augmented input (which includes memory recall, onboarding,
+        // coding context). This prevents transient context from duplicating
+        // across turns and inflating prefill token counts.
+        self.history
+            .push(Message::user(user_message.to_owned()));
         self.trim_history();
         self.maybe_compact_history();
         interrupt_flag.store(false, Ordering::Relaxed);
@@ -226,7 +239,17 @@ impl FaeAgentLlm {
             }
         });
 
-        let run_fut = agent.run_with_messages_streaming(self.history.clone(), clause_tx);
+        // Build per-turn message list: history uses the raw user text, but
+        // for THIS turn's inference we replace the last user message with the
+        // full augmented input (memory context + user text). This gives the
+        // model full context for the current turn without polluting history.
+        let mut turn_messages = self.history.clone();
+        if let Some(last) = turn_messages.last_mut()
+            && last.role == Role::User
+        {
+            *last = Message::user(user_input);
+        }
+        let run_fut = agent.run_with_messages_streaming(turn_messages, clause_tx);
         tokio::pin!(run_fut);
 
         let mut was_interrupted = false;
@@ -345,11 +368,22 @@ impl FaeAgentLlm {
         }
 
         let estimated_tokens = estimate_history_tokens(&self.history);
-        let threshold_tokens =
-            (self.context_size_tokens as f32 * self.compaction_threshold) as usize;
+        // In voice mode (tools_disabled), use a hard token budget (~1500)
+        // to keep prefill fast. In tool mode, use percentage of context.
+        let threshold_tokens = if self.tools_disabled {
+            1500usize
+        } else {
+            (self.context_size_tokens as f32 * self.compaction_threshold) as usize
+        };
         if estimated_tokens < threshold_tokens {
             return;
         }
+        tracing::info!(
+            estimated_tokens,
+            threshold_tokens,
+            history_len = self.history.len(),
+            "compacting conversation history"
+        );
 
         let system_offset = if self.history.first().is_some_and(|m| m.role == Role::System) {
             1usize
@@ -492,6 +526,39 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
         allow.insert("update_scheduled_task");
         allow.insert("delete_scheduled_task");
         allow.insert("trigger_scheduled_task");
+    }
+
+    // System utility queries that need bash (date, time, disk, etc.).
+    if contains_any(
+        &lower,
+        &[
+            "what time",
+            "current time",
+            "the time",
+            "what date",
+            "current date",
+            "the date",
+            "today's date",
+            "what day",
+            "disk space",
+            "disk usage",
+            "how much space",
+            "storage",
+            "system info",
+            "uptime",
+            "memory usage",
+            "cpu usage",
+            "battery",
+            "ip address",
+            "run a command",
+            "run command",
+            "run the command",
+            "execute",
+            "check the weather",
+            "what's the weather",
+        ],
+    ) {
+        allow.insert("bash");
     }
 
     if contains_any(
@@ -681,7 +748,8 @@ pub struct BackgroundAgentResult {
 ///
 /// * `task` — The background task to execute
 /// * `config` — LLM configuration (cloned from pipeline)
-/// * `preloaded_llm` — Shared local model (cheap `Arc` clone)
+/// * `preloaded_llm` — Shared local model (cheap `Arc` clone). Must be `Some`
+///   for the local backend to work; `None` falls back to `MissingLocalModelAdapter`.
 /// * `runtime_tx` — Runtime event sender for telemetry
 /// * `tool_approval_tx` — Optional approval channel
 /// * `canvas_registry` — Optional canvas registry
@@ -690,6 +758,7 @@ pub struct BackgroundAgentResult {
 pub async fn spawn_background_agent(
     task: BackgroundAgentTask,
     config: LlmConfig,
+    preloaded_llm: Option<&LocalLlm>,
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
@@ -707,7 +776,7 @@ pub async fn spawn_background_agent(
     };
 
     let credential_manager = crate::credentials::create_manager();
-    let provider = build_provider(&config, None, credential_manager.as_ref()).await;
+    let provider = build_provider(&config, preloaded_llm, credential_manager.as_ref()).await;
     let registry = build_registry(
         &config,
         tool_approval_tx,
