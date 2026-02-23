@@ -1781,74 +1781,7 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore] // Requires network + model download (~23 MB)
-    fn batch_embed_missing_embeds_all() {
-        use crate::memory::embedding::EmbeddingEngine;
-
-        let (_dir, repo) = test_repo();
-
-        // Insert 5 records without embeddings.
-        let r1 = repo
-            .insert_record(MemoryKind::Fact, "hello world", 0.8, None, &[])
-            .expect("insert r1");
-        let r2 = repo
-            .insert_record(MemoryKind::Fact, "goodbye world", 0.8, None, &[])
-            .expect("insert r2");
-        let r3 = repo
-            .insert_record(MemoryKind::Fact, "hello again", 0.8, None, &[])
-            .expect("insert r3");
-        let r4 = repo
-            .insert_record(MemoryKind::Profile, "user lives in Berlin", 0.9, None, &[])
-            .expect("insert r4");
-        let r5 = repo
-            .insert_record(MemoryKind::Profile, "user likes coding", 0.9, None, &[])
-            .expect("insert r5");
-
-        assert_eq!(repo.count_embeddings().expect("count"), 0);
-
-        let mut engine = EmbeddingEngine::download_and_load().expect("engine");
-        let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
-
-        assert_eq!(embedded_count, 5);
-        assert_eq!(repo.count_embeddings().expect("count"), 5);
-        assert!(repo.has_embedding(&r1.id).expect("has r1"));
-        assert!(repo.has_embedding(&r2.id).expect("has r2"));
-        assert!(repo.has_embedding(&r3.id).expect("has r3"));
-        assert!(repo.has_embedding(&r4.id).expect("has r4"));
-        assert!(repo.has_embedding(&r5.id).expect("has r5"));
-    }
-
-    #[test]
-    #[ignore] // Requires network + model download (~23 MB)
-    fn batch_embed_skips_already_embedded() {
-        use crate::memory::embedding::EmbeddingEngine;
-
-        let (_dir, repo) = test_repo();
-
-        let r1 = repo
-            .insert_record(MemoryKind::Fact, "hello world", 0.8, None, &[])
-            .expect("insert r1");
-        let r2 = repo
-            .insert_record(MemoryKind::Fact, "goodbye world", 0.8, None, &[])
-            .expect("insert r2");
-        let r3 = repo
-            .insert_record(MemoryKind::Fact, "hello again", 0.8, None, &[])
-            .expect("insert r3");
-
-        // Manually embed r1.
-        let mut e1 = vec![0.0_f32; super::EMBEDDING_DIM];
-        e1[0] = 1.0;
-        repo.store_embedding(&r1.id, &e1).expect("store e1");
-        assert_eq!(repo.count_embeddings().expect("count"), 1);
-
-        let mut engine = EmbeddingEngine::download_and_load().expect("engine");
-        let embedded_count = repo.batch_embed_missing(&mut engine).expect("batch embed");
-
-        assert_eq!(embedded_count, 2);
-        assert_eq!(repo.count_embeddings().expect("count"), 3);
-        assert!(repo.has_embedding(&r1.id).expect("has r1"));
-        assert!(repo.has_embedding(&r2.id).expect("has r2"));
-        assert!(repo.has_embedding(&r3.id).expect("has r3"));
-    }
+    // Batch-embed integration tests (download + load + batch_embed_missing)
+    // are consolidated in `tests/integration/embedding_engine.rs` to load the
+    // model once.  See `sqlite_batch_embed_full_suite`.
 }

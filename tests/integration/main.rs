@@ -14,6 +14,7 @@ mod capability_bridge_e2e;
 mod e2e_host_bridge;
 #[cfg(feature = "chatterbox")]
 mod e2e_voice_chatterbox;
+mod embedding_engine;
 mod error_recovery;
 mod fae_llm_spec_lock;
 mod ffi_abi;
