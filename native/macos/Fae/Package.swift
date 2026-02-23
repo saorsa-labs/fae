@@ -77,6 +77,9 @@ let package = Package(
                 .linkedFramework("IOKit"),
                 // DNS resolver (reqwest/hyper)
                 .linkedLibrary("resolv"),
+                // Compression libraries (bzip2-sys, lzma-sys / xz2 — used by zip, ort, symphonia)
+                .linkedLibrary("bz2"),
+                .linkedLibrary("lzma"),
             ]
         ),
 
