@@ -24,7 +24,8 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 ///
 /// Supports actions: `status`, `peers`, `presence`, `publish`, `subscribe`,
 /// `find_agent`, `task_lists`, `create_task_list`, `add_task`, `claim_task`,
-/// `complete_task`, `list_tasks`.
+/// `complete_task`, `list_tasks`, `list_contacts`, `add_contact`,
+/// `trust_contact`, `block_contact`, `remove_contact`.
 ///
 /// This is a **mutation** tool — only allowed in `ToolMode::Full`.
 ///
@@ -58,7 +59,8 @@ impl Tool for X0xTool {
 
     fn description(&self) -> &str {
         "Interact with the x0x gossip network: check peers, send messages, \
-         discover agents, and manage collaborative task lists via the local x0xd daemon."
+         discover agents, manage contacts/trust, and collaborative task lists \
+         via the local x0xd daemon."
     }
 
     fn schema(&self) -> serde_json::Value {
@@ -71,7 +73,9 @@ impl Tool for X0xTool {
                     "enum": [
                         "status", "peers", "presence", "publish", "subscribe",
                         "find_agent", "task_lists", "create_task_list",
-                        "add_task", "claim_task", "complete_task", "list_tasks"
+                        "add_task", "claim_task", "complete_task", "list_tasks",
+                        "list_contacts", "add_contact", "trust_contact",
+                        "block_contact", "remove_contact"
                     ]
                 },
                 "topic": {
@@ -109,6 +113,19 @@ impl Tool for X0xTool {
                 "status_text": {
                     "type": "string",
                     "description": "Presence status text (for presence)"
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Agent ID as 64-char hex string (for contact actions)"
+                },
+                "trust_level": {
+                    "type": "string",
+                    "description": "Trust level: blocked, unknown, known, trusted (for add_contact)",
+                    "enum": ["blocked", "unknown", "known", "trusted"]
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Human-readable label for a contact (for add_contact)"
                 }
             },
             "required": ["action"]
@@ -133,6 +150,11 @@ impl Tool for X0xTool {
             "claim_task" => execute_task_action(&args, "claim"),
             "complete_task" => execute_task_action(&args, "complete"),
             "list_tasks" => execute_list_tasks(&args),
+            "list_contacts" => execute_get("/contacts"),
+            "add_contact" => execute_add_contact(&args),
+            "trust_contact" => execute_quick_trust(&args, "trusted"),
+            "block_contact" => execute_quick_trust(&args, "blocked"),
+            "remove_contact" => execute_remove_contact(&args),
             _ => {
                 return Err(FaeLlmError::ToolValidationError(format!(
                     "unknown action: {action}"
@@ -353,6 +375,60 @@ fn execute_list_tasks(args: &serde_json::Value) -> Result<String, String> {
     execute_get(&format!("/task-lists/{list_id}/tasks"))
 }
 
+/// Execute a DELETE request against x0xd.
+fn execute_delete(path: &str) -> Result<String, String> {
+    let client = build_client()?;
+    let url = format!("{X0XD_BASE_URL}{path}");
+
+    let handle = tokio::runtime::Handle::current();
+    let response = handle
+        .block_on(client.delete(&url).send())
+        .map_err(format_request_error)?;
+
+    let status = response.status();
+    let body = handle
+        .block_on(response.text())
+        .map_err(|e| format!("failed to read response body: {e}"))?;
+
+    format_response(status, body)
+}
+
+fn execute_add_contact(args: &serde_json::Value) -> Result<String, String> {
+    let agent_id = require_string(args, "agent_id").map_err(|e| e.to_string())?;
+    let trust_level = args
+        .get("trust_level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("known");
+    let label = args.get("label").and_then(|v| v.as_str());
+
+    let mut body = serde_json::json!({
+        "agent_id": agent_id,
+        "trust_level": trust_level,
+    });
+    if let Some(label) = label {
+        body["label"] = serde_json::Value::String(label.to_string());
+    }
+    execute_post("/contacts", body)
+}
+
+fn execute_quick_trust(args: &serde_json::Value, level: &str) -> Result<String, String> {
+    let agent_id = require_string(args, "agent_id").map_err(|e| e.to_string())?;
+
+    execute_post(
+        "/contacts/trust",
+        serde_json::json!({
+            "agent_id": agent_id,
+            "level": level,
+        }),
+    )
+}
+
+fn execute_remove_contact(args: &serde_json::Value) -> Result<String, String> {
+    let agent_id = require_string(args, "agent_id").map_err(|e| e.to_string())?;
+
+    execute_delete(&format!("/contacts/{agent_id}"))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -388,7 +464,7 @@ mod tests {
             Some(a) => a,
             None => unreachable!("schema should have action enum"),
         };
-        assert!(actions.len() >= 12);
+        assert!(actions.len() >= 17);
     }
 
     #[test]

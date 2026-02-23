@@ -135,6 +135,8 @@ pub struct FaeDeviceTransferHandler {
     device_watcher_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Handle for the memory pressure monitor task.
     memory_pressure_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Handle for the x0x network message listener task.
+    x0x_listener_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Current pipeline operating mode (updated on degraded mode transitions).
     pipeline_mode: Mutex<crate::pipeline::coordinator::PipelineMode>,
     /// Cache state for skill discovery index rebuild decisions.
@@ -185,6 +187,7 @@ impl FaeDeviceTransferHandler {
             clean_exit_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             device_watcher_handle: Mutex::new(None),
             memory_pressure_handle: Mutex::new(None),
+            x0x_listener_handle: Mutex::new(None),
             pipeline_mode: Mutex::new(crate::pipeline::coordinator::PipelineMode::Conversation),
             skill_discovery_cache: Mutex::new(SkillDiscoveryCacheState::default()),
         }
@@ -1881,6 +1884,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             *guard = Some(approval_notification_tx.clone());
         }
 
+        // Clone text_tx for the x0x listener before storing the canonical sender.
+        let x0x_text_tx = text_tx.clone();
+
         // Store senders so other commands can use them.
         if let Ok(mut guard) = self.text_injection_tx.lock() {
             *guard = Some(text_tx);
@@ -2110,6 +2116,24 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         });
         if let Ok(mut guard) = self.approval_response_handle.lock() {
             *guard = Some(approval_response_jh);
+        }
+
+        // ── x0x network listener ──────────────────────────────────
+        // Connects to the local x0xd SSE stream and delivers trusted messages
+        // to the conversation pipeline via TextInjection.
+        {
+            let x0x_cancel = token.child_token();
+            let user_label: Arc<str> = self
+                .lock_config()
+                .ok()
+                .and_then(|c| c.user_name.clone())
+                .unwrap_or_else(|| "Fae".to_string())
+                .into();
+            let x0x_jh =
+                crate::x0x_listener::spawn_x0x_listener(x0x_text_tx, x0x_cancel, user_label);
+            if let Ok(mut guard) = self.x0x_listener_handle.lock() {
+                *guard = Some(x0x_jh);
+            }
         }
 
         // ── Crash recovery watcher ───────────────────────────────
@@ -2363,6 +2387,13 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
         // Abort memory pressure monitor task
         if let Ok(mut guard) = self.memory_pressure_handle.lock()
+            && let Some(jh) = guard.take()
+        {
+            jh.abort();
+        }
+
+        // Abort x0x listener task
+        if let Ok(mut guard) = self.x0x_listener_handle.lock()
             && let Some(jh) = guard.take()
         {
             jh.abort();

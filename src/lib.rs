@@ -74,6 +74,7 @@ pub mod viseme;
 pub mod voice_clone;
 pub mod voice_command;
 pub mod voiceprint;
+pub mod x0x_listener;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
