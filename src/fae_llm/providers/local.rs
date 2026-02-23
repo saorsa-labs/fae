@@ -33,10 +33,10 @@ pub struct LocalMistralrsConfig {
     pub temperature: f32,
     /// Nucleus sampling threshold.
     pub top_p: f32,
-    /// Frequency penalty to discourage repetition (0.0 = disabled).
-    pub frequency_penalty: f32,
-    /// Presence penalty to discourage repetition (0.0 = disabled).
-    pub presence_penalty: f32,
+    /// Top-k sampling: only the `k` most probable tokens are considered.
+    ///
+    /// `None` means no top-k constraint (all tokens eligible).
+    pub top_k: Option<usize>,
 }
 
 impl LocalMistralrsConfig {
@@ -48,8 +48,7 @@ impl LocalMistralrsConfig {
             max_tokens: 2048,
             temperature: 0.7,
             top_p: 0.9,
-            frequency_penalty: 0.0,
-            presence_penalty: 0.0,
+            top_k: None,
         }
     }
 
@@ -71,15 +70,9 @@ impl LocalMistralrsConfig {
         self
     }
 
-    /// Set frequency penalty (discourages token repetition).
-    pub fn with_frequency_penalty(mut self, penalty: f32) -> Self {
-        self.frequency_penalty = penalty;
-        self
-    }
-
-    /// Set presence penalty (discourages topic repetition).
-    pub fn with_presence_penalty(mut self, penalty: f32) -> Self {
-        self.presence_penalty = penalty;
+    /// Set top-k sampling constraint.
+    pub fn with_top_k(mut self, k: usize) -> Self {
+        self.top_k = Some(k);
         self
     }
 }
@@ -264,9 +257,10 @@ impl ProviderAdapter for LocalMistralrsAdapter {
             .set_sampler_temperature(temperature)
             .set_sampler_topp(top_p)
             .set_sampler_max_len(max_tokens)
-            .set_sampler_frequency_penalty(self.config.frequency_penalty)
-            .set_sampler_presence_penalty(self.config.presence_penalty)
             .enable_thinking(thinking_enabled);
+        if let Some(k) = self.config.top_k {
+            request = request.set_sampler_topk(k);
+        }
 
         // Convert fae_llm tool definitions to mistralrs format
         let mistral_tools: Vec<mistralrs::Tool> = tools

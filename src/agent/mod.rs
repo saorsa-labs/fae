@@ -202,8 +202,7 @@ impl FaeAgentLlm {
         // full augmented input (which includes memory recall, onboarding,
         // coding context). This prevents transient context from duplicating
         // across turns and inflating prefill token counts.
-        self.history
-            .push(Message::user(user_message.to_owned()));
+        self.history.push(Message::user(user_message.to_owned()));
         self.trim_history();
         self.maybe_compact_history();
         interrupt_flag.store(false, Ordering::Relaxed);
@@ -890,13 +889,14 @@ async fn build_provider(
             "agent using embedded local provider (model={})",
             config.model_id
         );
-        let provider_cfg =
+        let mut provider_cfg =
             LocalMistralrsConfig::new(local_llm.shared_model(), config.model_id.clone())
                 .with_temperature(config.temperature as f32)
                 .with_top_p(config.top_p as f32)
-                .with_max_tokens(config.max_tokens)
-                .with_frequency_penalty(config.repeat_penalty)
-                .with_presence_penalty(config.repeat_penalty * 0.5);
+                .with_max_tokens(config.max_tokens);
+        if let Some(k) = config.top_k {
+            provider_cfg = provider_cfg.with_top_k(k);
+        }
         return Arc::new(LocalMistralrsAdapter::new(provider_cfg));
     }
     let reason = "local backend selected but no preloaded local model is available. \

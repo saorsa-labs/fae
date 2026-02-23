@@ -445,6 +445,11 @@ pub struct LlmConfig {
     pub temperature: f64,
     /// Top-p (nucleus) sampling threshold.
     pub top_p: f64,
+    /// Top-k sampling: only the `k` most probable tokens are considered.
+    ///
+    /// `None` means no top-k constraint (all tokens eligible). `Some(40)` is
+    /// the benchmark-winning default for Qwen3-1.7B.
+    pub top_k: Option<usize>,
     /// Repeat penalty for generated tokens.
     pub repeat_penalty: f32,
     /// Maximum number of history messages to retain (excluding the system prompt).
@@ -497,11 +502,12 @@ impl Default for LlmConfig {
             enable_vision,
             voice_model_preset,
             tool_mode: AgentToolMode::default(),
-            max_tokens: 200,
+            max_tokens: 128,
             context_size_tokens: default_llm_context_size_tokens(),
-            temperature: 0.9,
+            temperature: 0.7,
             top_p: 0.9,
-            repeat_penalty: 1.15,
+            top_k: Some(40),
+            repeat_penalty: 1.1,
             max_history_messages: 10,
             message_queue_mode: LlmMessageQueueMode::default(),
             message_queue_max_pending: default_llm_message_queue_max_pending(),

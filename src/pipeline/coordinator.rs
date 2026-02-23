@@ -2603,7 +2603,9 @@ async fn run_llm_stage(
 
             let bg_tx = bg_result_tx.clone();
             let bg_cfg = bg_config.clone();
-            let bg_model = bg_preloaded.as_ref().map(crate::llm::LocalLlm::shallow_clone);
+            let bg_model = bg_preloaded
+                .as_ref()
+                .map(crate::llm::LocalLlm::shallow_clone);
             let bg_approval = bg_tool_approval_tx.clone();
             let bg_canvas = bg_canvas_registry.clone();
             let bg_perms = bg_shared_permissions.clone();
