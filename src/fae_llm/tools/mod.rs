@@ -39,6 +39,7 @@ pub mod scheduler_update;
 pub mod types;
 pub mod web_search;
 pub mod write;
+pub mod x0x;
 
 pub use bash::BashTool;
 pub use desktop::DesktopTool;
@@ -58,6 +59,7 @@ pub use scheduler_update::SchedulerUpdateTool;
 pub use types::{Tool, ToolResult, truncate_output};
 pub use web_search::WebSearchTool;
 pub use write::WriteTool;
+pub use x0x::X0xTool;
 
 #[cfg(test)]
 mod mode_gating_tests;

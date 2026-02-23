@@ -454,6 +454,29 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
         allow.insert("read");
     }
 
+    if contains_any(
+        &lower,
+        &[
+            "x0x",
+            "network",
+            "gossip",
+            "peer",
+            "peers",
+            "mesh",
+            "swarm",
+            "publish",
+            "subscribe",
+            "presence",
+            "agents online",
+            "other agents",
+            "find agent",
+            "task list",
+            "collaborative",
+        ],
+    ) {
+        allow.insert("x0x");
+    }
+
     let mut tools: Vec<String> = allow.into_iter().map(str::to_owned).collect();
     tools.sort();
     tools
@@ -856,6 +879,22 @@ fn build_registry(
         use crate::fae_llm::tools::{FetchUrlTool, WebSearchTool};
         registry.register(Arc::new(WebSearchTool::new()));
         registry.register(Arc::new(FetchUrlTool::new()));
+    }
+
+    // x0x gossip network tool — gated by Network permission.
+    // Registered in Full/FullNoApproval modes; gracefully fails when x0xd is not running.
+    if matches!(
+        config.tool_mode,
+        AgentToolMode::Full | AgentToolMode::FullNoApproval
+    ) {
+        let has_network_perm = shared_permissions
+            .as_ref()
+            .and_then(|sp| sp.lock().ok())
+            .is_some_and(|guard| guard.is_granted(crate::permissions::PermissionKind::Network));
+        if has_network_perm {
+            use crate::fae_llm::tools::X0xTool;
+            registry.register(Arc::new(X0xTool::new()));
+        }
     }
 
     // Scheduler tools (mode gating handled by each tool's allowed_in_mode).

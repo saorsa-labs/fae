@@ -123,6 +123,17 @@ take screenshots for reference, or control applications. Always explain what \
 you're about to automate before executing.",
 );
 
+define_skill!(
+    NetworkSkill,
+    name: "network",
+    description: "x0x gossip network — peer discovery, messaging, collaborative task lists",
+    permissions: [PermissionKind::Network],
+    prompt: "You can communicate with other AI agents via the x0x gossip network. \
+Use the x0x tool to check who's online, send messages, discover agents by \
+capability, and manage collaborative task lists. Always confirm with the user \
+before sending messages to other agents.",
+);
+
 /// Create a [`SkillSet`] containing all built-in permission-gated skills.
 pub fn builtin_skills() -> SkillSet {
     SkillSet::new(vec![
@@ -134,6 +145,7 @@ pub fn builtin_skills() -> SkillSet {
         Box::new(NotificationsSkill),
         Box::new(LocationSkill),
         Box::new(DesktopAutomationSkill),
+        Box::new(NetworkSkill),
     ])
 }
 
@@ -147,7 +159,7 @@ mod tests {
     #[test]
     fn all_builtins_have_nonempty_fields() {
         let set = builtin_skills();
-        assert_eq!(set.len(), 8);
+        assert_eq!(set.len(), 9);
 
         for skill in set.all() {
             assert!(!skill.name().is_empty(), "skill name empty");
@@ -210,7 +222,7 @@ mod tests {
             store.grant(*kind);
         }
 
-        assert_eq!(set.available(&store).len(), 8);
+        assert_eq!(set.available(&store).len(), 9);
     }
 
     #[test]

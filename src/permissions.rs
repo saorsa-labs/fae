@@ -43,6 +43,8 @@ pub enum PermissionKind {
     Camera,
     /// Desktop automation (AppleScript, accessibility).
     DesktopAutomation,
+    /// Network access for x0x gossip mesh operations.
+    Network,
 }
 
 impl PermissionKind {
@@ -59,6 +61,7 @@ impl PermissionKind {
             PermissionKind::Location,
             PermissionKind::Camera,
             PermissionKind::DesktopAutomation,
+            PermissionKind::Network,
         ]
     }
 }
@@ -76,6 +79,7 @@ impl fmt::Display for PermissionKind {
             PermissionKind::Location => "location",
             PermissionKind::Camera => "camera",
             PermissionKind::DesktopAutomation => "desktop_automation",
+            PermissionKind::Network => "network",
         };
         f.write_str(s)
     }
@@ -96,6 +100,7 @@ impl FromStr for PermissionKind {
             "location" => Ok(PermissionKind::Location),
             "camera" => Ok(PermissionKind::Camera),
             "desktop_automation" | "desktopautomation" => Ok(PermissionKind::DesktopAutomation),
+            "network" => Ok(PermissionKind::Network),
             _ => Err(PermissionParseError(s.to_owned())),
         }
     }
