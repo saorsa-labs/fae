@@ -22,7 +22,7 @@ impl ChannelBrain {
         let credential_manager = crate::credentials::create_manager();
         let agent = FaeAgentLlm::new(
             &llm_cfg,
-            preloaded_local,
+            preloaded_local.as_ref(),
             None,
             None,
             None,

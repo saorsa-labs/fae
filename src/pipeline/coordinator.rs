@@ -243,6 +243,31 @@ fn build_conversation_snapshot_entries(
     entries
 }
 
+/// Build a short conversation context for the background agent.
+///
+/// Takes the last `max_turns` turns and formats them as a readable summary
+/// so the background agent has continuity with the voice conversation.
+fn build_background_context(turns: &[ConversationTurn], max_turns: usize) -> String {
+    let recent = if turns.len() > max_turns {
+        &turns[turns.len() - max_turns..]
+    } else {
+        turns
+    };
+    if recent.is_empty() {
+        return String::new();
+    }
+    let mut ctx = String::from("Recent conversation:\n");
+    for turn in recent {
+        if !turn.user_text.trim().is_empty() {
+            ctx.push_str(&format!("User: {}\n", turn.user_text.trim()));
+        }
+        if !turn.assistant_text.trim().is_empty() {
+            ctx.push_str(&format!("Fae: {}\n", turn.assistant_text.trim()));
+        }
+    }
+    ctx
+}
+
 /// Pipeline operating mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineMode {
@@ -1728,6 +1753,14 @@ impl LlmEngine {
             Self::Agent(llm) => llm.truncate_history(keep_count),
         }
     }
+
+    /// Inject a background agent result into the voice engine's conversation
+    /// history so Fae has continuity about what she already told the user.
+    fn inject_background_result(&mut self, result_text: &str) {
+        match self {
+            Self::Agent(llm) => llm.inject_background_result(result_text),
+        }
+    }
 }
 
 async fn run_llm_stage(
@@ -1754,7 +1787,7 @@ async fn run_llm_stage(
     let credential_manager = crate::credentials::create_manager();
     let mut engine = match FaeAgentLlm::new_with_permissions(
         &config.llm,
-        preloaded,
+        preloaded.as_ref(),
         ctl.runtime_tx.clone(),
         ctl.tool_approval_tx.clone(),
         ctl.canvas_registry.clone(),
@@ -1763,12 +1796,26 @@ async fn run_llm_stage(
     )
     .await
     {
-        Ok(l) => LlmEngine::Agent(Box::new(l)),
+        Ok(mut agent) => {
+            // Voice engine: disable tools. Tool-intent routing is handled
+            // at the coordinator level by spawning background agents.
+            agent.disable_tools();
+            LlmEngine::Agent(Box::new(agent))
+        }
         Err(e) => {
             error!("failed to init agent LLM: {e}");
             return;
         }
     };
+
+    // Stash dependencies for spawning background agents.
+    // Note: `preloaded` was consumed by engine creation above. Background
+    // agents create their own provider (reloading the same model weights
+    // from cache is fast since the OS pages are already warm).
+    let bg_config = config.clone();
+    let bg_tool_approval_tx = ctl.tool_approval_tx.clone();
+    let bg_canvas_registry = ctl.canvas_registry.clone();
+    let bg_shared_permissions = ctl.shared_permissions.clone();
 
     let local_coding_assistants = LocalCodingAssistants::detect();
 
@@ -1844,6 +1891,21 @@ async fn run_llm_stage(
 
     let cancel = cancel;
     let mut turn_counter: u64 = 0;
+
+    // Canned acknowledgments for tool-intent routing (instant TTS feedback
+    // while the background agent works).
+    const TOOL_ACKS: &[&str] = &[
+        "Checking that now.",
+        "On it.",
+        "Let me look into that.",
+        "One moment.",
+        "Working on that.",
+    ];
+    let mut ack_counter: usize = 0;
+
+    // Channel for receiving results from background agent tasks.
+    let (bg_result_tx, mut bg_result_rx) = mpsc::channel::<crate::agent::BackgroundAgentResult>(4);
+
     'outer: loop {
         if cancel.is_cancelled() {
             let cleared = pending_inputs.clear();
@@ -1884,6 +1946,7 @@ async fn run_llm_stage(
                     TextInjection(Option<TextInjection>),
                     VoiceCommand(Option<crate::voice_command::VoiceCommand>),
                     QueueCommand(Option<LlmQueueCommand>),
+                    BackgroundResult(crate::agent::BackgroundAgentResult),
                 }
 
                 let input = tokio::select! {
@@ -1892,6 +1955,7 @@ async fn run_llm_stage(
                     inj = recv_injection => Input::TextInjection(inj),
                     cmd = recv_voice_cmd => Input::VoiceCommand(cmd),
                     cmd = recv_queue_cmd => Input::QueueCommand(cmd),
+                    Some(result) = bg_result_rx.recv() => Input::BackgroundResult(result),
                 };
 
                 match input {
@@ -1963,6 +2027,39 @@ async fn run_llm_stage(
                         // Text injection channel closed (GUI dropped sender).
                         // Continue with voice-only mode rather than killing the LLM stage.
                         text_injection_rx = None;
+                    }
+                    Input::BackgroundResult(result) => {
+                        // Background agent completed — inject result into voice
+                        // engine history and narrate via TTS.
+                        info!(
+                            task_id = %result.task_id,
+                            success = result.success,
+                            "background agent task completed"
+                        );
+                        if let Some(rt) = &runtime_tx {
+                            let _ = rt.send(RuntimeEvent::BackgroundTaskCompleted {
+                                task_id: result.task_id.clone(),
+                                success: result.success,
+                                summary: result.spoken_summary.clone(),
+                            });
+                        }
+                        if result.success && !result.spoken_summary.trim().is_empty() {
+                            engine.inject_background_result(&result.spoken_summary);
+                            let spoken = result.spoken_summary.clone();
+                            append_conversation_turn(
+                                &mut conversation_turns,
+                                format!("[background task {}]", result.task_id),
+                                spoken.clone(),
+                                ConversationSource::Voice,
+                            );
+                            let _ = tx
+                                .send(SentenceChunk {
+                                    text: spoken,
+                                    is_final: true,
+                                })
+                                .await;
+                        }
+                        continue;
                     }
                 }
             }
@@ -2068,6 +2165,85 @@ async fn run_llm_stage(
             continue;
         }
 
+        // ── Multi-channel routing ───────────────────────────────────────
+        // Classify intent: if tools are needed, send a canned acknowledgment
+        // immediately and spawn a background agent. The voice engine continues
+        // to handle the next user turn with zero tool overhead.
+        let intent = crate::agent::classify_intent(&user_text);
+        if intent.needs_tools {
+            info!(
+                tools = ?intent.tool_allowlist,
+                desc = %intent.task_description,
+                "tool intent detected — routing to background agent"
+            );
+
+            // 1. Send canned acknowledgment immediately via TTS.
+            let ack = TOOL_ACKS[ack_counter % TOOL_ACKS.len()];
+            ack_counter += 1;
+            let _ = tx
+                .send(SentenceChunk {
+                    text: ack.to_owned(),
+                    is_final: true,
+                })
+                .await;
+
+            // 2. Build conversation context (last few turns).
+            let context = build_background_context(&conversation_turns, 5);
+
+            // 3. Spawn background agent.
+            let task_id = format!("bg-{turn_counter}");
+            let task = crate::agent::BackgroundAgentTask {
+                id: task_id.clone(),
+                description: intent.task_description.clone(),
+                user_message: user_text.clone(),
+                conversation_context: context,
+                tool_allowlist: intent.tool_allowlist,
+            };
+
+            if let Some(rt) = &runtime_tx {
+                let _ = rt.send(RuntimeEvent::BackgroundTaskStarted {
+                    task_id: task_id.clone(),
+                    description: intent.task_description,
+                });
+            }
+
+            let bg_tx = bg_result_tx.clone();
+            let bg_cfg = bg_config.clone();
+            let bg_approval = bg_tool_approval_tx.clone();
+            let bg_canvas = bg_canvas_registry.clone();
+            let bg_perms = bg_shared_permissions.clone();
+            let bg_runtime = runtime_tx.clone();
+            tokio::spawn(async move {
+                let result = crate::agent::spawn_background_agent(
+                    task,
+                    bg_cfg.llm,
+                    bg_runtime,
+                    bg_approval,
+                    bg_canvas,
+                    bg_perms,
+                )
+                .await;
+                let _ = bg_tx.send(result).await;
+            });
+
+            // 4. Record the ack in conversation history.
+            append_conversation_turn(
+                &mut conversation_turns,
+                user_text.clone(),
+                ack.to_owned(),
+                conversation_source,
+            );
+            capture_memory_turn(
+                memory_orchestrator.as_ref(),
+                runtime_tx.as_ref(),
+                &turn_id,
+                &user_text,
+                ack,
+            );
+            continue;
+        }
+        // ── End multi-channel routing ────────────────────────────────────
+
         let mut llm_input = format!("User message:\n{user_text}");
         if let Some(memory) = &memory_orchestrator {
             if let Ok(Some(memory_ctx)) = memory.recall_context(&user_text) {
@@ -2127,6 +2303,7 @@ async fn run_llm_stage(
             Ok::<String, crate::error::SpeechError>(assistant_text)
         });
 
+        let mut pending_bg_results: Vec<crate::agent::BackgroundAgentResult> = Vec::new();
         let mut generation = Box::pin(engine.generate_response(
             llm_input.clone(),
             proxy_tx.clone(),
@@ -2244,8 +2421,32 @@ async fn run_llm_stage(
                         }
                     }
                 }
+                Some(bg_result) = bg_result_rx.recv() => {
+                    // Background agent completed during voice generation.
+                    // Cannot inject into engine here (mutable borrow conflict),
+                    // so stash for processing after generation completes.
+                    info!(
+                        task_id = %bg_result.task_id,
+                        success = bg_result.success,
+                        "background agent completed during generation (deferred)"
+                    );
+                    if let Some(rt) = &runtime_tx {
+                        let _ = rt.send(RuntimeEvent::BackgroundTaskCompleted {
+                            task_id: bg_result.task_id.clone(),
+                            success: bg_result.success,
+                            summary: bg_result.spoken_summary.clone(),
+                        });
+                    }
+                    if bg_result.success && !bg_result.spoken_summary.trim().is_empty() {
+                        // Queue the result text for injection + TTS after generation.
+                        pending_bg_results.push(bg_result);
+                    }
+                }
             }
         };
+        // Explicitly drop the pinned generation future to release the mutable
+        // borrow on `engine`, allowing us to call `inject_background_result`.
+        drop(generation);
 
         let assistant_text = match forward_handle.await {
             Ok(Ok(text)) => text,
@@ -2315,6 +2516,24 @@ async fn run_llm_stage(
             &user_text,
             &assistant_text,
         );
+
+        // Process any background agent results that arrived during generation.
+        for bg_result in pending_bg_results {
+            engine.inject_background_result(&bg_result.spoken_summary);
+            append_conversation_turn(
+                &mut conversation_turns,
+                format!("[background task {}]", bg_result.task_id),
+                bg_result.spoken_summary.clone(),
+                ConversationSource::Voice,
+            );
+            // Narrate the background result via TTS.
+            let _ = tx
+                .send(SentenceChunk {
+                    text: bg_result.spoken_summary,
+                    is_final: true,
+                })
+                .await;
+        }
 
         // Concurrent sentiment analysis → orb mood (non-blocking).
         if let Some(rt) = runtime_tx.clone() {

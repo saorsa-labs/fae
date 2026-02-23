@@ -209,4 +209,27 @@ pub enum RuntimeEvent {
         /// Duration in milliseconds for this stage.
         duration_ms: u64,
     },
+    /// A background agent task has been spawned.
+    ///
+    /// Emitted when the pipeline detects tool intent in a voice turn and
+    /// delegates execution to a background agent. The GUI can show a subtle
+    /// "working..." indicator on the orb.
+    BackgroundTaskStarted {
+        /// Unique task identifier.
+        task_id: String,
+        /// Human-readable description of the task.
+        description: String,
+    },
+    /// A background agent task completed.
+    ///
+    /// Emitted when a background agent finishes executing. The result text
+    /// is simultaneously injected into the TTS pipeline for narration.
+    BackgroundTaskCompleted {
+        /// Task identifier (matches `BackgroundTaskStarted::task_id`).
+        task_id: String,
+        /// Whether the task completed successfully.
+        success: bool,
+        /// Summary text (may be truncated for event payload size).
+        summary: String,
+    },
 }

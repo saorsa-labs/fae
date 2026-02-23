@@ -222,7 +222,9 @@ impl CanvasBridge {
             | RuntimeEvent::SkillProposal { .. }
             | RuntimeEvent::NoiseBudgetUpdate { .. }
             | RuntimeEvent::OrbMoodUpdate { .. }
-            | RuntimeEvent::PipelineTiming { .. } => {}
+            | RuntimeEvent::PipelineTiming { .. }
+            | RuntimeEvent::BackgroundTaskStarted { .. }
+            | RuntimeEvent::BackgroundTaskCompleted { .. } => {}
         }
     }
 

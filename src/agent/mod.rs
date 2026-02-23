@@ -46,12 +46,15 @@ pub struct FaeAgentLlm {
     max_history_messages: usize,
     context_size_tokens: usize,
     compaction_threshold: f32,
+    /// When true, tool schemas are never advertised to the model.
+    /// Used for the voice conversation engine in multi-channel mode.
+    tools_disabled: bool,
 }
 
 impl FaeAgentLlm {
     pub async fn new(
         config: &LlmConfig,
-        preloaded_llm: Option<LocalLlm>,
+        preloaded_llm: Option<&LocalLlm>,
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
@@ -79,7 +82,7 @@ impl FaeAgentLlm {
     /// compatible with callers that do not thread a shared store).
     pub async fn new_with_permissions(
         config: &LlmConfig,
-        preloaded_llm: Option<LocalLlm>,
+        preloaded_llm: Option<&LocalLlm>,
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
         tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
@@ -93,7 +96,7 @@ impl FaeAgentLlm {
             config.effective_system_prompt(perm_guard.as_deref(), None)
         };
 
-        let provider = build_provider(config, preloaded_llm.as_ref(), credential_manager).await;
+        let provider = build_provider(config, preloaded_llm, credential_manager).await;
         let registry = build_registry(
             config,
             tool_approval_tx,
@@ -116,7 +119,32 @@ impl FaeAgentLlm {
             max_history_messages: config.max_history_messages,
             context_size_tokens: config.context_size_tokens,
             compaction_threshold: 0.95,
+            tools_disabled: false,
         })
+    }
+
+    /// Disable tool schema advertisement for this engine.
+    ///
+    /// When tools are disabled, `generate_response()` always passes an empty
+    /// tool allowlist to the agent loop, ensuring zero tool schemas appear in
+    /// the model prompt. Used for the voice conversation engine in
+    /// multi-channel mode, where tool work is delegated to background agents.
+    pub fn disable_tools(&mut self) {
+        self.tools_disabled = true;
+    }
+
+    /// Inject a background agent result into the conversation history.
+    ///
+    /// Called when a background agent task completes, so the voice engine
+    /// knows what Fae already told the user and maintains conversational
+    /// continuity.
+    pub fn inject_background_result(&mut self, result_text: &str) {
+        if !result_text.trim().is_empty() {
+            self.history.push(Message::assistant(format!(
+                "[I completed a background task] {result_text}"
+            )));
+            self.trim_history();
+        }
     }
 
     pub fn truncate_history(&mut self, keep_count: usize) {
@@ -133,10 +161,15 @@ impl FaeAgentLlm {
     ) -> Result<bool> {
         let interrupt_flag = interrupt;
         let user_message = extract_latest_user_message(&user_input);
-        let tool_allowlist = select_tool_allowlist(user_message);
+        let tool_allowlist = if self.tools_disabled {
+            Vec::new()
+        } else {
+            select_tool_allowlist(user_message)
+        };
         tracing::debug!(
             user_message,
             tools = ?tool_allowlist,
+            tools_disabled = self.tools_disabled,
             "selected per-turn tool allowlist"
         );
 
@@ -416,6 +449,184 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
     let mut tools: Vec<String> = allow.into_iter().map(str::to_owned).collect();
     tools.sort();
     tools
+}
+
+/// Intent classification result from `classify_intent()`.
+///
+/// Determines whether a user message requires background tool execution
+/// and provides context for the background agent.
+pub struct IntentClassification {
+    /// Tool names the background agent should have access to.
+    pub tool_allowlist: Vec<String>,
+    /// Natural language description of the task for the background agent.
+    pub task_description: String,
+    /// Whether this message needs tool use (true) or is purely conversational (false).
+    pub needs_tools: bool,
+}
+
+/// Classify user intent and determine routing.
+///
+/// Enhanced version of `select_tool_allowlist()` that also produces a
+/// task description for the background agent.
+pub fn classify_intent(user_text: &str) -> IntentClassification {
+    let tools = select_tool_allowlist(user_text);
+    let needs_tools = !tools.is_empty();
+
+    let task_description = if needs_tools {
+        format!(
+            "The user said: \"{user_text}\"\n\
+             Complete this request using your available tools and provide a concise spoken summary."
+        )
+    } else {
+        String::new()
+    };
+
+    IntentClassification {
+        tool_allowlist: tools,
+        task_description,
+        needs_tools,
+    }
+}
+
+/// A background agent task spawned from the voice conversation.
+pub struct BackgroundAgentTask {
+    /// Unique task identifier.
+    pub id: String,
+    /// Human-readable description for logging/events.
+    pub description: String,
+    /// The user's original message that triggered this task.
+    pub user_message: String,
+    /// Recent conversation context (last few turns) for continuity.
+    pub conversation_context: String,
+    /// Tool names this agent should have access to.
+    pub tool_allowlist: Vec<String>,
+}
+
+/// Result from a completed background agent task.
+pub struct BackgroundAgentResult {
+    /// Task identifier (matches `BackgroundAgentTask::id`).
+    pub task_id: String,
+    /// Whether the task completed successfully.
+    pub success: bool,
+    /// Text to speak via TTS (the agent's final answer).
+    pub spoken_summary: String,
+}
+
+/// Spawn a background agent to execute a tool-heavy task.
+///
+/// Creates a fresh `FaeAgentLlm` sharing the same LLM model weights,
+/// runs it with a focused prompt and restricted tool set, and collects
+/// the result text for narration via TTS.
+///
+/// # Arguments
+///
+/// * `task` — The background task to execute
+/// * `config` — LLM configuration (cloned from pipeline)
+/// * `preloaded_llm` — Shared local model (cheap `Arc` clone)
+/// * `runtime_tx` — Runtime event sender for telemetry
+/// * `tool_approval_tx` — Optional approval channel
+/// * `canvas_registry` — Optional canvas registry
+/// * `credential_manager` — Credential manager for provider setup
+/// * `shared_permissions` — Live permission store
+pub async fn spawn_background_agent(
+    task: BackgroundAgentTask,
+    config: LlmConfig,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
+    tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+    canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+    shared_permissions: Option<SharedPermissionStore>,
+) -> BackgroundAgentResult {
+    // Build a background-specific config with the agent prompt.
+    let bg_system_prompt = {
+        let perm_guard = shared_permissions.as_ref().and_then(|sp| sp.lock().ok());
+        let base = config.effective_system_prompt(perm_guard.as_deref(), None);
+        format!(
+            "{}\n\n{}",
+            crate::personality::BACKGROUND_AGENT_PROMPT.trim(),
+            base
+        )
+    };
+
+    let credential_manager = crate::credentials::create_manager();
+    let provider = build_provider(&config, None, credential_manager.as_ref()).await;
+    let registry = build_registry(
+        &config,
+        tool_approval_tx,
+        canvas_registry,
+        shared_permissions,
+    );
+
+    let parallel_tool_calls = matches!(config.tool_mode, AgentToolMode::ReadOnly);
+    let agent_config = FaeAgentConfig::new()
+        .with_parallel_tool_calls(parallel_tool_calls)
+        .with_max_parallel_tool_calls(4);
+
+    // Build the input prompt with conversation context.
+    let input = if task.conversation_context.is_empty() {
+        format!("User message:\n{}", task.user_message)
+    } else {
+        format!(
+            "Recent conversation context:\n{}\n\nUser message:\n{}",
+            task.conversation_context, task.user_message
+        )
+    };
+
+    let history = vec![Message::system(bg_system_prompt)];
+
+    let mut agent = AgentLoop::new(agent_config, Arc::clone(&provider), Arc::clone(&registry))
+        .restrict_tools_to(&task.tool_allowlist);
+    if let Some(ref tx) = runtime_tx {
+        agent = agent.with_runtime_tx(tx.clone());
+    }
+
+    // Collect output text (no streaming to TTS — we batch the result).
+    let (collect_tx, mut collect_rx) = mpsc::channel::<String>(32);
+    let collector_handle = tokio::spawn(async move {
+        let mut full_text = String::new();
+        while let Some(clause) = collect_rx.recv().await {
+            if !clause.is_empty() {
+                if !full_text.is_empty() {
+                    full_text.push(' ');
+                }
+                full_text.push_str(clause.trim());
+            }
+        }
+        full_text
+    });
+
+    let mut messages = history;
+    messages.push(Message::user(input));
+
+    let run_result = agent
+        .run_with_messages_streaming(messages, collect_tx)
+        .await;
+
+    let collected_text = collector_handle.await.unwrap_or_default();
+
+    match run_result {
+        Ok(result) => {
+            // Prefer streamed text; fall back to result's final_text.
+            let spoken = if collected_text.trim().is_empty() {
+                result.final_text.trim().to_owned()
+            } else {
+                collected_text
+            };
+
+            BackgroundAgentResult {
+                task_id: task.id,
+                success: true,
+                spoken_summary: spoken,
+            }
+        }
+        Err(e) => {
+            tracing::error!(task_id = %task.id, error = %e, "background agent failed");
+            BackgroundAgentResult {
+                task_id: task.id,
+                success: false,
+                spoken_summary: format!("Sorry, I couldn't complete that. {e}"),
+            }
+        }
+    }
 }
 
 struct MissingLocalModelAdapter;

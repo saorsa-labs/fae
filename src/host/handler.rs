@@ -966,6 +966,21 @@ fn map_runtime_event(event: &RuntimeEvent) -> (String, serde_json::Value) {
             "pipeline.timing".to_owned(),
             serde_json::json!({"stage": stage, "duration_ms": duration_ms}),
         ),
+        RuntimeEvent::BackgroundTaskStarted {
+            task_id,
+            description,
+        } => (
+            "background_task.started".to_owned(),
+            serde_json::json!({"task_id": task_id, "description": description}),
+        ),
+        RuntimeEvent::BackgroundTaskCompleted {
+            task_id,
+            success,
+            summary,
+        } => (
+            "background_task.completed".to_owned(),
+            serde_json::json!({"task_id": task_id, "success": success, "summary": summary}),
+        ),
     }
 }
 

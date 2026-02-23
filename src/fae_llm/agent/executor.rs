@@ -206,9 +206,16 @@ impl ToolExecutor {
         cancel: &CancellationToken,
     ) -> Vec<Result<ExecutedToolCall, FaeLlmError>> {
         if self.parallel_tool_calls && calls.len() > 1 {
+            // Clone + enumerate into owned tuples to avoid HRTB lifetime
+            // issues when this executor runs inside a `tokio::spawn` future.
+            let indexed: Vec<(usize, AccumulatedToolCall)> = calls
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i, c.clone()))
+                .collect();
             let unordered: Vec<(usize, Result<ExecutedToolCall, FaeLlmError>)> =
-                stream::iter(calls.iter().enumerate())
-                    .map(|(idx, call)| async move { (idx, self.execute_tool(call, cancel).await) })
+                stream::iter(indexed)
+                    .map(|(idx, call)| async move { (idx, self.execute_tool(&call, cancel).await) })
                     .buffer_unordered(self.max_parallel_tool_calls)
                     .collect()
                     .await;
