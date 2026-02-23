@@ -1802,6 +1802,43 @@ impl LocalCodingAssistants {
     }
 }
 
+/// Returns `true` when the user's message looks coding-related.
+///
+/// Used to gate injection of local coding-assistant context (Codex, Claude
+/// Code install status) into the LLM prompt — avoids noise on non-coding
+/// queries like "what time is it?".
+fn should_include_local_coding_assistants_context(user_text: &str) -> bool {
+    let lower = user_text.to_ascii_lowercase();
+    [
+        "code",
+        "coding",
+        "bug",
+        "debug",
+        "refactor",
+        "compile",
+        "build failed",
+        "test failure",
+        "unit test",
+        "cargo",
+        "rust",
+        "python",
+        "typescript",
+        "javascript",
+        "repo",
+        "repository",
+        "pull request",
+        "commit",
+        "stack trace",
+        "implementation",
+        "implement this",
+        "patch",
+        "codex",
+        "claude code",
+    ]
+    .iter()
+    .any(|term| lower.contains(term))
+}
+
 fn is_command_available(command: &str) -> bool {
     let Some(path_os) = std::env::var_os("PATH") else {
         return false;
@@ -2687,7 +2724,9 @@ async fn run_llm_stage(
             }
         }
 
-        if local_coding_assistants.any() {
+        if local_coding_assistants.any()
+            && should_include_local_coding_assistants_context(&user_text)
+        {
             let permission = memory_orchestrator
                 .as_ref()
                 .and_then(|memory| memory.coding_assistant_permission().ok().flatten());
@@ -5216,5 +5255,25 @@ mod tests {
         cancel.cancel();
         drop(stt_tx);
         let _ = handle.await;
+    }
+
+    #[test]
+    fn coding_assistant_context_enabled_for_coding_intent() {
+        assert!(should_include_local_coding_assistants_context(
+            "Can you debug this Rust compile error?"
+        ));
+        assert!(should_include_local_coding_assistants_context(
+            "Please help me refactor this code"
+        ));
+    }
+
+    #[test]
+    fn coding_assistant_context_skipped_for_general_chat() {
+        assert!(!should_include_local_coding_assistants_context(
+            "What time is it in London?"
+        ));
+        assert!(!should_include_local_coding_assistants_context(
+            "How's the weather today?"
+        ));
     }
 }

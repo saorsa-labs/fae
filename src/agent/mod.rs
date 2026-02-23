@@ -737,6 +737,51 @@ pub struct BackgroundAgentResult {
     pub spoken_summary: String,
 }
 
+/// Select the reasoning level for a background agent task.
+///
+/// Pure system-utility queries (bash-only + factual keywords like "what time")
+/// get [`ReasoningLevel::Off`]. Multi-tool tasks or analytical questions get
+/// [`ReasoningLevel::Medium`]. Everything else defaults to
+/// [`ReasoningLevel::Low`].
+fn select_background_reasoning_level(task: &BackgroundAgentTask) -> ReasoningLevel {
+    let lower = task.user_message.to_ascii_lowercase();
+    let only_bash = task.tool_allowlist.len() == 1 && task.tool_allowlist[0] == "bash";
+
+    // Pure system utility questions don't need internal reasoning.
+    if only_bash
+        && contains_any(
+            &lower,
+            &[
+                "what time",
+                "current time",
+                "the time",
+                "what date",
+                "current date",
+                "today's date",
+                "what day",
+                "uptime",
+                "disk space",
+                "disk usage",
+                "storage",
+                "memory usage",
+                "cpu usage",
+                "battery",
+                "ip address",
+            ],
+        )
+    {
+        return ReasoningLevel::Off;
+    }
+
+    // Multi-tool tasks or analytical asks benefit from deeper reasoning.
+    if task.tool_allowlist.len() > 1 || needs_deeper_reasoning(task.user_message.as_str()) {
+        return ReasoningLevel::Medium;
+    }
+
+    // Keep lightweight reasoning for ordinary tool tasks.
+    ReasoningLevel::Low
+}
+
 /// Spawn a background agent to execute a tool-heavy task.
 ///
 /// Creates a fresh `FaeAgentLlm` sharing the same LLM model weights,
@@ -763,10 +808,18 @@ pub async fn spawn_background_agent(
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     shared_permissions: Option<SharedPermissionStore>,
 ) -> BackgroundAgentResult {
+    let reasoning_level = select_background_reasoning_level(&task);
+    tracing::info!(
+        task_id = %task.id,
+        reasoning_level = ?reasoning_level,
+        tools = ?task.tool_allowlist,
+        "selected background agent reasoning level"
+    );
+
     // Build a background-specific config with the agent prompt.
     let bg_system_prompt = {
         let perm_guard = shared_permissions.as_ref().and_then(|sp| sp.lock().ok());
-        let base = config.effective_system_prompt(perm_guard.as_deref(), None);
+        let base = config.effective_system_prompt_for_mode(perm_guard.as_deref(), None, false);
         format!(
             "{}\n\n{}",
             crate::personality::BACKGROUND_AGENT_PROMPT.trim(),
@@ -787,7 +840,7 @@ pub async fn spawn_background_agent(
     let agent_config = FaeAgentConfig::new()
         .with_parallel_tool_calls(parallel_tool_calls)
         .with_max_parallel_tool_calls(4)
-        .with_reasoning_level(ReasoningLevel::Medium);
+        .with_reasoning_level(reasoning_level);
 
     // Build the input prompt with conversation context.
     let input = if task.conversation_context.is_empty() {
@@ -1445,5 +1498,35 @@ mod tests {
         let intent = classify_intent("hi Fae, how are you today?");
         assert!(!intent.needs_tools);
         assert!(!intent.needs_thinking);
+    }
+
+    #[test]
+    fn background_reasoning_off_for_simple_time_query() {
+        let task = BackgroundAgentTask {
+            id: "bg-test".to_owned(),
+            description: "time".to_owned(),
+            user_message: "What time is it right now?".to_owned(),
+            conversation_context: String::new(),
+            tool_allowlist: vec!["bash".to_owned()],
+        };
+        assert_eq!(
+            select_background_reasoning_level(&task),
+            ReasoningLevel::Off
+        );
+    }
+
+    #[test]
+    fn background_reasoning_medium_for_multi_tool_tasks() {
+        let task = BackgroundAgentTask {
+            id: "bg-test".to_owned(),
+            description: "calendar+search".to_owned(),
+            user_message: "Search the web and compare options for my meeting plan".to_owned(),
+            conversation_context: String::new(),
+            tool_allowlist: vec!["web_search".to_owned(), "list_calendar_events".to_owned()],
+        };
+        assert_eq!(
+            select_background_reasoning_level(&task),
+            ReasoningLevel::Medium
+        );
     }
 }

@@ -1,5 +1,5 @@
 use crate::agent::FaeAgentLlm;
-use crate::config::SpeechConfig;
+use crate::config::{AgentToolMode, SpeechConfig};
 use crate::error::{Result, SpeechError};
 use crate::llm::LocalLlm;
 use crate::pipeline::messages::SentenceChunk;
@@ -16,7 +16,19 @@ pub struct ChannelBrain {
 
 impl ChannelBrain {
     pub async fn from_config(config: &SpeechConfig) -> Result<Self> {
-        let llm_cfg = config.llm.clone();
+        let mut llm_cfg = config.llm.clone();
+        // Note: FullNoApproval is intentionally NOT caught here — it is a
+        // trusted-automation mode that explicitly opts out of approval gates.
+        if matches!(
+            llm_cfg.tool_mode,
+            AgentToolMode::ReadWrite | AgentToolMode::Full
+        ) {
+            tracing::warn!(
+                requested_mode = ?llm_cfg.tool_mode,
+                "channels runtime has no interactive approval path; forcing read_only tool mode"
+            );
+            llm_cfg.tool_mode = AgentToolMode::ReadOnly;
+        }
         let preloaded_local = Some(LocalLlm::new(&llm_cfg).await?);
 
         let credential_manager = crate::credentials::create_manager();

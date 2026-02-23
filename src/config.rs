@@ -758,7 +758,26 @@ Personal context:\n\
         permissions: Option<&crate::permissions::PermissionStore>,
         user_name: Option<&str>,
     ) -> String {
-        self.effective_system_prompt_with_vision(permissions, self.enable_vision, user_name)
+        self.effective_system_prompt_for_mode(permissions, user_name, true)
+    }
+
+    /// Returns the fully assembled system prompt for a specific prompt mode.
+    ///
+    /// `voice_optimized = true` uses the condensed prompt variant for lower
+    /// prefill latency. `false` uses the full prompt with skills/capability
+    /// fragments for background/tool-heavy tasks.
+    pub fn effective_system_prompt_for_mode(
+        &self,
+        permissions: Option<&crate::permissions::PermissionStore>,
+        user_name: Option<&str>,
+        voice_optimized: bool,
+    ) -> String {
+        self.effective_system_prompt_with_vision_and_mode(
+            permissions,
+            self.enable_vision,
+            user_name,
+            voice_optimized,
+        )
     }
 
     /// Like [`effective_system_prompt`](Self::effective_system_prompt) but with
@@ -769,6 +788,23 @@ Personal context:\n\
         vision_capable: bool,
         user_name: Option<&str>,
     ) -> String {
+        self.effective_system_prompt_with_vision_and_mode(
+            permissions,
+            vision_capable,
+            user_name,
+            true,
+        )
+    }
+
+    /// Like [`effective_system_prompt_with_vision`](Self::effective_system_prompt_with_vision)
+    /// but allows selecting voice-optimized vs full prompt assembly.
+    pub fn effective_system_prompt_with_vision_and_mode(
+        &self,
+        permissions: Option<&crate::permissions::PermissionStore>,
+        vision_capable: bool,
+        user_name: Option<&str>,
+        voice_optimized: bool,
+    ) -> String {
         let add_on = self.system_prompt.trim();
         let is_legacy = Self::LEGACY_PROMPTS
             .iter()
@@ -778,9 +814,6 @@ Personal context:\n\
         } else {
             add_on
         };
-        // Voice-optimized: skip skills/capability sections for lower prefill
-        // latency. The tool gating layer handles tool availability separately.
-        let voice_optimized = true;
         crate::personality::assemble_prompt(
             &self.personality,
             clean_addon,
