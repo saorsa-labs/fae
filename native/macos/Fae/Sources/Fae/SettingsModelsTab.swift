@@ -8,8 +8,9 @@ struct SettingsModelsTab: View {
 
     private let voiceModelOptions: [(label: String, value: String, description: String)] = [
         ("Auto (Recommended)", "auto", "Uses Qwen3-4B on systems with at least 32 GB RAM, otherwise Qwen3-1.7B."),
-        ("Qwen3-4B", "qwen3_4b", "Higher instruction quality, slightly slower."),
-        ("Qwen3-1.7B", "qwen3_1_7b", "Fastest local voice model.")
+        ("Qwen3-4B", "qwen3_4b", "Higher instruction quality, slightly slower first response."),
+        ("Qwen3-1.7B", "qwen3_1_7b", "Good balance of quality and speed."),
+        ("Qwen3-0.6B", "qwen3_0_6b", "Fastest response time, lower quality. Best for quick voice interactions.")
     ]
 
     var body: some View {

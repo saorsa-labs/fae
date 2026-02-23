@@ -261,6 +261,8 @@ pub enum VoiceModelPreset {
     Qwen3_4b,
     /// Force Qwen3 1.7B GGUF.
     Qwen3_1_7b,
+    /// Force Qwen3 0.6B GGUF (fastest, lowest quality).
+    Qwen3_0_6b,
 }
 
 /// Runtime safety profile.
@@ -532,6 +534,12 @@ pub fn recommended_local_model(
             "Qwen/Qwen3-1.7B",
             false,
         ),
+        VoiceModelPreset::Qwen3_0_6b => (
+            "unsloth/Qwen3-0.6B-GGUF",
+            "Qwen3-0.6B-Q4_K_M.gguf",
+            "Qwen/Qwen3-0.6B",
+            false,
+        ),
         VoiceModelPreset::Auto => match total_memory_bytes {
             Some(bytes) if bytes >= 32 * GIB => (
                 "unsloth/Qwen3-4B-Instruct-2507-GGUF",
@@ -591,6 +599,7 @@ pub fn is_managed_default_model_id(model_id: &str) -> bool {
         "unsloth/Qwen3-4B-Instruct-2507-GGUF"
             | "MaziyarPanahi/Qwen3-4B-Instruct-GGUF"
             | "unsloth/Qwen3-1.7B-GGUF"
+            | "unsloth/Qwen3-0.6B-GGUF"
             | "Qwen/Qwen3-VL-4B-Instruct"
             | "Qwen/Qwen3-VL-8B-Instruct"
     )
@@ -715,6 +724,9 @@ Personal context:\n\
     ///
     /// `permissions` gates built-in skill prompt fragments. When `None`, all
     /// skills are omitted.
+    ///
+    /// Voice-optimized mode strips skills and capability fragments to minimize
+    /// prefill latency. Enabled by default for the embedded voice pipeline.
     pub fn effective_system_prompt(
         &self,
         permissions: Option<&crate::permissions::PermissionStore>,
@@ -740,12 +752,16 @@ Personal context:\n\
         } else {
             add_on
         };
+        // Voice-optimized: skip skills/capability sections for lower prefill
+        // latency. The tool gating layer handles tool availability separately.
+        let voice_optimized = true;
         crate::personality::assemble_prompt(
             &self.personality,
             clean_addon,
             permissions,
             vision_capable,
             user_name,
+            voice_optimized,
         )
     }
 }

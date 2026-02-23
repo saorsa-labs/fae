@@ -255,7 +255,7 @@ fn onboarding_set_user_name_persists_and_injects_into_prompt() {
     );
 
     // 3. Verify the assembled system prompt contains "Alice"
-    let prompt = personality::assemble_prompt("fae", "", None, false, Some("Alice"));
+    let prompt = personality::assemble_prompt("fae", "", None, false, Some("Alice"), false);
     assert!(
         prompt.contains("Alice"),
         "assembled prompt must contain user name"

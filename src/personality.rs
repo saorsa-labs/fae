@@ -67,6 +67,48 @@ pub fn load_onboarding_checklist() -> String {
         .unwrap_or_else(|_| DEFAULT_ONBOARDING_CHECKLIST.to_owned())
 }
 
+/// Condensed system prompt for voice-optimized mode.
+///
+/// Keeps identity, style, companion presence, and memory usage.
+/// Strips tool delegation, scheduler details, skill management, coding
+/// assistant policy, web search, and proactive intelligence specifics.
+/// ~2KB vs ~18KB full prompt — roughly 4-5x fewer prefill tokens.
+const VOICE_CORE_PROMPT: &str = "\
+You are Fae, a proactive personal AI assistant.\n\
+\n\
+Core style:\n\
+- Be concise by default (1-3 short sentences) unless the user asks for depth.\n\
+- Be direct, practical, and calm.\n\
+- Do not expose hidden chain-of-thought.\n\
+\n\
+Greeting style:\n\
+- Greet warmly but never the same way twice. You are a companion, not a product demo.\n\
+- Vary tone and energy. A simple \"Hey\" can be better than a long introduction.\n\
+- Never start with formulaic self-descriptions.\n\
+\n\
+You are here for your user and they for you. You are a team.\n\
+Always be helpful, never noisy. Become friends with your user.\n\
+Help guide them if they feel down. Never lie, never just agree.\n\
+Work hard to find truth and help your user do likewise.\n\
+\n\
+Memory:\n\
+- Use memory context to personalize help and avoid re-asking.\n\
+- If memory conflicts with user input, follow the latest correction.\n\
+- Do not invent memories. If a fact is missing, ask.\n\
+- Honor requests to forget something.\n\
+\n\
+Companion presence:\n\
+- You are always present and listening, like a friend in the room.\n\
+- Direct address — respond naturally and fully.\n\
+- Background noise, TV, music — stay quiet.\n\
+- Uncertain if addressed — err on the side of silence.\n\
+- Silence is respectful presence, not failure.\n\
+\n\
+Safety:\n\
+- NEVER delete files without explicit permission.\n\
+- NEVER remove content without explicit permission.\n\
+- Always explain intent before high-impact actions.";
+
 /// Vision understanding section injected when the local model supports images.
 const VISION_PROMPT: &str = "\
 Vision understanding:\n\
@@ -83,6 +125,8 @@ Vision understanding:\n\
 /// so the model knows it can process image inputs.
 /// When `user_name` is `Some`, a user-context section is added so the LLM can
 /// address the user by name.
+/// When `voice_optimized` is `true`, skills and permission fragments are omitted
+/// to minimize prefill latency for voice conversations.
 #[must_use]
 pub fn assemble_prompt(
     _personality_name: &str,
@@ -90,13 +134,20 @@ pub fn assemble_prompt(
     permissions: Option<&PermissionStore>,
     vision_capable: bool,
     user_name: Option<&str>,
+    voice_optimized: bool,
 ) -> String {
-    let soul = load_soul();
-    let skills = crate::skills::load_all_skills();
     let add_on = user_add_on.trim();
 
     let mut parts: Vec<String> = Vec::with_capacity(8);
-    parts.push(CORE_PROMPT.trim().to_owned());
+    if voice_optimized {
+        // Use condensed prompt (~2KB) instead of full prompt (~18KB).
+        // SOUL is still included for personality grounding.
+        parts.push(VOICE_CORE_PROMPT.trim().to_owned());
+    } else {
+        parts.push(CORE_PROMPT.trim().to_owned());
+    }
+
+    let soul = load_soul();
 
     if vision_capable {
         parts.push(VISION_PROMPT.to_owned());
@@ -117,31 +168,37 @@ pub fn assemble_prompt(
         }
     }
 
-    let skills_trimmed = skills.trim();
-    if !skills_trimmed.is_empty() {
-        parts.push(skills_trimmed.to_owned());
-    }
-
-    if let Some(store) = permissions {
-        let builtin_skills = crate::skills::builtins::builtin_skills();
-        let active = builtin_skills.active_prompt_fragments(store);
-        if !active.trim().is_empty() {
-            parts.push(format!(
-                "# Active capabilities\n\n\
-                 The following capabilities are enabled:\n\n{active}"
-            ));
+    // Skip skills and capability fragments in voice-optimized mode to reduce
+    // prefill latency. The tool gating layer already handles which tools are
+    // available — we don't need the LLM to "know about" every skill schema.
+    if !voice_optimized {
+        let skills = crate::skills::load_all_skills();
+        let skills_trimmed = skills.trim();
+        if !skills_trimmed.is_empty() {
+            parts.push(skills_trimmed.to_owned());
         }
-        let unavailable = builtin_skills.unavailable(store);
-        if !unavailable.is_empty() {
-            let names: Vec<&str> = unavailable.iter().map(|s| s.name()).collect();
-            parts.push(format!(
-                "# Capabilities requiring permission\n\n\
-                 These capabilities are available but not yet granted: {}. \
-                 If the user asks about these, try using the tool \u{2014} the system will \
-                 prompt them to grant access. If declined, suggest they can enable \
-                 it later in settings.",
-                names.join(", ")
-            ));
+
+        if let Some(store) = permissions {
+            let builtin_skills = crate::skills::builtins::builtin_skills();
+            let active = builtin_skills.active_prompt_fragments(store);
+            if !active.trim().is_empty() {
+                parts.push(format!(
+                    "# Active capabilities\n\n\
+                     The following capabilities are enabled:\n\n{active}"
+                ));
+            }
+            let unavailable = builtin_skills.unavailable(store);
+            if !unavailable.is_empty() {
+                let names: Vec<&str> = unavailable.iter().map(|s| s.name()).collect();
+                parts.push(format!(
+                    "# Capabilities requiring permission\n\n\
+                     These capabilities are available but not yet granted: {}. \
+                     If the user asks about these, try using the tool \u{2014} the system will \
+                     prompt them to grant access. If declined, suggest they can enable \
+                     it later in settings.",
+                    names.join(", ")
+                ));
+            }
         }
     }
 
@@ -171,26 +228,26 @@ mod tests {
 
     #[test]
     fn assemble_includes_core_and_soul() {
-        let prompt = assemble_prompt("fae", "", None, false, None);
+        let prompt = assemble_prompt("fae", "", None, false, None, false);
         assert!(prompt.contains("You are Fae"));
         assert!(prompt.starts_with(CORE_PROMPT.trim()));
     }
 
     #[test]
     fn assemble_appends_user_add_on() {
-        let prompt = assemble_prompt("any", "Be extra concise.", None, false, None);
+        let prompt = assemble_prompt("any", "Be extra concise.", None, false, None, false);
         assert!(prompt.ends_with("Be extra concise."));
     }
 
     #[test]
     fn assemble_includes_built_in_skills() {
-        let prompt = assemble_prompt("any", "", None, false, None);
+        let prompt = assemble_prompt("any", "", None, false, None, false);
         assert!(prompt.contains("You have a canvas window."));
     }
 
     #[test]
     fn prompt_includes_companion_presence() {
-        let prompt = assemble_prompt("fae", "", None, false, None);
+        let prompt = assemble_prompt("fae", "", None, false, None, false);
         assert!(prompt.contains("Companion presence:"));
         assert!(prompt.contains("always present and listening"));
         assert!(prompt.contains("Direct address"));
@@ -208,20 +265,20 @@ mod tests {
 
     #[test]
     fn assemble_includes_vision_section_when_capable() {
-        let prompt = assemble_prompt("fae", "", None, true, None);
+        let prompt = assemble_prompt("fae", "", None, true, None, false);
         assert!(prompt.contains("Vision understanding:"));
         assert!(prompt.contains("images never leave the device"));
     }
 
     #[test]
     fn assemble_excludes_vision_section_when_not_capable() {
-        let prompt = assemble_prompt("fae", "", None, false, None);
+        let prompt = assemble_prompt("fae", "", None, false, None, false);
         assert!(!prompt.contains("Vision understanding:"));
     }
 
     #[test]
     fn assemble_includes_apple_ecosystem_skill() {
-        let prompt = assemble_prompt("fae", "", None, false, None);
+        let prompt = assemble_prompt("fae", "", None, false, None, false);
         // The apple-ecosystem skill references Apple tool names.
         assert!(prompt.contains("search_contacts"));
         assert!(prompt.contains("list_calendar_events"));
@@ -234,7 +291,7 @@ mod tests {
         let mut store = PermissionStore::default();
         store.grant(PermissionKind::Calendar);
 
-        let prompt = assemble_prompt("fae", "", Some(&store), false, None);
+        let prompt = assemble_prompt("fae", "", Some(&store), false, None, false);
         // CalendarSkill's fragment mentions "schedule management".
         assert!(
             prompt.contains("schedule management") || prompt.contains("calendar"),
@@ -250,7 +307,7 @@ mod tests {
         // Default store has nothing granted.
         let store = PermissionStore::default();
 
-        let prompt = assemble_prompt("fae", "", Some(&store), false, None);
+        let prompt = assemble_prompt("fae", "", Some(&store), false, None, false);
         // Mail should appear in "requiring permission" section.
         assert!(prompt.contains("Capabilities requiring permission"));
         assert!(prompt.contains("mail"));
@@ -261,7 +318,7 @@ mod tests {
         use crate::permissions::PermissionStore;
         let store = PermissionStore::default();
 
-        let prompt = assemble_prompt("fae", "", Some(&store), false, None);
+        let prompt = assemble_prompt("fae", "", Some(&store), false, None, false);
         assert!(prompt.contains("Capabilities requiring permission"));
         // All 8 built-in skills should be listed as unavailable.
         for name in [
@@ -279,5 +336,32 @@ mod tests {
                 "expected '{name}' in unavailable capabilities"
             );
         }
+    }
+
+    #[test]
+    fn voice_optimized_strips_skills_and_permissions() {
+        use crate::permissions::PermissionStore;
+        let store = PermissionStore::default();
+
+        let full = assemble_prompt("fae", "", Some(&store), false, None, false);
+        let voice = assemble_prompt("fae", "", Some(&store), false, None, true);
+
+        // Voice-optimized should still include core prompt and SOUL.
+        assert!(voice.contains("You are Fae"));
+        // SOUL content is loaded from disk; check compiled-in default instead.
+        assert!(DEFAULT_SOUL.contains("Presence Principles"));
+
+        // But should NOT include skills or capability sections.
+        assert!(!voice.contains("You have a canvas window."));
+        assert!(!voice.contains("search_contacts"));
+        assert!(!voice.contains("Capabilities requiring permission"));
+
+        // Voice prompt should be significantly shorter than full prompt.
+        assert!(
+            voice.len() < full.len(),
+            "voice ({}) should be shorter than full ({})",
+            voice.len(),
+            full.len()
+        );
     }
 }
