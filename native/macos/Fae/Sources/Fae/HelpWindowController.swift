@@ -31,6 +31,7 @@ final class HelpWindowController {
         switch name {
         case "getting-started": title = "Getting Started"
         case "shortcuts": title = "Keyboard Shortcuts"
+        case "models-and-voice": title = "Model & Voice Reference"
         case "privacy": title = "Privacy & Security"
         default: title = "Fae Help"
         }

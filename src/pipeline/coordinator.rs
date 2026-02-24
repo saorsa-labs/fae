@@ -18,7 +18,7 @@ use crate::pipeline::messages::{
     TextInjection, Transcription,
 };
 use crate::pipeline::voice_approval::{
-    PendingVoiceApproval, resolve_voice_approval, start_voice_approval,
+    ApprovalContext, PendingVoiceApproval, resolve_and_advance_approval, start_voice_approval,
 };
 use crate::pipeline::voice_identity::{
     approval_speaker_verified, build_voice_identity_profile, extract_voiceprint_samples,
@@ -153,23 +153,9 @@ impl PipelineCoordinator {
     ///
     /// This skips lazy loading inside each stage, avoiding mid-conversation delays.
     pub fn with_models(config: SpeechConfig, models: InitializedModels) -> Self {
-        Self {
-            config,
-            cancel: CancellationToken::new(),
-            mode: PipelineMode::Conversation,
-            models: Some(models),
-            runtime_tx: None,
-            tool_approval_tx: None,
-            text_injection_rx: None,
-            canvas_registry: None,
-            gate_cmd_rx: None,
-            gate_active: Arc::new(AtomicBool::new(false)),
-            console_output: true,
-            shared_permissions: None,
-            voice_command_tx: None,
-            approval_notification_rx: None,
-            approval_response_tx: None,
-        }
+        let mut coord = Self::new(config);
+        coord.models = Some(models);
+        coord
     }
 
     /// Set the pipeline operating mode.
@@ -1350,18 +1336,13 @@ async fn run_identity_gate(
                     && (0.6..=10.0).contains(&dur)
                     && rms >= 0.01
                 {
-                    let mut user = primary_user.clone().unwrap_or_else(|| crate::memory::PrimaryUser {
-                        name: config
-                            .user_name
-                            .clone()
-                            .unwrap_or_else(|| "Primary User".to_owned()),
-                        voiceprint: None,
-                        voiceprints: Vec::new(),
-                        voiceprint_centroid: None,
-                        voiceprint_threshold: None,
-                        voiceprint_version: None,
-                        voiceprint_updated_at: None,
-                        voice_sample_wav: None,
+                    let mut user = primary_user.clone().unwrap_or_else(|| {
+                        crate::memory::PrimaryUser::with_name(
+                            config
+                                .user_name
+                                .clone()
+                                .unwrap_or_else(|| "Primary User".to_owned()),
+                        )
                     });
 
                     let mut samples = extract_voiceprint_samples(&user);
@@ -1521,165 +1502,6 @@ pub(crate) async fn speak(
     }
 }
 
-#[cfg(test)]
-fn parse_name(text: &str) -> Option<String> {
-    let raw = text.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let lower = raw.to_ascii_lowercase();
-
-    // Search for name-introducing patterns anywhere in the text, not just at the start.
-    // This handles "Hello, I'm David" where a greeting precedes the name pattern.
-    let patterns = [
-        "my name is ",
-        "i am ",
-        "i'm ",
-        "im ",
-        "this is ",
-        "call me ",
-        "it's ",
-        "its ",
-        "name's ",
-        "names ",
-    ];
-    for pat in patterns {
-        if let Some(idx) = lower.find(pat) {
-            let rest = &lower[idx + pat.len()..];
-            let token = rest.split_whitespace().next().unwrap_or("");
-            let cleaned = clean_name_token(token);
-            if !cleaned.is_empty() && !is_filler_word(&cleaned) {
-                return Some(capitalize_first(&cleaned));
-            }
-        }
-    }
-
-    // Single-token fallback: take the last non-filler word.
-    // Greetings like "Hello" or "Hi" are filtered out.
-    let tokens: Vec<&str> = lower.split_whitespace().collect();
-    for token in tokens.iter().rev() {
-        let cleaned = clean_name_token(token);
-        if !cleaned.is_empty() && !is_filler_word(&cleaned) {
-            return Some(capitalize_first(&cleaned));
-        }
-    }
-
-    None
-}
-
-/// Returns `true` for common greetings, filler words, articles, nationalities,
-/// and identity words that are not plausible names.
-#[cfg(test)]
-fn is_filler_word(token: &str) -> bool {
-    matches!(
-        token,
-        // Greetings / filler
-        "hello"
-            | "hi"
-            | "hey"
-            | "yo"
-            | "hiya"
-            | "howdy"
-            | "greetings"
-            | "morning"
-            | "evening"
-            | "afternoon"
-            | "the"
-            | "a"
-            | "an"
-            | "um"
-            | "uh"
-            | "er"
-            | "erm"
-            | "so"
-            | "well"
-            | "okay"
-            | "ok"
-            | "yeah"
-            | "yes"
-            | "no"
-            | "just"
-            | "like"
-            | "actually"
-            | "basically"
-            | "you"
-            | "your"
-            | "can"
-            | "fae"
-            | "fay"
-            | "faye"
-            | "fee"
-            | "fey"
-            // Feelings / states
-            | "tired"
-            | "happy"
-            | "sad"
-            | "glad"
-            | "ready"
-            | "busy"
-            | "hungry"
-            | "fine"
-            | "good"
-            | "great"
-            | "here"
-            | "there"
-            | "back"
-            | "sorry"
-            | "excited"
-            // Gender / identity
-            | "male"
-            | "female"
-            | "nonbinary"
-            // Nationalities (common ones that follow "I'm")
-            | "scottish"
-            | "english"
-            | "irish"
-            | "welsh"
-            | "british"
-            | "american"
-            | "canadian"
-            | "australian"
-            | "french"
-            | "german"
-            | "italian"
-            | "spanish"
-            | "dutch"
-            | "swedish"
-            | "norwegian"
-            | "danish"
-            | "finnish"
-            | "polish"
-            | "russian"
-            | "chinese"
-            | "japanese"
-            | "korean"
-            | "indian"
-            | "brazilian"
-            | "mexican"
-            | "african"
-            | "european"
-            | "asian"
-            // Common professions
-            | "developer"
-            | "engineer"
-            | "teacher"
-            | "student"
-            | "doctor"
-            | "programmer"
-            | "retired"
-    )
-}
-
-#[cfg(test)]
-fn clean_name_token(token: &str) -> String {
-    token
-        .trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '-' && c != '\'')
-        .chars()
-        .filter(|c| c.is_ascii_alphabetic() || *c == '-' || *c == '\'')
-        .take(24)
-        .collect()
-}
-
 #[derive(Debug, Clone, Copy)]
 struct LocalCodingAssistants {
     codex_installed: bool,
@@ -1784,7 +1606,7 @@ struct LlmStageControl {
 }
 
 async fn run_llm_stage(
-    config: SpeechConfig,
+    mut config: SpeechConfig,
     preloaded: Option<crate::llm::LocalLlm>,
     mut rx: mpsc::Receiver<Transcription>,
     tx: mpsc::Sender<SentenceChunk>,
@@ -1796,8 +1618,6 @@ async fn run_llm_stage(
     if let Err(e) = crate::personality::ensure_prompt_assets() {
         warn!("failed to ensure prompt assets: {e}");
     }
-
-    let mut config = config;
 
     // Apply RAM-based model selection so config.llm.model_id matches the
     // actually-loaded model (startup may have selected a different model
@@ -2056,72 +1876,45 @@ async fn run_llm_stage(
                             };
                             match response {
                                 ApprovalVoiceResponse::Approved => {
-                                    let ack = crate::personality::next_acknowledgment(
+                                    let mut actx = ApprovalContext {
+                                        pending: &mut pending_voice_approval,
+                                        ack_counter: &mut approval_ack_counter,
+                                        awaiting_approval: &awaiting_approval,
+                                        approval_response_tx: &approval_response_tx,
+                                        runtime_tx: &runtime_tx,
+                                        queue: &mut approval_queue,
+                                        tx: &tx,
+                                        cancel: &cancel,
+                                    };
+                                    resolve_and_advance_approval(
+                                        &mut actx,
                                         crate::personality::APPROVAL_GRANTED,
-                                        approval_ack_counter,
-                                    );
-                                    approval_ack_counter += 1;
-                                    resolve_voice_approval(
-                                        &mut pending_voice_approval,
                                         true,
                                         "voice",
-                                        &awaiting_approval,
-                                        &approval_response_tx,
-                                        &runtime_tx,
                                         speaker_verified_event,
-                                    );
-                                    let _ = tx
-                                        .send(SentenceChunk {
-                                            text: ack.to_owned(),
-                                            is_final: true,
-                                        })
-                                        .await;
-                                    // Process any queued approvals.
-                                    if let Some(next) = approval_queue.pop() {
-                                        pending_voice_approval = Some(
-                                            start_voice_approval(
-                                                &next,
-                                                &tx,
-                                                &awaiting_approval,
-                                                &cancel,
-                                            )
-                                            .await,
-                                        );
-                                    }
+                                    )
+                                    .await;
                                     continue;
                                 }
                                 ApprovalVoiceResponse::Denied => {
-                                    let ack = crate::personality::next_acknowledgment(
+                                    let mut actx = ApprovalContext {
+                                        pending: &mut pending_voice_approval,
+                                        ack_counter: &mut approval_ack_counter,
+                                        awaiting_approval: &awaiting_approval,
+                                        approval_response_tx: &approval_response_tx,
+                                        runtime_tx: &runtime_tx,
+                                        queue: &mut approval_queue,
+                                        tx: &tx,
+                                        cancel: &cancel,
+                                    };
+                                    resolve_and_advance_approval(
+                                        &mut actx,
                                         crate::personality::APPROVAL_DENIED,
-                                        approval_ack_counter,
-                                    );
-                                    approval_ack_counter += 1;
-                                    resolve_voice_approval(
-                                        &mut pending_voice_approval,
                                         false,
                                         "voice",
-                                        &awaiting_approval,
-                                        &approval_response_tx,
-                                        &runtime_tx,
                                         speaker_verified_event,
-                                    );
-                                    let _ = tx
-                                        .send(SentenceChunk {
-                                            text: ack.to_owned(),
-                                            is_final: true,
-                                        })
-                                        .await;
-                                    if let Some(next) = approval_queue.pop() {
-                                        pending_voice_approval = Some(
-                                            start_voice_approval(
-                                                &next,
-                                                &tx,
-                                                &awaiting_approval,
-                                                &cancel,
-                                            )
-                                            .await,
-                                        );
-                                    }
+                                    )
+                                    .await;
                                     continue;
                                 }
                                 ApprovalVoiceResponse::Ambiguous => {
@@ -2129,37 +1922,24 @@ async fn run_llm_stage(
                                         pva.reprompt_count += 1;
                                         if pva.reprompt_count >= 2 {
                                             // Too many ambiguous responses — deny.
-                                            let ack = crate::personality::next_acknowledgment(
+                                            let mut actx = ApprovalContext {
+                                                pending: &mut pending_voice_approval,
+                                                ack_counter: &mut approval_ack_counter,
+                                                awaiting_approval: &awaiting_approval,
+                                                approval_response_tx: &approval_response_tx,
+                                                runtime_tx: &runtime_tx,
+                                                queue: &mut approval_queue,
+                                                tx: &tx,
+                                                cancel: &cancel,
+                                            };
+                                            resolve_and_advance_approval(
+                                                &mut actx,
                                                 crate::personality::APPROVAL_TIMEOUT,
-                                                approval_ack_counter,
-                                            );
-                                            approval_ack_counter += 1;
-                                            resolve_voice_approval(
-                                                &mut pending_voice_approval,
                                                 false,
                                                 "voice",
-                                                &awaiting_approval,
-                                                &approval_response_tx,
-                                                &runtime_tx,
                                                 speaker_verified_event,
-                                            );
-                                            let _ = tx
-                                                .send(SentenceChunk {
-                                                    text: ack.to_owned(),
-                                                    is_final: true,
-                                                })
-                                                .await;
-                                            if let Some(next) = approval_queue.pop() {
-                                                pending_voice_approval = Some(
-                                                    start_voice_approval(
-                                                        &next,
-                                                        &tx,
-                                                        &awaiting_approval,
-                                                        &cancel,
-                                                    )
-                                                    .await,
-                                                );
-                                            }
+                                            )
+                                            .await;
                                         } else {
                                             if !speaker_verified {
                                                 info!(
@@ -2318,37 +2098,24 @@ async fn run_llm_stage(
                             }
                             _ => {
                                 // 58s elapsed — auto-deny before the 60s tool timeout.
-                                let ack = crate::personality::next_acknowledgment(
+                                let mut actx = ApprovalContext {
+                                    pending: &mut pending_voice_approval,
+                                    ack_counter: &mut approval_ack_counter,
+                                    awaiting_approval: &awaiting_approval,
+                                    approval_response_tx: &approval_response_tx,
+                                    runtime_tx: &runtime_tx,
+                                    queue: &mut approval_queue,
+                                    tx: &tx,
+                                    cancel: &cancel,
+                                };
+                                resolve_and_advance_approval(
+                                    &mut actx,
                                     crate::personality::APPROVAL_TIMEOUT,
-                                    approval_ack_counter,
-                                );
-                                approval_ack_counter += 1;
-                                resolve_voice_approval(
-                                    &mut pending_voice_approval,
                                     false,
                                     "timeout",
-                                    &awaiting_approval,
-                                    &approval_response_tx,
-                                    &runtime_tx,
                                     None,
-                                );
-                                let _ = tx
-                                    .send(SentenceChunk {
-                                        text: ack.to_owned(),
-                                        is_final: true,
-                                    })
-                                    .await;
-                                if let Some(next) = approval_queue.pop() {
-                                    pending_voice_approval = Some(
-                                        start_voice_approval(
-                                            &next,
-                                            &tx,
-                                            &awaiting_approval,
-                                            &cancel,
-                                        )
-                                        .await,
-                                    );
-                                }
+                                )
+                                .await;
                             }
                         }
                         continue;
@@ -3997,6 +3764,153 @@ mod tests {
     use super::*;
     use crate::pipeline::voice_identity::VoiceIdentityProfile;
     use std::time::Duration;
+
+    // ── Test-only name-parsing helpers ────────────────────────────────
+
+    fn parse_name(text: &str) -> Option<String> {
+        let raw = text.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let lower = raw.to_ascii_lowercase();
+
+        let patterns = [
+            "my name is ",
+            "i am ",
+            "i'm ",
+            "im ",
+            "this is ",
+            "call me ",
+            "it's ",
+            "its ",
+            "name's ",
+            "names ",
+        ];
+        for pat in patterns {
+            if let Some(idx) = lower.find(pat) {
+                let rest = &lower[idx + pat.len()..];
+                let token = rest.split_whitespace().next().unwrap_or("");
+                let cleaned = clean_name_token(token);
+                if !cleaned.is_empty() && !is_filler_word(&cleaned) {
+                    return Some(capitalize_first(&cleaned));
+                }
+            }
+        }
+
+        let tokens: Vec<&str> = lower.split_whitespace().collect();
+        for token in tokens.iter().rev() {
+            let cleaned = clean_name_token(token);
+            if !cleaned.is_empty() && !is_filler_word(&cleaned) {
+                return Some(capitalize_first(&cleaned));
+            }
+        }
+
+        None
+    }
+
+    fn is_filler_word(token: &str) -> bool {
+        matches!(
+            token,
+            "hello"
+                | "hi"
+                | "hey"
+                | "yo"
+                | "hiya"
+                | "howdy"
+                | "greetings"
+                | "morning"
+                | "evening"
+                | "afternoon"
+                | "the"
+                | "a"
+                | "an"
+                | "um"
+                | "uh"
+                | "er"
+                | "erm"
+                | "so"
+                | "well"
+                | "okay"
+                | "ok"
+                | "yeah"
+                | "yes"
+                | "no"
+                | "just"
+                | "like"
+                | "actually"
+                | "basically"
+                | "you"
+                | "your"
+                | "can"
+                | "fae"
+                | "fay"
+                | "faye"
+                | "fee"
+                | "fey"
+                | "tired"
+                | "happy"
+                | "sad"
+                | "glad"
+                | "ready"
+                | "busy"
+                | "hungry"
+                | "fine"
+                | "good"
+                | "great"
+                | "here"
+                | "there"
+                | "back"
+                | "sorry"
+                | "excited"
+                | "male"
+                | "female"
+                | "nonbinary"
+                | "scottish"
+                | "english"
+                | "irish"
+                | "welsh"
+                | "british"
+                | "american"
+                | "canadian"
+                | "australian"
+                | "french"
+                | "german"
+                | "italian"
+                | "spanish"
+                | "dutch"
+                | "swedish"
+                | "norwegian"
+                | "danish"
+                | "finnish"
+                | "polish"
+                | "russian"
+                | "chinese"
+                | "japanese"
+                | "korean"
+                | "indian"
+                | "brazilian"
+                | "mexican"
+                | "african"
+                | "european"
+                | "asian"
+                | "developer"
+                | "engineer"
+                | "teacher"
+                | "student"
+                | "doctor"
+                | "programmer"
+                | "retired"
+        )
+    }
+
+    fn clean_name_token(token: &str) -> String {
+        token
+            .trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '-' && c != '\'')
+            .chars()
+            .filter(|c| c.is_ascii_alphabetic() || *c == '-' || *c == '\'')
+            .take(24)
+            .collect()
+    }
 
     // ── clean_model_json ─────────────────────────────────────────────
 

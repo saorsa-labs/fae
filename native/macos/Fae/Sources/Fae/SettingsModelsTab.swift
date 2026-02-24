@@ -1,10 +1,15 @@
 import SwiftUI
 
-/// Models settings tab: pipeline status and model information.
+/// Voice settings tab: model selection and voice identity controls.
 struct SettingsModelsTab: View {
     var commandSender: HostCommandSender?
-    @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
+
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
+    @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
+    @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
+    @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = true
+    @State private var hydratingFromConfig: Bool = false
+    @State private var hasLoadedConfig: Bool = false
 
     private let voiceModelOptions: [(label: String, value: String, description: String)] = [
         ("Auto (Recommended)", "auto", "Uses Qwen3-4B on systems with at least 32 GB RAM, otherwise Qwen3-1.7B."),
@@ -13,37 +18,66 @@ struct SettingsModelsTab: View {
         ("Qwen3-0.6B", "qwen3_0_6b", "Fastest response time, lower quality. Best for quick voice interactions.")
     ]
 
+    private let voiceIdentityModes: [(label: String, value: String, description: String)] = [
+        ("Assist (Recommended)", "assist", "Uses speaker matching but still allows direct-address fallback for regular conversation."),
+        ("Enforce", "enforce", "Only accepts the enrolled speaker for gated voice interaction.")
+    ]
+
     var body: some View {
         Form {
-            Section("Pipeline") {
-                HStack {
-                    Text("Status")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    Spacer()
-                    Text(pipelineAux.status)
+            Section("Voice Identity") {
+                Toggle("Enable Voice Identity", isOn: $voiceIdentityEnabled)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .onChange(of: voiceIdentityEnabled) {
+                        guard !hydratingFromConfig else { return }
+                        commandSender?.sendCommand(
+                            name: "config.patch",
+                            payload: ["key": "voice_identity.enabled", "value": voiceIdentityEnabled]
+                        )
+                    }
+
+                Picker("Mode", selection: $voiceIdentityMode) {
+                    ForEach(voiceIdentityModes, id: \.value) { option in
+                        Text(option.label).tag(option.value)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(!voiceIdentityEnabled)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .onChange(of: voiceIdentityMode) {
+                    guard !hydratingFromConfig else { return }
+                    commandSender?.sendCommand(
+                        name: "config.patch",
+                        payload: ["key": "voice_identity.mode", "value": voiceIdentityMode]
+                    )
+                }
+
+                Toggle("Require Voice Match for Approvals", isOn: $voiceIdentityApprovalRequiresMatch)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .disabled(!voiceIdentityEnabled)
+                    .onChange(of: voiceIdentityApprovalRequiresMatch) {
+                        guard !hydratingFromConfig else { return }
+                        commandSender?.sendCommand(
+                            name: "config.patch",
+                            payload: [
+                                "key": "voice_identity.approval_requires_match",
+                                "value": voiceIdentityApprovalRequiresMatch,
+                            ]
+                        )
+                    }
+
+                if let currentMode = voiceIdentityModes.first(where: { $0.value == voiceIdentityMode }) {
+                    Text(currentMode.description)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Text("Audio RMS")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    Spacer()
-                    ProgressView(value: pipelineAux.audioRMS, total: 1.0)
-                        .frame(width: 100)
-                    Text(String(format: "%.2f", pipelineAux.audioRMS))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, alignment: .trailing)
-                }
+
+                Text("Voice identity is off by default and can be enrolled during onboarding.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
-            Section("Voice Models") {
-                modelRow(label: "TTS Engine", value: "Kokoro-82M")
-                modelRow(label: "STT Engine", value: "Parakeet")
-            }
-
-            Section("LLM") {
-                modelRow(label: "Provider", value: "Local (Embedded)")
+            Section("Voice Model") {
                 Picker("Voice Model", selection: $voiceModelPreset) {
                     ForEach(voiceModelOptions, id: \.value) { option in
                         Text(option.label).tag(option.value)
@@ -63,18 +97,70 @@ struct SettingsModelsTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            Section("Reference") {
+                Text("Read-only model/provider details have moved to Help > Model & Voice Reference.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+        .onAppear {
+            guard !hasLoadedConfig else { return }
+            hasLoadedConfig = true
+            Task { @MainActor in
+                await hydrateFromBackendConfig()
+            }
+        }
     }
 
-    private func modelRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-            Spacer()
-            Text(value)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    @MainActor
+    private func hydrateFromBackendConfig() async {
+        guard let sender = commandSender as? EmbeddedCoreSender else { return }
+
+        async let voiceIdentityResponse = sender.queryCommand(
+            name: "config.get",
+            payload: ["key": "voice_identity"]
+        )
+        async let voiceModelResponse = sender.queryCommand(
+            name: "config.get",
+            payload: ["key": "llm.voice_model_preset"]
+        )
+
+        let (voiceIdentity, voiceModel) = await (voiceIdentityResponse, voiceModelResponse)
+
+        hydratingFromConfig = true
+        defer { hydratingFromConfig = false }
+
+        let voicePayload = unwrapPayload(voiceIdentity)
+        if let identity = voicePayload["voice_identity"] as? [String: Any] {
+            if let enabled = identity["enabled"] as? Bool {
+                voiceIdentityEnabled = enabled
+            }
+            if let mode = identity["mode"] as? String,
+               voiceIdentityModes.contains(where: { $0.value == mode })
+            {
+                voiceIdentityMode = mode
+            }
+            if let requireMatch = identity["approval_requires_match"] as? Bool {
+                voiceIdentityApprovalRequiresMatch = requireMatch
+            }
         }
+
+        let modelPayload = unwrapPayload(voiceModel)
+        if let llm = modelPayload["llm"] as? [String: Any],
+           let preset = llm["voice_model_preset"] as? String,
+           voiceModelOptions.contains(where: { $0.value == preset })
+        {
+            voiceModelPreset = preset
+        }
+    }
+
+    private func unwrapPayload(_ response: [String: Any]?) -> [String: Any] {
+        guard let response else { return [:] }
+        if let payload = response["payload"] as? [String: Any] {
+            return payload
+        }
+        return response
     }
 }

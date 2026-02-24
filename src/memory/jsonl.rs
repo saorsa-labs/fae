@@ -58,6 +58,22 @@ pub struct PrimaryUser {
     pub voice_sample_wav: Option<String>,
 }
 
+impl PrimaryUser {
+    /// Create a new `PrimaryUser` with the given name and all other fields defaulted.
+    pub fn with_name(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            voiceprint: None,
+            voiceprints: Vec::new(),
+            voiceprint_centroid: None,
+            voiceprint_threshold: None,
+            voiceprint_version: None,
+            voiceprint_updated_at: None,
+            voice_sample_wav: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Person {
     pub name: String,

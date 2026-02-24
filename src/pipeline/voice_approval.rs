@@ -31,6 +31,21 @@ pub(crate) struct PendingVoiceApproval {
     pub(crate) reprompt_count: u8,
 }
 
+/// Shared state references needed by approval resolution and advancement.
+///
+/// Bundles the channel/flag references that are always passed together to avoid
+/// excessive parameter counts on approval helper functions.
+pub(crate) struct ApprovalContext<'a> {
+    pub(crate) pending: &'a mut Option<PendingVoiceApproval>,
+    pub(crate) ack_counter: &'a mut u64,
+    pub(crate) awaiting_approval: &'a Arc<AtomicBool>,
+    pub(crate) approval_response_tx: &'a Option<mpsc::UnboundedSender<(u64, bool)>>,
+    pub(crate) runtime_tx: &'a Option<broadcast::Sender<RuntimeEvent>>,
+    pub(crate) queue: &'a mut Vec<super::messages::ApprovalNotification>,
+    pub(crate) tx: &'a mpsc::Sender<SentenceChunk>,
+    pub(crate) cancel: &'a CancellationToken,
+}
+
 /// Initiate a voice approval prompt: speak the prompt, set the flag, create state.
 pub(crate) async fn start_voice_approval(
     notification: &super::messages::ApprovalNotification,
@@ -60,6 +75,42 @@ pub(crate) async fn start_voice_approval(
         prompt_spoken_at: None, // set when AssistantSpeechEnd arrives
         created_at: Instant::now(),
         reprompt_count: 0,
+    }
+}
+
+/// Resolve a pending approval, speak the acknowledgment, and advance to the
+/// next queued approval (if any).
+///
+/// This consolidates the repeated resolve-ack-queue-pop pattern that appears
+/// for every approval resolution path (Approved, Denied, Ambiguous max, Timeout).
+pub(crate) async fn resolve_and_advance_approval(
+    ctx: &mut ApprovalContext<'_>,
+    ack_list: &[&str],
+    approved: bool,
+    source: &str,
+    speaker_verified: Option<bool>,
+) {
+    let ack = crate::personality::next_acknowledgment(ack_list, *ctx.ack_counter);
+    *ctx.ack_counter += 1;
+    resolve_voice_approval(
+        ctx.pending,
+        approved,
+        source,
+        ctx.awaiting_approval,
+        ctx.approval_response_tx,
+        ctx.runtime_tx,
+        speaker_verified,
+    );
+    let _ = ctx
+        .tx
+        .send(SentenceChunk {
+            text: ack.to_owned(),
+            is_final: true,
+        })
+        .await;
+    if let Some(next) = ctx.queue.pop() {
+        *ctx.pending =
+            Some(start_voice_approval(&next, ctx.tx, ctx.awaiting_approval, ctx.cancel).await);
     }
 }
 

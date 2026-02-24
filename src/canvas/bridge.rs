@@ -297,21 +297,25 @@ impl CanvasBridge {
         self.push(MessageRole::Assistant, trimmed);
     }
 
-    /// Push a message and update grouping state.
-    fn push(&mut self, role: MessageRole, text: &str) {
-        if text.trim().is_empty() {
-            return;
-        }
+    /// Advance the timestamp and update consecutive-role grouping.
+    fn track_group(&mut self, role: MessageRole) -> u64 {
         let ts = self.next_ts;
         self.next_ts += 1;
-
         if self.last_role == Some(role) {
             self.group_count += 1;
         } else {
             self.last_role = Some(role);
             self.group_count = 1;
         }
+        ts
+    }
 
+    /// Push a message and update grouping state.
+    fn push(&mut self, role: MessageRole, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let ts = self.track_group(role);
         let msg = CanvasMessage::new(role, text, ts);
         self.session.push_message(&msg);
     }
@@ -321,17 +325,7 @@ impl CanvasBridge {
         if name.trim().is_empty() || text.trim().is_empty() {
             return;
         }
-        let ts = self.next_ts;
-        self.next_ts += 1;
-
-        let role = MessageRole::Tool;
-        if self.last_role == Some(role) {
-            self.group_count += 1;
-        } else {
-            self.last_role = Some(role);
-            self.group_count = 1;
-        }
-
+        let ts = self.track_group(MessageRole::Tool);
         let msg = CanvasMessage::tool(name, text, ts);
         self.session.push_message(&msg);
     }
@@ -347,17 +341,7 @@ impl CanvasBridge {
         if name.trim().is_empty() || text.trim().is_empty() {
             return;
         }
-        let ts = self.next_ts;
-        self.next_ts += 1;
-
-        let role = MessageRole::Tool;
-        if self.last_role == Some(role) {
-            self.group_count += 1;
-        } else {
-            self.last_role = Some(role);
-            self.group_count = 1;
-        }
-
+        let ts = self.track_group(MessageRole::Tool);
         let msg = CanvasMessage::tool_with_details(name, text, ts, tool_input, tool_result_text);
         self.session.push_message(&msg);
     }

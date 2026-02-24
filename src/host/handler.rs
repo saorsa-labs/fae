@@ -3,7 +3,7 @@
 use crate::approval::ToolApprovalRequest;
 use crate::config::{
     AgentToolMode, LlmBackend, RuntimeConfig, RuntimeProfile, RuntimeRescueSavedLlmConfig,
-    SpeechConfig, VoiceModelPreset,
+    SpeechConfig, VoiceIdentityMode, VoiceModelPreset,
 };
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
@@ -280,6 +280,47 @@ impl FaeDeviceTransferHandler {
                     .join(", ")
             ))
         })
+    }
+
+    fn modify_capability(&self, capability: &str, scope: Option<&str>, grant: bool) -> Result<()> {
+        let kind = Self::parse_permission(capability)?;
+        let action = if grant { "grant" } else { "deny" };
+        info!(%kind, ?scope, "capability.{action} — persisting");
+
+        let mut guard = self.lock_config()?;
+        if grant {
+            guard.permissions.grant(kind);
+        } else {
+            guard.permissions.deny(kind);
+        }
+        drop(guard);
+
+        self.save_config()?;
+
+        if let Ok(mut perms) = self.shared_permissions.lock() {
+            if grant {
+                perms.grant(kind);
+            } else {
+                perms.deny(kind);
+            }
+        }
+
+        let all_granted: Vec<String> = self
+            .shared_permissions
+            .lock()
+            .map(|g| g.all_granted().iter().map(|k| k.to_string()).collect())
+            .unwrap_or_default();
+        self.emit_event(
+            "permissions.changed",
+            serde_json::json!({
+                "kind": kind.to_string(),
+                "granted": grant,
+                "all_granted": all_granted,
+            }),
+        );
+
+        info!(%kind, "capability.{action} persisted to config");
+        Ok(())
     }
 
     fn invalidate_skill_discovery_cache(&self) {
@@ -816,71 +857,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
     }
 
     fn grant_capability(&self, capability: &str, scope: Option<&str>) -> Result<()> {
-        let kind = Self::parse_permission(capability)?;
-        info!(%kind, ?scope, "capability.grant — persisting");
-
-        let mut guard = self.lock_config()?;
-        guard.permissions.grant(kind);
-        drop(guard);
-
-        self.save_config()?;
-
-        // Update the live shared store so tools see the grant immediately.
-        if let Ok(mut perms) = self.shared_permissions.lock() {
-            perms.grant(kind);
-        }
-
-        // Emit permissions.changed so the conversation UI can update in real-time.
-        let all_granted: Vec<String> = self
-            .shared_permissions
-            .lock()
-            .map(|g| g.all_granted().iter().map(|k| k.to_string()).collect())
-            .unwrap_or_default();
-        self.emit_event(
-            "permissions.changed",
-            serde_json::json!({
-                "kind": kind.to_string(),
-                "granted": true,
-                "all_granted": all_granted,
-            }),
-        );
-
-        info!(%kind, "capability.grant persisted to config");
-        Ok(())
+        self.modify_capability(capability, scope, true)
     }
 
     fn deny_capability(&self, capability: &str, scope: Option<&str>) -> Result<()> {
-        let kind = Self::parse_permission(capability)?;
-        info!(%kind, ?scope, "capability.deny — persisting");
-
-        let mut guard = self.lock_config()?;
-        guard.permissions.deny(kind);
-        drop(guard);
-
-        self.save_config()?;
-
-        // Update the live shared store so tools see the revocation immediately.
-        if let Ok(mut perms) = self.shared_permissions.lock() {
-            perms.deny(kind);
-        }
-
-        // Emit permissions.changed so the conversation UI can update in real-time.
-        let all_granted: Vec<String> = self
-            .shared_permissions
-            .lock()
-            .map(|g| g.all_granted().iter().map(|k| k.to_string()).collect())
-            .unwrap_or_default();
-        self.emit_event(
-            "permissions.changed",
-            serde_json::json!({
-                "kind": kind.to_string(),
-                "granted": false,
-                "all_granted": all_granted,
-            }),
-        );
-
-        info!(%kind, "capability.deny persisted to config");
-        Ok(())
+        self.modify_capability(capability, scope, false)
     }
 
     fn query_onboarding_state(&self) -> Result<serde_json::Value> {
@@ -960,16 +941,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 existing.name = name.to_owned();
                 existing
             }
-            _ => crate::memory::PrimaryUser {
-                name: name.to_owned(),
-                voiceprint: None,
-                voiceprints: Vec::new(),
-                voiceprint_centroid: None,
-                voiceprint_threshold: None,
-                voiceprint_version: None,
-                voiceprint_updated_at: None,
-                voice_sample_wav: None,
-            },
+            _ => crate::memory::PrimaryUser::with_name(name),
         };
         if let Err(e) = store.save_primary_user(&user) {
             warn!("failed to save primary user to memory: {e}");
@@ -1089,22 +1061,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         store.ensure_dirs()?;
         let mut user = match store.load_primary_user()? {
             Some(existing) => existing,
-            None => crate::memory::PrimaryUser {
-                name: user_name,
-                voiceprint: None,
-                voiceprints: Vec::new(),
-                voiceprint_centroid: None,
-                voiceprint_threshold: None,
-                voiceprint_version: None,
-                voiceprint_updated_at: None,
-                voice_sample_wav: None,
-            },
+            None => crate::memory::PrimaryUser::with_name(user_name),
         };
-        if user.voiceprints.is_empty()
-            && let Some(v) = user.voiceprint.clone()
-        {
-            user.voiceprints.push(v);
-        }
+        user.voiceprints = crate::pipeline::voice_identity::extract_voiceprint_samples(&user);
         let sample_count = user.voiceprints.len();
         store.save_primary_user(&user)?;
 
@@ -1131,12 +1090,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             )
         })?;
 
-        let mut samples = user.voiceprints.clone();
-        if samples.is_empty()
-            && let Some(v) = user.voiceprint.clone()
-        {
-            samples.push(v);
-        }
+        let samples = crate::pipeline::voice_identity::extract_voiceprint_samples(&user);
         let required = voice_cfg.min_enroll_samples as usize;
         if samples.len() < required {
             return Err(SpeechError::Config(format!(
@@ -1153,11 +1107,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         user.voiceprint_centroid = Some(centroid);
         user.voiceprint_threshold = Some(voice_cfg.threshold_accept);
         user.voiceprint_version = Some("spectral-v1".to_owned());
-        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => d.as_secs(),
-            Err(_) => 0,
-        };
-        user.voiceprint_updated_at = Some(now);
+        user.voiceprint_updated_at = Some(crate::time_util::now_epoch_secs());
         if voice_cfg.store_raw_samples {
             user.voiceprints = samples;
         } else {
@@ -2606,6 +2556,40 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     "voice_model_preset": guard.llm.voice_model_preset
                 }
             })),
+            Some("voice_identity") => {
+                let mode = match guard.voice_identity.mode {
+                    VoiceIdentityMode::Assist => "assist",
+                    VoiceIdentityMode::Enforce => "enforce",
+                };
+                Ok(serde_json::json!({
+                    "voice_identity": {
+                        "enabled": guard.voice_identity.enabled,
+                        "mode": mode,
+                        "approval_requires_match": guard.voice_identity.approval_requires_match
+                    }
+                }))
+            }
+            Some("voice_identity.enabled") => Ok(serde_json::json!({
+                "voice_identity": {
+                    "enabled": guard.voice_identity.enabled
+                }
+            })),
+            Some("voice_identity.mode") => {
+                let mode = match guard.voice_identity.mode {
+                    VoiceIdentityMode::Assist => "assist",
+                    VoiceIdentityMode::Enforce => "enforce",
+                };
+                Ok(serde_json::json!({
+                    "voice_identity": {
+                        "mode": mode
+                    }
+                }))
+            }
+            Some("voice_identity.approval_requires_match") => Ok(serde_json::json!({
+                "voice_identity": {
+                    "approval_requires_match": guard.voice_identity.approval_requires_match
+                }
+            })),
             _ => Ok(serde_json::json!({})),
         }
     }
@@ -2676,6 +2660,45 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                             );
                         }
                     }
+                }
+            }
+            "voice_identity.enabled" => {
+                if let Some(v) = value.as_bool() {
+                    let mut guard = self.lock_config()?;
+                    guard.voice_identity.enabled = v;
+                    drop(guard);
+                    self.save_config()?;
+                    info!(enabled = v, "config.patch applied: voice_identity.enabled");
+                }
+            }
+            "voice_identity.mode" => {
+                if let Some(s) = value.as_str() {
+                    match serde_json::from_value::<VoiceIdentityMode>(serde_json::Value::String(
+                        s.to_owned(),
+                    )) {
+                        Ok(mode) => {
+                            let mut guard = self.lock_config()?;
+                            guard.voice_identity.mode = mode;
+                            drop(guard);
+                            self.save_config()?;
+                            info!(?mode, "config.patch applied: voice_identity.mode");
+                        }
+                        Err(_) => {
+                            warn!(key, value = s, "config.patch: invalid voice_identity.mode");
+                        }
+                    }
+                }
+            }
+            "voice_identity.approval_requires_match" => {
+                if let Some(v) = value.as_bool() {
+                    let mut guard = self.lock_config()?;
+                    guard.voice_identity.approval_requires_match = v;
+                    drop(guard);
+                    self.save_config()?;
+                    info!(
+                        approval_requires_match = v,
+                        "config.patch applied: voice_identity.approval_requires_match"
+                    );
                 }
             }
             "runtime.profile" => {
@@ -3017,6 +3040,59 @@ mod tests {
             .query_config_get(Some("llm.voice_model_preset"))
             .unwrap();
         assert_eq!(result["llm"]["voice_model_preset"], "qwen3_4b");
+    }
+
+    #[test]
+    fn config_patch_voice_identity_updates_and_persists() {
+        let (handler, dir, _rt) = temp_handler();
+        let path = dir.path().join("config.toml");
+
+        handler
+            .request_config_patch("voice_identity.enabled", &serde_json::json!(true))
+            .unwrap();
+        handler
+            .request_config_patch("voice_identity.mode", &serde_json::json!("enforce"))
+            .unwrap();
+        handler
+            .request_config_patch(
+                "voice_identity.approval_requires_match",
+                &serde_json::json!(false),
+            )
+            .unwrap();
+
+        {
+            let guard = handler.config.lock().unwrap();
+            assert!(guard.voice_identity.enabled);
+            assert_eq!(guard.voice_identity.mode, VoiceIdentityMode::Enforce);
+            assert!(!guard.voice_identity.approval_requires_match);
+        }
+
+        let loaded = SpeechConfig::from_file(&path).unwrap();
+        assert!(loaded.voice_identity.enabled);
+        assert_eq!(loaded.voice_identity.mode, VoiceIdentityMode::Enforce);
+        assert!(!loaded.voice_identity.approval_requires_match);
+    }
+
+    #[test]
+    fn config_get_voice_identity_returns_current_values() {
+        let (handler, _dir, _rt) = temp_handler();
+        handler
+            .request_config_patch("voice_identity.enabled", &serde_json::json!(true))
+            .unwrap();
+        handler
+            .request_config_patch("voice_identity.mode", &serde_json::json!("assist"))
+            .unwrap();
+        handler
+            .request_config_patch(
+                "voice_identity.approval_requires_match",
+                &serde_json::json!(true),
+            )
+            .unwrap();
+
+        let result = handler.query_config_get(Some("voice_identity")).unwrap();
+        assert_eq!(result["voice_identity"]["enabled"], true);
+        assert_eq!(result["voice_identity"]["mode"], "assist");
+        assert_eq!(result["voice_identity"]["approval_requires_match"], true);
     }
 
     #[test]

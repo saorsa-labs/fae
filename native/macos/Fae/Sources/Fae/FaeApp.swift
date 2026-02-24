@@ -237,7 +237,6 @@ struct FaeApp: App {
             SettingsView(commandSender: commandSender, sparkleUpdater: sparkleUpdater)
                 .environmentObject(orbState)
                 .environmentObject(handoff)
-                .environmentObject(pipelineAux)
                 .environmentObject(auxiliaryWindows)
                 .environmentObject(onboarding)
         }
@@ -248,6 +247,9 @@ struct FaeApp: App {
                 }
                 Button("Keyboard Shortcuts") {
                     helpWindow.showPage("shortcuts")
+                }
+                Button("Model & Voice Reference") {
+                    helpWindow.showPage("models-and-voice")
                 }
                 Divider()
                 Button("Privacy & Security") {

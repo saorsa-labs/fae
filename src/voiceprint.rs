@@ -89,7 +89,7 @@ pub fn compute_voiceprint(samples: &[f32], sample_rate: u32) -> Result<Vec<f32>>
             for c in buf.iter().take(end).skip(start) {
                 let mag = (c.re * c.re + c.im * c.im).sqrt();
                 sum += (1.0f32 + mag).ln();
-                n = n.saturating_add(1);
+                n += 1;
             }
             if n > 0 {
                 *acc_b += sum / n as f32;
@@ -120,10 +120,7 @@ pub fn similarity(a: &[f32], b: &[f32]) -> Option<f32> {
     if a.len() != b.len() || a.is_empty() {
         return None;
     }
-    let mut dot = 0.0f32;
-    for (x, y) in a.iter().zip(b.iter()) {
-        dot += *x * *y;
-    }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     Some(dot)
 }
 

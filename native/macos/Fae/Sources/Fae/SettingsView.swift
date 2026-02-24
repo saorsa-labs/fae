@@ -3,7 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var handoff: DeviceHandoffController
-    @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var onboarding: OnboardingController
 
@@ -26,9 +25,8 @@ struct SettingsView: View {
                 }
 
             SettingsModelsTab(commandSender: commandSender)
-                .environmentObject(pipelineAux)
                 .tabItem {
-                    Label("Models", systemImage: "cpu")
+                    Label("Voice", systemImage: "waveform")
                 }
 
             SettingsToolsTab(commandSender: commandSender)
