@@ -73,7 +73,6 @@ pub mod ui;
 pub mod update;
 pub mod vad;
 pub mod viseme;
-pub mod voice_clone;
 pub mod voice_command;
 pub mod voiceprint;
 pub mod x0x_listener;

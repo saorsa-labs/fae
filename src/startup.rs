@@ -6,7 +6,7 @@
 //! For GUI consumers, use [`initialize_models_with_progress`] which accepts a
 //! [`ProgressCallback`] for structured progress events.
 
-use crate::config::{MemoryConfig, SpeechConfig, TtsBackend};
+use crate::config::{MemoryConfig, SpeechConfig};
 use crate::error::{Result, SpeechError};
 use crate::kernel_signature::{KernelSignatureStatus, run_kernel_signature_check};
 use crate::llm::LocalLlm;
@@ -115,7 +115,7 @@ pub fn build_download_plan(config: &SpeechConfig) -> DownloadPlan {
     }
 
     // TTS (Kokoro)
-    if matches!(config.tts.backend, TtsBackend::Kokoro) {
+    {
         let tts_repo = crate::tts::kokoro::download::KOKORO_REPO_ID;
         let model_file = crate::tts::kokoro::download::model_filename(&config.tts.model_variant);
         let voice_file = crate::tts::kokoro::download::voice_filename(&config.tts.voice);
@@ -294,18 +294,12 @@ pub async fn initialize_models_with_progress(
     }
 
     // TTS: Pre-download Kokoro assets with progress callbacks.
-    let kokoro_paths = if matches!(config.tts.backend, TtsBackend::Kokoro) {
-        Some(
-            crate::tts::kokoro::download::download_kokoro_assets_with_progress(
-                &config.tts.model_variant,
-                &config.tts.voice,
-                &model_manager,
-                callback,
-            )?,
-        )
-    } else {
-        None
-    };
+    let kokoro_paths = crate::tts::kokoro::download::download_kokoro_assets_with_progress(
+        &config.tts.model_variant,
+        &config.tts.voice,
+        &model_manager,
+        callback,
+    )?;
 
     // --- Phase 2: Load models ---
     println!("\nLoading models...");
@@ -317,20 +311,7 @@ pub async fn initialize_models_with_progress(
     } else {
         None
     };
-    let tts = if let Some(paths) = kokoro_paths {
-        Some(load_tts_from_paths(paths, config, callback)?)
-    } else if matches!(config.tts.backend, TtsBackend::Kokoro) {
-        Some(load_tts(config, callback)?)
-    } else {
-        println!(
-            "  TTS: using {} backend (loaded at pipeline start)",
-            match config.tts.backend {
-                TtsBackend::Kokoro => "Kokoro",
-                TtsBackend::FishSpeech => "Fish Speech",
-            }
-        );
-        None
-    };
+    let tts = Some(load_tts_from_paths(kokoro_paths, config, callback)?);
 
     Ok(InitializedModels { stt, llm, tts })
 }
@@ -423,14 +404,7 @@ async fn load_llm(config: &SpeechConfig, callback: Option<&ProgressCallback>) ->
     Ok(llm)
 }
 
-/// Load TTS with a status message and optional progress callback.
-fn load_tts(config: &SpeechConfig, callback: Option<&ProgressCallback>) -> Result<KokoroTts> {
-    load_model_with_progress("TTS (Kokoro-82M)".to_owned(), callback, || {
-        KokoroTts::new(&config.tts)
-    })
-}
-
-/// Load TTS from pre-downloaded paths (skips download phase).
+/// Load TTS from pre-downloaded paths.
 fn load_tts_from_paths(
     paths: crate::tts::kokoro::download::KokoroPaths,
     config: &SpeechConfig,

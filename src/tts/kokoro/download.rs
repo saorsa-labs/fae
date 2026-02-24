@@ -9,16 +9,65 @@ use tracing::info;
 /// HuggingFace repo for Kokoro-82M ONNX models.
 pub const KOKORO_REPO_ID: &str = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
+/// Bundled custom Fae voice style (generated from `assets/voices/fae.wav` via KVoiceWalk).
+///
+/// This is a raw f32 tensor of shape `[510, 1, 256]` — the standard Kokoro voice format.
+static BUNDLED_FAE_VOICE: &[u8] = include_bytes!("../../../assets/voices/fae.bin");
+
 /// Resolve voice aliases to their underlying Kokoro voice style name.
 ///
-/// The `"fae"` alias maps to `"bf_emma"` (British female), matching Fae's
-/// character. The bundled `assets/voices/fae.wav` serves as the canonical
-/// reference for future voice-cloning integration.
+/// The `"fae"` alias returns `"bf_fae"` indicating a British female voice.
+/// The actual voice data is bundled in the binary (see [`materialize_bundled_voice`]).
 pub fn resolve_voice_alias(voice: &str) -> &str {
     match voice {
-        "fae" => "bf_emma",
+        "fae" => "bf_fae",
         other => other,
     }
+}
+
+/// Materialize the bundled Fae voice to a cache file and return its path.
+///
+/// Writes the embedded voice data to `<cache_dir>/voices/fae.bin` if it
+/// doesn't already exist (or if the size doesn't match). Returns the path
+/// for loading by the Kokoro engine.
+///
+/// # Errors
+///
+/// Returns an error if the cache directory cannot be created or the file cannot be written.
+pub fn materialize_bundled_voice() -> Result<PathBuf> {
+    let cache_dir = crate::fae_dirs::cache_dir();
+    let voice_dir = cache_dir.join("voices");
+    let voice_path = voice_dir.join("fae.bin");
+
+    // Skip write if already materialized with correct size.
+    if voice_path.is_file()
+        && std::fs::metadata(&voice_path)
+            .is_ok_and(|meta| meta.len() == BUNDLED_FAE_VOICE.len() as u64)
+    {
+        info!("using cached bundled voice: {}", voice_path.display());
+        return Ok(voice_path);
+    }
+
+    std::fs::create_dir_all(&voice_dir).map_err(|e| {
+        SpeechError::Tts(format!(
+            "failed to create voice cache dir {}: {e}",
+            voice_dir.display()
+        ))
+    })?;
+
+    std::fs::write(&voice_path, BUNDLED_FAE_VOICE).map_err(|e| {
+        SpeechError::Tts(format!(
+            "failed to write bundled voice to {}: {e}",
+            voice_path.display()
+        ))
+    })?;
+
+    info!(
+        "materialized bundled fae voice ({} bytes) to {}",
+        BUNDLED_FAE_VOICE.len(),
+        voice_path.display()
+    );
+    Ok(voice_path)
 }
 
 /// Paths to downloaded Kokoro assets.
@@ -49,9 +98,14 @@ pub fn model_filename(variant: &str) -> &'static str {
 
 /// Get the voice filename for a given voice name.
 ///
-/// Resolves aliases (e.g. `"fae"` → `"bf_emma"`) before building the path.
-/// Returns `None` if the voice is a custom absolute path to a `.bin` file.
+/// Returns `None` for bundled voices (`"fae"`) or custom absolute `.bin` paths.
+/// For HuggingFace-hosted voices, returns the repo-relative filename.
 pub fn voice_filename(voice: &str) -> Option<String> {
+    // Bundled voice — no HF download needed.
+    if voice == "fae" {
+        return None;
+    }
+
     let resolved = resolve_voice_alias(voice);
     if std::path::Path::new(resolved)
         .extension()
@@ -84,7 +138,9 @@ pub fn download_kokoro_assets_with_progress(
     let tokenizer_json =
         model_manager.download_with_progress(KOKORO_REPO_ID, "tokenizer.json", callback)?;
 
-    let voice_bin = if let Some(vf) = voice_filename(voice) {
+    let voice_bin = if voice == "fae" {
+        materialize_bundled_voice()?
+    } else if let Some(vf) = voice_filename(voice) {
         model_manager.download_with_progress(KOKORO_REPO_ID, &vf, callback)?
     } else {
         PathBuf::from(voice)
@@ -124,20 +180,23 @@ pub fn download_kokoro_assets(variant: &str, voice: &str) -> Result<KokoroPaths>
         .get("tokenizer.json")
         .map_err(|e| SpeechError::Model(format!("failed to download tokenizer.json: {e}")))?;
 
-    // Voice style tensor (resolve aliases like "fae" → "bf_emma")
-    let resolved_voice = resolve_voice_alias(voice);
-    let voice_bin = if std::path::Path::new(resolved_voice)
-        .extension()
-        .is_some_and(|ext| ext == "bin")
-        && std::path::Path::new(resolved_voice).is_absolute()
-    {
-        // User provided an absolute path to a custom .bin
-        PathBuf::from(resolved_voice)
+    // Voice style tensor
+    let voice_bin = if voice == "fae" {
+        materialize_bundled_voice()?
     } else {
-        let voice_file = format!("voices/{resolved_voice}.bin");
-        info!("ensuring voice: {voice_file}");
-        repo.get(&voice_file)
-            .map_err(|e| SpeechError::Model(format!("failed to download {voice_file}: {e}")))?
+        let resolved_voice = resolve_voice_alias(voice);
+        if std::path::Path::new(resolved_voice)
+            .extension()
+            .is_some_and(|ext| ext == "bin")
+            && std::path::Path::new(resolved_voice).is_absolute()
+        {
+            PathBuf::from(resolved_voice)
+        } else {
+            let voice_file = format!("voices/{resolved_voice}.bin");
+            info!("ensuring voice: {voice_file}");
+            repo.get(&voice_file)
+                .map_err(|e| SpeechError::Model(format!("failed to download {voice_file}: {e}")))?
+        }
     };
 
     Ok(KokoroPaths {

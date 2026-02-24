@@ -42,29 +42,6 @@ fn personality_profile_with_addon_appends_cleanly() {
 fn default_config_uses_kokoro_backend() {
     let config = SpeechConfig::default();
     assert_eq!(config.tts.backend, TtsBackend::Kokoro);
-    assert!(config.tts.voice_reference.is_none());
-}
-
-#[test]
-fn fish_speech_config_round_trips_through_toml() {
-    let mut config = SpeechConfig::default();
-    config.tts.backend = TtsBackend::FishSpeech;
-    config.tts.voice_reference = Some("assets/voices/fae.wav".into());
-    config.tts.voice_reference_transcript =
-        Some("Hello, I'm Fae, a nature spirit from the Highlands.".into());
-
-    let toml_str = toml::to_string_pretty(&config).expect("serialization should succeed");
-
-    let loaded: SpeechConfig = toml::from_str(&toml_str).expect("deserialization should succeed");
-    assert_eq!(loaded.tts.backend, TtsBackend::FishSpeech);
-    assert_eq!(
-        loaded.tts.voice_reference.as_deref(),
-        Some(std::path::Path::new("assets/voices/fae.wav"))
-    );
-    assert_eq!(
-        loaded.tts.voice_reference_transcript.as_deref(),
-        Some("Hello, I'm Fae, a nature spirit from the Highlands.")
-    );
 }
 
 #[test]
@@ -85,12 +62,11 @@ fn kokoro_config_preserves_voice_setting() {
 fn personality_and_tts_config_are_independent() {
     let mut config = SpeechConfig::default();
     config.llm.personality = "fae".to_owned();
-    config.tts.backend = TtsBackend::FishSpeech;
 
     // Personality assembly should work regardless of TTS backend.
     let prompt = config.llm.effective_system_prompt(None, None);
     assert!(prompt.contains("Fae"));
 
-    // TTS backend should be independent of personality choice.
-    assert_eq!(config.tts.backend, TtsBackend::FishSpeech);
+    // TTS backend should be Kokoro.
+    assert_eq!(config.tts.backend, TtsBackend::Kokoro);
 }

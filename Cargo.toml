@@ -39,8 +39,6 @@ tools = []
 # TTS ONNX execution provider features (CoreML always enabled on macOS via ort dep).
 directml = ["ort/directml"]
 cuda = ["ort/cuda"]
-# Voice cloning TTS backend (Fish Speech).
-fish-speech = []
 # Embedded web search (fae-search crate) — always compiled.
 # Local chatterbox TTS server integration tests.
 chatterbox = []
@@ -157,7 +155,6 @@ crossbeam-channel = "0.5"
 async-trait = "0.1"
 rustfft = "6"
 rfd = "0.15"
-symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "wav"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rand = "0.8"
 zip = "2"
