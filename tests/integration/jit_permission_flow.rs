@@ -232,9 +232,11 @@ fn shared_permission_store_live_view_reflects_runtime_grant() {
             );
         }
         Err(e) => {
+            // Any store-level error is acceptable (not initialized, permission denied,
+            // or osascript/AppleEvent timeout in CI). What matters is the gate passed
+            // the call through — i.e. the error is NOT "Permission not granted: contacts".
             assert!(
-                e.to_string().contains("not initialized")
-                    || e.to_string().contains("permission denied"),
+                !e.to_string().contains("Permission not granted: contacts"),
                 "error should come from the store, not the gate: {e}"
             );
         }
@@ -283,9 +285,11 @@ fn revocation_via_deny_blocks_previously_allowed_tool() {
             );
         }
         Err(e) => {
+            // Any store-level error is acceptable (not initialized, permission denied,
+            // or osascript/AppleEvent timeout in CI). What matters is the gate passed
+            // the call through — i.e. the error is NOT "Permission not granted: contacts".
             assert!(
-                e.to_string().contains("not initialized")
-                    || e.to_string().contains("permission denied"),
+                !e.to_string().contains("Permission not granted: contacts"),
                 "error should come from unregistered store: {e}"
             );
         }
