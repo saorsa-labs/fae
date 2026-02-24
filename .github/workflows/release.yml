@@ -197,6 +197,8 @@ jobs:
           # Use checked-in Info.plist with version substitution.
           cp native/macos/Fae/Info.plist "$APP_BUNDLE/Contents/Info.plist"
           sed -i '' "s/__VERSION__/${VERSION}/g" "$APP_BUNDLE/Contents/Info.plist"
+          APPCAST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml"
+          sed -i '' "s|__APPCAST_URL__|${APPCAST_URL}|g" "$APP_BUNDLE/Contents/Info.plist"
 
           # Archive includes native app bundle.
           cp -R "$APP_BUNDLE" "$ARCHIVE_STAGING/Fae.app"

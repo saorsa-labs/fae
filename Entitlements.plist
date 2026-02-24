@@ -46,7 +46,7 @@
   <!-- Shared keychain access for future extensions -->
   <key>keychain-access-groups</key>
   <array>
-    <string>$(AppIdentifierPrefix)com.saorsalabs.fae</string>
+    <string>MEGSB2GXGZ.com.saorsalabs.fae</string>
   </array>
 </dict>
 </plist>
