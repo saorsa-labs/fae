@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.1] - 2026-02-24
+
+### Added
+
+- **AppleScript Apple integration** — new `applescript.rs` implements all five Apple ecosystem stores (Contacts, Calendar, Reminders, Notes, Mail) via `osascript`/JXA with no Objective-C bindings required. Works under App Sandbox with appropriate entitlements.
+- **Live skill health checks** — `run_skill_health_check()` now issues real JSON-RPC pings to skill subprocesses instead of checking process liveness only. Detects unresponsive skills before they fail in conversation.
+- **JIT permission channel** — Just-in-time macOS permission requests are now wired through the coordinator → handler → Swift event pipeline, giving users a native prompt at first use rather than at launch.
+- **`SkillProposalStore`** — skill opportunity analysis integrated into morning briefings and the `skill_proposals` scheduler task.
+- **Qwen3-8B preset** — new `Qwen3_8b` forced preset for systems with ≥48 GiB RAM; auto-mode now selects 8B at ≥48 GiB.
+- **`AgentChannels` struct** — spawn API refactored from positional arguments into a typed struct, eliminating a class of argument-order bugs.
+
+### Changed
+
+- **Intent keyword refinement** — tool-routing keyword sets tuned to reduce false positives (e.g. canvas/vision queries no longer misrouted to bash).
+- **`OnceLock`-backed store registry** — Apple ecosystem store instances are now registered once at handler startup via `register_apple_stores()`, replacing per-call construction.
+- **CI/release workflows** — `--features metal` added to all macOS build steps; ensures GPU-accelerated inference is included in release binaries.
+- **Warm thinking tone** — A3→C4 ascending two-note tone replaces the flat sine burst; volume and fade tuned for natural feel.
+- **Orb breath dynamics** — idle orb now breathes with subtle amplitude variation.
+
+### Removed
+
+- `src/agent/approval_tool.rs` — `ApprovalTool` inlined into `src/agent/mod.rs` to reduce indirection.
+
 ## [v0.7.0] - 2026-02-20
 
 ### Added

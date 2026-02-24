@@ -741,6 +741,21 @@ impl PythonSkillRunner {
             .is_some_and(|p| p.state() == PythonProcessState::Running && p.is_alive())
     }
 
+    /// Returns the skill name this runner manages.
+    pub fn skill_name(&self) -> &str {
+        &self.config.skill_name
+    }
+
+    /// Sends a `skill.health` JSON-RPC ping and returns the result.
+    ///
+    /// Returns `None` if the process is not running (no comm handle).
+    /// Returns `Some(Ok(..))` on a successful health response, or
+    /// `Some(Err(..))` on timeout/protocol error.
+    pub async fn health_check(&mut self) -> Option<Result<HealthResult, PythonSkillError>> {
+        let comm = self.comm.as_mut()?;
+        Some(comm.perform_health_check(Duration::from_secs(10)).await)
+    }
+
     /// Starts the subprocess and performs the handshake.
     ///
     /// In daemon mode this must be called before [`send`](PythonSkillRunner::send).

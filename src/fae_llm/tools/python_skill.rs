@@ -30,9 +30,21 @@ use crate::skills::python_runner::{PythonSkillRunner, SkillProcessConfig};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::types::{Tool, ToolResult};
+
+/// Global shared runner map.  Both `PythonSkillTool` and the scheduler's
+/// health-check task reference the same map so that the scheduler can send
+/// `skill.health` pings to processes originally spawned by the tool.
+pub type SharedRunnerMap = Arc<Mutex<HashMap<String, PythonSkillRunner>>>;
+
+static GLOBAL_RUNNERS: OnceLock<SharedRunnerMap> = OnceLock::new();
+
+/// Returns the global shared runner map, creating it on first call.
+pub fn global_runner_map() -> SharedRunnerMap {
+    Arc::clone(GLOBAL_RUNNERS.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))))
+}
 
 /// Tool that dispatches a JSON-RPC method call to a named Python skill subprocess.
 ///
@@ -47,8 +59,8 @@ pub struct PythonSkillTool {
     skills_dir: PathBuf,
     /// Resolved path to the `uv` binary.
     uv_path: PathBuf,
-    /// Live runner instances keyed by skill name.
-    runners: Mutex<HashMap<String, PythonSkillRunner>>,
+    /// Live runner instances keyed by skill name (shared global map).
+    runners: SharedRunnerMap,
 }
 
 impl PythonSkillTool {
@@ -57,14 +69,17 @@ impl PythonSkillTool {
         Self {
             skills_dir,
             uv_path,
-            runners: Mutex::new(HashMap::new()),
+            runners: global_runner_map(),
         }
     }
 
-    /// Create a tool using defaults (python skills dir from [`fae_dirs`] and
+    /// Create a tool using defaults (skills dir from [`fae_dirs`] and
     /// `"uv"` for PATH lookup).
+    ///
+    /// Uses `skills_dir()` (not `python_skills_dir()`) to match the layout
+    /// used by `python_lifecycle` when installing skill scripts.
     pub fn with_default_dir() -> Self {
-        Self::new(crate::fae_dirs::python_skills_dir(), PathBuf::from("uv"))
+        Self::new(crate::fae_dirs::skills_dir(), PathBuf::from("uv"))
     }
 }
 
@@ -146,10 +161,7 @@ impl Tool for PythonSkillTool {
             )));
         }
 
-        let script_path = self
-            .skills_dir
-            .join(skill_name)
-            .join(format!("{skill_name}.py"));
+        let script_path = self.skills_dir.join(format!("{skill_name}.py"));
 
         // Check if the skill script exists.
         if !script_path.exists() {
@@ -308,6 +320,38 @@ mod tests {
         let result = tool.execute(args).unwrap();
         assert!(!result.success);
         assert!(result.error.unwrap().contains("skill not found"));
+    }
+
+    #[test]
+    fn script_path_matches_lifecycle_flat_layout() {
+        // The python_lifecycle installs scripts at `{skills_root}/{id}.py` (flat).
+        // The PythonSkillTool must look for scripts at the same path.
+        let root = std::path::PathBuf::from("/test/skills");
+        let tool = PythonSkillTool::new(root.clone(), std::path::PathBuf::from("uv"));
+        let skill_name = "discord-bot";
+
+        // Simulate the path the tool would construct (from execute()).
+        let tool_path = tool.skills_dir.join(format!("{skill_name}.py"));
+
+        // Simulate the path the lifecycle would install to (active_script_path).
+        let lifecycle_path = root.join(format!("{skill_name}.py"));
+
+        assert_eq!(
+            tool_path, lifecycle_path,
+            "PythonSkillTool path must match python_lifecycle active_script_path layout"
+        );
+    }
+
+    #[test]
+    fn with_default_dir_uses_skills_dir() {
+        // Verify with_default_dir() uses skills_dir (matching lifecycle)
+        // rather than python_skills_dir.
+        let tool = PythonSkillTool::with_default_dir();
+        let expected = crate::fae_dirs::skills_dir();
+        assert_eq!(
+            tool.skills_dir, expected,
+            "with_default_dir should use fae_dirs::skills_dir() to match lifecycle"
+        );
     }
 
     #[test]

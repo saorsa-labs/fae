@@ -154,6 +154,27 @@ impl std::fmt::Debug for FaeDeviceTransferHandler {
     }
 }
 
+/// Register AppleScript-based store implementations for all Apple ecosystem stores.
+///
+/// Uses `OnceLock` internally — safe to call multiple times (subsequent calls are no-ops).
+fn register_apple_stores() {
+    use crate::fae_llm::tools::apple::applescript::{
+        ApplescriptCalendarStore, ApplescriptContactStore, ApplescriptMailStore,
+        ApplescriptNoteStore, ApplescriptReminderStore,
+    };
+    use crate::fae_llm::tools::apple::{
+        register_calendar_store, register_contact_store, register_mail_store, register_note_store,
+        register_reminder_store,
+    };
+
+    register_contact_store(Arc::new(ApplescriptContactStore));
+    register_calendar_store(Arc::new(ApplescriptCalendarStore));
+    register_reminder_store(Arc::new(ApplescriptReminderStore));
+    register_note_store(Arc::new(ApplescriptNoteStore));
+    register_mail_store(Arc::new(ApplescriptMailStore));
+    info!("registered AppleScript-backed Apple ecosystem stores");
+}
+
 impl FaeDeviceTransferHandler {
     /// Create a handler that reads/writes config at the given path.
     pub fn new(
@@ -165,6 +186,12 @@ impl FaeDeviceTransferHandler {
         // Initialise the shared permissions from the persisted config so that
         // previously-granted permissions are visible to tools immediately.
         let shared_permissions = config.permissions.clone().into_shared();
+
+        // Register AppleScript-backed Apple ecosystem stores.
+        // These are unconditionally registered; the AvailabilityGatedTool layer
+        // handles permission checks at execution time.
+        register_apple_stores();
+
         Self {
             config: Mutex::new(config),
             config_path,
@@ -1767,6 +1794,66 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         // while the pipeline runs are immediately visible to the tool gate.
         let shared_perms_for_pipeline = Arc::clone(&self.shared_permissions);
 
+        // JIT permission channel: when a tool gate needs a permission that is
+        // not yet granted, it sends a `JitPermissionRequest` through this
+        // channel. The bridge task converts it into a `capability.requested`
+        // event that the Swift UI observes to show the native permission dialog.
+        let (jit_request_tx, mut jit_request_rx) =
+            mpsc::unbounded_channel::<crate::permissions::JitPermissionRequest>();
+        let jit_event_tx = self.event_tx.clone();
+        let jit_shared_perms = Arc::clone(&self.shared_permissions);
+        let jit_cancel = token.clone();
+        self.tokio_handle.spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = jit_cancel.cancelled() => break,
+                    req = jit_request_rx.recv() => {
+                        let Some(req) = req else { break };
+                        let request_id = uuid::Uuid::new_v4().to_string();
+                        let kind_str = req.kind.to_string();
+                        info!(
+                            kind = %kind_str,
+                            tool = %req.tool_name,
+                            "JIT permission request — emitting capability.requested"
+                        );
+                        let envelope = EventEnvelope::new(
+                            request_id.clone(),
+                            "capability.requested".to_owned(),
+                            serde_json::json!({
+                                "request_id": request_id,
+                                "capability": kind_str,
+                                "reason": req.reason,
+                                "jit": true,
+                                "tool_name": req.tool_name,
+                            }),
+                        );
+                        let _ = jit_event_tx.send(envelope);
+
+                        // Wait for the grant/deny to propagate through the
+                        // shared permission store, then resolve the oneshot.
+                        // We poll the store for up to 60 seconds — the handler's
+                        // `modify_capability()` updates it when `capability.grant`
+                        // or `capability.deny` arrives from Swift.
+                        let start = std::time::Instant::now();
+                        let granted = loop {
+                            if start.elapsed() >= std::time::Duration::from_secs(60) {
+                                break false;
+                            }
+                            let is_granted = jit_shared_perms
+                                .lock()
+                                .map(|g| g.is_granted(req.kind))
+                                .unwrap_or(false);
+                            if is_granted {
+                                break true;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        };
+                        let _ = req.respond_to.send(granted);
+                    }
+                }
+            }
+        });
+
         // Reset clean-exit flag for this run. The restart watcher reads this
         // to distinguish a clean stop from a crash. `request_runtime_stop()`
         // sets it to `true` *before* cancelling the token, eliminating the
@@ -1814,7 +1901,8 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 .with_tool_approvals(coordinator_approval_tx)
                 .with_approval_voice(approval_notification_rx, approval_response_tx)
                 .with_console_output(false)
-                .with_shared_permissions(shared_perms_for_pipeline);
+                .with_shared_permissions(shared_perms_for_pipeline)
+                .with_jit_channel(jit_request_tx);
 
             // Run until cancelled or pipeline exits.
             tokio::select! {

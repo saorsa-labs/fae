@@ -46,6 +46,11 @@ impl IntelligenceStore {
         &self.repo
     }
 
+    /// Returns the memory root directory (where `fae.db` lives).
+    pub fn memory_root(&self) -> &std::path::Path {
+        self.repo.root()
+    }
+
     /// Store an intelligence item as a memory record.
     ///
     /// Maps the `IntelligenceKind` to the corresponding `MemoryKind` and

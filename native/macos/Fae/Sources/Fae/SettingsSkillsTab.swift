@@ -10,11 +10,21 @@ import SwiftUI
 ///
 /// System capabilities (Microphone, Files, Notifications, Location, Desktop Automation)
 /// are shown in a separate section. Each row links to the relevant macOS Privacy pane.
+/// Decoded Python skill record from `python_registry.json`.
+private struct PythonSkillRecord: Codable, Identifiable {
+    let id: String
+    let name: String
+    let version: String
+    let status: String
+    let last_error: String?
+}
+
 struct SettingsSkillsTab: View {
     let commandSender: HostCommandSender?
 
     @State private var showingImport: Bool = false
     @State private var installedSkills: [String] = []
+    @State private var pythonSkills: [PythonSkillRecord] = []
 
     var body: some View {
         Form {
@@ -65,6 +75,44 @@ struct SettingsSkillsTab: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            // MARK: - Python Skills
+
+            if !pythonSkills.isEmpty {
+                Section("Python Skills") {
+                    Text("Installed Python skill packages (managed via skill lifecycle).")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    ForEach(pythonSkills) { skill in
+                        HStack(spacing: 10) {
+                            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20, alignment: .center)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(skill.name)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                Text("v\(skill.version)")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                if let error = skill.last_error {
+                                    Text(error)
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                        .lineLimit(1)
+                                }
+                            }
+
+                            Spacer()
+
+                            pythonStatusBadge(skill.status)
                         }
                         .padding(.vertical, 2)
                     }
@@ -241,7 +289,10 @@ struct SettingsSkillsTab: View {
             SkillImportView(commandSender: commandSender)
                 .onDisappear { refreshInstalledSkills() }
         }
-        .onAppear { refreshInstalledSkills() }
+        .onAppear {
+            refreshInstalledSkills()
+            refreshPythonSkills()
+        }
     }
 
     // MARK: - Skill Row
@@ -309,5 +360,45 @@ struct SettingsSkillsTab: View {
         try? FileManager.default.removeItem(at: filePath)
         refreshInstalledSkills()
         commandSender?.sendCommand(name: "skills.reload", payload: [:])
+    }
+
+    // MARK: - Python Skills Management
+
+    private var pythonRegistryURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("fae/skills/.state/python_registry.json")
+    }
+
+    private func refreshPythonSkills() {
+        guard let data = try? Data(contentsOf: pythonRegistryURL),
+              let records = try? JSONDecoder().decode([PythonSkillRecord].self, from: data)
+        else {
+            pythonSkills = []
+            return
+        }
+        pythonSkills = records.sorted { $0.name < $1.name }
+    }
+
+    @ViewBuilder
+    private func pythonStatusBadge(_ status: String) -> some View {
+        let (label, color): (String, Color) = switch status.lowercased() {
+        case "active":
+            ("Active", .green)
+        case "pending":
+            ("Pending", .orange)
+        case "disabled":
+            ("Disabled", .secondary)
+        case "quarantined":
+            ("Quarantined", .red)
+        default:
+            (status, .secondary)
+        }
+
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
     }
 }

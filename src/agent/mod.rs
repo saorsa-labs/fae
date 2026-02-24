@@ -40,6 +40,22 @@ static NEXT_APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
 /// Maximum number of recent responses to track for duplicate detection.
 const RECENT_RESPONSE_WINDOW: usize = 5;
 
+/// Bundle of optional channel handles threaded into the agent and tool registry.
+///
+/// Grouping these avoids clippy `too_many_arguments` on constructors and spawn
+/// functions while keeping each channel independently optional.
+#[derive(Default)]
+pub struct AgentChannels {
+    /// Channel for tool-approval requests (UI overlay).
+    pub tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
+    /// Canvas session registry for canvas tools.
+    pub canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
+    /// Live permission store for availability-gated tools.
+    pub shared_permissions: Option<SharedPermissionStore>,
+    /// JIT permission request channel for on-demand permission grants.
+    pub jit_request_tx: Option<mpsc::UnboundedSender<crate::permissions::JitPermissionRequest>>,
+}
+
 pub struct FaeAgentLlm {
     provider: Arc<dyn ProviderAdapter>,
     registry: Arc<ToolRegistry>,
@@ -67,49 +83,48 @@ impl FaeAgentLlm {
         canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
         credential_manager: &dyn crate::credentials::CredentialManager,
     ) -> Result<Self> {
-        Self::new_with_permissions(
+        let channels = AgentChannels {
+            tool_approval_tx,
+            canvas_registry,
+            ..AgentChannels::default()
+        };
+        Self::new_with_channels(
             config,
             preloaded_llm,
             runtime_tx,
-            tool_approval_tx,
-            canvas_registry,
             credential_manager,
-            None,
+            channels,
         )
         .await
     }
 
-    /// Create a new agent with an explicit live [`SharedPermissionStore`].
+    /// Create a new agent with an explicit set of [`AgentChannels`].
     ///
-    /// When `shared_permissions` is `Some`, the Apple ecosystem tool gate
-    /// uses this store to check permissions at execution time, enabling JIT
-    /// permission grants to be reflected without rebuilding the tool registry.
+    /// When `channels.shared_permissions` is `Some`, the Apple ecosystem tool
+    /// gate uses that store to check permissions at execution time, enabling
+    /// JIT permission grants to be reflected without rebuilding the registry.
     ///
-    /// When `None` is passed, a fresh default store is created (backward
-    /// compatible with callers that do not thread a shared store).
-    pub async fn new_with_permissions(
+    /// When `None`, a fresh default store is created (backward compatible with
+    /// callers that do not thread a shared store).
+    pub async fn new_with_channels(
         config: &LlmConfig,
         preloaded_llm: Option<&LocalLlm>,
         runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
-        tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
-        canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
         credential_manager: &dyn crate::credentials::CredentialManager,
-        shared_permissions: Option<SharedPermissionStore>,
+        channels: AgentChannels,
     ) -> Result<Self> {
         // Snapshot permission state for system prompt injection, then drop
         // the guard so `shared_permissions` can be moved into `build_registry`.
         let system_prompt = {
-            let perm_guard = shared_permissions.as_ref().and_then(|sp| sp.lock().ok());
+            let perm_guard = channels
+                .shared_permissions
+                .as_ref()
+                .and_then(|sp| sp.lock().ok());
             config.effective_system_prompt(perm_guard.as_deref(), None)
         };
 
         let provider = build_provider(config, preloaded_llm, credential_manager).await;
-        let registry = build_registry(
-            config,
-            tool_approval_tx,
-            canvas_registry,
-            shared_permissions,
-        );
+        let registry = build_registry(config, channels);
 
         let history = vec![Message::system(system_prompt)];
 
@@ -516,6 +531,16 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
         allow.insert("x0x");
     }
 
+    if contains_any(&lower, intent::DESKTOP_KEYWORDS) {
+        allow.insert("desktop_automation");
+    }
+
+    if contains_any(&lower, intent::CANVAS_KEYWORDS) {
+        allow.insert("canvas_render");
+        allow.insert("canvas_interact");
+        allow.insert("canvas_export");
+    }
+
     let mut tools: Vec<String> = allow.into_iter().map(str::to_owned).collect();
     tools.sort();
     tools
@@ -652,18 +677,13 @@ fn select_background_reasoning_level(task: &BackgroundAgentTask) -> ReasoningLev
 /// * `preloaded_llm` — Shared local model (cheap `Arc` clone). Must be `Some`
 ///   for the local backend to work; `None` falls back to `MissingLocalModelAdapter`.
 /// * `runtime_tx` — Runtime event sender for telemetry
-/// * `tool_approval_tx` — Optional approval channel
-/// * `canvas_registry` — Optional canvas registry
-/// * `credential_manager` — Credential manager for provider setup
-/// * `shared_permissions` — Live permission store
+/// * `channels` — Optional channel handles (approval, canvas, permissions, JIT)
 pub async fn spawn_background_agent(
     task: BackgroundAgentTask,
     config: LlmConfig,
     preloaded_llm: Option<&LocalLlm>,
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
-    tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
-    canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
-    shared_permissions: Option<SharedPermissionStore>,
+    channels: AgentChannels,
 ) -> BackgroundAgentResult {
     let reasoning_level = select_background_reasoning_level(&task);
     tracing::info!(
@@ -682,12 +702,7 @@ pub async fn spawn_background_agent(
 
     let credential_manager = crate::credentials::create_manager();
     let provider = build_provider(&config, preloaded_llm, credential_manager.as_ref()).await;
-    let registry = build_registry(
-        &config,
-        tool_approval_tx,
-        canvas_registry,
-        shared_permissions,
-    );
+    let registry = build_registry(&config, channels);
 
     let parallel_tool_calls = matches!(config.tool_mode, AgentToolMode::ReadOnly);
     let agent_config = FaeAgentConfig::new()
@@ -820,12 +835,13 @@ Ensure a GGUF or vision model is configured.";
 /// (pipeline coordinator) should pass the handler's `shared_permissions()` so
 /// that runtime grants are immediately visible to tools without a registry
 /// rebuild.
-fn build_registry(
-    config: &LlmConfig,
-    tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
-    canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
-    shared_permissions: Option<SharedPermissionStore>,
-) -> Arc<ToolRegistry> {
+fn build_registry(config: &LlmConfig, channels: AgentChannels) -> Arc<ToolRegistry> {
+    let AgentChannels {
+        tool_approval_tx,
+        canvas_registry,
+        shared_permissions,
+        jit_request_tx,
+    } = channels;
     let mode = match config.tool_mode {
         AgentToolMode::Off | AgentToolMode::ReadOnly => ToolMode::ReadOnly,
         AgentToolMode::ReadWrite | AgentToolMode::Full | AgentToolMode::FullNoApproval => {
@@ -950,13 +966,18 @@ fn build_registry(
         let mail = global_mail_store();
 
         // Helper to wrap an AppleEcosystemTool with permission gating.
+        // When a JIT request channel is available, the gate can emit a
+        // `JitPermissionRequest` that triggers a native permission dialog.
         macro_rules! gated {
-            ($tool:expr) => {
-                Arc::new(AvailabilityGatedTool::new(
-                    Arc::new($tool),
-                    Arc::clone(&perms),
-                ))
-            };
+            ($tool:expr) => {{
+                let gate = AvailabilityGatedTool::new(Arc::new($tool), Arc::clone(&perms));
+                let gate = if let Some(ref jit_tx) = jit_request_tx {
+                    gate.with_jit_channel(jit_tx.clone())
+                } else {
+                    gate
+                };
+                Arc::new(gate)
+            }};
         }
 
         registry.register(gated!(SearchContactsTool::new(Arc::clone(&contacts))));
@@ -1208,7 +1229,7 @@ mod tests {
             ..LlmConfig::default()
         };
 
-        let registry = build_registry(&config, None, None, None);
+        let registry = build_registry(&config, AgentChannels::default());
         assert!(
             registry.exists("python_skill"),
             "python_skill tool should be registered in full mode"

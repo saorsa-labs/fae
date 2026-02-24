@@ -125,6 +125,12 @@ pub struct PipelineCoordinator {
     /// The coordinator sends `(request_id, approved)` after the user responds
     /// via voice (or after timeout).
     approval_response_tx: Option<mpsc::UnboundedSender<(u64, bool)>>,
+    /// JIT permission request channel threaded into background agent tool gates.
+    ///
+    /// When an Apple ecosystem tool requires a permission that is not yet granted,
+    /// it sends a [`JitPermissionRequest`] on this channel. The handler receives
+    /// the request and emits a `capability.requested` event for the native UI.
+    jit_request_tx: Option<mpsc::UnboundedSender<crate::permissions::JitPermissionRequest>>,
 }
 
 impl PipelineCoordinator {
@@ -146,6 +152,7 @@ impl PipelineCoordinator {
             voice_command_tx: None,
             approval_notification_rx: None,
             approval_response_tx: None,
+            jit_request_tx: None,
         }
     }
 
@@ -232,6 +239,20 @@ impl PipelineCoordinator {
         permissions: crate::permissions::SharedPermissionStore,
     ) -> Self {
         self.shared_permissions = Some(permissions);
+        self
+    }
+
+    /// Thread a JIT permission request channel into background agent tool gates.
+    ///
+    /// When an Apple ecosystem tool gate needs a permission that isn't yet
+    /// granted, it sends a [`crate::permissions::JitPermissionRequest`] on this
+    /// channel. The handler task converts the request into a `capability.requested`
+    /// event for the native UI.
+    pub fn with_jit_channel(
+        mut self,
+        tx: mpsc::UnboundedSender<crate::permissions::JitPermissionRequest>,
+    ) -> Self {
+        self.jit_request_tx = Some(tx);
         self
     }
 
@@ -499,6 +520,7 @@ impl PipelineCoordinator {
                     let tool_approval_tx = tool_approval_tx.clone();
                     let canvas_registry = canvas_registry.clone();
                     let shared_permissions = self.shared_permissions.clone();
+                    let jit_request_tx_for_llm = self.jit_request_tx.clone();
                     let approval_notification_rx = self.approval_notification_rx.take();
                     let approval_response_tx = self.approval_response_tx.take();
                     tokio::task::spawn_blocking(move || {
@@ -530,6 +552,7 @@ impl PipelineCoordinator {
                                 awaiting_approval: awaiting_approval_for_llm,
                                 approval_notification_rx,
                                 approval_response_tx,
+                                jit_request_tx: jit_request_tx_for_llm,
                             };
                             run_llm_stage(
                                 config,
@@ -1588,7 +1611,7 @@ struct LlmStageControl {
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     /// Live shared permission store from the command handler.
     ///
-    /// When `Some`, this is passed to `FaeAgentLlm::new_with_permissions` so
+    /// When `Some`, this is passed to `FaeAgentLlm::new_with_channels` so
     /// that JIT grants from `capability.grant` commands are immediately
     /// visible to Apple ecosystem tool gates without a registry rebuild.
     shared_permissions: Option<crate::permissions::SharedPermissionStore>,
@@ -1603,6 +1626,8 @@ struct LlmStageControl {
         Option<mpsc::UnboundedReceiver<super::messages::ApprovalNotification>>,
     /// Sender for resolved approval responses back to the handler.
     approval_response_tx: Option<mpsc::UnboundedSender<(u64, bool)>>,
+    /// JIT permission request channel for background agent tool gates.
+    jit_request_tx: Option<mpsc::UnboundedSender<crate::permissions::JitPermissionRequest>>,
 }
 
 async fn run_llm_stage(
@@ -1625,14 +1650,19 @@ async fn run_llm_stage(
     crate::config::apply_ram_model_selection(&mut config.llm);
 
     let credential_manager = crate::credentials::create_manager();
-    let mut engine = match FaeAgentLlm::new_with_permissions(
+    let voice_channels = crate::agent::AgentChannels {
+        tool_approval_tx: ctl.tool_approval_tx.clone(),
+        canvas_registry: ctl.canvas_registry.clone(),
+        shared_permissions: ctl.shared_permissions.clone(),
+        // Voice engine disables tools — no JIT channel needed.
+        jit_request_tx: None,
+    };
+    let mut engine = match FaeAgentLlm::new_with_channels(
         &config.llm,
         preloaded.as_ref(),
         ctl.runtime_tx.clone(),
-        ctl.tool_approval_tx.clone(),
-        ctl.canvas_registry.clone(),
         credential_manager.as_ref(),
-        ctl.shared_permissions.clone(),
+        voice_channels,
     )
     .await
     {
@@ -1655,6 +1685,7 @@ async fn run_llm_stage(
     let bg_tool_approval_tx = ctl.tool_approval_tx.clone();
     let bg_canvas_registry = ctl.canvas_registry.clone();
     let bg_shared_permissions = ctl.shared_permissions.clone();
+    let bg_jit_request_tx = ctl.jit_request_tx.clone();
 
     let local_coding_assistants = LocalCodingAssistants::detect();
 
@@ -1722,6 +1753,7 @@ async fn run_llm_stage(
         awaiting_approval,
         approval_notification_rx: mut approval_notif_rx,
         approval_response_tx,
+        jit_request_tx: _,
     } = ctl;
 
     // Voice command receiver (currently unused — was Pi-specific).
@@ -2266,9 +2298,12 @@ async fn run_llm_stage(
             let bg_model = bg_preloaded
                 .as_ref()
                 .map(crate::llm::LocalLlm::shallow_clone);
-            let bg_approval = bg_tool_approval_tx.clone();
-            let bg_canvas = bg_canvas_registry.clone();
-            let bg_perms = bg_shared_permissions.clone();
+            let bg_channels = crate::agent::AgentChannels {
+                tool_approval_tx: bg_tool_approval_tx.clone(),
+                canvas_registry: bg_canvas_registry.clone(),
+                shared_permissions: bg_shared_permissions.clone(),
+                jit_request_tx: bg_jit_request_tx.clone(),
+            };
             let bg_runtime = runtime_tx.clone();
             tokio::spawn(async move {
                 let result = crate::agent::spawn_background_agent(
@@ -2276,9 +2311,7 @@ async fn run_llm_stage(
                     bg_cfg.llm,
                     bg_model.as_ref(),
                     bg_runtime,
-                    bg_approval,
-                    bg_canvas,
-                    bg_perms,
+                    bg_channels,
                 )
                 .await;
                 let _ = bg_tx.send(result).await;

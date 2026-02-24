@@ -62,6 +62,8 @@ final class JitPermissionController: ObservableObject {
             requestReminders(capability: capability)
         case "mail":
             requestMail(capability: capability)
+        case "desktop_automation":
+            requestDesktopAutomation(capability: capability)
         default:
             NSLog("JitPermissionController: unsupported JIT capability '%@' — denying", capability)
             postDenied(capability: capability)
@@ -129,16 +131,87 @@ final class JitPermissionController: ObservableObject {
         }
     }
 
-    // MARK: - Mail (System Settings fallback)
+    // MARK: - Mail (System Settings fallback with polling)
 
     private func requestMail(capability: String) {
         // Mail automation has no direct permission API; open Privacy settings
-        // so the user can grant access manually.
+        // so the user can grant access manually, then poll for up to 30 seconds.
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
             NSWorkspace.shared.open(url)
         }
-        // Report denied since we can't programmatically detect the grant.
-        postDenied(capability: capability)
+        pollForAutomationPermission(capability: capability, bundleId: "com.apple.mail")
+    }
+
+    // MARK: - Desktop Automation (Accessibility)
+
+    private func requestDesktopAutomation(capability: String) {
+        // Desktop automation requires Accessibility permission. Open System
+        // Settings to the correct pane and poll for the grant.
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+        pollForAccessibilityPermission(capability: capability)
+    }
+
+    // MARK: - Permission Polling Helpers
+
+    /// Polls for an Automation permission grant by attempting a scripting bridge
+    /// check on the target app. Checks every 2 seconds for up to 30 seconds.
+    private func pollForAutomationPermission(capability: String, bundleId: String) {
+        Task {
+            let maxAttempts = 15  // 15 * 2s = 30s
+            for _ in 0..<maxAttempts {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                // Check if the user has granted Automation permission by testing
+                // a lightweight osascript call. If it succeeds, the permission
+                // was granted.
+                let result = await checkAutomation(bundleId: bundleId)
+                if result {
+                    postGranted(capability: capability)
+                    return
+                }
+            }
+            postDenied(capability: capability)
+        }
+    }
+
+    /// Runs a trivial AppleScript targeting the app to check Automation permission.
+    private func checkAutomation(bundleId: String) async -> Bool {
+        let script: String
+        switch bundleId {
+        case "com.apple.mail":
+            script = "tell application \"Mail\" to return name"
+        default:
+            script = "tell application id \"\(bundleId)\" to return name"
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
+    /// Polls for Accessibility permission grant. Checks every 2 seconds for
+    /// up to 30 seconds.
+    private func pollForAccessibilityPermission(capability: String) {
+        Task {
+            let maxAttempts = 15  // 15 * 2s = 30s
+            for _ in 0..<maxAttempts {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if AXIsProcessTrusted() {
+                    postGranted(capability: capability)
+                    return
+                }
+            }
+            postDenied(capability: capability)
+        }
     }
 
     // MARK: - Result Notifications

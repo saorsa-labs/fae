@@ -1,22 +1,60 @@
-//! FFI bridge stubs for Apple ecosystem stores.
+//! FFI bridge for Apple ecosystem stores.
 //!
-//! In production, the macOS Swift application registers real store implementations
-//! at startup.  Before registration, all operations return a `PermissionDenied`
-//! error with a clear diagnostic message.
+//! Uses [`OnceLock`]-backed statics for each store.  Real implementations
+//! (e.g. [`ApplescriptContactStore`]) are registered once at startup.
+//! Before registration, the `global_*_store()` accessors return the
+//! `Unregistered*` stubs which return clear `PermissionDenied` errors.
 //!
-//! # Design
+//! # Usage
 //!
-//! - `global_contact_store()` returns an `Arc<dyn ContactStore>`.
-//! - `global_calendar_store()` returns an `Arc<dyn CalendarStore>`.
-//! - `global_reminder_store()` returns an `Arc<dyn ReminderStore>`.
-//! - `global_note_store()` returns an `Arc<dyn NoteStore>`.
+//! ```ignore
+//! // At startup (e.g. in host/handler.rs):
+//! register_contact_store(Arc::new(ApplescriptContactStore));
+//! register_calendar_store(Arc::new(ApplescriptCalendarStore));
+//! // ...
 //!
-//! All return their respective `Unregistered*` stubs until a real implementation
-//! is injected by the host platform (Phase 3.4).
-//! For now the unregistered stores provide clear error messages that guide
-//! diagnostics without panicking.
+//! // Tool code (unchanged):
+//! let contacts = global_contact_store();
+//! ```
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+// ─── OnceLock statics ────────────────────────────────────────────────────────
+
+static CONTACT_STORE: OnceLock<Arc<dyn ContactStore>> = OnceLock::new();
+static CALENDAR_STORE: OnceLock<Arc<dyn CalendarStore>> = OnceLock::new();
+static REMINDER_STORE: OnceLock<Arc<dyn ReminderStore>> = OnceLock::new();
+static NOTE_STORE: OnceLock<Arc<dyn NoteStore>> = OnceLock::new();
+static MAIL_STORE: OnceLock<Arc<dyn MailStore>> = OnceLock::new();
+
+// ─── Registration functions ──────────────────────────────────────────────────
+
+/// Register the global contact store implementation.
+///
+/// Called once at startup. Subsequent calls are no-ops (first writer wins).
+pub fn register_contact_store(store: Arc<dyn ContactStore>) {
+    let _ = CONTACT_STORE.set(store);
+}
+
+/// Register the global calendar store implementation.
+pub fn register_calendar_store(store: Arc<dyn CalendarStore>) {
+    let _ = CALENDAR_STORE.set(store);
+}
+
+/// Register the global reminder store implementation.
+pub fn register_reminder_store(store: Arc<dyn ReminderStore>) {
+    let _ = REMINDER_STORE.set(store);
+}
+
+/// Register the global note store implementation.
+pub fn register_note_store(store: Arc<dyn NoteStore>) {
+    let _ = NOTE_STORE.set(store);
+}
+
+/// Register the global mail store implementation.
+pub fn register_mail_store(store: Arc<dyn MailStore>) {
+    let _ = MAIL_STORE.set(store);
+}
 
 use super::calendar::{
     CalendarEvent, CalendarInfo, CalendarStore, CalendarStoreError, EventPatch, EventQuery,
@@ -121,20 +159,24 @@ impl CalendarStore for UnregisteredCalendarStore {
 
 /// Returns the global contact store.
 ///
-/// Currently always returns `UnregisteredContactStore`.  When the Swift
-/// application starts and the user grants Contacts permission, the host will
-/// replace this with a real store (Phase 3.4).
+/// Returns the registered implementation if `register_contact_store()` was
+/// called, otherwise falls back to `UnregisteredContactStore`.
 pub fn global_contact_store() -> Arc<dyn ContactStore> {
-    Arc::new(UnregisteredContactStore)
+    CONTACT_STORE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(UnregisteredContactStore))
 }
 
 /// Returns the global calendar store.
 ///
-/// Currently always returns `UnregisteredCalendarStore`.  When the Swift
-/// application starts and the user grants Calendar permission, the host will
-/// replace this with a real store (Phase 3.4).
+/// Returns the registered implementation if `register_calendar_store()` was
+/// called, otherwise falls back to `UnregisteredCalendarStore`.
 pub fn global_calendar_store() -> Arc<dyn CalendarStore> {
-    Arc::new(UnregisteredCalendarStore)
+    CALENDAR_STORE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(UnregisteredCalendarStore))
 }
 
 // ─── UnregisteredReminderStore ────────────────────────────────────────────────
@@ -194,11 +236,13 @@ impl ReminderStore for UnregisteredReminderStore {
 
 /// Returns the global reminder store.
 ///
-/// Currently always returns `UnregisteredReminderStore`.  When the Swift
-/// application starts and the user grants Reminders permission, the host will
-/// replace this with a real store (Phase 3.4).
+/// Returns the registered implementation if `register_reminder_store()` was
+/// called, otherwise falls back to `UnregisteredReminderStore`.
 pub fn global_reminder_store() -> Arc<dyn ReminderStore> {
-    Arc::new(UnregisteredReminderStore)
+    REMINDER_STORE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(UnregisteredReminderStore))
 }
 
 // ─── UnregisteredNoteStore ────────────────────────────────────────────────────
@@ -246,11 +290,13 @@ impl NoteStore for UnregisteredNoteStore {
 
 /// Returns the global note store.
 ///
-/// Currently always returns `UnregisteredNoteStore`.  When the Swift
-/// application starts and the user grants Desktop Automation permission, the
-/// host will replace this with a real store (Phase 3.4).
+/// Returns the registered implementation if `register_note_store()` was
+/// called, otherwise falls back to `UnregisteredNoteStore`.
 pub fn global_note_store() -> Arc<dyn NoteStore> {
-    Arc::new(UnregisteredNoteStore)
+    NOTE_STORE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(UnregisteredNoteStore))
 }
 
 // ─── UnregisteredMailStore ────────────────────────────────────────────────────
@@ -290,11 +336,13 @@ impl MailStore for UnregisteredMailStore {
 
 /// Returns the global mail store.
 ///
-/// Currently always returns `UnregisteredMailStore`.  When the Swift
-/// application starts and the user grants Mail permission, the host will
-/// replace this with a real store (Phase 3.4).
+/// Returns the registered implementation if `register_mail_store()` was
+/// called, otherwise falls back to `UnregisteredMailStore`.
 pub fn global_mail_store() -> Arc<dyn MailStore> {
-    Arc::new(UnregisteredMailStore)
+    MAIL_STORE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(UnregisteredMailStore))
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

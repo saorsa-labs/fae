@@ -23,15 +23,39 @@ pub(crate) const FAE_NAME_VARIANTS: &[&str] =
 
 pub(crate) const WEB_KEYWORDS: &[&str] = &[
     "search", "look up", "lookup", "latest", "news", "web", "internet", "online", "website",
-    "source", "article",
+    "article",
 ];
 
-pub(crate) const CALENDAR_KEYWORDS: &[&str] =
-    &["calendar", "meeting", "event", "schedule on my calendar"];
+pub(crate) const CALENDAR_KEYWORDS: &[&str] = &[
+    "calendar",
+    "meeting",
+    "event",
+    "schedule on my calendar",
+    "what's on my schedule",
+    "when is my",
+    "book a meeting",
+    "block time",
+];
 
-pub(crate) const REMINDERS_KEYWORDS: &[&str] = &["reminder", "reminders", "todo", "to-do"];
+pub(crate) const REMINDERS_KEYWORDS: &[&str] = &[
+    "reminder",
+    "reminders",
+    "todo",
+    "to-do",
+    "remind me",
+    "set a reminder",
+    "add a reminder",
+    "don't forget",
+];
 
-pub(crate) const NOTES_KEYWORDS: &[&str] = &["note", "notes"];
+pub(crate) const NOTES_KEYWORDS: &[&str] = &[
+    "my notes",
+    "in notes",
+    "apple notes",
+    "create a note",
+    "save a note",
+    "notes app",
+];
 
 pub(crate) const MAIL_KEYWORDS: &[&str] = &["mail", "email", "inbox"];
 
@@ -46,6 +70,11 @@ pub(crate) const SCHEDULER_KEYWORDS: &[&str] = &[
     "remind me every",
     "every day",
     "every week",
+    "recurring",
+    "run every",
+    "schedule a task",
+    "set up automation",
+    "daily task",
 ];
 
 pub(crate) const BASH_KEYWORDS: &[&str] = &[
@@ -86,19 +115,19 @@ pub(crate) const FILE_KEYWORDS: &[&str] = &[
 
 pub(crate) const X0X_KEYWORDS: &[&str] = &[
     "x0x",
-    "network",
-    "gossip",
-    "peer",
+    "x0x network",
+    "gossip network",
+    "peer network",
     "peers",
     "mesh",
     "swarm",
-    "publish",
+    "publish to x0x",
+    "publish message",
     "subscribe",
     "presence",
     "agents online",
     "other agents",
     "find agent",
-    "task list",
     "collaborative",
 ];
 
@@ -191,10 +220,29 @@ pub(crate) const CODING_CONTEXT_KEYWORDS: &[&str] = &[
     "repo",
     "repository",
     "pull request",
-    "commit",
+    "git commit",
     "stack trace",
     "implement this",
-    "patch",
+    "apply patch",
+    "patch file",
     "codex",
     "claude code",
 ];
+
+// ── Desktop & canvas keywords ─────────────────────────────────────────
+
+/// Keywords indicating desktop automation intent — screenshots, window
+/// management, mouse/keyboard simulation.
+pub(crate) const DESKTOP_KEYWORDS: &[&str] = &[
+    "screenshot",
+    "take a screenshot",
+    "click on",
+    "type into",
+    "list windows",
+    "focus window",
+    "launch app",
+];
+
+/// Keywords indicating canvas/visualization intent.
+pub(crate) const CANVAS_KEYWORDS: &[&str] =
+    &["draw", "chart", "graph", "diagram", "visualize", "render a"];

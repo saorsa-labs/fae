@@ -29,6 +29,7 @@
 //! [`MailStore`]: mail::MailStore
 //! [`PermissionStore`]: crate::permissions::PermissionStore
 
+pub mod applescript;
 pub mod availability_gate;
 pub mod calendar;
 pub mod contacts;
@@ -52,7 +53,8 @@ pub use contacts::{
 };
 pub use ffi_bridge::{
     global_calendar_store, global_contact_store, global_mail_store, global_note_store,
-    global_reminder_store,
+    global_reminder_store, register_calendar_store, register_contact_store, register_mail_store,
+    register_note_store, register_reminder_store,
 };
 pub use mail::{
     ComposeMailTool, GetMailTool, Mail, MailQuery, MailStore, MailStoreError, NewMail,

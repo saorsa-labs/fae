@@ -699,55 +699,229 @@ fn run_morning_briefing_check(memory_root: &Path) -> TaskResult {
     }
 }
 
-/// Check for skill proposal opportunities.
+/// Check for skill proposal opportunities and persist them.
+///
+/// Detected opportunities are saved to the `SkillProposalStore` so they
+/// appear in the morning briefing and can be acted on later.
 fn run_skill_proposal_check(memory_root: &Path) -> TaskResult {
     let fae_root = memory_root.parent().unwrap_or(memory_root);
     let policy = crate::intelligence::load_skill_opportunity_policy(fae_root);
     let opportunities =
         crate::intelligence::detect_skill_opportunities_with_policy(memory_root, policy);
     if opportunities.is_empty() {
-        TaskResult::Success("no new skill opportunities detected".into())
-    } else {
-        let names: Vec<&str> = opportunities
-            .iter()
-            .map(|(name, _, _)| name.as_str())
-            .collect();
-        TaskResult::Success(format!(
-            "detected {} skill opportunities: {}",
-            opportunities.len(),
-            names.join(", ")
-        ))
+        return TaskResult::Success("no new skill opportunities detected".into());
     }
+
+    // Persist new proposals (dedup handled by SkillProposalStore::propose).
+    let mut store = crate::intelligence::SkillProposalStore::load(fae_root);
+    let mut new_count = 0usize;
+    for (name, description, trigger) in &opportunities {
+        if store.propose(name, description, trigger).is_some() {
+            new_count += 1;
+        }
+    }
+    if new_count > 0 && store.save(fae_root).is_err() {
+        tracing::warn!("failed to save skill proposals");
+    }
+
+    let names: Vec<&str> = opportunities
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .collect();
+    TaskResult::Success(format!(
+        "detected {} opportunities ({new_count} new): {}",
+        opportunities.len(),
+        names.join(", ")
+    ))
 }
 
 /// Run health checks for all active Python skills.
 ///
-/// Lists installed skills and reports on their status. This is a lightweight
-/// check that inspects lifecycle status; actual process-level health checks
-/// are performed by the runtime when skills are running.
+/// For each installed skill that is `Active`, attempts to send a `skill.health`
+/// JSON-RPC ping to the live runner process (if one exists). Results are fed
+/// into [`HealthMonitor`] which may produce [`HealthAction`]s (restart,
+/// quarantine, notify). Actions are executed inline.
 fn run_skill_health_check() -> TaskResult {
+    use crate::fae_llm::tools::python_skill::global_runner_map;
+    use crate::skills::health_monitor::{HealthAction, HealthCheckOutcome, HealthMonitor};
+
     let skills = crate::skills::list_python_skills();
     if skills.is_empty() {
         return TaskResult::Success("no Python skills installed".into());
     }
 
-    let active_count = skills.iter().filter(|s| s.status.is_runnable()).count();
-    let quarantined: Vec<&str> = skills
-        .iter()
-        .filter(|s| s.status.is_quarantined())
-        .map(|s| s.id.as_str())
-        .collect();
-
-    if quarantined.is_empty() {
-        TaskResult::Success(format!("{active_count}/{} skills healthy", skills.len()))
-    } else {
-        TaskResult::Success(format!(
-            "{active_count}/{} skills healthy, {} quarantined: {}",
-            skills.len(),
-            quarantined.len(),
-            quarantined.join(", ")
-        ))
+    let active_skills: Vec<_> = skills.iter().filter(|s| s.status.is_runnable()).collect();
+    if active_skills.is_empty() {
+        let quarantined = skills.iter().filter(|s| s.status.is_quarantined()).count();
+        return TaskResult::Success(format!(
+            "0/{} skills active ({quarantined} quarantined)",
+            skills.len()
+        ));
     }
+
+    let runners = global_runner_map();
+    let mut monitor = HealthMonitor::with_defaults();
+    let mut all_actions: Vec<HealthAction> = Vec::new();
+    let mut healthy = 0usize;
+    let mut failed = 0usize;
+
+    // Use a one-shot tokio runtime for the async health pings.  The
+    // scheduler callback is synchronous, so we build a small current-thread
+    // runtime.  This avoids blocking the pipeline's main runtime.
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            return TaskResult::Error(format!("cannot create health-check runtime: {e}"));
+        }
+    };
+
+    for skill in &active_skills {
+        let outcome = {
+            let mut guard = match runners.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    all_actions.extend(monitor.process_check_result(
+                        &skill.id,
+                        HealthCheckOutcome::Unreachable {
+                            reason: "runner map lock poisoned".into(),
+                        },
+                    ));
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            let Some(runner) = guard.get_mut(&skill.id) else {
+                // Runner not started yet — skill is installed but has never
+                // been invoked.  Report as healthy (no process to check).
+                healthy += 1;
+                continue;
+            };
+
+            if !runner.is_running() {
+                HealthCheckOutcome::Unreachable {
+                    reason: "process not running".into(),
+                }
+            } else {
+                // We need to drop the mutex guard before blocking on async I/O
+                // to avoid holding the lock across an await point.  Instead we
+                // grab the runner via a short-lived re-lock inside the async
+                // block.  But the simplest correct approach is: check liveness
+                // above (already done), then release the guard and re-acquire
+                // inside the runtime block.
+                drop(guard);
+
+                // Take the runner out of the map temporarily so we can
+                // call the async health_check() without holding the
+                // MutexGuard across the await point.
+                let mut runner = {
+                    let mut g = match runners.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            all_actions.extend(monitor.process_check_result(
+                                &skill.id,
+                                HealthCheckOutcome::Unreachable {
+                                    reason: "runner map lock poisoned".into(),
+                                },
+                            ));
+                            failed += 1;
+                            continue;
+                        }
+                    };
+                    match g.remove(&skill.id) {
+                        Some(r) => r,
+                        None => {
+                            healthy += 1;
+                            continue;
+                        }
+                    }
+                };
+
+                let health_result = rt.block_on(runner.health_check());
+
+                // Put the runner back.
+                if let Ok(mut g) = runners.lock() {
+                    g.insert(skill.id.clone(), runner);
+                }
+
+                match health_result {
+                    None => HealthCheckOutcome::Unreachable {
+                        reason: "no comm handle".into(),
+                    },
+                    Some(Ok(result)) if result.is_ok() => HealthCheckOutcome::Healthy,
+                    Some(Ok(result)) => HealthCheckOutcome::Degraded {
+                        detail: result.detail.unwrap_or_else(|| result.status.clone()),
+                    },
+                    Some(Err(e)) => HealthCheckOutcome::Failed {
+                        error: e.to_string(),
+                    },
+                }
+            }
+        };
+
+        match &outcome {
+            HealthCheckOutcome::Healthy => healthy += 1,
+            _ => failed += 1,
+        }
+        let actions = monitor.process_check_result(&skill.id, outcome);
+        all_actions.extend(actions);
+    }
+
+    // Execute health actions.
+    for action in &all_actions {
+        match action {
+            HealthAction::QuarantineSkill { skill_id, reason } => {
+                tracing::warn!(
+                    skill = %skill_id,
+                    reason = %reason,
+                    "quarantining skill after repeated failures"
+                );
+                let quarantine_result = crate::skills::quarantine_python_skill(skill_id, reason);
+                if let Err(e) = quarantine_result {
+                    tracing::error!(skill = %skill_id, error = %e, "failed to quarantine");
+                }
+            }
+            HealthAction::RestartSkill { skill_id, attempt } => {
+                tracing::info!(
+                    skill = %skill_id,
+                    attempt = %attempt,
+                    "health monitor requesting restart"
+                );
+                // Remove the runner so the next tool invocation re-creates it
+                // (triggers a fresh spawn + handshake).
+                if let Ok(mut g) = runners.lock() {
+                    g.remove(skill_id.as_str());
+                }
+            }
+            HealthAction::NotifyUser { skill_id, message } => {
+                tracing::warn!(
+                    skill = %skill_id,
+                    message = %message,
+                    "skill health notification"
+                );
+            }
+        }
+    }
+
+    let quarantined = skills.iter().filter(|s| s.status.is_quarantined()).count();
+    let summary = if all_actions.is_empty() {
+        format!(
+            "{healthy}/{} skills healthy (checked {}, {quarantined} quarantined)",
+            skills.len(),
+            active_skills.len()
+        )
+    } else {
+        format!(
+            "{healthy}/{} healthy, {failed} failing, {} actions taken, {quarantined} quarantined",
+            skills.len(),
+            all_actions.len()
+        )
+    };
+
+    TaskResult::Success(summary)
 }
 
 /// Check GitHub for a new Fae release.

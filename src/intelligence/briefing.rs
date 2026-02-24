@@ -32,6 +32,8 @@ pub enum BriefingCategory {
     Relationship,
     /// Background research results.
     Research,
+    /// Detected skill installation opportunity.
+    SkillProposal,
     /// Custom/other category.
     Custom,
 }
@@ -154,6 +156,22 @@ pub fn build_briefing(store: &IntelligenceStore) -> Briefing {
         }
     }
 
+    // Gather pending skill proposals.
+    {
+        let fae_root = store.memory_root().parent().unwrap_or(store.memory_root());
+        let proposal_store = crate::intelligence::SkillProposalStore::load(fae_root);
+        for proposal in proposal_store.pending() {
+            let summary = format!("{}: {}", proposal.name, proposal.description);
+            let item = BriefingItem::new(
+                BriefingPriority::Low,
+                BriefingCategory::SkillProposal,
+                summary,
+            )
+            .with_source(proposal.id.clone());
+            items.push(item);
+        }
+    }
+
     // Sort by priority (highest first), then by category.
     items.sort_by(|a, b| b.priority.cmp(&a.priority));
 
@@ -227,6 +245,19 @@ pub fn format_briefing_for_prompt(briefing: &Briefing) -> Option<String> {
     if !research.is_empty() {
         let mut s = String::from("## Research Findings\n");
         for item in &research {
+            s.push_str(&format!("- {}\n", item.summary));
+        }
+        sections.push(s);
+    }
+
+    let skill_proposals: Vec<_> = briefing
+        .items
+        .iter()
+        .filter(|i| i.category == BriefingCategory::SkillProposal)
+        .collect();
+    if !skill_proposals.is_empty() {
+        let mut s = String::from("## Skill Suggestions\n");
+        for item in &skill_proposals {
             s.push_str(&format!("- {}\n", item.summary));
         }
         sections.push(s);

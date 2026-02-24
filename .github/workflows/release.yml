@@ -72,7 +72,7 @@ jobs:
       - name: Build libfae.a static library
         run: |
           rustup target add aarch64-apple-darwin
-          cargo build --release --target aarch64-apple-darwin --lib
+          cargo build --release --no-default-features --features metal --target aarch64-apple-darwin --lib
           if [ ! -f "target/aarch64-apple-darwin/release/libfae.a" ]; then
             echo "::error::libfae.a not found after build"
             exit 1
