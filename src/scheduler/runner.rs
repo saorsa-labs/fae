@@ -4,12 +4,11 @@
 //! executes them. Task definitions and run history are persisted to
 //! `~/.config/fae/scheduler.json`.
 
+use crate::scheduler::authority::{
+    LeaderLease, LeadershipDecision, RunKeyLedger, now_epoch_millis,
+};
 use crate::scheduler::tasks::{
     Schedule, ScheduledTask, TaskKind, TaskResult, TaskRunOutcome, TaskRunRecord,
-};
-use crate::scheduler::{
-    authority::{LeaderLease, LeadershipDecision, RunKeyLedger, now_epoch_millis},
-    tasks,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -352,7 +351,7 @@ impl Scheduler {
                 None => continue,
             };
 
-            let started_at = tasks::now_epoch_secs();
+            let started_at = crate::time_util::now_epoch_secs();
             let planned_at = task_snapshot.next_run.unwrap_or_else(|| {
                 if TICK_INTERVAL_SECS == 0 {
                     started_at
@@ -367,7 +366,7 @@ impl Scheduler {
             }
 
             let mut result = self.execute_task(&task_snapshot);
-            let finished_at = tasks::now_epoch_secs();
+            let finished_at = crate::time_util::now_epoch_secs();
 
             let elapsed_secs = finished_at.saturating_sub(started_at);
             let mut outcome = result.outcome();

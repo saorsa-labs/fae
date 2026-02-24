@@ -242,12 +242,7 @@ impl SkillPaths {
     }
 }
 
-fn now_epoch_secs() -> u64 {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs(),
-        Err(_) => 0,
-    }
-}
+use crate::time_util::now_epoch_secs;
 
 fn sync_mutation_manifest_from_managed_skills(action: &str, reason: Option<&str>) {
     let event = crate::mutation_manifest::MutationSyncEvent::new(

@@ -4,4 +4,5 @@ pub mod channel;
 pub mod contract;
 pub mod handler;
 pub mod latency;
+pub(crate) mod runtime_events;
 pub mod stdio;

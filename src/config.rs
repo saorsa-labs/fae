@@ -28,6 +28,8 @@ pub struct SpeechConfig {
     pub intelligence: IntelligenceConfig,
     /// Conversation gate settings (sleep phrases / always-on mode).
     pub conversation: ConversationConfig,
+    /// Voice identity and speaker-matching settings.
+    pub voice_identity: VoiceIdentityConfig,
     /// Barge-in (interrupt) behavior while the assistant is generating/speaking.
     pub barge_in: BargeInConfig,
     /// Wake word detection (MFCC+DTW keyword spotter).
@@ -649,90 +651,22 @@ impl LlmConfig {
     /// Prefer [`crate::personality::CORE_PROMPT`] for new code.
     pub const BASE_SYSTEM_PROMPT: &'static str = crate::personality::CORE_PROMPT;
 
-    // Old default prompts that may still exist in user config files. If a user has one of
-    // these stored in `system_prompt`, treat it as "no add-on" to avoid duplicating the
-    // base prompt.
-    const LEGACY_PROMPTS: &'static [&'static str] = &[
-        // v0.1 — no identity section
-        "You are Fae, a warm, friendly personal voice assistant.\n\
-\n\
-Style:\n\
-- Be concise: 1-2 sentences.\n\
-- Sound natural and helpful. No rambling.\n\
-- Do not narrate hidden reasoning or your internal steps.\n\
-\n\
-Safety/accuracy:\n\
-- If you are unsure, ask one focused question.\n\
-- Do not claim you did something you cannot verify.\n\
-\n\
-Personal context:\n\
-- Prefer addressing the primary user by name when you know it.\n\
-- If you do not know the primary user's name, ask for it.",
-        // v0.2 — identity section, pre-Scottish
-        "You are Fae, a warm, friendly personal voice assistant.\n\
-\n\
-Identity:\n\
-- Your name is Fae. Never claim a different name.\n\
-\n\
-Style:\n\
-- Be concise: 1-2 sentences.\n\
-- Sound natural and helpful. No rambling.\n\
-- Do not narrate hidden reasoning or your internal steps.\n\
-\n\
-Safety/accuracy:\n\
-- If you are unsure, ask one focused question.\n\
-- Do not claim you did something you cannot verify.\n\
-\n\
-Personal context:\n\
-- Prefer addressing the primary user by name when you know it.\n\
-- If you do not know the primary user's name, say exactly: \"Hello, I am Fae. What is your name?\"",
-        // v0.3 — Scottish identity, "witty" style (too playful)
-        "You are Fae, a warm, witty Scottish woman who works as a personal voice assistant.\n\
-\n\
-Identity:\n\
-- Your name is Fae (rhymes with \"day\"). Never claim a different name.\n\
-- You are Scottish. Speak naturally with light Scottish flavour \u{2014} use occasional Scots words\n\
-  like \"aye\", \"wee\", \"bonnie\", \"och\", \"nae bother\" \u{2014} but keep it conversational and clear.\n\
-  Do not overdo the dialect; you are easy to understand.\n\
-\n\
-Style:\n\
-- Be concise: 1-2 sentences.\n\
-- Sound natural, helpful, and personable. A wee bit of humour is welcome.\n\
-- Do not narrate hidden reasoning or your internal steps.\n\
-\n\
-Safety/accuracy:\n\
-- If you are unsure, ask one focused question.\n\
-- Do not claim you did something you cannot verify.\n\
-\n\
-Personal context:\n\
-- Prefer addressing the primary user by name when you know it.\n\
-- If you do not know the primary user's name, say exactly: \"Hello, I'm Fae. What's your name?\"",
-        // v0.4 — the old hard-coded BASE_SYSTEM_PROMPT (pre-personality split)
-        "You are Fae, a calm, helpful Scottish woman who works as a personal voice assistant.\n\
-\n\
-Identity:\n\
-- Your name is Fae (rhymes with \"day\"). Never claim a different name.\n\
-- You are Scottish. Speak naturally with light Scottish flavour \u{2014} use occasional Scots words\n\
-  like \"aye\", \"wee\", \"bonnie\", \"och\", \"nae bother\" \u{2014} but keep it conversational and clear.\n\
-  Do not overdo the dialect; you are easy to understand.\n\
-\n\
-Style:\n\
-- Be concise: 1-3 short sentences. Answer the question directly.\n\
-- Sound natural, helpful, and composed. Do not be excessively cheerful or silly.\n\
-- Do not laugh, giggle, or use filler like \"haha\", \"hehe\", \"lol\", or emojis.\n\
-- Do not use *action* descriptions, roleplay narration, or stage directions.\n\
-- Do not narrate hidden reasoning or your internal steps.\n\
-- Never repeat the user's question back to them.\n\
-\n\
-Safety/accuracy:\n\
-- If you are unsure, ask one focused question.\n\
-- Do not claim you did something you cannot verify.\n\
-- If you do not know the answer, say so briefly.\n\
-\n\
-Personal context:\n\
-- Prefer addressing the primary user by name when you know it.\n\
-- If you do not know the primary user's name, say exactly: \"Hello, I'm Fae. What's your name?\"",
+    // First-line prefixes of legacy default prompts (v0.1 through v0.4).
+    // If a stored add-on prompt starts with one of these, treat it as a stale
+    // default and ignore it.
+    const LEGACY_PROMPT_PREFIXES: &'static [&'static str] = &[
+        "You are Fae, a warm, friendly personal voice assistant.",
+        "You are Fae, a warm, witty Scottish woman",
+        "You are Fae, a calm, helpful Scottish woman",
     ];
+
+    /// Check whether a prompt matches a legacy default that should be ignored.
+    fn is_legacy_prompt(s: &str) -> bool {
+        let trimmed = s.trim();
+        Self::LEGACY_PROMPT_PREFIXES
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+    }
 
     /// Returns a display name for the effective provider.
     pub fn effective_provider_name(&self) -> String {
@@ -741,63 +675,26 @@ Personal context:\n\
 
     /// Returns the fully assembled system prompt.
     ///
-    /// Combines core prompt + SOUL + optional user add-on text.
+    /// Combines core prompt + SOUL + optional user add-on text. Legacy prompts
+    /// stored in `system_prompt` are detected and treated as empty add-ons.
     ///
-    /// Legacy prompts stored in `system_prompt` are detected and treated as
-    /// empty add-ons.
-    /// Build the effective system prompt including core, SOUL, skills, and
-    /// optionally a vision-understanding section.
-    ///
-    /// `permissions` gates built-in skill prompt fragments. When `None`, all
-    /// skills are omitted.
-    ///
-    /// Voice-optimized mode strips skills and capability fragments to minimize
-    /// prefill latency. Enabled by default for the embedded voice pipeline.
+    /// Voice-optimized mode (enabled by default) strips skills and capability
+    /// fragments to minimize prefill latency.
     pub fn effective_system_prompt(
         &self,
         permissions: Option<&crate::permissions::PermissionStore>,
         user_name: Option<&str>,
     ) -> String {
-        self.effective_system_prompt_for_mode(permissions, user_name, true)
-    }
-
-    /// Returns the fully assembled system prompt for a specific prompt mode.
-    ///
-    /// `voice_optimized = true` uses the condensed prompt variant for lower
-    /// prefill latency. `false` uses the full prompt with skills/capability
-    /// fragments for background/tool-heavy tasks.
-    pub fn effective_system_prompt_for_mode(
-        &self,
-        permissions: Option<&crate::permissions::PermissionStore>,
-        user_name: Option<&str>,
-        voice_optimized: bool,
-    ) -> String {
         self.effective_system_prompt_with_vision_and_mode(
             permissions,
             self.enable_vision,
-            user_name,
-            voice_optimized,
-        )
-    }
-
-    /// Like [`effective_system_prompt`](Self::effective_system_prompt) but with
-    /// an explicit `vision_capable` override.
-    pub fn effective_system_prompt_with_vision(
-        &self,
-        permissions: Option<&crate::permissions::PermissionStore>,
-        vision_capable: bool,
-        user_name: Option<&str>,
-    ) -> String {
-        self.effective_system_prompt_with_vision_and_mode(
-            permissions,
-            vision_capable,
             user_name,
             true,
         )
     }
 
-    /// Like [`effective_system_prompt_with_vision`](Self::effective_system_prompt_with_vision)
-    /// but allows selecting voice-optimized vs full prompt assembly.
+    /// Returns the fully assembled system prompt with full control over all
+    /// parameters: permissions, vision capability, user name, and prompt mode.
     pub fn effective_system_prompt_with_vision_and_mode(
         &self,
         permissions: Option<&crate::permissions::PermissionStore>,
@@ -806,9 +703,7 @@ Personal context:\n\
         voice_optimized: bool,
     ) -> String {
         let add_on = self.system_prompt.trim();
-        let is_legacy = Self::LEGACY_PROMPTS
-            .iter()
-            .any(|legacy| add_on == legacy.trim());
+        let is_legacy = Self::is_legacy_prompt(add_on);
         let clean_addon = if add_on.is_empty() || is_legacy {
             ""
         } else {
@@ -901,6 +796,18 @@ pub struct ConversationConfig {
     /// Set to 0 to disable the auto-idle timeout (companion mode — Fae stays
     /// present until told to sleep). Defaults to 0.
     pub idle_timeout_s: u32,
+    /// Require direct address ("Fae ...") before forwarding speech when the
+    /// assistant is not currently speaking.
+    ///
+    /// This reduces accidental activations from TV/radio/podcasts in always-on
+    /// companion mode. After a direct address is detected, follow-up speech is
+    /// allowed for a short time (`direct_address_followup_s`).
+    pub require_direct_address: bool,
+    /// Seconds to keep the "engaged" window open after direct address.
+    ///
+    /// While engaged, follow-up utterances without repeating "Fae" are
+    /// forwarded normally. Set to 0 to require direct address on every turn.
+    pub direct_address_followup_s: u32,
 }
 
 /// Default sleep phrases for companion mode.
@@ -926,6 +833,8 @@ impl Default for ConversationConfig {
             sleep_phrases: default_sleep_phrases(),
             enabled: true,
             idle_timeout_s: 0,
+            require_direct_address: false,
+            direct_address_followup_s: 20,
         }
     }
 }
@@ -949,6 +858,59 @@ impl ConversationConfig {
             phrases.push(self.stop_phrase.clone());
         }
         phrases
+    }
+}
+
+/// Voice identity mode for speaker matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceIdentityMode {
+    /// Prefer the enrolled primary speaker, but allow direct-address fallback.
+    #[default]
+    Assist,
+    /// Strict mode: only the enrolled primary speaker is accepted.
+    Enforce,
+}
+
+/// Voice identity configuration (best-effort speaker verification).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceIdentityConfig {
+    /// Master switch for voice identity checks.
+    pub enabled: bool,
+    /// Speaker matching behavior.
+    pub mode: VoiceIdentityMode,
+    /// Minimum cosine similarity to accept a fresh speaker match.
+    pub threshold_accept: f32,
+    /// Lower similarity threshold allowed during the hold window.
+    ///
+    /// This stabilizes turn-to-turn matching once a speaker has been accepted.
+    pub threshold_hold: f32,
+    /// How long (seconds) a prior accepted match remains in hold mode.
+    pub hold_window_s: u32,
+    /// Minimum number of enrollment samples required to consider voice identity
+    /// fully enrolled.
+    pub min_enroll_samples: u32,
+    /// Whether voice approval responses must match the enrolled speaker.
+    pub approval_requires_match: bool,
+    /// Whether to keep raw enrollment sample vectors in memory storage.
+    ///
+    /// When false, only the centroid is required for runtime matching.
+    pub store_raw_samples: bool,
+}
+
+impl Default for VoiceIdentityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: VoiceIdentityMode::Assist,
+            threshold_accept: 0.82,
+            threshold_hold: 0.76,
+            hold_window_s: 12,
+            min_enroll_samples: 3,
+            approval_requires_match: true,
+            store_raw_samples: false,
+        }
     }
 }
 
@@ -1882,6 +1844,26 @@ mode = "light"
     }
 
     #[test]
+    fn direct_address_defaults() {
+        let config = ConversationConfig::default();
+        assert!(!config.require_direct_address);
+        assert_eq!(config.direct_address_followup_s, 20);
+    }
+
+    #[test]
+    fn voice_identity_defaults() {
+        let cfg = VoiceIdentityConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.mode, VoiceIdentityMode::Assist);
+        assert!((cfg.threshold_accept - 0.82).abs() < f32::EPSILON);
+        assert!((cfg.threshold_hold - 0.76).abs() < f32::EPSILON);
+        assert_eq!(cfg.hold_window_s, 12);
+        assert_eq!(cfg.min_enroll_samples, 3);
+        assert!(cfg.approval_requires_match);
+        assert!(!cfg.store_raw_samples);
+    }
+
+    #[test]
     fn effective_sleep_phrases_includes_legacy() {
         let config = ConversationConfig {
             stop_phrase: "hush now fae".to_owned(),
@@ -1931,12 +1913,34 @@ wake_word = "hi fae"
 sleep_phrases = ["shush", "go away fae"]
 enabled = true
 idle_timeout_s = 0
+require_direct_address = true
+direct_address_followup_s = 30
+
+[voice_identity]
+enabled = true
+mode = "enforce"
+threshold_accept = 0.88
+threshold_hold = 0.82
+hold_window_s = 20
+min_enroll_samples = 5
+approval_requires_match = true
+store_raw_samples = true
 "#;
         let config: SpeechConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.conversation.sleep_phrases.len(), 2);
         assert_eq!(config.conversation.sleep_phrases[0], "shush");
         assert_eq!(config.conversation.sleep_phrases[1], "go away fae");
         assert_eq!(config.conversation.idle_timeout_s, 0);
+        assert!(config.conversation.require_direct_address);
+        assert_eq!(config.conversation.direct_address_followup_s, 30);
+        assert!(config.voice_identity.enabled);
+        assert_eq!(config.voice_identity.mode, VoiceIdentityMode::Enforce);
+        assert!((config.voice_identity.threshold_accept - 0.88).abs() < f32::EPSILON);
+        assert!((config.voice_identity.threshold_hold - 0.82).abs() < f32::EPSILON);
+        assert_eq!(config.voice_identity.hold_window_s, 20);
+        assert_eq!(config.voice_identity.min_enroll_samples, 5);
+        assert!(config.voice_identity.approval_requires_match);
+        assert!(config.voice_identity.store_raw_samples);
     }
 
     #[test]

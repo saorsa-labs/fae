@@ -3,12 +3,12 @@
 //! Defines the [`ScheduledTask`] type, [`Schedule`] enum for timing,
 //! and built-in update-check task implementations.
 
+use crate::time_util::now_epoch_secs;
 use chrono::{
     Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How often a task should run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -418,14 +418,6 @@ fn exponential_backoff(base_secs: u64, streak: u32) -> u64 {
         i += 1;
     }
     delay
-}
-
-/// Returns current UTC seconds since epoch.
-pub(crate) fn now_epoch_secs() -> u64 {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs(),
-        Err(_) => 0,
-    }
 }
 
 fn epoch_to_local(ts: u64) -> chrono::DateTime<Local> {

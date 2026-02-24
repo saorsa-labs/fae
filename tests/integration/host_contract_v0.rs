@@ -25,6 +25,26 @@ fn command_name_parse_known_and_unknown() {
     assert_eq!(onboarding_advance, Some(CommandName::OnboardingAdvance));
     let onboarding_complete = CommandName::parse("onboarding.complete");
     assert_eq!(onboarding_complete, Some(CommandName::OnboardingComplete));
+    let onboarding_voiceprint_get = CommandName::parse("onboarding.voiceprint.get_state");
+    assert_eq!(
+        onboarding_voiceprint_get,
+        Some(CommandName::OnboardingVoiceprintGetState)
+    );
+    let onboarding_voiceprint_start = CommandName::parse("onboarding.voiceprint.start_enrollment");
+    assert_eq!(
+        onboarding_voiceprint_start,
+        Some(CommandName::OnboardingVoiceprintStartEnrollment)
+    );
+    let onboarding_voiceprint_finalize = CommandName::parse("onboarding.voiceprint.finalize");
+    assert_eq!(
+        onboarding_voiceprint_finalize,
+        Some(CommandName::OnboardingVoiceprintFinalize)
+    );
+    let onboarding_voiceprint_reset = CommandName::parse("onboarding.voiceprint.reset");
+    assert_eq!(
+        onboarding_voiceprint_reset,
+        Some(CommandName::OnboardingVoiceprintReset)
+    );
 
     let orb_feeling_set = CommandName::parse("orb.feeling.set");
     assert_eq!(orb_feeling_set, Some(CommandName::OrbFeelingSet));
@@ -67,6 +87,22 @@ fn command_name_parse_known_and_unknown() {
     assert_eq!(
         CommandName::OnboardingComplete.as_str(),
         "onboarding.complete"
+    );
+    assert_eq!(
+        CommandName::OnboardingVoiceprintGetState.as_str(),
+        "onboarding.voiceprint.get_state"
+    );
+    assert_eq!(
+        CommandName::OnboardingVoiceprintStartEnrollment.as_str(),
+        "onboarding.voiceprint.start_enrollment"
+    );
+    assert_eq!(
+        CommandName::OnboardingVoiceprintFinalize.as_str(),
+        "onboarding.voiceprint.finalize"
+    );
+    assert_eq!(
+        CommandName::OnboardingVoiceprintReset.as_str(),
+        "onboarding.voiceprint.reset"
     );
     assert_eq!(
         CommandName::ConversationInjectText.as_str(),
@@ -271,5 +307,65 @@ fn command_name_onboarding_complete_roundtrip() {
     assert_eq!(json, "onboarding.complete");
     let deserialized: CommandName =
         serde_json::from_value(json).expect("deserialize OnboardingComplete");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_onboarding_voiceprint_get_state_roundtrip() {
+    let name = CommandName::OnboardingVoiceprintGetState;
+    let wire = name.as_str();
+    assert_eq!(wire, "onboarding.voiceprint.get_state");
+    let parsed = CommandName::parse(wire).expect("parse onboarding.voiceprint.get_state");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize OnboardingVoiceprintGetState");
+    assert_eq!(json, "onboarding.voiceprint.get_state");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OnboardingVoiceprintGetState");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_onboarding_voiceprint_start_enrollment_roundtrip() {
+    let name = CommandName::OnboardingVoiceprintStartEnrollment;
+    let wire = name.as_str();
+    assert_eq!(wire, "onboarding.voiceprint.start_enrollment");
+    let parsed = CommandName::parse(wire).expect("parse onboarding.voiceprint.start_enrollment");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize OnboardingVoiceprintStartEnrollment");
+    assert_eq!(json, "onboarding.voiceprint.start_enrollment");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OnboardingVoiceprintStartEnrollment");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_onboarding_voiceprint_finalize_roundtrip() {
+    let name = CommandName::OnboardingVoiceprintFinalize;
+    let wire = name.as_str();
+    assert_eq!(wire, "onboarding.voiceprint.finalize");
+    let parsed = CommandName::parse(wire).expect("parse onboarding.voiceprint.finalize");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize OnboardingVoiceprintFinalize");
+    assert_eq!(json, "onboarding.voiceprint.finalize");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OnboardingVoiceprintFinalize");
+    assert_eq!(deserialized, name);
+}
+
+#[test]
+fn command_name_onboarding_voiceprint_reset_roundtrip() {
+    let name = CommandName::OnboardingVoiceprintReset;
+    let wire = name.as_str();
+    assert_eq!(wire, "onboarding.voiceprint.reset");
+    let parsed = CommandName::parse(wire).expect("parse onboarding.voiceprint.reset");
+    assert_eq!(parsed, name);
+
+    let json = serde_json::to_value(name).expect("serialize OnboardingVoiceprintReset");
+    assert_eq!(json, "onboarding.voiceprint.reset");
+    let deserialized: CommandName =
+        serde_json::from_value(json).expect("deserialize OnboardingVoiceprintReset");
     assert_eq!(deserialized, name);
 }

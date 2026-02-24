@@ -1097,6 +1097,102 @@ async fn onboarding_advance_returns_accepted_with_phase() {
     handle.abort();
 }
 
+#[tokio::test]
+async fn onboarding_voiceprint_get_state_returns_payload() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-onboarding-vp-state",
+            CommandName::OnboardingVoiceprintGetState,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("onboarding.voiceprint.get_state should succeed");
+
+    assert!(response.ok);
+    assert!(response.payload["enrolled"].is_boolean());
+    assert!(response.payload["sample_count"].is_number());
+    assert!(response.payload["required_samples"].is_number());
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn onboarding_voiceprint_start_enrollment_emits_event() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let response = client
+        .send(CommandEnvelope::new(
+            "req-onboarding-vp-start",
+            CommandName::OnboardingVoiceprintStartEnrollment,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("onboarding.voiceprint.start_enrollment should succeed");
+
+    assert!(response.ok);
+    assert_eq!(response.payload["accepted"], true);
+    assert_eq!(response.payload["enrollment_active"], true);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event.event, "onboarding.voiceprint.started");
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn onboarding_voiceprint_finalize_and_reset_emit_events() {
+    let handler = RecordingHandler::default();
+    let (client, server) = command_channel(8, 8, handler);
+    let handle = tokio::spawn(server.run());
+    let mut events = client.subscribe_events();
+
+    let finalize = client
+        .send(CommandEnvelope::new(
+            "req-onboarding-vp-finalize",
+            CommandName::OnboardingVoiceprintFinalize,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("onboarding.voiceprint.finalize should succeed");
+    assert!(finalize.ok);
+    assert_eq!(finalize.payload["accepted"], true);
+
+    let event_finalize = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event_finalize.event, "onboarding.voiceprint.completed");
+
+    let reset = client
+        .send(CommandEnvelope::new(
+            "req-onboarding-vp-reset",
+            CommandName::OnboardingVoiceprintReset,
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("onboarding.voiceprint.reset should succeed");
+    assert!(reset.ok);
+    assert_eq!(reset.payload["accepted"], true);
+
+    let event_reset = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event recv");
+    assert_eq!(event_reset.event, "onboarding.voiceprint.reset");
+
+    handle.abort();
+}
+
 // ---- capability.request jit field tests ----
 
 #[tokio::test]

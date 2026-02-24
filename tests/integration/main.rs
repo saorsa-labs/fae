@@ -42,3 +42,4 @@ mod scheduler_authority_v0;
 mod scheduler_ui_integration;
 mod tool_judgment_eval;
 mod uv_bootstrap_e2e;
+mod voiceprint_onboarding;

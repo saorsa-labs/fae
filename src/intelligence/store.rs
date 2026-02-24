@@ -7,6 +7,7 @@
 use crate::error::{Result, SpeechError};
 use crate::intelligence::types::{IntelligenceItem, IntelligenceKind};
 use crate::memory::{MemoryKind, MemoryRecord, SqliteMemoryRepository};
+use crate::time_util::now_epoch_secs;
 
 /// Intelligence-focused query and storage layer.
 ///
@@ -373,14 +374,6 @@ fn days_from_epoch(year: i64, month: u32, day: u32) -> Option<i64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
     Some(days)
-}
-
-/// Get current time as epoch seconds.
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

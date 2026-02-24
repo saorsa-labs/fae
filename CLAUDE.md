@@ -417,18 +417,39 @@ caused confusion where code changes appeared not to work.
 **MANDATORY build sequence for testing:**
 
 ```bash
-cargo clean                    # Remove ALL cached Rust artifacts
-rm -rf native/macos/Fae/.build # Remove Swift SPM build cache too!
+just clean                     # cargo clean — remove ALL cached Rust artifacts
 just build-staticlib           # Rebuild libfae.a from scratch
-just build-native-swift        # Rebuild and RE-LINK Swift app
-just _bundle-app && just _sign-bundle  # Bundle and sign
-open "$FAE_APP" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+just bundle-native             # Clean Swift + build + bundle + sign + verify
+                               # (also kills any running Fae process automatically)
+just run-native                # Launch Fae (kills stale process, opens with log capture)
 ```
 
-**NEVER skip `cargo clean` AND Swift `.build` cleanup when testing changes.**
-Swift's SPM caches the linked binary — even a fresh `libfae.a` won't take effect
-unless the Swift `.build` directory is also removed. If something "isn't working"
-after a code change, the FIRST thing to check is whether the binary is stale.
+Or as a single pipeline:
+
+```bash
+just clean && just build-staticlib && just bundle-native && just run-native
+```
+
+Monitor logs: `tail -f /tmp/fae-test.log`
+
+**TWO failure modes to watch for:**
+
+1. **Stale binary** — Swift SPM caches the linked binary. Even a fresh `libfae.a`
+   won't take effect unless `native/macos/Fae/.build` is also removed. The
+   `bundle-native` recipe handles this automatically (runs `clean-native` first).
+
+2. **Stale process** — macOS `open` reactivates an already-running Fae process
+   instead of launching the new binary. This silently ignores your fresh build.
+   The `run-native` and `bundle-native` recipes now kill any existing Fae process
+   automatically via `_kill-fae`. If launching manually, always kill first:
+
+   ```bash
+   pkill -f "Fae.app/Contents/MacOS/Fae" 2>/dev/null; sleep 1
+   open "$FAE_APP" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+   ```
+
+**If Fae "isn't working" after a code change**, check BOTH: is the binary stale?
+Is a stale process still running? (`pgrep -fl Fae`)
 
 ## Build memory optimization
 
@@ -514,8 +535,20 @@ Chatterbox is wired into Claude Code via notification hooks (`~/.claude/settings
 
 ### Launching Fae with log capture for testing
 
+**Preferred: use the justfile recipe** (kills stale process, signs, launches with logs):
+
 ```bash
-# Launch Fae as macOS app with stdout/stderr captured:
+just run-native                # Build + sign + kill stale + launch with log capture
+tail -f /tmp/fae-test.log      # Monitor in another terminal
+```
+
+**Manual launch** (if you already have a signed bundle):
+
+```bash
+# ALWAYS kill any existing Fae process first — macOS `open` reactivates
+# the running process instead of launching your new binary!
+pkill -f "Fae.app/Contents/MacOS/Fae" 2>/dev/null; sleep 1
+
 FAE_APP="native/macos/Fae/.build/arm64-apple-macosx/debug/Fae.app"
 open "$FAE_APP" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
 

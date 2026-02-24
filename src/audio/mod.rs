@@ -4,3 +4,4 @@ pub mod aec;
 pub mod capture;
 pub mod device_watcher;
 pub mod playback;
+pub mod tone;

@@ -585,11 +585,7 @@ impl SqliteMemoryRepository {
             .filter(|h| h.score > 0.0)
             .collect();
 
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         hits.truncate(limit);
         Ok(hits)
     }
@@ -664,11 +660,7 @@ impl SqliteMemoryRepository {
             .collect();
 
         // Sort by score descending.
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        hits.sort_by(|a, b| b.score.total_cmp(&a.score));
         hits.truncate(limit);
         Ok(hits)
     }

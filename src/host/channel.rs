@@ -94,6 +94,34 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn set_family_info(&self, _relations: &serde_json::Value) -> Result<()> {
         Ok(())
     }
+    /// Query voiceprint enrollment state for onboarding.
+    fn query_onboarding_voiceprint_state(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "enabled": false,
+            "enrolled": false,
+            "sample_count": 0,
+            "required_samples": 3
+        }))
+    }
+    /// Start (or continue) voiceprint enrollment.
+    fn onboarding_voiceprint_start_enrollment(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "accepted": true,
+            "enrollment_active": true,
+            "sample_count": 0
+        }))
+    }
+    /// Finalize voiceprint enrollment from collected samples.
+    fn onboarding_voiceprint_finalize(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "accepted": true,
+            "enrolled": true
+        }))
+    }
+    /// Reset and remove stored voiceprint enrollment data.
+    fn onboarding_voiceprint_reset(&self) -> Result<()> {
+        Ok(())
+    }
     /// Reload custom skills from `~/.fae/skills/`.
     fn reload_skills(&self) -> Result<()> {
         Ok(())
@@ -386,6 +414,18 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::OnboardingAdvance => self.handle_onboarding_advance(envelope),
             CommandName::OnboardingComplete => self.handle_onboarding_complete(envelope),
             CommandName::OnboardingSetUserName => self.handle_onboarding_set_user_name(envelope),
+            CommandName::OnboardingVoiceprintGetState => {
+                self.handle_onboarding_voiceprint_get_state(envelope)
+            }
+            CommandName::OnboardingVoiceprintStartEnrollment => {
+                self.handle_onboarding_voiceprint_start_enrollment(envelope)
+            }
+            CommandName::OnboardingVoiceprintFinalize => {
+                self.handle_onboarding_voiceprint_finalize(envelope)
+            }
+            CommandName::OnboardingVoiceprintReset => {
+                self.handle_onboarding_voiceprint_reset(envelope)
+            }
             CommandName::OnboardingSetContactInfo => {
                 self.handle_onboarding_set_contact_info(envelope)
             }
@@ -758,6 +798,65 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
 
         self.emit_event(
             "onboarding.family_info_set",
+            serde_json::json!({
+                "request_id": envelope.request_id
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
+        ))
+    }
+
+    fn handle_onboarding_voiceprint_get_state(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let state = self.handler.query_onboarding_voiceprint_state()?;
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), state))
+    }
+
+    fn handle_onboarding_voiceprint_start_enrollment(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let payload = self.handler.onboarding_voiceprint_start_enrollment()?;
+
+        self.emit_event(
+            "onboarding.voiceprint.started",
+            serde_json::json!({
+                "request_id": envelope.request_id
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), payload))
+    }
+
+    fn handle_onboarding_voiceprint_finalize(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let payload = self.handler.onboarding_voiceprint_finalize()?;
+
+        self.emit_event(
+            "onboarding.voiceprint.completed",
+            serde_json::json!({
+                "request_id": envelope.request_id
+            }),
+        );
+
+        Ok(ResponseEnvelope::ok(envelope.request_id.clone(), payload))
+    }
+
+    fn handle_onboarding_voiceprint_reset(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        self.handler.onboarding_voiceprint_reset()?;
+
+        self.emit_event(
+            "onboarding.voiceprint.reset",
             serde_json::json!({
                 "request_id": envelope.request_id
             }),

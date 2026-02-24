@@ -62,6 +62,14 @@ pub enum CommandName {
     OnboardingComplete,
     #[serde(rename = "onboarding.set_user_name")]
     OnboardingSetUserName,
+    #[serde(rename = "onboarding.voiceprint.get_state")]
+    OnboardingVoiceprintGetState,
+    #[serde(rename = "onboarding.voiceprint.start_enrollment")]
+    OnboardingVoiceprintStartEnrollment,
+    #[serde(rename = "onboarding.voiceprint.finalize")]
+    OnboardingVoiceprintFinalize,
+    #[serde(rename = "onboarding.voiceprint.reset")]
+    OnboardingVoiceprintReset,
     #[serde(rename = "conversation.link_detected")]
     ConversationLinkDetected,
     #[serde(rename = "config.get")]
@@ -180,6 +188,10 @@ impl CommandName {
             Self::OnboardingAdvance => "onboarding.advance",
             Self::OnboardingComplete => "onboarding.complete",
             Self::OnboardingSetUserName => "onboarding.set_user_name",
+            Self::OnboardingVoiceprintGetState => "onboarding.voiceprint.get_state",
+            Self::OnboardingVoiceprintStartEnrollment => "onboarding.voiceprint.start_enrollment",
+            Self::OnboardingVoiceprintFinalize => "onboarding.voiceprint.finalize",
+            Self::OnboardingVoiceprintReset => "onboarding.voiceprint.reset",
             Self::ConversationLinkDetected => "conversation.link_detected",
             Self::ConfigGet => "config.get",
             Self::ConfigPatch => "config.patch",
@@ -239,6 +251,12 @@ impl CommandName {
             "onboarding.advance" => Some(Self::OnboardingAdvance),
             "onboarding.complete" => Some(Self::OnboardingComplete),
             "onboarding.set_user_name" => Some(Self::OnboardingSetUserName),
+            "onboarding.voiceprint.get_state" => Some(Self::OnboardingVoiceprintGetState),
+            "onboarding.voiceprint.start_enrollment" => {
+                Some(Self::OnboardingVoiceprintStartEnrollment)
+            }
+            "onboarding.voiceprint.finalize" => Some(Self::OnboardingVoiceprintFinalize),
+            "onboarding.voiceprint.reset" => Some(Self::OnboardingVoiceprintReset),
             "conversation.link_detected" => Some(Self::ConversationLinkDetected),
             "config.get" => Some(Self::ConfigGet),
             "config.patch" => Some(Self::ConfigPatch),
@@ -405,3 +423,111 @@ impl std::fmt::Display for ContractError {
 }
 
 impl std::error::Error for ContractError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exhaustive list of every `CommandName` variant.
+    ///
+    /// If you add a new variant, add it here — the round-trip test below
+    /// will verify that `as_str()` and `parse()` stay in sync.
+    const ALL_COMMANDS: &[CommandName] = &[
+        CommandName::HostPing,
+        CommandName::HostVersion,
+        CommandName::RuntimeStart,
+        CommandName::RuntimeStop,
+        CommandName::RuntimeStatus,
+        CommandName::ConversationInjectText,
+        CommandName::ConversationGateSet,
+        CommandName::ApprovalRespond,
+        CommandName::SchedulerList,
+        CommandName::SchedulerCreate,
+        CommandName::SchedulerUpdate,
+        CommandName::SchedulerDelete,
+        CommandName::SchedulerTriggerNow,
+        CommandName::DeviceMove,
+        CommandName::DeviceGoHome,
+        CommandName::OrbPaletteSet,
+        CommandName::OrbPaletteClear,
+        CommandName::OrbFeelingSet,
+        CommandName::OrbUrgencySet,
+        CommandName::OrbFlash,
+        CommandName::CapabilityRequest,
+        CommandName::CapabilityGrant,
+        CommandName::CapabilityDeny,
+        CommandName::OnboardingGetState,
+        CommandName::OnboardingAdvance,
+        CommandName::OnboardingComplete,
+        CommandName::OnboardingSetUserName,
+        CommandName::OnboardingVoiceprintGetState,
+        CommandName::OnboardingVoiceprintStartEnrollment,
+        CommandName::OnboardingVoiceprintFinalize,
+        CommandName::OnboardingVoiceprintReset,
+        CommandName::ConversationLinkDetected,
+        CommandName::ConfigGet,
+        CommandName::ConfigPatch,
+        CommandName::OnboardingSetContactInfo,
+        CommandName::OnboardingSetFamilyInfo,
+        CommandName::SkillsReload,
+        CommandName::DataDeleteAll,
+        CommandName::SkillPythonStart,
+        CommandName::SkillPythonStop,
+        CommandName::SkillPythonList,
+        CommandName::SkillPythonInstall,
+        CommandName::SkillPythonDisable,
+        CommandName::SkillPythonActivate,
+        CommandName::SkillPythonQuarantine,
+        CommandName::SkillPythonRollback,
+        CommandName::SkillPythonAdvanceStatus,
+        CommandName::SkillCredentialCollect,
+        CommandName::SkillCredentialClear,
+        CommandName::SkillDiscoverySearch,
+        CommandName::SkillGenerate,
+        CommandName::SkillGenerateStatus,
+        CommandName::SkillHealthCheck,
+        CommandName::SkillHealthStatusCmd,
+        CommandName::SkillChannelInstall,
+        CommandName::SkillChannelList,
+    ];
+
+    #[test]
+    fn command_name_as_str_parse_round_trip() {
+        for &cmd in ALL_COMMANDS {
+            let wire = cmd.as_str();
+            let parsed = CommandName::parse(wire);
+            assert_eq!(
+                parsed,
+                Some(cmd),
+                "round-trip failed for {wire}: as_str produced {wire:?}, parse returned {parsed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_name_serde_round_trip() {
+        for &cmd in ALL_COMMANDS {
+            let json = serde_json::to_string(&cmd)
+                .unwrap_or_else(|e| panic!("serialize {cmd:?} failed: {e}"));
+            let deserialized: CommandName = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("deserialize {json} failed: {e}"));
+            assert_eq!(cmd, deserialized, "serde round-trip failed for {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn all_commands_list_is_exhaustive() {
+        // Verify via serde: every valid wire string in `as_str` must
+        // appear in `ALL_COMMANDS`, and vice versa.
+        let wire_strings: Vec<&str> = ALL_COMMANDS.iter().map(|c| c.as_str()).collect();
+        // Check no duplicates.
+        let mut sorted = wire_strings.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            wire_strings.len(),
+            sorted.len(),
+            "duplicate entries in ALL_COMMANDS"
+        );
+    }
+}

@@ -6,6 +6,7 @@
 
 use crate::intelligence::store::IntelligenceStore;
 use crate::memory::{MemoryKind, MemoryRecord};
+use crate::time_util::now_epoch_secs;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::warn;
@@ -217,14 +218,6 @@ pub fn load_research_policy(fae_root: &Path) -> ResearchPolicy {
             ResearchPolicy::default()
         }
     }
-}
-
-/// Get current time as epoch seconds.
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

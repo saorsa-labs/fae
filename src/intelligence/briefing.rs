@@ -6,6 +6,7 @@
 
 use crate::intelligence::store::IntelligenceStore;
 use crate::memory::MemoryRecord;
+use crate::time_util::now_epoch_secs;
 
 /// Priority level for briefing items (higher = more urgent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -301,14 +302,6 @@ fn parse_simple_date(date_str: &str) -> Option<u64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
     Some(days as u64 * 86_400)
-}
-
-/// Get current time as epoch seconds.
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

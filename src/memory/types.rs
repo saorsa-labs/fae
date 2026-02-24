@@ -354,12 +354,7 @@ pub(crate) fn new_id(prefix: &str) -> String {
     format!("{prefix}-{}-{counter}", now_epoch_nanos())
 }
 
-pub(crate) fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+pub(crate) use crate::time_util::now_epoch_secs;
 
 pub(crate) fn now_epoch_nanos() -> u128 {
     std::time::SystemTime::now()

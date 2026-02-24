@@ -118,7 +118,7 @@ impl Tool for SchedulerListTool {
 
 /// Format an epoch timestamp as a human-readable relative time string.
 fn format_time_ago(epoch_secs: u64) -> String {
-    let now = crate::scheduler::tasks::now_epoch_secs();
+    let now = crate::time_util::now_epoch_secs();
     if epoch_secs > now {
         return "in the future".to_owned();
     }
@@ -182,27 +182,27 @@ mod tests {
 
     #[test]
     fn format_time_ago_just_now() {
-        let now = crate::scheduler::tasks::now_epoch_secs();
+        let now = crate::time_util::now_epoch_secs();
         assert_eq!(format_time_ago(now), "just now");
     }
 
     #[test]
     fn format_time_ago_minutes() {
-        let now = crate::scheduler::tasks::now_epoch_secs();
+        let now = crate::time_util::now_epoch_secs();
         let result = format_time_ago(now.saturating_sub(300));
         assert!(result.contains("5 minutes ago"));
     }
 
     #[test]
     fn format_time_ago_hours() {
-        let now = crate::scheduler::tasks::now_epoch_secs();
+        let now = crate::time_util::now_epoch_secs();
         let result = format_time_ago(now.saturating_sub(7200));
         assert!(result.contains("2 hours ago"));
     }
 
     #[test]
     fn format_time_ago_days() {
-        let now = crate::scheduler::tasks::now_epoch_secs();
+        let now = crate::time_util::now_epoch_secs();
         let result = format_time_ago(now.saturating_sub(172800));
         assert!(result.contains("2 days ago"));
     }

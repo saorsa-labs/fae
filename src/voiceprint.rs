@@ -127,6 +127,32 @@ pub fn similarity(a: &[f32], b: &[f32]) -> Option<f32> {
     Some(dot)
 }
 
+/// Compute an L2-normalized centroid from a set of voiceprint vectors.
+#[must_use]
+pub fn centroid(samples: &[Vec<f32>]) -> Option<Vec<f32>> {
+    let first = samples.first()?;
+    if first.is_empty() {
+        return None;
+    }
+    let dims = first.len();
+    if !samples.iter().all(|s| s.len() == dims) {
+        return None;
+    }
+
+    let mut out = vec![0.0f32; dims];
+    for sample in samples {
+        for (dst, src) in out.iter_mut().zip(sample.iter()) {
+            *dst += *src;
+        }
+    }
+    let n = samples.len() as f32;
+    for v in &mut out {
+        *v /= n;
+    }
+    l2_normalize(&mut out);
+    Some(out)
+}
+
 fn resample_linear(samples: &[f32], in_rate: u32, out_rate: u32) -> Result<Vec<f32>> {
     if in_rate == 0 || out_rate == 0 {
         return Err(SpeechError::Memory("invalid sample rate".into()));
@@ -196,5 +222,35 @@ fn l2_normalize(v: &mut [f32]) {
         for x in v.iter_mut() {
             *x /= norm;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{centroid, similarity};
+
+    #[test]
+    fn centroid_normalizes_average_vector() {
+        let samples = vec![vec![1.0, 0.0, 0.0], vec![1.0, 0.0, 0.0]];
+        let c = centroid(&samples).expect("centroid");
+        assert_eq!(c.len(), 3);
+        assert!((c[0] - 1.0).abs() < 1e-6);
+        assert!(c[1].abs() < 1e-6);
+        assert!(c[2].abs() < 1e-6);
+    }
+
+    #[test]
+    fn centroid_rejects_mismatched_dimensions() {
+        let samples = vec![vec![1.0, 0.0], vec![1.0]];
+        assert!(centroid(&samples).is_none());
+    }
+
+    #[test]
+    fn similarity_of_identical_vectors_is_one() {
+        let a = vec![0.5, 0.5, 0.70710677];
+        let sim = similarity(&a, &a).expect("similarity");
+        assert!((sim - 1.0).abs() < 1e-5);
     }
 }

@@ -6,6 +6,7 @@
 //! - promotion state (staging/canary/active/quarantined/snapshot/removed).
 
 use crate::error::{Result, SpeechError};
+use crate::time_util::now_epoch_secs;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
@@ -453,13 +454,6 @@ fn digest_file_blake3(path: &Path) -> Result<String> {
         ))
     })?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
-}
-
-fn now_epoch_secs() -> u64 {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs(),
-        Err(_) => 0,
-    }
 }
 
 fn artifact_key(path: &Path, data_dir: &Path, config_dir: &Path) -> String {

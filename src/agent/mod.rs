@@ -53,7 +53,7 @@ pub struct FaeAgentLlm {
     /// Used for the voice conversation engine in multi-channel mode.
     tools_disabled: bool,
     /// Ring buffer of recent assistant response texts for duplicate detection.
-    recent_responses: Vec<String>,
+    recent_responses: std::collections::VecDeque<String>,
     /// Counter for consecutive duplicate detections (for varied fallbacks).
     consecutive_duplicates: usize,
 }
@@ -127,7 +127,7 @@ impl FaeAgentLlm {
             context_size_tokens: config.context_size_tokens,
             compaction_threshold: 0.70,
             tools_disabled: false,
-            recent_responses: Vec::with_capacity(RECENT_RESPONSE_WINDOW),
+            recent_responses: std::collections::VecDeque::with_capacity(RECENT_RESPONSE_WINDOW),
             consecutive_duplicates: 0,
         })
     }
@@ -430,9 +430,9 @@ impl FaeAgentLlm {
     /// Track a new response in the recent response ring buffer.
     fn track_response(&mut self, response_text: &str) {
         if self.recent_responses.len() >= RECENT_RESPONSE_WINDOW {
-            self.recent_responses.remove(0);
+            self.recent_responses.pop_front();
         }
-        self.recent_responses.push(response_text.to_owned());
+        self.recent_responses.push_back(response_text.to_owned());
     }
 }
 
@@ -445,9 +445,8 @@ fn extract_latest_user_message(input: &str) -> &str {
     }
 }
 
-fn contains_any(haystack: &str, terms: &[&str]) -> bool {
-    terms.iter().any(|term| haystack.contains(term))
-}
+use crate::intent;
+use crate::intent::contains_any;
 
 /// Select a small per-turn tool allowlist based on explicit user intent.
 ///
@@ -457,21 +456,12 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
     let lower = user_text.to_ascii_lowercase();
     let mut allow: HashSet<&'static str> = HashSet::new();
 
-    if contains_any(
-        &lower,
-        &[
-            "search", "look up", "lookup", "latest", "news", "web", "internet", "online",
-            "website", "source", "article",
-        ],
-    ) {
+    if contains_any(&lower, intent::WEB_KEYWORDS) {
         allow.insert("web_search");
         allow.insert("fetch_url");
     }
 
-    if contains_any(
-        &lower,
-        &["calendar", "meeting", "event", "schedule on my calendar"],
-    ) {
+    if contains_any(&lower, intent::CALENDAR_KEYWORDS) {
         allow.insert("list_calendars");
         allow.insert("list_calendar_events");
         allow.insert("create_calendar_event");
@@ -479,47 +469,33 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
         allow.insert("delete_calendar_event");
     }
 
-    if contains_any(&lower, &["reminder", "reminders", "todo", "to-do"]) {
+    if contains_any(&lower, intent::REMINDERS_KEYWORDS) {
         allow.insert("list_reminder_lists");
         allow.insert("list_reminders");
         allow.insert("create_reminder");
         allow.insert("set_reminder_completed");
     }
 
-    if contains_any(&lower, &["note", "notes"]) {
+    if contains_any(&lower, intent::NOTES_KEYWORDS) {
         allow.insert("list_notes");
         allow.insert("get_note");
         allow.insert("create_note");
         allow.insert("append_to_note");
     }
 
-    if contains_any(&lower, &["mail", "email", "inbox"]) {
+    if contains_any(&lower, intent::MAIL_KEYWORDS) {
         allow.insert("search_mail");
         allow.insert("get_mail");
         allow.insert("compose_mail");
     }
 
-    if contains_any(
-        &lower,
-        &["contact", "contacts", "phone number", "address book"],
-    ) {
+    if contains_any(&lower, intent::CONTACTS_KEYWORDS) {
         allow.insert("search_contacts");
         allow.insert("get_contact");
         allow.insert("create_contact");
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "scheduled task",
-            "scheduled tasks",
-            "automation",
-            "automations",
-            "remind me every",
-            "every day",
-            "every week",
-        ],
-    ) {
+    if contains_any(&lower, intent::SCHEDULER_KEYWORDS) {
         allow.insert("list_scheduled_tasks");
         allow.insert("create_scheduled_task");
         allow.insert("update_scheduled_task");
@@ -528,72 +504,15 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
     }
 
     // System utility queries that need bash (date, time, disk, etc.).
-    if contains_any(
-        &lower,
-        &[
-            "what time",
-            "current time",
-            "the time",
-            "what date",
-            "current date",
-            "the date",
-            "today's date",
-            "what day",
-            "disk space",
-            "disk usage",
-            "how much space",
-            "storage",
-            "system info",
-            "uptime",
-            "memory usage",
-            "cpu usage",
-            "battery",
-            "ip address",
-            "run a command",
-            "run command",
-            "run the command",
-            "execute",
-            "check the weather",
-            "what's the weather",
-        ],
-    ) {
+    if contains_any(&lower, intent::BASH_KEYWORDS) {
         allow.insert("bash");
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "read file",
-            "open file",
-            "show file",
-            "in this file",
-            "in this repo",
-            "in this project",
-        ],
-    ) {
+    if contains_any(&lower, intent::FILE_KEYWORDS) {
         allow.insert("read");
     }
 
-    if contains_any(
-        &lower,
-        &[
-            "x0x",
-            "network",
-            "gossip",
-            "peer",
-            "peers",
-            "mesh",
-            "swarm",
-            "publish",
-            "subscribe",
-            "presence",
-            "agents online",
-            "other agents",
-            "find agent",
-            "task list",
-            "collaborative",
-        ],
-    ) {
+    if contains_any(&lower, intent::X0X_KEYWORDS) {
         allow.insert("x0x");
     }
 
@@ -669,48 +588,7 @@ fn needs_deeper_reasoning(user_text: &str) -> bool {
         return false;
     }
 
-    contains_any(
-        &lower,
-        &[
-            "explain",
-            "analyze",
-            "analyse",
-            "compare",
-            "contrast",
-            "pros and cons",
-            "advantages and disadvantages",
-            "trade-off",
-            "tradeoff",
-            "think about",
-            "think through",
-            "reason about",
-            "help me understand",
-            "break down",
-            "walk me through",
-            "step by step",
-            "why does",
-            "why would",
-            "why is it",
-            "how does",
-            "how would",
-            "what if",
-            "what would happen",
-            "implications of",
-            "consequences of",
-            "difference between",
-            "summarize",
-            "summarise",
-            "evaluate",
-            "assessment",
-            "critique",
-            "recommend",
-            "should i",
-            "plan for",
-            "strategy for",
-            "design a",
-            "architect",
-        ],
-    )
+    contains_any(&lower, intent::DEEPER_REASONING_KEYWORDS)
 }
 
 /// A background agent task spawned from the voice conversation.
@@ -748,28 +626,7 @@ fn select_background_reasoning_level(task: &BackgroundAgentTask) -> ReasoningLev
     let only_bash = task.tool_allowlist.len() == 1 && task.tool_allowlist[0] == "bash";
 
     // Pure system utility questions don't need internal reasoning.
-    if only_bash
-        && contains_any(
-            &lower,
-            &[
-                "what time",
-                "current time",
-                "the time",
-                "what date",
-                "current date",
-                "today's date",
-                "what day",
-                "uptime",
-                "disk space",
-                "disk usage",
-                "storage",
-                "memory usage",
-                "cpu usage",
-                "battery",
-                "ip address",
-            ],
-        )
-    {
+    if only_bash && contains_any(&lower, intent::BRIEF_REASONING_KEYWORDS) {
         return ReasoningLevel::Off;
     }
 
@@ -819,7 +676,12 @@ pub async fn spawn_background_agent(
     // Build a background-specific config with the agent prompt.
     let bg_system_prompt = {
         let perm_guard = shared_permissions.as_ref().and_then(|sp| sp.lock().ok());
-        let base = config.effective_system_prompt_for_mode(perm_guard.as_deref(), None, false);
+        let base = config.effective_system_prompt_with_vision_and_mode(
+            perm_guard.as_deref(),
+            config.enable_vision,
+            None,
+            false,
+        );
         format!(
             "{}\n\n{}",
             crate::personality::BACKGROUND_AGENT_PROMPT.trim(),
@@ -981,6 +843,16 @@ fn build_registry(
     };
     let mut registry = ToolRegistry::new(mode);
 
+    // Helper: wrap a tool with approval gating and register it.
+    let register_with_approval = |tool: Arc<dyn crate::fae_llm::tools::Tool>,
+                                  reg: &mut ToolRegistry| {
+        reg.register(Arc::new(ApprovalTool::new(
+            tool,
+            tool_approval_tx.clone(),
+            APPROVAL_TIMEOUT,
+        )));
+    };
+
     match config.tool_mode {
         AgentToolMode::Off => {}
         AgentToolMode::ReadOnly => {
@@ -988,46 +860,18 @@ fn build_registry(
         }
         AgentToolMode::ReadWrite => {
             registry.register(Arc::new(ReadTool::new()));
-            registry.register(Arc::new(ApprovalTool::new(
-                Arc::new(WriteTool::new()),
-                tool_approval_tx.clone(),
-                APPROVAL_TIMEOUT,
-            )));
-            registry.register(Arc::new(ApprovalTool::new(
-                Arc::new(EditTool::new()),
-                tool_approval_tx.clone(),
-                APPROVAL_TIMEOUT,
-            )));
+            register_with_approval(Arc::new(WriteTool::new()), &mut registry);
+            register_with_approval(Arc::new(EditTool::new()), &mut registry);
         }
         AgentToolMode::Full => {
-            registry.register(Arc::new(ApprovalTool::new(
-                Arc::new(BashTool::new()),
-                tool_approval_tx.clone(),
-                APPROVAL_TIMEOUT,
-            )));
+            register_with_approval(Arc::new(BashTool::new()), &mut registry);
             registry.register(Arc::new(ReadTool::new()));
-            registry.register(Arc::new(ApprovalTool::new(
-                Arc::new(WriteTool::new()),
-                tool_approval_tx.clone(),
-                APPROVAL_TIMEOUT,
-            )));
-            registry.register(Arc::new(ApprovalTool::new(
-                Arc::new(EditTool::new()),
-                tool_approval_tx.clone(),
-                APPROVAL_TIMEOUT,
-            )));
-            registry.register(Arc::new(ApprovalTool::new(
-                Arc::new(PythonSkillTool::with_default_dir()),
-                tool_approval_tx.clone(),
-                APPROVAL_TIMEOUT,
-            )));
+            register_with_approval(Arc::new(WriteTool::new()), &mut registry);
+            register_with_approval(Arc::new(EditTool::new()), &mut registry);
+            register_with_approval(Arc::new(PythonSkillTool::with_default_dir()), &mut registry);
             // Desktop automation (Full mode, with approval).
             if let Some(desktop_tool) = crate::fae_llm::tools::DesktopTool::try_new() {
-                registry.register(Arc::new(ApprovalTool::new(
-                    Arc::new(desktop_tool),
-                    tool_approval_tx,
-                    APPROVAL_TIMEOUT,
-                )));
+                register_with_approval(Arc::new(desktop_tool), &mut registry);
             }
         }
         AgentToolMode::FullNoApproval => {

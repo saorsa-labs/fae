@@ -10,7 +10,6 @@ use super::types::*;
 use crate::config::MemoryConfig;
 use crate::error::{Result, SpeechError};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
@@ -43,7 +42,18 @@ pub struct MemoryStore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrimaryUser {
     pub name: String,
+    #[serde(default)]
     pub voiceprint: Option<Vec<f32>>,
+    #[serde(default)]
+    pub voiceprints: Vec<Vec<f32>>,
+    #[serde(default)]
+    pub voiceprint_centroid: Option<Vec<f32>>,
+    #[serde(default)]
+    pub voiceprint_threshold: Option<f32>,
+    #[serde(default)]
+    pub voiceprint_version: Option<String>,
+    #[serde(default)]
+    pub voiceprint_updated_at: Option<u64>,
     #[serde(default)]
     pub voice_sample_wav: Option<String>,
 }
@@ -51,6 +61,7 @@ pub struct PrimaryUser {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Person {
     pub name: String,
+    #[serde(default)]
     pub voiceprint: Option<Vec<f32>>,
     #[serde(default)]
     pub voice_sample_wav: Option<String>,
@@ -763,8 +774,7 @@ impl MemoryRepository {
 
         hits.sort_by(|a, b| {
             b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(Ordering::Equal)
+                .total_cmp(&a.score)
                 .then_with(|| b.record.updated_at.cmp(&a.record.updated_at))
         });
         hits.truncate(max_results);
@@ -2288,6 +2298,11 @@ mod tests {
         let user = PrimaryUser {
             name: "Alice".into(),
             voiceprint: Some(vec![0.1, 0.2, 0.3]),
+            voiceprints: vec![vec![0.1, 0.2, 0.3]],
+            voiceprint_centroid: Some(vec![0.1, 0.2, 0.3]),
+            voiceprint_threshold: Some(0.82),
+            voiceprint_version: Some("v1".into()),
+            voiceprint_updated_at: Some(1_700_000_000),
             voice_sample_wav: Some("voices/alice.wav".into()),
         };
         let data = toml::to_string_pretty(&user).unwrap();
@@ -2296,6 +2311,15 @@ mod tests {
         let decoded: PrimaryUser = toml::from_str(&extracted).unwrap();
         assert_eq!(decoded.name, "Alice");
         assert_eq!(decoded.voiceprint.unwrap().len(), 3);
+        assert_eq!(decoded.voiceprints.len(), 1);
+        assert_eq!(
+            decoded.voiceprint_centroid.unwrap_or_default().len(),
+            3,
+            "centroid must deserialize"
+        );
+        assert_eq!(decoded.voiceprint_threshold, Some(0.82));
+        assert_eq!(decoded.voiceprint_version.as_deref(), Some("v1"));
+        assert_eq!(decoded.voiceprint_updated_at, Some(1_700_000_000));
         assert_eq!(
             decoded.voice_sample_wav.unwrap_or_default(),
             "voices/alice.wav"

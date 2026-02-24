@@ -5,6 +5,7 @@
 
 use crate::config::RuntimeProfile;
 use crate::error::{Result, SpeechError};
+use crate::time_util::now_epoch_secs;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -236,13 +237,6 @@ fn read_recent_runtime_audit_from_path(
     }
 
     Ok(tail.into_iter().collect())
-}
-
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 fn compute_runtime_audit_chain_hash(

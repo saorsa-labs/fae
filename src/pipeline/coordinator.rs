@@ -3,17 +3,31 @@
 use crate::approval::ToolApprovalRequest;
 use crate::audio::aec::{AecProcessor, ReferenceBuffer, ReferenceHandle};
 use crate::canvas::registry::CanvasSessionRegistry;
-use crate::config::{LlmMessageQueueDropPolicy, LlmMessageQueueMode, SpeechConfig};
+use crate::config::{SpeechConfig, VoiceIdentityMode};
 use crate::error::Result;
 use crate::memory::{MemoryOrchestrator, MemoryStore};
+use crate::pipeline::conversation::{
+    ConversationTurn, append_conversation_turn, build_background_context,
+    build_conversation_snapshot_entries, capture_memory_turn,
+};
+use crate::pipeline::input_queue::{
+    LlmInputQueue, QueuedLlmInput, clear_pending_inputs, enqueue_pending_input,
+};
 use crate::pipeline::messages::{
     AudioChunk, ControlEvent, GateCommand, SentenceChunk, SpeechSegment, SynthesizedAudio,
     TextInjection, Transcription,
 };
-use crate::runtime::{ConversationSnapshotEntry, ConversationSnapshotEntryRole, RuntimeEvent};
+use crate::pipeline::voice_approval::{
+    PendingVoiceApproval, resolve_voice_approval, start_voice_approval,
+};
+use crate::pipeline::voice_identity::{
+    approval_speaker_verified, build_voice_identity_profile, extract_voiceprint_samples,
+    load_approval_voice_profile,
+};
+use crate::runtime::RuntimeEvent;
 use crate::startup::InitializedModels;
+use crate::time_util::now_epoch_secs;
 use crate::tts::kokoro::strip_non_speech_chars;
-use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -44,249 +58,6 @@ enum PlaybackCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LlmQueueCommand {
     ClearQueuedInputs,
-}
-
-/// State for a pending voice approval request in the LLM stage.
-///
-/// Created when an [`ApprovalNotification`] arrives; consumed when the user
-/// responds via voice or the request times out.
-struct PendingVoiceApproval {
-    request_id: u64,
-    tool_name: String,
-    /// Human-readable prompt that was spoken to the user.
-    description: String,
-    /// When the approval prompt finished playing (echo tail reference).
-    prompt_spoken_at: Option<Instant>,
-    /// When this approval was created (for timeout tracking).
-    created_at: Instant,
-    /// How many times we've re-prompted due to ambiguous responses.
-    reprompt_count: u8,
-}
-
-/// A user input item pending for the LLM stage.
-#[derive(Debug, Clone)]
-enum QueuedLlmInput {
-    Transcription(Transcription),
-    TextInjection(TextInjection),
-}
-
-impl QueuedLlmInput {
-    fn text(&self) -> &str {
-        match self {
-            Self::Transcription(t) => &t.text,
-            Self::TextInjection(i) => &i.text,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueueEnqueueAction {
-    Enqueued,
-    DroppedOldest,
-    DroppedNewest,
-    DroppedIncoming,
-}
-
-/// Bounded queue for user inputs received while an LLM run is active.
-struct LlmInputQueue {
-    mode: LlmMessageQueueMode,
-    max_pending: usize,
-    drop_policy: LlmMessageQueueDropPolicy,
-    pending: VecDeque<QueuedLlmInput>,
-}
-
-impl LlmInputQueue {
-    fn new(config: &crate::config::LlmConfig) -> Self {
-        Self {
-            mode: config.message_queue_mode,
-            max_pending: config.message_queue_max_pending,
-            drop_policy: config.message_queue_drop_policy,
-            pending: VecDeque::new(),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.pending.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
-
-    fn clear(&mut self) -> usize {
-        let cleared = self.pending.len();
-        self.pending.clear();
-        cleared
-    }
-
-    fn enqueue(&mut self, input: QueuedLlmInput) -> QueueEnqueueAction {
-        if input.text().trim().is_empty() {
-            return QueueEnqueueAction::DroppedIncoming;
-        }
-
-        if self.max_pending == 0 {
-            return QueueEnqueueAction::DroppedIncoming;
-        }
-
-        if self.pending.len() < self.max_pending {
-            self.pending.push_back(input);
-            return QueueEnqueueAction::Enqueued;
-        }
-
-        match self.drop_policy {
-            LlmMessageQueueDropPolicy::Oldest => {
-                let _ = self.pending.pop_front();
-                self.pending.push_back(input);
-                QueueEnqueueAction::DroppedOldest
-            }
-            LlmMessageQueueDropPolicy::Newest => {
-                let _ = self.pending.pop_back();
-                self.pending.push_back(input);
-                QueueEnqueueAction::DroppedNewest
-            }
-            LlmMessageQueueDropPolicy::None => QueueEnqueueAction::DroppedIncoming,
-        }
-    }
-
-    fn dequeue_next(&mut self) -> Option<QueuedLlmInput> {
-        match self.mode {
-            LlmMessageQueueMode::Followup => self.pending.pop_front(),
-            LlmMessageQueueMode::Collect => self.dequeue_collect_mode(),
-        }
-    }
-
-    fn dequeue_collect_mode(&mut self) -> Option<QueuedLlmInput> {
-        let first = self.pending.pop_front()?;
-        match first {
-            QueuedLlmInput::Transcription(mut merged) => {
-                while let Some(QueuedLlmInput::Transcription(next)) = self.pending.front() {
-                    if next.text.trim().is_empty() {
-                        let _ = self.pending.pop_front();
-                        continue;
-                    }
-                    let Some(QueuedLlmInput::Transcription(next)) = self.pending.pop_front() else {
-                        break;
-                    };
-                    append_collected_text(&mut merged.text, &next.text);
-                    merged.is_final = merged.is_final || next.is_final;
-                    merged.transcribed_at = next.transcribed_at;
-                }
-                Some(QueuedLlmInput::Transcription(merged))
-            }
-            QueuedLlmInput::TextInjection(mut merged) => {
-                if merged.fork_at_keep_count.is_some() {
-                    return Some(QueuedLlmInput::TextInjection(merged));
-                }
-                while let Some(QueuedLlmInput::TextInjection(next)) = self.pending.front() {
-                    if next.fork_at_keep_count.is_some() {
-                        break;
-                    }
-                    if next.text.trim().is_empty() {
-                        let _ = self.pending.pop_front();
-                        continue;
-                    }
-                    let Some(QueuedLlmInput::TextInjection(next)) = self.pending.pop_front() else {
-                        break;
-                    };
-                    append_collected_text(&mut merged.text, &next.text);
-                }
-                Some(QueuedLlmInput::TextInjection(merged))
-            }
-        }
-    }
-}
-
-fn append_collected_text(base: &mut String, next: &str) {
-    let next = next.trim();
-    if next.is_empty() {
-        return;
-    }
-    if !base.trim().is_empty() {
-        base.push_str("\n\n");
-    } else {
-        base.clear();
-    }
-    base.push_str(next);
-}
-
-/// Source of a conversation turn for attribution and telemetry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // ScheduledTask variant will be used when scheduler integration completes
-enum ConversationSource {
-    /// User spoke via microphone (STT).
-    Voice,
-    /// User typed text via GUI.
-    TextInput,
-    /// Scheduled task triggered conversation.
-    ScheduledTask { task_id: String },
-}
-
-#[derive(Debug, Clone)]
-struct ConversationTurn {
-    user_text: String,
-    assistant_text: String,
-    /// Source of this turn (voice, text, or scheduled task).
-    #[allow(dead_code)] // Will be used for telemetry/analytics in future phases
-    source: ConversationSource,
-}
-
-fn append_conversation_turn(
-    turns: &mut Vec<ConversationTurn>,
-    user_text: String,
-    assistant_text: String,
-    source: ConversationSource,
-) {
-    turns.push(ConversationTurn {
-        user_text,
-        assistant_text,
-        source,
-    });
-}
-
-fn build_conversation_snapshot_entries(
-    turns: &[ConversationTurn],
-) -> Vec<ConversationSnapshotEntry> {
-    let mut entries = Vec::with_capacity(turns.len().saturating_mul(2));
-    for turn in turns {
-        if !turn.user_text.trim().is_empty() {
-            entries.push(ConversationSnapshotEntry {
-                role: ConversationSnapshotEntryRole::User,
-                text: turn.user_text.clone(),
-            });
-        }
-        if !turn.assistant_text.trim().is_empty() {
-            entries.push(ConversationSnapshotEntry {
-                role: ConversationSnapshotEntryRole::Assistant,
-                text: turn.assistant_text.clone(),
-            });
-        }
-    }
-    entries
-}
-
-/// Build a short conversation context for the background agent.
-///
-/// Takes the last `max_turns` turns and formats them as a readable summary
-/// so the background agent has continuity with the voice conversation.
-fn build_background_context(turns: &[ConversationTurn], max_turns: usize) -> String {
-    let recent = if turns.len() > max_turns {
-        &turns[turns.len() - max_turns..]
-    } else {
-        turns
-    };
-    if recent.is_empty() {
-        return String::new();
-    }
-    let mut ctx = String::from("Recent conversation:\n");
-    for turn in recent {
-        if !turn.user_text.trim().is_empty() {
-            ctx.push_str(&format!("User: {}\n", turn.user_text.trim()));
-        }
-        if !turn.assistant_text.trim().is_empty() {
-            ctx.push_str(&format!("Fae: {}\n", turn.assistant_text.trim()));
-        }
-    }
-    ctx
 }
 
 /// Pipeline operating mode.
@@ -647,6 +418,7 @@ impl PipelineCoordinator {
                     let cancel = cancel.clone();
                     let tts_tx = tts_sentence_tx.clone();
                     let memory_root = memory_root.clone();
+                    let runtime_tx = runtime_tx.clone();
                     tokio::spawn(async move {
                         run_identity_gate(
                             config,
@@ -655,6 +427,7 @@ impl PipelineCoordinator {
                             tts_tx,
                             memory_root,
                             onboarding_seg_rx,
+                            runtime_tx,
                             cancel,
                         )
                         .await;
@@ -677,6 +450,7 @@ impl PipelineCoordinator {
                         cancel: cancel.clone(),
                         gate_cmd_rx: self.gate_cmd_rx.take(),
                         gate_active: Arc::clone(&self.gate_active),
+                        awaiting_approval: Arc::clone(&awaiting_approval),
                     };
                     let handle = Some(tokio::spawn(async move {
                         run_conversation_gate(config, ident_rx, gated_tx, gate_ctl).await;
@@ -1515,15 +1289,20 @@ async fn run_stt_stage(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_identity_gate(
-    _config: SpeechConfig,
+    config: SpeechConfig,
     mut rx: mpsc::Receiver<Transcription>,
     tx: mpsc::Sender<Transcription>,
     tts_tx: mpsc::Sender<SentenceChunk>,
     memory_root: std::path::PathBuf,
     _onboarding_seg_rx: Option<mpsc::Receiver<SpeechSegment>>,
+    runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     cancel: CancellationToken,
 ) {
+    let voice_cfg = config.voice_identity.clone();
+    let min_enroll_samples = voice_cfg.min_enroll_samples.max(1) as usize;
+
     let store = MemoryStore::new(&memory_root);
     if let Err(e) = store.ensure_dirs() {
         error!("memory init failed: {e}");
@@ -1532,13 +1311,17 @@ async fn run_identity_gate(
         error!("voice dir init failed: {e}");
     }
 
-    let has_primary = match store.load_primary_user() {
-        Ok(v) => v.is_some(),
+    let mut primary_user = match store.load_primary_user() {
+        Ok(v) => v,
         Err(e) => {
             error!("failed to load primary user memory: {e}");
-            false
+            None
         }
     };
+    let mut identity_profile = build_voice_identity_profile(primary_user.as_ref(), &voice_cfg);
+    let mut hold_until: Option<Instant> = None;
+
+    let has_primary = primary_user.is_some();
 
     if !has_primary {
         let _ = speak(
@@ -1555,8 +1338,122 @@ async fn run_identity_gate(
             msg = rx.recv() => {
                 let Some(t) = msg else { break };
 
-                // TODO: Speaker detection disabled — respond to all speech.
-                // Re-enable voiceprint gating once embeddings are more stable.
+                let lower_raw = t.text.to_lowercase();
+                let has_direct_address = find_name_mention(&lower_raw).is_some();
+
+                // Voiceprint enrollment capture for onboarding/manual setup.
+                if voice_cfg.enabled
+                    && !identity_profile.is_enrolled()
+                    && has_direct_address
+                    && let (Some(vp), Some(dur), Some(rms)) =
+                        (t.voiceprint.as_ref(), t.audio_duration_secs, t.audio_rms)
+                    && (0.6..=10.0).contains(&dur)
+                    && rms >= 0.01
+                {
+                    let mut user = primary_user.clone().unwrap_or_else(|| crate::memory::PrimaryUser {
+                        name: config
+                            .user_name
+                            .clone()
+                            .unwrap_or_else(|| "Primary User".to_owned()),
+                        voiceprint: None,
+                        voiceprints: Vec::new(),
+                        voiceprint_centroid: None,
+                        voiceprint_threshold: None,
+                        voiceprint_version: None,
+                        voiceprint_updated_at: None,
+                        voice_sample_wav: None,
+                    });
+
+                    let mut samples = extract_voiceprint_samples(&user);
+                    let is_duplicate = samples
+                        .iter()
+                        .filter_map(|existing| crate::voiceprint::similarity(existing, vp))
+                        .any(|sim| sim >= 0.995);
+                    if !is_duplicate {
+                        samples.push(vp.clone());
+                        user.voiceprints = samples.clone();
+                        let mut enrolled = false;
+                        if samples.len() >= min_enroll_samples
+                            && let Some(c) = crate::voiceprint::centroid(&samples)
+                        {
+                            user.voiceprint = Some(c.clone());
+                            user.voiceprint_centroid = Some(c);
+                            user.voiceprint_threshold = Some(voice_cfg.threshold_accept);
+                            user.voiceprint_version = Some("spectral-v1".to_owned());
+                            user.voiceprint_updated_at = Some(now_epoch_secs());
+                            if !voice_cfg.store_raw_samples {
+                                user.voiceprints.clear();
+                            }
+                            enrolled = true;
+                        }
+                        if let Err(e) = store.save_primary_user(&user) {
+                            warn!("failed to persist voiceprint enrollment sample: {e}");
+                        } else {
+                            primary_user = Some(user);
+                            identity_profile =
+                                build_voice_identity_profile(primary_user.as_ref(), &voice_cfg);
+                            if let Some(rt) = &runtime_tx {
+                                let sample_count = primary_user
+                                    .as_ref()
+                                    .map(|u| extract_voiceprint_samples(u).len())
+                                    .unwrap_or(0);
+                                let _ = rt.send(RuntimeEvent::VoiceprintEnrollmentProgress {
+                                    sample_count,
+                                    required_samples: min_enroll_samples,
+                                    enrolled,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Speaker verification gate.
+                if voice_cfg.enabled && identity_profile.is_enrolled() {
+                    let now = Instant::now();
+                    let similarity = identity_profile.similarity(t.voiceprint.as_ref());
+                    let in_hold_window = hold_until.is_some_and(|until| now <= until);
+                    let matched = similarity.is_some_and(|sim| {
+                        sim >= identity_profile.threshold_accept
+                            || (in_hold_window && sim >= identity_profile.threshold_hold)
+                    });
+
+                    if matched {
+                        hold_until = Some(now + identity_profile.hold_window);
+                        if let Some(rt) = &runtime_tx {
+                            let _ = rt.send(RuntimeEvent::VoiceIdentityDecision {
+                                accepted: true,
+                                reason: "speaker_match".to_owned(),
+                                similarity,
+                            });
+                        }
+                    } else {
+                        let assist_fallback =
+                            identity_profile.mode == VoiceIdentityMode::Assist && has_direct_address;
+                        if !assist_fallback {
+                            if let Some(rt) = &runtime_tx {
+                                let reason = if similarity.is_some() {
+                                    "speaker_mismatch"
+                                } else {
+                                    "missing_voiceprint"
+                                };
+                                let _ = rt.send(RuntimeEvent::VoiceIdentityDecision {
+                                    accepted: false,
+                                    reason: reason.to_owned(),
+                                    similarity,
+                                });
+                            }
+                            continue;
+                        }
+
+                        if let Some(rt) = &runtime_tx {
+                            let _ = rt.send(RuntimeEvent::VoiceIdentityDecision {
+                                accepted: true,
+                                reason: "assist_direct_address_fallback".to_owned(),
+                                similarity,
+                            });
+                        }
+                    }
+                }
 
                 if tx.send(t).await.is_err() {
                     break;
@@ -1609,7 +1506,7 @@ async fn run_voice_command_filter(
     }
 }
 
-async fn speak(
+pub(crate) async fn speak(
     tts_tx: &mpsc::Sender<SentenceChunk>,
     text: &str,
     cancel: CancellationToken,
@@ -1809,34 +1706,7 @@ impl LocalCodingAssistants {
 /// queries like "what time is it?".
 fn should_include_local_coding_assistants_context(user_text: &str) -> bool {
     let lower = user_text.to_ascii_lowercase();
-    [
-        "code",
-        "coding",
-        "bug",
-        "debug",
-        "refactor",
-        "compile",
-        "build failed",
-        "test failure",
-        "unit test",
-        "cargo",
-        "rust",
-        "python",
-        "typescript",
-        "javascript",
-        "repo",
-        "repository",
-        "pull request",
-        "commit",
-        "stack trace",
-        "implementation",
-        "implement this",
-        "patch",
-        "codex",
-        "claude code",
-    ]
-    .iter()
-    .any(|term| lower.contains(term))
+    crate::intent::contains_any(&lower, crate::intent::CODING_CONTEXT_KEYWORDS)
 }
 
 fn is_command_available(command: &str) -> bool {
@@ -1886,11 +1756,6 @@ fn build_local_coding_assistants_context(
     )
 }
 
-/// Internal engine wrapper for the agent LLM.
-enum LlmEngine {
-    Agent(Box<crate::agent::FaeAgentLlm>),
-}
-
 struct LlmStageControl {
     interrupt: Arc<AtomicBool>,
     assistant_speaking: Arc<AtomicBool>,
@@ -1916,47 +1781,6 @@ struct LlmStageControl {
         Option<mpsc::UnboundedReceiver<super::messages::ApprovalNotification>>,
     /// Sender for resolved approval responses back to the handler.
     approval_response_tx: Option<mpsc::UnboundedSender<(u64, bool)>>,
-}
-
-impl LlmEngine {
-    /// Generate a response using whichever backend is active.
-    async fn generate_response(
-        &mut self,
-        user_input: String,
-        tx: mpsc::Sender<SentenceChunk>,
-        interrupt: Arc<AtomicBool>,
-    ) -> crate::error::Result<bool> {
-        match self {
-            Self::Agent(llm) => llm.generate_response(user_input, tx, interrupt).await,
-        }
-    }
-
-    /// Truncate the conversation history to keep only the system prompt and
-    /// the first `keep_count` messages after it. Used for conversation forking.
-    fn truncate_history(&mut self, keep_count: usize) {
-        match self {
-            Self::Agent(llm) => llm.truncate_history(keep_count),
-        }
-    }
-
-    /// Inject a background agent result into the voice engine's conversation
-    /// history so Fae has continuity about what she already told the user.
-    fn inject_background_result(&mut self, result_text: &str) {
-        match self {
-            Self::Agent(llm) => llm.inject_background_result(result_text),
-        }
-    }
-
-    /// Temporarily change the reasoning level for the next generation.
-    ///
-    /// Used to enable thinking mode for complex conversational queries and
-    /// reset it afterwards. Does not affect background agents (they have
-    /// their own config).
-    fn set_reasoning_level(&mut self, level: crate::fae_llm::types::ReasoningLevel) {
-        match self {
-            Self::Agent(llm) => llm.set_reasoning_level(level),
-        }
-    }
 }
 
 async fn run_llm_stage(
@@ -1996,7 +1820,7 @@ async fn run_llm_stage(
             // Voice engine: disable tools. Tool-intent routing is handled
             // at the coordinator level by spawning background agents.
             agent.disable_tools();
-            LlmEngine::Agent(Box::new(agent))
+            Box::new(agent)
         }
         Err(e) => {
             error!("failed to init agent LLM: {e}");
@@ -2093,6 +1917,9 @@ async fn run_llm_stage(
     // Acknowledgment counter for rotating through canned phrases.
     // Shared between tool acks and thinking acks for global rotation.
     let mut ack_counter: u64 = 0;
+
+    // Optional enrolled speaker profile for approval response hardening.
+    let mut approval_voice_profile = load_approval_voice_profile(&config);
 
     // Voice approval state machine.
     let mut pending_voice_approval: Option<PendingVoiceApproval> = None;
@@ -2201,7 +2028,32 @@ async fn run_llm_stage(
                             use crate::voice_command::{
                                 ApprovalVoiceResponse, parse_approval_response,
                             };
-                            let response = parse_approval_response(&transcription.text);
+                            let (speaker_verified, speaker_similarity) = approval_speaker_verified(
+                                approval_voice_profile.as_ref(),
+                                &transcription,
+                            );
+                            if let Some(rt) = &runtime_tx
+                                && approval_voice_profile.is_some()
+                            {
+                                let reason = if speaker_verified {
+                                    "approval_speaker_match"
+                                } else {
+                                    "approval_speaker_mismatch"
+                                };
+                                let _ = rt.send(RuntimeEvent::VoiceIdentityDecision {
+                                    accepted: speaker_verified,
+                                    reason: reason.to_owned(),
+                                    similarity: speaker_similarity,
+                                });
+                            }
+                            let speaker_verified_event =
+                                approval_voice_profile.as_ref().map(|_| speaker_verified);
+
+                            let response = if speaker_verified {
+                                parse_approval_response(&transcription.text)
+                            } else {
+                                ApprovalVoiceResponse::Ambiguous
+                            };
                             match response {
                                 ApprovalVoiceResponse::Approved => {
                                     let ack = crate::personality::next_acknowledgment(
@@ -2216,6 +2068,7 @@ async fn run_llm_stage(
                                         &awaiting_approval,
                                         &approval_response_tx,
                                         &runtime_tx,
+                                        speaker_verified_event,
                                     );
                                     let _ = tx
                                         .send(SentenceChunk {
@@ -2250,6 +2103,7 @@ async fn run_llm_stage(
                                         &awaiting_approval,
                                         &approval_response_tx,
                                         &runtime_tx,
+                                        speaker_verified_event,
                                     );
                                     let _ = tx
                                         .send(SentenceChunk {
@@ -2287,6 +2141,7 @@ async fn run_llm_stage(
                                                 &awaiting_approval,
                                                 &approval_response_tx,
                                                 &runtime_tx,
+                                                speaker_verified_event,
                                             );
                                             let _ = tx
                                                 .send(SentenceChunk {
@@ -2306,6 +2161,12 @@ async fn run_llm_stage(
                                                 );
                                             }
                                         } else {
+                                            if !speaker_verified {
+                                                info!(
+                                                    similarity = speaker_similarity,
+                                                    "approval response rejected (speaker mismatch)"
+                                                );
+                                            }
                                             let reprompt = crate::personality::next_acknowledgment(
                                                 crate::personality::APPROVAL_AMBIGUOUS,
                                                 approval_ack_counter,
@@ -2410,7 +2271,6 @@ async fn run_llm_stage(
                                 &mut conversation_turns,
                                 format!("[background task {}]", result.task_id),
                                 spoken.clone(),
-                                ConversationSource::Voice,
                             );
                             let _ = tx
                                 .send(SentenceChunk {
@@ -2422,6 +2282,9 @@ async fn run_llm_stage(
                         continue;
                     }
                     Input::ApprovalNotification(Some(notif)) => {
+                        // Refresh enrolled profile at approval start so newly
+                        // completed onboarding enrollment applies immediately.
+                        approval_voice_profile = load_approval_voice_profile(&config);
                         // A tool is requesting user approval. If we're already
                         // handling one, queue it; otherwise start immediately.
                         if pending_voice_approval.is_some() {
@@ -2467,6 +2330,7 @@ async fn run_llm_stage(
                                     &awaiting_approval,
                                     &approval_response_tx,
                                     &runtime_tx,
+                                    None,
                                 );
                                 let _ = tx
                                     .send(SentenceChunk {
@@ -2491,12 +2355,6 @@ async fn run_llm_stage(
                     }
                 }
             }
-        };
-
-        // Determine source of this turn for attribution
-        let conversation_source = match &next_input {
-            QueuedLlmInput::Transcription(_) => ConversationSource::Voice,
-            QueuedLlmInput::TextInjection(_) => ConversationSource::TextInput,
         };
 
         let user_ctx = UserInputContext {
@@ -2529,7 +2387,6 @@ async fn run_llm_stage(
                 &mut conversation_turns,
                 user_text.clone(),
                 assistant_text.clone(),
-                conversation_source.clone(),
             );
 
             if let Some(rt) = &runtime_tx {
@@ -2563,7 +2420,6 @@ async fn run_llm_stage(
                 &mut conversation_turns,
                 user_text.clone(),
                 assistant_text.clone(),
-                conversation_source.clone(),
             );
 
             if let Some(rt) = &runtime_tx {
@@ -2662,12 +2518,7 @@ async fn run_llm_stage(
             });
 
             // 4. Record the ack in conversation history.
-            append_conversation_turn(
-                &mut conversation_turns,
-                user_text.clone(),
-                ack.to_owned(),
-                conversation_source,
-            );
+            append_conversation_turn(&mut conversation_turns, user_text.clone(), ack.to_owned());
             capture_memory_turn(
                 memory_orchestrator.as_ref(),
                 runtime_tx.as_ref(),
@@ -2995,7 +2846,6 @@ async fn run_llm_stage(
             &mut conversation_turns,
             user_text.clone(),
             assistant_text.clone(),
-            conversation_source,
         );
         capture_memory_turn(
             memory_orchestrator.as_ref(),
@@ -3012,7 +2862,6 @@ async fn run_llm_stage(
                 &mut conversation_turns,
                 format!("[background task {}]", bg_result.task_id),
                 bg_result.spoken_summary.clone(),
-                ConversationSource::Voice,
             );
             // Narrate the background result via TTS.
             let _ = tx
@@ -3078,7 +2927,7 @@ struct UserInputContext<'a> {
 
 fn prepare_user_text(
     input: QueuedLlmInput,
-    engine: &mut LlmEngine,
+    engine: &mut Box<crate::agent::FaeAgentLlm>,
     ctx: &UserInputContext<'_>,
 ) -> Option<String> {
     match input {
@@ -3174,104 +3023,6 @@ fn prepare_user_text(
     }
 }
 
-fn enqueue_pending_input(queue: &mut LlmInputQueue, input: QueuedLlmInput) {
-    let action = queue.enqueue(input);
-    match action {
-        QueueEnqueueAction::Enqueued => {}
-        QueueEnqueueAction::DroppedOldest => {
-            warn!(
-                pending = queue.len(),
-                "LLM pending-input queue full, dropped oldest entry"
-            );
-        }
-        QueueEnqueueAction::DroppedNewest => {
-            warn!(
-                pending = queue.len(),
-                "LLM pending-input queue full, dropped newest queued entry"
-            );
-        }
-        QueueEnqueueAction::DroppedIncoming => {
-            warn!(
-                pending = queue.len(),
-                "LLM pending-input queue full, dropped incoming entry"
-            );
-        }
-    }
-}
-
-fn clear_pending_inputs(
-    queue: &mut LlmInputQueue,
-    rx: &mut mpsc::Receiver<Transcription>,
-    text_injection_rx: &mut Option<mpsc::UnboundedReceiver<TextInjection>>,
-    transcription_channel_closed: &mut bool,
-) -> usize {
-    let mut cleared = queue.clear();
-
-    loop {
-        match rx.try_recv() {
-            Ok(t) => {
-                if !t.text.trim().is_empty() {
-                    cleared += 1;
-                }
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                *transcription_channel_closed = true;
-                break;
-            }
-        }
-    }
-
-    if let Some(injection_rx) = text_injection_rx.as_mut() {
-        loop {
-            match injection_rx.try_recv() {
-                Ok(injection) => {
-                    if !injection.text.trim().is_empty() {
-                        cleared += 1;
-                    }
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    *text_injection_rx = None;
-                    break;
-                }
-            }
-        }
-    }
-
-    cleared
-}
-
-fn capture_memory_turn(
-    memory_orchestrator: Option<&MemoryOrchestrator>,
-    runtime_tx: Option<&broadcast::Sender<RuntimeEvent>>,
-    turn_id: &str,
-    user_text: &str,
-    assistant_text: &str,
-) {
-    if let Some(memory) = memory_orchestrator {
-        match memory.capture_turn(turn_id, user_text, assistant_text) {
-            Ok(report) => {
-                if let Some(rt) = runtime_tx {
-                    for write in &report.writes {
-                        let _ = rt.send(RuntimeEvent::MemoryWrite {
-                            op: write.op.clone(),
-                            target_id: write.target_id.clone(),
-                        });
-                    }
-                    for conflict in &report.conflicts {
-                        let _ = rt.send(RuntimeEvent::MemoryConflict {
-                            existing_id: conflict.existing_id.clone(),
-                            replacement_id: conflict.replacement_id.clone(),
-                        });
-                    }
-                }
-            }
-            Err(e) => warn!("memory capture failed: {e}"),
-        }
-    }
-}
-
 /// Emit panel visibility runtime events for the given voice command.
 ///
 /// Handles ShowConversation/HideConversation/ShowCanvas/HideCanvas.
@@ -3295,75 +3046,6 @@ fn emit_panel_visibility_events(
             }
         }
         _ => {}
-    }
-}
-
-/// Initiate a voice approval prompt: speak the prompt, set the flag, create state.
-async fn start_voice_approval(
-    notification: &super::messages::ApprovalNotification,
-    tx: &mpsc::Sender<SentenceChunk>,
-    awaiting_approval: &Arc<AtomicBool>,
-    cancel: &CancellationToken,
-) -> PendingVoiceApproval {
-    let prompt = crate::personality::format_approval_prompt(
-        &notification.tool_name,
-        &notification.input_json,
-    );
-    info!(
-        request_id = notification.request_id,
-        tool = %notification.tool_name,
-        "speaking approval prompt"
-    );
-
-    // Speak the approval prompt via TTS.
-    let _ = speak(tx, &prompt, cancel.clone()).await;
-
-    awaiting_approval.store(true, Ordering::Relaxed);
-
-    PendingVoiceApproval {
-        request_id: notification.request_id,
-        tool_name: notification.tool_name.clone(),
-        description: prompt,
-        prompt_spoken_at: None, // set when AssistantSpeechEnd arrives
-        created_at: Instant::now(),
-        reprompt_count: 0,
-    }
-}
-
-/// Resolve a pending voice approval and send the response.
-fn resolve_voice_approval(
-    pending: &mut Option<PendingVoiceApproval>,
-    approved: bool,
-    source: &str,
-    awaiting_approval: &Arc<AtomicBool>,
-    approval_response_tx: &Option<mpsc::UnboundedSender<(u64, bool)>>,
-    runtime_tx: &Option<broadcast::Sender<RuntimeEvent>>,
-) {
-    if let Some(pva) = pending.take() {
-        let latency_ms = pva
-            .prompt_spoken_at
-            .map(|t| t.elapsed().as_millis())
-            .unwrap_or(0);
-        info!(
-            request_id = pva.request_id,
-            tool = %pva.tool_name,
-            prompt = %pva.description,
-            latency_ms,
-            approved,
-            source,
-            "resolving voice approval"
-        );
-        if let Some(resp_tx) = approval_response_tx {
-            let _ = resp_tx.send((pva.request_id, approved));
-        }
-        if let Some(rt) = runtime_tx {
-            let _ = rt.send(RuntimeEvent::ApprovalResolved {
-                request_id: pva.request_id,
-                approved,
-                source: source.to_owned(),
-            });
-        }
-        awaiting_approval.store(false, Ordering::Relaxed);
     }
 }
 
@@ -3596,60 +3278,16 @@ async fn run_playback_stage(
                         let _ = control_tx.send(ControlEvent::AssistantSpeechEnd { interrupted: true });
                     }
                     Some(PlaybackCommand::ThinkingTone) => {
-                        // Generate a brief 150ms acknowledgment tone (soft sine wave)
-                        // so the user knows Fae is processing their request.
-                        let tone_sample_rate = config.output_sample_rate;
-                        let duration_secs = 0.15_f32;
-                        let n_samples = (tone_sample_rate as f32 * duration_secs) as usize;
-                        let freq = 440.0_f32; // A4, gentle
-                        let volume = 0.08_f32; // Very quiet
-                        let tone: Vec<f32> = (0..n_samples)
-                            .map(|i| {
-                                let t = i as f32 / tone_sample_rate as f32;
-                                // Apply a smooth fade-in/fade-out envelope
-                                let env = {
-                                    let fade_samples = n_samples / 4;
-                                    if i < fade_samples {
-                                        i as f32 / fade_samples as f32
-                                    } else if i > n_samples - fade_samples {
-                                        (n_samples - i) as f32 / fade_samples as f32
-                                    } else {
-                                        1.0
-                                    }
-                                };
-                                volume * env * (2.0 * std::f32::consts::PI * freq * t).sin()
-                            })
-                            .collect();
-                        if let Err(e) = playback.enqueue(&tone, tone_sample_rate, true) {
+                        let sr = config.output_sample_rate;
+                        let tone = crate::audio::tone::generate_thinking_tone(sr);
+                        if let Err(e) = playback.enqueue(&tone, sr, true) {
                             error!("thinking tone playback error: {e}");
                         }
                     }
                     Some(PlaybackCommand::ListeningTone) => {
-                        // Generate a short ascending two-note chime (C5→E5, ~200ms)
-                        // to signal that Fae is listening for a yes/no response.
-                        let tone_sample_rate = config.output_sample_rate;
-                        let note_duration = 0.10_f32; // 100ms per note
-                        let n_per_note = (tone_sample_rate as f32 * note_duration) as usize;
-                        let freq_c5 = 523.25_f32;
-                        let freq_e5 = 659.25_f32;
-                        let volume = 0.10_f32;
-                        let mut tone = Vec::with_capacity(n_per_note * 2);
-                        for (note_idx, freq) in [freq_c5, freq_e5].iter().enumerate() {
-                            for i in 0..n_per_note {
-                                let t = i as f32 / tone_sample_rate as f32;
-                                let fade_len = n_per_note / 5;
-                                let env = if i < fade_len {
-                                    i as f32 / fade_len as f32
-                                } else if i > n_per_note - fade_len {
-                                    (n_per_note - i) as f32 / fade_len as f32
-                                } else {
-                                    1.0
-                                };
-                                let _ = note_idx; // suppress unused warning
-                                tone.push(volume * env * (2.0 * std::f32::consts::PI * freq * t).sin());
-                            }
-                        }
-                        if let Err(e) = playback.enqueue(&tone, tone_sample_rate, true) {
+                        let sr = config.output_sample_rate;
+                        let tone = crate::audio::tone::generate_listening_tone(sr);
+                        if let Err(e) = playback.enqueue(&tone, sr, true) {
                             error!("listening tone playback error: {e}");
                         }
                     }
@@ -3733,49 +3371,9 @@ enum GateState {
 /// Strip punctuation that STT inserts (commas, periods, etc.) so that
 /// phrase matching is resilient to transcription formatting differences.
 /// For example, "that will do, fae" → "that will do fae".
-fn strip_punctuation(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Expand common English contractions.
+use super::text_processing::strip_punctuation;
 #[cfg(test)]
-fn expand_contractions(text: &str) -> String {
-    text.replace("that'll", "that will")
-        .replace("i'll", "i will")
-        .replace("i'm", "i am")
-        .replace("i've", "i have")
-        .replace("i'd", "i would")
-        .replace("you'll", "you will")
-        .replace("you're", "you are")
-        .replace("you've", "you have")
-        .replace("you'd", "you would")
-        .replace("we'll", "we will")
-        .replace("we're", "we are")
-        .replace("we've", "we have")
-        .replace("they'll", "they will")
-        .replace("they're", "they are")
-        .replace("they've", "they have")
-        .replace("he'll", "he will")
-        .replace("she'll", "she will")
-        .replace("it'll", "it will")
-        .replace("it's", "it is")
-        .replace("can't", "cannot")
-        .replace("won't", "will not")
-        .replace("don't", "do not")
-        .replace("doesn't", "does not")
-        .replace("didn't", "did not")
-        .replace("isn't", "is not")
-        .replace("wasn't", "was not")
-        .replace("weren't", "were not")
-        .replace("wouldn't", "would not")
-        .replace("couldn't", "could not")
-        .replace("shouldn't", "should not")
-}
+use super::text_processing::{capitalize_first, expand_contractions};
 
 /// Whether the user is asking to open the full conversation in canvas.
 fn is_show_conversation_request(text: &str) -> bool {
@@ -3817,6 +3415,11 @@ struct ConversationGateControl {
     /// Shared flag indicating whether the gate is currently active.
     /// Written by the gate, read by the GUI for button state.
     gate_active: Arc<AtomicBool>,
+    /// Shared flag indicating whether a voice approval yes/no is in progress.
+    ///
+    /// While true, the gate should not require direct address so short
+    /// responses like "yes" / "no" are not dropped.
+    awaiting_approval: Arc<AtomicBool>,
 }
 
 /// Conversation gate: routes transcriptions based on active/idle state.
@@ -3840,6 +3443,9 @@ async fn run_conversation_gate(
     mut ctl: ConversationGateControl,
 ) {
     let idle_timeout_s = config.conversation.idle_timeout_s;
+    let require_direct_address = config.conversation.require_direct_address;
+    let direct_address_followup =
+        Duration::from_secs(config.conversation.direct_address_followup_s as u64);
     // Always-on: start in Active state.
     let mut state = GateState::Active;
 
@@ -3853,6 +3459,9 @@ async fn run_conversation_gate(
     // Auto-idle: track when the last conversational activity happened.
     let mut last_activity = Instant::now();
     let mut idle_check = tokio::time::interval(Duration::from_secs(5));
+    // Engaged window: once the user addresses Fae directly, allow follow-up
+    // turns without repeating the name for a short period.
+    let mut engaged_until: Option<Instant> = None;
 
     info!("conversation gate active (always-on)");
 
@@ -3978,7 +3587,11 @@ async fn run_conversation_gate(
                                     if llm_tx.send(forwarded).await.is_err() {
                                         break;
                                     }
-                                    last_activity = Instant::now();
+                                    let now = Instant::now();
+                                    if require_direct_address && !direct_address_followup.is_zero() {
+                                        engaged_until = Some(now + direct_address_followup);
+                                    }
+                                    last_activity = now;
                                     continue;
                                 }
 
@@ -3986,6 +3599,23 @@ async fn run_conversation_gate(
                                 if assistant_active {
                                     // During assistant speech without name: ignore.
                                     // Background conversation doesn't interrupt.
+                                    continue;
+                                }
+
+                                // In direct-address mode, ignore ambient speech
+                                // unless the user recently addressed Fae.
+                                let in_followup_window = engaged_until
+                                    .is_some_and(|until| Instant::now() <= until);
+                                let approval_in_progress =
+                                    ctl.awaiting_approval.load(Ordering::Relaxed);
+                                if require_direct_address
+                                    && !in_followup_window
+                                    && !approval_in_progress
+                                {
+                                    info!(
+                                        text = %t.text,
+                                        "dropping transcription (no direct address outside follow-up window)"
+                                    );
                                     continue;
                                 }
 
@@ -4006,7 +3636,11 @@ async fn run_conversation_gate(
                                 if llm_tx.send(t).await.is_err() {
                                     break;
                                 }
-                                last_activity = Instant::now();
+                                let now = Instant::now();
+                                if require_direct_address && !direct_address_followup.is_zero() {
+                                    engaged_until = Some(now + direct_address_followup);
+                                }
+                                last_activity = now;
                             }
                         }
                     }
@@ -4017,138 +3651,9 @@ async fn run_conversation_gate(
     }
 }
 
-/// Extract the user's query from text surrounding a name mention match.
-///
-/// Prefers text after the name ("Fae, how are you?" → "how are you?"),
-/// falls back to text before it ("Hello Fae" → "Hello"), then defaults to
-/// "Hello" if the name was the entire utterance.
-fn extract_query_around_name(text: &str, pos: usize, matched_len: usize) -> String {
-    let after = &text[pos + matched_len..];
-    let after = after.trim_start_matches([',', ':', '.', '!', '?', ' ']);
-    let after = after.trim();
-
-    if !after.is_empty() {
-        return after.to_owned();
-    }
-
-    let before = &text[..pos];
-    let before = before.trim_end_matches([',', ':', '.', '!', '?', ' ']);
-    let before = before.trim();
-    if before.is_empty() {
-        "Hello".to_owned()
-    } else {
-        before.to_owned()
-    }
-}
-
-/// Check if the assistant's name ("fae") appears in text as a standalone word.
-///
-/// This is used during Active state for name-gated barge-in: saying "Fae,
-/// stop that" should interrupt the assistant.
-/// Returns `(byte_pos, matched_len)` of the first standalone name match, or
-/// `None` if the name doesn't appear.
-fn find_name_mention(lower_raw: &str) -> Option<(usize, usize)> {
-    let variants = ["faye", "fae", "fea", "fay", "fey", "fah", "feh", "fee"];
-
-    let mut best: Option<(usize, usize)> = None;
-    for v in variants {
-        let mut search_from = 0;
-        while search_from < lower_raw.len() {
-            let haystack = &lower_raw[search_from..];
-            let Some(rel_pos) = haystack.find(v) else {
-                break;
-            };
-            let pos = search_from + rel_pos;
-            let end = pos + v.len();
-
-            // Word boundary check to avoid false positives ("coffee" matching "fee").
-            let start_ok = pos == 0 || !lower_raw.as_bytes()[pos - 1].is_ascii_alphanumeric();
-            let end_ok =
-                end >= lower_raw.len() || !lower_raw.as_bytes()[end].is_ascii_alphanumeric();
-
-            if start_ok && end_ok {
-                let candidate = (pos, v.len());
-                best = match best {
-                    None => Some(candidate),
-                    Some(prev) if candidate.0 < prev.0 => Some(candidate),
-                    Some(prev) => Some(prev),
-                };
-                break;
-            }
-            search_from = pos + 1;
-        }
-    }
-    best
-}
-
-fn canonicalize_wake_word_transcription(wake_word: &str, text: &str) -> Option<String> {
-    // Conservative fix-up for common STT confusions when users address Fae.
-    // We only rewrite the first "wake-like" token near the start of the utterance.
-    let wake = wake_word.trim().to_ascii_lowercase();
-
-    // Only perform canonicalization for wake words containing "fae".
-    if !wake.contains("fae") {
-        return None;
-    }
-
-    let original = text;
-    let trimmed = original.trim_start();
-    let base_off = original.len().saturating_sub(trimmed.len());
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    let canonical = "Fae";
-    let fae_variants = ["faye", "fae", "fea", "fee", "fay", "fey", "fah", "feh"];
-
-    fn boundary_ok(s: &str, at: usize) -> bool {
-        if at >= s.len() {
-            return true;
-        }
-        matches!(
-            s.as_bytes()[at],
-            b' ' | b'\t' | b'\n' | b'\r' | b',' | b'.' | b'!' | b'?' | b':' | b';'
-        )
-    }
-
-    // Direct: "fee, ...", "fay ..."
-    for v in fae_variants {
-        if lower.starts_with(v) && boundary_ok(&lower, v.len()) {
-            let start = base_off;
-            let end = start + v.len();
-            if end <= original.len() && end > start {
-                let mut out = original.to_owned();
-                out.replace_range(start..end, canonical);
-                return Some(out);
-            }
-        }
-    }
-
-    // Common prefixed forms: "hey fee", "hi fee", "hello fee", "hello, fee", etc.
-    // Include comma-separated variants since STT often inserts punctuation.
-    let prefixes = [
-        "hey ", "hey, ", "hi ", "hi, ", "high ", "high, ", "hello ", "hello, ", "ok ", "ok, ",
-        "okay ", "okay, ",
-    ];
-    for prefix in prefixes.iter().copied() {
-        if let Some(after) = lower.strip_prefix(prefix) {
-            for v in fae_variants {
-                if after.starts_with(v) && boundary_ok(after, v.len()) {
-                    let start = base_off + prefix.len();
-                    let end = start + v.len();
-                    if end <= original.len() && end > start {
-                        let mut out = original.to_owned();
-                        out.replace_range(start..end, canonical);
-                        return Some(out);
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
+use super::name_detection::{
+    canonicalize_wake_word_transcription, extract_query_around_name, find_name_mention,
+};
 
 /// Print transcriptions to stdout (for transcribe-only mode).
 async fn run_print_stage(
@@ -4195,19 +3700,6 @@ fn within_assistant_holdoff(last_start: &Option<Instant>, holdoff_ms: u32) -> bo
         return false;
     }
     Instant::now().duration_since(t0) < Duration::from_millis(holdoff_ms as u64)
-}
-
-#[cfg(test)]
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) => {
-            let mut result = c.to_uppercase().to_string();
-            result.push_str(chars.as_str());
-            result
-        }
-        None => String::new(),
-    }
 }
 
 /// Forward LLM sentence chunks to TTS and the runtime event stream.
@@ -4406,90 +3898,7 @@ async fn forward_sentences(
     }
 }
 
-/// Strip markdown code fences from text. Removes leading/trailing
-/// ` ```json ` / ` ``` ` markers that models sometimes wrap JSON in.
-fn strip_markdown_fences(text: &str) -> String {
-    let mut s = text.to_owned();
-    // Remove opening fence: ```json or ```
-    if let Some(start) = s.find("```") {
-        let fence_end = s[start + 3..]
-            .find('\n')
-            .map(|i| start + 3 + i + 1)
-            .unwrap_or(start + 3);
-        s.replace_range(start..fence_end, "");
-    }
-    // Remove closing fence
-    if let Some(end) = s.rfind("```") {
-        s.replace_range(end..end + 3, "");
-    }
-    s
-}
-
-/// Extract the outermost `{...}` JSON object from `text`, accounting
-/// for nested braces and quoted strings. Returns the slice if balanced
-/// braces are found, `None` otherwise.
-fn extract_json_object(text: &str) -> Option<&str> {
-    let start = text.find('{')?;
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    for (i, ch) in text[start..].char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => escape_next = true,
-            '"' => in_string = !in_string,
-            '{' if !in_string => depth += 1,
-            '}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&text[start..start + i + 1]);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Clean up common JSON formatting issues from local LLM output.
-///
-/// Local models sometimes output values like `1 billion` or `1.25 billion`
-/// instead of proper numeric literals. This function normalizes those
-/// patterns so the JSON can be parsed by serde.
-fn clean_model_json(text: &str) -> String {
-    let mut result = text.to_owned();
-
-    // Process multiplier words from largest to smallest.
-    for (word, multiplier) in [
-        (" trillion", 1_000_000_000_000_f64),
-        (" billion", 1_000_000_000_f64),
-        (" million", 1_000_000_f64),
-    ] {
-        while let Some(word_pos) = result.find(word) {
-            // Walk backward from the space before the word to find the number.
-            let before = &result[..word_pos];
-            let num_start = before
-                .rfind(|c: char| !c.is_ascii_digit() && c != '.')
-                .map_or(0, |i| i + 1);
-            let num_str = &result[num_start..word_pos];
-
-            if let Ok(n) = num_str.parse::<f64>() {
-                let expanded = format!("{}", (n * multiplier) as i64);
-                result.replace_range(num_start..word_pos + word.len(), &expanded);
-            } else {
-                // Can't parse the preceding text as a number; leave it and
-                // break to avoid an infinite loop.
-                break;
-            }
-        }
-    }
-
-    result
-}
+use super::text_processing::{clean_model_json, extract_json_object, strip_markdown_fences};
 
 /// Attempt to parse `text` as a canvas `RenderContent` JSON blob and
 /// render it to the `"gui"` canvas session.
@@ -4586,6 +3995,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use crate::pipeline::voice_identity::VoiceIdentityProfile;
     use std::time::Duration;
 
     // ── clean_model_json ─────────────────────────────────────────────
@@ -5071,6 +4481,7 @@ mod tests {
             cancel: cancel.clone(),
             gate_cmd_rx: None,
             gate_active: Arc::clone(&gate_active),
+            awaiting_approval: Arc::new(AtomicBool::new(false)),
         };
 
         let handle = tokio::spawn(async move {
@@ -5109,6 +4520,436 @@ mod tests {
         let _ = handle.await;
     }
 
+    #[tokio::test]
+    async fn gate_direct_address_mode_drops_ambient_and_allows_followups() {
+        let mut config = SpeechConfig::default();
+        config.conversation.require_direct_address = true;
+        config.conversation.direct_address_followup_s = 20;
+
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, mut llm_rx) = mpsc::channel(8);
+        let (playback_cmd_tx, _playback_cmd_rx) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+
+        let gate_active = Arc::new(AtomicBool::new(false));
+        let ctl = ConversationGateControl {
+            interrupt: Arc::new(AtomicBool::new(false)),
+            assistant_speaking: Arc::new(AtomicBool::new(false)),
+            assistant_generating: Arc::new(AtomicBool::new(false)),
+            playback_cmd_tx,
+            llm_queue_cmd_tx: None,
+            clear_queue_on_stop: false,
+            console_output: false,
+            cancel: cancel.clone(),
+            gate_cmd_rx: None,
+            gate_active: Arc::clone(&gate_active),
+            awaiting_approval: Arc::new(AtomicBool::new(false)),
+        };
+
+        let handle = tokio::spawn(async move {
+            run_conversation_gate(config, stt_rx, llm_tx, ctl).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(gate_active.load(Ordering::Relaxed));
+
+        // No direct address yet — should be ignored as ambient.
+        stt_tx
+            .send(Transcription {
+                text: "what is the weather today".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_rms: None,
+                audio_duration_secs: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send ambient-like transcription");
+
+        let first = tokio::time::timeout(Duration::from_millis(200), llm_rx.recv()).await;
+        assert!(first.is_err(), "non-addressed speech should be dropped");
+
+        // Direct address should pass and start follow-up window.
+        stt_tx
+            .send(Transcription {
+                text: "Fae, what is the weather today?".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_rms: None,
+                audio_duration_secs: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send direct-address transcription");
+
+        let addressed = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("direct-address transcription should be forwarded");
+        let addressed = addressed.expect("forwarded transcription");
+        assert_eq!(addressed.text, "what is the weather today?");
+
+        // Follow-up without name should pass while engaged window is open.
+        stt_tx
+            .send(Transcription {
+                text: "and tomorrow?".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_rms: None,
+                audio_duration_secs: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send follow-up transcription");
+
+        let followup = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("follow-up should be forwarded");
+        let followup = followup.expect("forwarded follow-up");
+        assert_eq!(followup.text, "and tomorrow?");
+
+        cancel.cancel();
+        drop(stt_tx);
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn gate_direct_address_mode_bypasses_filter_during_approval() {
+        let mut config = SpeechConfig::default();
+        config.conversation.require_direct_address = true;
+        config.conversation.direct_address_followup_s = 0;
+
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, mut llm_rx) = mpsc::channel(8);
+        let (playback_cmd_tx, _playback_cmd_rx) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let awaiting_approval = Arc::new(AtomicBool::new(true));
+
+        let ctl = ConversationGateControl {
+            interrupt: Arc::new(AtomicBool::new(false)),
+            assistant_speaking: Arc::new(AtomicBool::new(false)),
+            assistant_generating: Arc::new(AtomicBool::new(false)),
+            playback_cmd_tx,
+            llm_queue_cmd_tx: None,
+            clear_queue_on_stop: false,
+            console_output: false,
+            cancel: cancel.clone(),
+            gate_cmd_rx: None,
+            gate_active: Arc::new(AtomicBool::new(false)),
+            awaiting_approval: Arc::clone(&awaiting_approval),
+        };
+
+        let handle = tokio::spawn(async move {
+            run_conversation_gate(config, stt_rx, llm_tx, ctl).await;
+        });
+
+        stt_tx
+            .send(Transcription {
+                text: "yes".to_string(),
+                is_final: true,
+                voiceprint: None,
+                audio_rms: None,
+                audio_duration_secs: None,
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send approval response");
+
+        let received = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("approval response should pass through");
+        assert_eq!(received.expect("forwarded").text, "yes");
+
+        cancel.cancel();
+        drop(stt_tx);
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn identity_gate_enforce_drops_mismatch_and_accepts_match() {
+        let mut config = SpeechConfig::default();
+        config.voice_identity.enabled = true;
+        config.voice_identity.mode = VoiceIdentityMode::Enforce;
+        config.voice_identity.threshold_accept = 0.8;
+        config.voice_identity.threshold_hold = 0.75;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let memory_root = root.path().to_path_buf();
+        let store = MemoryStore::new(&memory_root);
+        store.ensure_dirs().expect("memory dirs");
+        store
+            .save_primary_user(&crate::memory::PrimaryUser {
+                name: "Alice".to_owned(),
+                voiceprint: Some(vec![1.0, 0.0, 0.0]),
+                voiceprints: vec![vec![1.0, 0.0, 0.0]],
+                voiceprint_centroid: Some(vec![1.0, 0.0, 0.0]),
+                voiceprint_threshold: Some(0.8),
+                voiceprint_version: Some("spectral-v1".to_owned()),
+                voiceprint_updated_at: Some(1),
+                voice_sample_wav: None,
+            })
+            .expect("save primary user");
+
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, mut llm_rx) = mpsc::channel(8);
+        let (tts_tx, _tts_rx) = mpsc::channel(8);
+        let cancel = CancellationToken::new();
+
+        let handle = tokio::spawn(async move {
+            run_identity_gate(
+                config,
+                stt_rx,
+                llm_tx,
+                tts_tx,
+                memory_root,
+                None,
+                None,
+                cancel.clone(),
+            )
+            .await;
+        });
+
+        stt_tx
+            .send(Transcription {
+                text: "hello there".to_owned(),
+                is_final: true,
+                voiceprint: Some(vec![0.0, 1.0, 0.0]),
+                audio_rms: Some(0.08),
+                audio_duration_secs: Some(1.1),
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send mismatch");
+        let mismatch = tokio::time::timeout(Duration::from_millis(200), llm_rx.recv()).await;
+        assert!(
+            mismatch.is_err(),
+            "mismatched speaker should be dropped in enforce mode"
+        );
+
+        stt_tx
+            .send(Transcription {
+                text: "hello there".to_owned(),
+                is_final: true,
+                voiceprint: Some(vec![1.0, 0.0, 0.0]),
+                audio_rms: Some(0.08),
+                audio_duration_secs: Some(1.1),
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send match");
+        let matched = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("match should pass");
+        assert_eq!(
+            matched.expect("forwarded transcription").text,
+            "hello there"
+        );
+
+        drop(stt_tx);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn identity_gate_assist_allows_direct_address_fallback() {
+        let mut config = SpeechConfig::default();
+        config.voice_identity.enabled = true;
+        config.voice_identity.mode = VoiceIdentityMode::Assist;
+        config.voice_identity.threshold_accept = 0.8;
+        config.voice_identity.threshold_hold = 0.75;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let memory_root = root.path().to_path_buf();
+        let store = MemoryStore::new(&memory_root);
+        store.ensure_dirs().expect("memory dirs");
+        store
+            .save_primary_user(&crate::memory::PrimaryUser {
+                name: "Alice".to_owned(),
+                voiceprint: Some(vec![1.0, 0.0, 0.0]),
+                voiceprints: vec![vec![1.0, 0.0, 0.0]],
+                voiceprint_centroid: Some(vec![1.0, 0.0, 0.0]),
+                voiceprint_threshold: Some(0.8),
+                voiceprint_version: Some("spectral-v1".to_owned()),
+                voiceprint_updated_at: Some(1),
+                voice_sample_wav: None,
+            })
+            .expect("save primary user");
+
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, mut llm_rx) = mpsc::channel(8);
+        let (tts_tx, _tts_rx) = mpsc::channel(8);
+        let cancel = CancellationToken::new();
+
+        let handle = tokio::spawn(async move {
+            run_identity_gate(
+                config,
+                stt_rx,
+                llm_tx,
+                tts_tx,
+                memory_root,
+                None,
+                None,
+                cancel.clone(),
+            )
+            .await;
+        });
+
+        stt_tx
+            .send(Transcription {
+                text: "what's the weather".to_owned(),
+                is_final: true,
+                voiceprint: Some(vec![0.0, 1.0, 0.0]),
+                audio_rms: Some(0.08),
+                audio_duration_secs: Some(1.1),
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send mismatch");
+        let dropped = tokio::time::timeout(Duration::from_millis(200), llm_rx.recv()).await;
+        assert!(dropped.is_err(), "non-addressed mismatch should be dropped");
+
+        stt_tx
+            .send(Transcription {
+                text: "Fae, what's the weather".to_owned(),
+                is_final: true,
+                voiceprint: Some(vec![0.0, 1.0, 0.0]),
+                audio_rms: Some(0.08),
+                audio_duration_secs: Some(1.1),
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send direct-address mismatch");
+        let fallback = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("direct-address fallback should pass");
+        assert_eq!(
+            fallback.expect("forwarded transcription").text,
+            "Fae, what's the weather"
+        );
+
+        drop(stt_tx);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn identity_gate_collects_enrollment_samples_and_finalizes() {
+        let mut config = SpeechConfig::default();
+        config.voice_identity.enabled = true;
+        config.voice_identity.mode = VoiceIdentityMode::Enforce;
+        config.voice_identity.min_enroll_samples = 2;
+        config.voice_identity.store_raw_samples = true;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let memory_root = root.path().to_path_buf();
+        let store = MemoryStore::new(&memory_root);
+        store.ensure_dirs().expect("memory dirs");
+        store
+            .save_primary_user(&crate::memory::PrimaryUser {
+                name: "Alice".to_owned(),
+                voiceprint: None,
+                voiceprints: Vec::new(),
+                voiceprint_centroid: None,
+                voiceprint_threshold: None,
+                voiceprint_version: None,
+                voiceprint_updated_at: None,
+                voice_sample_wav: None,
+            })
+            .expect("save primary user");
+
+        let (stt_tx, stt_rx) = mpsc::channel(8);
+        let (llm_tx, mut llm_rx) = mpsc::channel(8);
+        let (tts_tx, _tts_rx) = mpsc::channel(8);
+        let cancel = CancellationToken::new();
+
+        let handle = tokio::spawn(async move {
+            run_identity_gate(
+                config,
+                stt_rx,
+                llm_tx,
+                tts_tx,
+                memory_root.clone(),
+                None,
+                None,
+                cancel.clone(),
+            )
+            .await;
+        });
+
+        stt_tx
+            .send(Transcription {
+                text: "Fae, sample one".to_owned(),
+                is_final: true,
+                voiceprint: Some(vec![1.0, 0.0, 0.0]),
+                audio_rms: Some(0.09),
+                audio_duration_secs: Some(1.0),
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send sample one");
+        let _ = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("sample one should still pass");
+
+        stt_tx
+            .send(Transcription {
+                text: "Fae, sample two".to_owned(),
+                is_final: true,
+                voiceprint: Some(vec![0.8, 0.6, 0.0]),
+                audio_rms: Some(0.09),
+                audio_duration_secs: Some(1.0),
+                audio_captured_at: Instant::now(),
+                transcribed_at: Instant::now(),
+            })
+            .await
+            .expect("send sample two");
+        let _ = tokio::time::timeout(Duration::from_secs(2), llm_rx.recv())
+            .await
+            .expect("sample two should pass");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let saved = store
+            .load_primary_user()
+            .expect("load primary")
+            .expect("primary exists");
+        assert!(
+            saved.voiceprint_centroid.is_some(),
+            "voiceprint centroid should be finalized after required samples"
+        );
+
+        drop(stt_tx);
+        handle.abort();
+    }
+
+    #[test]
+    fn approval_speaker_verification_rejects_mismatch() {
+        let profile = VoiceIdentityProfile {
+            mode: VoiceIdentityMode::Assist,
+            centroid: Some(vec![1.0, 0.0, 0.0]),
+            threshold_accept: 0.8,
+            threshold_hold: 0.7,
+            hold_window: Duration::from_secs(8),
+        };
+        let mismatch = Transcription {
+            text: "yes".to_owned(),
+            is_final: true,
+            voiceprint: Some(vec![0.0, 1.0, 0.0]),
+            audio_rms: Some(0.08),
+            audio_duration_secs: Some(0.6),
+            audio_captured_at: Instant::now(),
+            transcribed_at: Instant::now(),
+        };
+        let (ok, sim) = approval_speaker_verified(Some(&profile), &mismatch);
+        assert!(!ok);
+        assert!(sim.is_some());
+    }
+
     /// Verify GateCommand::Sleep → Idle → GateCommand::Wake → Active cycle.
     #[tokio::test]
     async fn gate_sleep_wake_cycle() {
@@ -5131,6 +4972,7 @@ mod tests {
             cancel: cancel.clone(),
             gate_cmd_rx: Some(gate_cmd_rx),
             gate_active: Arc::clone(&gate_active),
+            awaiting_approval: Arc::new(AtomicBool::new(false)),
         };
 
         let handle = tokio::spawn(async move {
@@ -5234,6 +5076,7 @@ mod tests {
             cancel: cancel.clone(),
             gate_cmd_rx: Some(gate_cmd_rx),
             gate_active: Arc::new(AtomicBool::new(false)),
+            awaiting_approval: Arc::new(AtomicBool::new(false)),
         };
 
         let handle = tokio::spawn(async move {

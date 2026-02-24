@@ -8,6 +8,7 @@ use crate::config::{
 use crate::error::{Result, SpeechError};
 use crate::host::channel::{DeviceTarget, DeviceTransferHandler};
 use crate::host::contract::EventEnvelope;
+use crate::host::runtime_events::{map_runtime_event, progress_event_to_json};
 use crate::onboarding::OnboardingPhase;
 use crate::permissions::{PermissionKind, SharedPermissionStore};
 use crate::pipeline::coordinator::PipelineCoordinator;
@@ -16,6 +17,7 @@ use crate::progress::ProgressEvent;
 use crate::runtime::RuntimeEvent;
 use crate::runtime_audit::{RuntimeAuditEntry, RuntimeAuditSource};
 use crate::startup::initialize_models_with_progress;
+use crate::time_util::now_epoch_secs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -366,7 +368,7 @@ impl FaeDeviceTransferHandler {
                 config.llm.backend = LlmBackend::Local;
                 config.llm.tool_mode = AgentToolMode::ReadOnly;
                 if config.runtime.rescue_entered_at_secs.is_none() {
-                    config.runtime.rescue_entered_at_secs = Some(Self::now_epoch_secs());
+                    config.runtime.rescue_entered_at_secs = Some(now_epoch_secs());
                 }
             }
             return false;
@@ -381,7 +383,7 @@ impl FaeDeviceTransferHandler {
                     });
                 }
                 config.runtime.profile = RuntimeProfile::Rescue;
-                config.runtime.rescue_entered_at_secs = Some(Self::now_epoch_secs());
+                config.runtime.rescue_entered_at_secs = Some(now_epoch_secs());
                 config.llm.backend = LlmBackend::Local;
                 config.llm.tool_mode = AgentToolMode::ReadOnly;
             }
@@ -396,13 +398,6 @@ impl FaeDeviceTransferHandler {
         }
 
         true
-    }
-
-    fn now_epoch_secs() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
     }
 
     fn rescue_health_json(inputs: RescueHealthInputs, now_secs: u64) -> serde_json::Value {
@@ -560,7 +555,7 @@ impl FaeDeviceTransferHandler {
     ///
     /// Returns `true` if profile changed from `rescue` to `standard`.
     fn maybe_exit_rescue_profile_for_timeout(&self) -> Result<bool> {
-        let now_secs = Self::now_epoch_secs();
+        let now_secs = now_epoch_secs();
         let (auto_recovered, timeout_minutes, entered_at, from_profile, to_profile) = {
             let mut guard = self.lock_config()?;
             let timeout_minutes = guard.runtime.rescue_auto_exit_minutes;
@@ -742,275 +737,6 @@ impl FaeDeviceTransferHandler {
     }
 }
 
-/// Convert a `ProgressEvent` to a JSON payload for FFI event emission.
-fn progress_event_to_json(evt: &ProgressEvent) -> serde_json::Value {
-    match evt {
-        ProgressEvent::DownloadStarted {
-            repo_id,
-            filename,
-            total_bytes,
-        } => serde_json::json!({
-            "stage": "download_started",
-            "repo_id": repo_id,
-            "filename": filename,
-            "total_bytes": total_bytes,
-        }),
-        ProgressEvent::DownloadProgress {
-            repo_id,
-            filename,
-            bytes_downloaded,
-            total_bytes,
-        } => serde_json::json!({
-            "stage": "download_progress",
-            "repo_id": repo_id,
-            "filename": filename,
-            "bytes_downloaded": bytes_downloaded,
-            "total_bytes": total_bytes,
-        }),
-        ProgressEvent::DownloadComplete { repo_id, filename } => serde_json::json!({
-            "stage": "download_complete",
-            "repo_id": repo_id,
-            "filename": filename,
-        }),
-        ProgressEvent::Cached { repo_id, filename } => serde_json::json!({
-            "stage": "cached",
-            "repo_id": repo_id,
-            "filename": filename,
-        }),
-        ProgressEvent::LoadStarted { model_name } => serde_json::json!({
-            "stage": "load_started",
-            "model_name": model_name,
-        }),
-        ProgressEvent::LoadComplete {
-            model_name,
-            duration_secs,
-        } => serde_json::json!({
-            "stage": "load_complete",
-            "model_name": model_name,
-            "duration_secs": duration_secs,
-        }),
-        ProgressEvent::AggregateProgress {
-            bytes_downloaded,
-            total_bytes,
-            files_complete,
-            files_total,
-        } => serde_json::json!({
-            "stage": "aggregate_progress",
-            "bytes_downloaded": bytes_downloaded,
-            "total_bytes": total_bytes,
-            "files_complete": files_complete,
-            "files_total": files_total,
-        }),
-        ProgressEvent::DownloadPlanReady { plan } => serde_json::json!({
-            "stage": "download_plan_ready",
-            "file_count": plan.files.len(),
-            "total_bytes": plan.total_bytes(),
-            "needs_download": plan.needs_download(),
-        }),
-        ProgressEvent::Error { message } => serde_json::json!({
-            "stage": "error",
-            "message": message,
-        }),
-    }
-}
-
-/// Map a `RuntimeEvent` to an FFI-compatible event name and JSON payload.
-fn map_runtime_event(event: &RuntimeEvent) -> (String, serde_json::Value) {
-    use crate::pipeline::messages::ControlEvent;
-    match event {
-        RuntimeEvent::Control(ControlEvent::AudioDeviceChanged { device_name }) => (
-            "pipeline.control".to_owned(),
-            serde_json::json!({
-                "action": "audio_device_changed",
-                "device_name": device_name,
-            }),
-        ),
-        RuntimeEvent::Control(ControlEvent::DegradedMode { mode }) => (
-            "pipeline.control".to_owned(),
-            serde_json::json!({
-                "action": "degraded_mode",
-                "mode": mode,
-            }),
-        ),
-        RuntimeEvent::Control(c) => (
-            "pipeline.control".to_owned(),
-            serde_json::json!({"control": format!("{c:?}")}),
-        ),
-        RuntimeEvent::Transcription(t) => (
-            "pipeline.transcription".to_owned(),
-            serde_json::json!({"text": t.text, "is_final": t.is_final}),
-        ),
-        RuntimeEvent::AssistantSentence(s) => (
-            "pipeline.assistant_sentence".to_owned(),
-            serde_json::json!({"text": s.text, "is_final": s.is_final}),
-        ),
-        RuntimeEvent::AssistantGenerating { active } => (
-            "pipeline.generating".to_owned(),
-            serde_json::json!({"active": active}),
-        ),
-        RuntimeEvent::ToolExecuting { name } => (
-            "pipeline.tool_executing".to_owned(),
-            serde_json::json!({"name": name}),
-        ),
-        RuntimeEvent::ToolCall {
-            id,
-            name,
-            input_json,
-        } => (
-            "pipeline.tool_call".to_owned(),
-            serde_json::json!({"id": id, "name": name, "input_json": input_json}),
-        ),
-        RuntimeEvent::ToolResult {
-            id,
-            name,
-            success,
-            output_text,
-        } => (
-            "pipeline.tool_result".to_owned(),
-            serde_json::json!({
-                "id": id,
-                "name": name,
-                "success": success,
-                "output_text": output_text,
-            }),
-        ),
-        RuntimeEvent::AssistantAudioLevel { rms } => (
-            "pipeline.audio_level".to_owned(),
-            serde_json::json!({"rms": rms}),
-        ),
-        RuntimeEvent::AssistantViseme { mouth_png } => (
-            "pipeline.viseme".to_owned(),
-            serde_json::json!({"mouth_png": mouth_png}),
-        ),
-        RuntimeEvent::MemoryRecall { query, hits } => (
-            "pipeline.memory_recall".to_owned(),
-            serde_json::json!({"query": query, "hits": hits}),
-        ),
-        RuntimeEvent::MemoryWrite { op, target_id } => (
-            "pipeline.memory_write".to_owned(),
-            serde_json::json!({"op": op, "target_id": target_id}),
-        ),
-        RuntimeEvent::MemoryConflict {
-            existing_id,
-            replacement_id,
-        } => (
-            "pipeline.memory_conflict".to_owned(),
-            serde_json::json!({"existing_id": existing_id, "replacement_id": replacement_id}),
-        ),
-        RuntimeEvent::MemoryMigration { from, to, success } => (
-            "pipeline.memory_migration".to_owned(),
-            serde_json::json!({"from": from, "to": to, "success": success}),
-        ),
-        RuntimeEvent::ModelSelectionPrompt {
-            candidates,
-            timeout_secs,
-        } => (
-            "pipeline.model_selection_prompt".to_owned(),
-            serde_json::json!({"candidates": candidates, "timeout_secs": timeout_secs}),
-        ),
-        RuntimeEvent::ModelSelected { provider_model } => (
-            "pipeline.model_selected".to_owned(),
-            serde_json::json!({"provider_model": provider_model}),
-        ),
-        RuntimeEvent::VoiceCommandDetected { command } => (
-            "pipeline.voice_command".to_owned(),
-            serde_json::json!({"command": command}),
-        ),
-        RuntimeEvent::PermissionsChanged { granted } => (
-            "pipeline.permissions_changed".to_owned(),
-            serde_json::json!({"granted": granted}),
-        ),
-        RuntimeEvent::ModelSwitchRequested { target } => (
-            "pipeline.model_switch_requested".to_owned(),
-            serde_json::json!({"target": target}),
-        ),
-        RuntimeEvent::ConversationSnapshot { entries } => {
-            let items: Vec<serde_json::Value> = entries
-                .iter()
-                .map(|e| serde_json::json!({"role": format!("{:?}", e.role), "text": e.text}))
-                .collect();
-            (
-                "pipeline.conversation_snapshot".to_owned(),
-                serde_json::json!({"entries": items}),
-            )
-        }
-        RuntimeEvent::MicStatus { active } => (
-            "pipeline.mic_status".to_owned(),
-            serde_json::json!({"active": active}),
-        ),
-        RuntimeEvent::ConversationCanvasVisibility { visible } => (
-            "pipeline.canvas_visibility".to_owned(),
-            serde_json::json!({"visible": visible}),
-        ),
-        RuntimeEvent::ConversationVisibility { visible } => (
-            "pipeline.conversation_visibility".to_owned(),
-            serde_json::json!({"visible": visible}),
-        ),
-        RuntimeEvent::ProviderFallback { primary, error } => (
-            "pipeline.provider_fallback".to_owned(),
-            serde_json::json!({"primary": primary, "error": error}),
-        ),
-        RuntimeEvent::IntelligenceExtraction {
-            items_count,
-            actions_count,
-        } => (
-            "pipeline.intelligence_extraction".to_owned(),
-            serde_json::json!({"items_count": items_count, "actions_count": actions_count}),
-        ),
-        RuntimeEvent::ProactiveBriefingReady { item_count } => (
-            "pipeline.briefing_ready".to_owned(),
-            serde_json::json!({"item_count": item_count}),
-        ),
-        RuntimeEvent::RelationshipUpdate { name } => (
-            "pipeline.relationship_update".to_owned(),
-            serde_json::json!({"name": name}),
-        ),
-        RuntimeEvent::SkillProposal { skill_name } => (
-            "pipeline.skill_proposal".to_owned(),
-            serde_json::json!({"skill_name": skill_name}),
-        ),
-        RuntimeEvent::NoiseBudgetUpdate { remaining } => (
-            "pipeline.noise_budget".to_owned(),
-            serde_json::json!({"remaining": remaining}),
-        ),
-        RuntimeEvent::OrbMoodUpdate { feeling, palette } => (
-            "orb.state_changed".to_owned(),
-            serde_json::json!({"feeling": feeling, "palette": palette}),
-        ),
-        RuntimeEvent::PipelineTiming { stage, duration_ms } => (
-            "pipeline.timing".to_owned(),
-            serde_json::json!({"stage": stage, "duration_ms": duration_ms}),
-        ),
-        RuntimeEvent::BackgroundTaskStarted {
-            task_id,
-            description,
-        } => (
-            "background_task.started".to_owned(),
-            serde_json::json!({"task_id": task_id, "description": description}),
-        ),
-        RuntimeEvent::BackgroundTaskCompleted {
-            task_id,
-            success,
-            summary,
-        } => (
-            "background_task.completed".to_owned(),
-            serde_json::json!({"task_id": task_id, "success": success, "summary": summary}),
-        ),
-        RuntimeEvent::ApprovalResolved {
-            request_id,
-            approved,
-            source,
-        } => (
-            "approval.resolved".to_owned(),
-            serde_json::json!({
-                "request_id": request_id.to_string(),
-                "approved": approved,
-                "source": source,
-            }),
-        ),
-    }
-}
-
 impl DeviceTransferHandler for FaeDeviceTransferHandler {
     fn request_move(&self, target: DeviceTarget) -> Result<()> {
         info!(target = target.as_str(), "device.move requested");
@@ -1167,10 +893,22 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             .iter()
             .map(|k| k.to_string())
             .collect();
+        drop(guard);
+        let voiceprint_state = self
+            .query_onboarding_voiceprint_state()
+            .unwrap_or_else(|_| {
+                serde_json::json!({
+                    "enabled": false,
+                    "enrolled": false,
+                    "sample_count": 0,
+                    "required_samples": 0
+                })
+            });
         Ok(serde_json::json!({
             "onboarded": onboarded,
             "phase": phase.as_str(),
-            "granted_permissions": granted
+            "granted_permissions": granted,
+            "voiceprint": voiceprint_state
         }))
     }
 
@@ -1225,6 +963,11 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             _ => crate::memory::PrimaryUser {
                 name: name.to_owned(),
                 voiceprint: None,
+                voiceprints: Vec::new(),
+                voiceprint_centroid: None,
+                voiceprint_threshold: None,
+                voiceprint_version: None,
+                voiceprint_updated_at: None,
                 voice_sample_wav: None,
             },
         };
@@ -1284,6 +1027,169 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             drop(guard);
             self.save_config()?;
             info!("onboarding.set_family_info persisted to config");
+        }
+
+        Ok(())
+    }
+
+    fn query_onboarding_voiceprint_state(&self) -> Result<serde_json::Value> {
+        let guard = self.lock_config()?;
+        let memory_root = guard.memory.root_dir.clone();
+        let voice_cfg = guard.voice_identity.clone();
+        drop(guard);
+
+        let store = crate::memory::MemoryStore::new(&memory_root);
+        let loaded = store.load_primary_user().ok().flatten();
+
+        let mut sample_count = 0usize;
+        let mut enrolled = false;
+        if let Some(user) = loaded {
+            sample_count = user.voiceprints.len();
+            if sample_count == 0 && user.voiceprint.is_some() {
+                sample_count = 1;
+            }
+            enrolled = user.voiceprint_centroid.is_some() || user.voiceprint.is_some();
+        }
+
+        let mode = match voice_cfg.mode {
+            crate::config::VoiceIdentityMode::Assist => "assist",
+            crate::config::VoiceIdentityMode::Enforce => "enforce",
+        };
+
+        Ok(serde_json::json!({
+            "enabled": voice_cfg.enabled,
+            "mode": mode,
+            "enrolled": enrolled,
+            "sample_count": sample_count,
+            "required_samples": voice_cfg.min_enroll_samples,
+            "approval_requires_match": voice_cfg.approval_requires_match
+        }))
+    }
+
+    fn onboarding_voiceprint_start_enrollment(&self) -> Result<serde_json::Value> {
+        info!("onboarding.voiceprint.start_enrollment");
+
+        // Enable voice identity in config.
+        {
+            let mut guard = self.lock_config()?;
+            guard.voice_identity.enabled = true;
+        }
+        self.save_config()?;
+
+        let guard = self.lock_config()?;
+        let memory_root = guard.memory.root_dir.clone();
+        let required = guard.voice_identity.min_enroll_samples;
+        let user_name = guard
+            .user_name
+            .clone()
+            .unwrap_or_else(|| "Primary User".to_owned());
+        drop(guard);
+
+        let store = crate::memory::MemoryStore::new(&memory_root);
+        store.ensure_dirs()?;
+        let mut user = match store.load_primary_user()? {
+            Some(existing) => existing,
+            None => crate::memory::PrimaryUser {
+                name: user_name,
+                voiceprint: None,
+                voiceprints: Vec::new(),
+                voiceprint_centroid: None,
+                voiceprint_threshold: None,
+                voiceprint_version: None,
+                voiceprint_updated_at: None,
+                voice_sample_wav: None,
+            },
+        };
+        if user.voiceprints.is_empty()
+            && let Some(v) = user.voiceprint.clone()
+        {
+            user.voiceprints.push(v);
+        }
+        let sample_count = user.voiceprints.len();
+        store.save_primary_user(&user)?;
+
+        Ok(serde_json::json!({
+            "accepted": true,
+            "enrollment_active": true,
+            "sample_count": sample_count,
+            "required_samples": required
+        }))
+    }
+
+    fn onboarding_voiceprint_finalize(&self) -> Result<serde_json::Value> {
+        info!("onboarding.voiceprint.finalize");
+
+        let guard = self.lock_config()?;
+        let memory_root = guard.memory.root_dir.clone();
+        let voice_cfg = guard.voice_identity.clone();
+        drop(guard);
+
+        let store = crate::memory::MemoryStore::new(&memory_root);
+        let mut user = store.load_primary_user()?.ok_or_else(|| {
+            SpeechError::Config(
+                "onboarding.voiceprint.finalize: primary user record missing".to_owned(),
+            )
+        })?;
+
+        let mut samples = user.voiceprints.clone();
+        if samples.is_empty()
+            && let Some(v) = user.voiceprint.clone()
+        {
+            samples.push(v);
+        }
+        let required = voice_cfg.min_enroll_samples as usize;
+        if samples.len() < required {
+            return Err(SpeechError::Config(format!(
+                "onboarding.voiceprint.finalize: not enough samples ({}/{required})",
+                samples.len()
+            )));
+        }
+
+        let centroid = crate::voiceprint::centroid(&samples).ok_or_else(|| {
+            SpeechError::Config("onboarding.voiceprint.finalize: invalid sample vectors".to_owned())
+        })?;
+
+        user.voiceprint = Some(centroid.clone());
+        user.voiceprint_centroid = Some(centroid);
+        user.voiceprint_threshold = Some(voice_cfg.threshold_accept);
+        user.voiceprint_version = Some("spectral-v1".to_owned());
+        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_secs(),
+            Err(_) => 0,
+        };
+        user.voiceprint_updated_at = Some(now);
+        if voice_cfg.store_raw_samples {
+            user.voiceprints = samples;
+        } else {
+            user.voiceprints = Vec::new();
+        }
+        store.save_primary_user(&user)?;
+
+        Ok(serde_json::json!({
+            "accepted": true,
+            "enrolled": true,
+            "sample_count": if voice_cfg.store_raw_samples { user.voiceprints.len() } else { required },
+            "required_samples": required
+        }))
+    }
+
+    fn onboarding_voiceprint_reset(&self) -> Result<()> {
+        info!("onboarding.voiceprint.reset");
+
+        let memory_root = {
+            let guard = self.lock_config()?;
+            guard.memory.root_dir.clone()
+        };
+
+        let store = crate::memory::MemoryStore::new(&memory_root);
+        if let Some(mut user) = store.load_primary_user()? {
+            user.voiceprint = None;
+            user.voiceprints.clear();
+            user.voiceprint_centroid = None;
+            user.voiceprint_threshold = None;
+            user.voiceprint_version = None;
+            user.voiceprint_updated_at = None;
+            store.save_primary_user(&user)?;
         }
 
         Ok(())
@@ -2104,6 +2010,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                                         "request_id": request_id.to_string(),
                                         "approved": approved,
                                         "source": "voice",
+                                        "speaker_verified": serde_json::Value::Null,
                                     }),
                                 );
                                 let _ = event_tx_resolution.send(envelope);
@@ -2486,7 +2393,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                 entered_at_secs,
                 pipeline_error: matches!(state, PipelineState::Error(_)),
             },
-            Self::now_epoch_secs(),
+            now_epoch_secs(),
         );
         result["rescue_health"] = rescue_health;
 
@@ -3218,8 +3125,7 @@ mod tests {
                 tool_mode: AgentToolMode::FullNoApproval,
             });
             guard.runtime.rescue_auto_exit_minutes = 10;
-            guard.runtime.rescue_entered_at_secs =
-                Some(FaeDeviceTransferHandler::now_epoch_secs().saturating_sub(10 * 60));
+            guard.runtime.rescue_entered_at_secs = Some(now_epoch_secs().saturating_sub(10 * 60));
         }
 
         let recovered = handler
@@ -3255,8 +3161,7 @@ mod tests {
                 tool_mode: AgentToolMode::FullNoApproval,
             });
             guard.runtime.rescue_auto_exit_minutes = 1;
-            guard.runtime.rescue_entered_at_secs =
-                Some(FaeDeviceTransferHandler::now_epoch_secs().saturating_sub(60));
+            guard.runtime.rescue_entered_at_secs = Some(now_epoch_secs().saturating_sub(60));
         }
 
         let recovered = handler

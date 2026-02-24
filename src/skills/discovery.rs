@@ -149,7 +149,7 @@ impl SkillDiscoveryIndex {
             )));
         }
 
-        let now = now_epoch_secs();
+        let now = crate::time_util::now_epoch_secs() as i64;
 
         // Upsert metadata.
         self.conn
@@ -585,13 +585,6 @@ pub fn rebuild_skill_index_deterministic(
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-fn now_epoch_secs() -> i64 {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(d) => d.as_secs() as i64,
-        Err(_) => 0,
-    }
-}
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 

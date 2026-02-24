@@ -194,14 +194,27 @@ setup-signing-keychain:
     echo "✓ Signing identity ready:"
     security find-identity -v -p codesigning "$KC" | head -3
 
+# Kill any running Fae process (prevents macOS from reactivating a stale process).
+_kill-fae:
+    #!/usr/bin/env bash
+    if pgrep -f "Fae.app/Contents/MacOS/Fae" > /dev/null 2>&1; then
+        echo "Killing existing Fae process…"
+        pkill -f "Fae.app/Contents/MacOS/Fae" 2>/dev/null || true
+        sleep 1
+    fi
+
 # Build, bundle, sign, and launch the native app.
 # Requires: MACOS_SIGNING_IDENTITY from env (sourced via ~/.zshrc → ~/.secrets).
-run-native: build-native-swift _bundle-app _sign-bundle
-    open "{{_app_bundle}}"
+# Always kills any existing Fae process first — macOS `open` reactivates a running
+# process instead of launching the new binary, which silently ignores your fresh build.
+run-native: build-native-swift _bundle-app _sign-bundle _kill-fae
+    open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
 
 # Build the Swift app, create .app bundle, sign, and verify it (without launching).
 # Always cleans the Swift build first to prevent stale artifacts.
-bundle-native: clean-native build-native-swift _bundle-app _sign-bundle _verify-bundle
+# Kills any running Fae process — a running process locks the old binary and macOS
+# `open` will reactivate it instead of launching the newly built one.
+bundle-native: _kill-fae clean-native build-native-swift _bundle-app _sign-bundle _verify-bundle
     @echo "✓ Signed bundle ready: {{_app_bundle}}"
 
 # (internal) Assemble the .app bundle from the SPM debug build.

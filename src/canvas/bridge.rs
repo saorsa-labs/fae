@@ -225,7 +225,9 @@ impl CanvasBridge {
             | RuntimeEvent::PipelineTiming { .. }
             | RuntimeEvent::BackgroundTaskStarted { .. }
             | RuntimeEvent::BackgroundTaskCompleted { .. }
-            | RuntimeEvent::ApprovalResolved { .. } => {}
+            | RuntimeEvent::ApprovalResolved { .. }
+            | RuntimeEvent::VoiceIdentityDecision { .. }
+            | RuntimeEvent::VoiceprintEnrollmentProgress { .. } => {}
         }
     }
 

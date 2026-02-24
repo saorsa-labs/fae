@@ -244,5 +244,27 @@ pub enum RuntimeEvent {
         approved: bool,
         /// How the approval was resolved: `"voice"`, `"button"`, or `"timeout"`.
         source: String,
+        /// Whether the resolving voice speaker matched the enrolled identity.
+        ///
+        /// `None` for non-voice paths (button/timeout).
+        speaker_verified: Option<bool>,
+    },
+    /// Speaker verification decision for an incoming transcription.
+    VoiceIdentityDecision {
+        /// Whether the utterance passed identity checks.
+        accepted: bool,
+        /// Decision reason (e.g. `speaker_match`, `speaker_mismatch`).
+        reason: String,
+        /// Optional cosine similarity score when voiceprint is available.
+        similarity: Option<f32>,
+    },
+    /// Progress updates while collecting onboarding voiceprint samples.
+    VoiceprintEnrollmentProgress {
+        /// Number of captured samples currently stored.
+        sample_count: usize,
+        /// Minimum required samples to finalize enrollment.
+        required_samples: usize,
+        /// Whether enrollment is now complete.
+        enrolled: bool,
     },
 }

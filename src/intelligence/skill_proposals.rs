@@ -5,6 +5,7 @@
 //! new skills that could help the user. Proposals go through a lifecycle:
 //! Proposed → Accepted/Rejected → Installed.
 
+use crate::time_util::now_epoch_secs;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::warn;
@@ -428,14 +429,6 @@ fn capitalize_first(s: &str) -> String {
         Some(c) => c.to_uppercase().to_string() + chars.as_str(),
         None => String::new(),
     }
-}
-
-/// Get current time as epoch seconds.
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
