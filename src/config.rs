@@ -276,9 +276,11 @@ pub enum AgentToolMode {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VoiceModelPreset {
-    /// Choose based on detected RAM (`>=32GiB` → 4B, otherwise 1.7B).
+    /// Choose based on detected RAM (`>=48GiB` → 8B, `>=32GiB` → 4B, otherwise 1.7B).
     #[default]
     Auto,
+    /// Force Qwen3 8B GGUF.
+    Qwen3_8b,
     /// Force Qwen3 4B GGUF.
     Qwen3_4b,
     /// Force Qwen3 1.7B GGUF.
@@ -535,6 +537,7 @@ fn default_llm_context_size_tokens() -> usize {
 pub fn recommended_context_size_tokens(total_memory_bytes: Option<u64>) -> usize {
     const GIB: u64 = 1024 * 1024 * 1024;
     match total_memory_bytes {
+        Some(bytes) if bytes >= 48 * GIB => 32_768,
         Some(bytes) if bytes >= 32 * GIB => 16_384,
         _ => 8_192,
     }
@@ -550,6 +553,12 @@ pub fn recommended_local_model(
 ) -> (&'static str, &'static str, &'static str, bool) {
     const GIB: u64 = 1024 * 1024 * 1024;
     match voice_model_preset {
+        VoiceModelPreset::Qwen3_8b => (
+            "unsloth/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf",
+            "Qwen/Qwen3-8B",
+            false,
+        ),
         VoiceModelPreset::Qwen3_4b => (
             "unsloth/Qwen3-4B-Instruct-2507-GGUF",
             "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
@@ -569,6 +578,12 @@ pub fn recommended_local_model(
             false,
         ),
         VoiceModelPreset::Auto => match total_memory_bytes {
+            Some(bytes) if bytes >= 48 * GIB => (
+                "unsloth/Qwen3-8B-GGUF",
+                "Qwen3-8B-Q4_K_M.gguf",
+                "Qwen/Qwen3-8B",
+                false,
+            ),
             Some(bytes) if bytes >= 32 * GIB => (
                 "unsloth/Qwen3-4B-Instruct-2507-GGUF",
                 "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
@@ -624,7 +639,8 @@ pub fn apply_ram_model_selection(llm: &mut LlmConfig) {
 pub fn is_managed_default_model_id(model_id: &str) -> bool {
     matches!(
         model_id,
-        "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+        "unsloth/Qwen3-8B-GGUF"
+            | "unsloth/Qwen3-4B-Instruct-2507-GGUF"
             | "MaziyarPanahi/Qwen3-4B-Instruct-GGUF"
             | "unsloth/Qwen3-1.7B-GGUF"
             | "unsloth/Qwen3-0.6B-GGUF"
@@ -1562,7 +1578,8 @@ mod tests {
         assert_eq!(recommended_context_size_tokens(Some(8 * GIB)), 8_192);
         assert_eq!(recommended_context_size_tokens(Some(16 * GIB)), 8_192);
         assert_eq!(recommended_context_size_tokens(Some(32 * GIB)), 16_384);
-        assert_eq!(recommended_context_size_tokens(Some(64 * GIB)), 16_384);
+        assert_eq!(recommended_context_size_tokens(Some(48 * GIB)), 32_768);
+        assert_eq!(recommended_context_size_tokens(Some(64 * GIB)), 32_768);
         assert_eq!(recommended_context_size_tokens(None), 8_192);
     }
 
@@ -1986,6 +2003,17 @@ wake_word = "hey fae"
     }
 
     #[test]
+    fn recommended_local_model_selects_8b_for_very_high_ram_auto() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let (model_id, gguf_file, tokenizer_id, vision) =
+            recommended_local_model(Some(48 * GIB), VoiceModelPreset::Auto);
+        assert_eq!(model_id, "unsloth/Qwen3-8B-GGUF");
+        assert_eq!(gguf_file, "Qwen3-8B-Q4_K_M.gguf");
+        assert_eq!(tokenizer_id, "Qwen/Qwen3-8B");
+        assert!(!vision);
+    }
+
+    #[test]
     fn recommended_local_model_selects_4b_for_high_ram_auto() {
         const GIB: u64 = 1024 * 1024 * 1024;
         let (model_id, gguf_file, tokenizer_id, vision) =
@@ -2010,18 +2038,23 @@ wake_word = "hey fae"
     #[test]
     fn recommended_local_model_forced_presets_ignore_ram() {
         const GIB: u64 = 1024 * 1024 * 1024;
+        let (model_8b, _, _, vision_8b) =
+            recommended_local_model(Some(8 * GIB), VoiceModelPreset::Qwen3_8b);
         let (model_4b, _, _, vision_4b) =
             recommended_local_model(Some(8 * GIB), VoiceModelPreset::Qwen3_4b);
         let (model_1_7b, _, _, vision_1_7b) =
             recommended_local_model(Some(96 * GIB), VoiceModelPreset::Qwen3_1_7b);
+        assert_eq!(model_8b, "unsloth/Qwen3-8B-GGUF");
         assert_eq!(model_4b, "unsloth/Qwen3-4B-Instruct-2507-GGUF");
         assert_eq!(model_1_7b, "unsloth/Qwen3-1.7B-GGUF");
+        assert!(!vision_8b);
         assert!(!vision_4b);
         assert!(!vision_1_7b);
     }
 
     #[test]
     fn is_managed_default_model_id_recognizes_old_and_new() {
+        assert!(is_managed_default_model_id("unsloth/Qwen3-8B-GGUF"));
         assert!(is_managed_default_model_id(
             "unsloth/Qwen3-4B-Instruct-2507-GGUF"
         ));

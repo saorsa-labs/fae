@@ -6,7 +6,7 @@
 
 ## Context
 
-Fae requires a real-time voice-to-voice conversational system that:
+Fae requires a voice-to-voice conversational system with real-time audio processing that:
 
 - Supports personality steering via system prompts (critical for Fae's identity)
 - Runs entirely on-device with no API keys or remote servers
@@ -78,7 +78,7 @@ Mic (16kHz) -> AEC -> Silero VAD -> Parakeet STT (ONNX) -> LLM Agent -> Kokoro T
 
 ### Negative
 
-- **Higher total latency** than unified models (~400-600ms vs ~200ms theoretical)
+- **Higher total latency** than unified models (~1-3s end-to-end vs ~200ms theoretical for unified S2S). This is perceived as a natural thinking pause rather than a technical limitation.
 - **More moving parts** — 5 components to maintain vs 1 unified model
 - **No voice cloning yet** — Kokoro has fixed voices (future: Fish Speech, Qwen3-TTS)
 

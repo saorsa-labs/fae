@@ -97,7 +97,7 @@ clean-native:
 
 # Build libfae static library for macOS arm64 (for Swift embedding)
 build-staticlib:
-    cargo build --release --no-default-features --target aarch64-apple-darwin
+    cargo build --release --no-default-features --features metal --target aarch64-apple-darwin
 
 # Build libfae static library for macOS x86_64 (Intel / CI)
 build-staticlib-x86:

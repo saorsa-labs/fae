@@ -160,6 +160,9 @@ final class ConversationBridgeController: ObservableObject {
     private func handleGenerating(active: Bool) {
         // Native generating state — the ConversationWindowView observes this directly.
         conversationController?.isGenerating = active
+        if active {
+            subtitleState?.showToolMessage("Thinking...")
+        }
     }
 
     private func handleToolExecution(userInfo: [AnyHashable: Any]) {

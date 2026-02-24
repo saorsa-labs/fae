@@ -56,6 +56,24 @@ enum OrbMode: String, CaseIterable, Identifiable {
         }
     }
 
+    var breathIntensity: Float {
+        switch self {
+        case .idle: return 1.0
+        case .listening: return 1.2
+        case .thinking: return 2.5
+        case .speaking: return 1.3
+        }
+    }
+
+    var innerGlowIntensity: Float {
+        switch self {
+        case .idle: return 1.0
+        case .listening: return 1.0
+        case .thinking: return 1.8
+        case .speaking: return 1.2
+        }
+    }
+
     /// Default palette colours for each mode (when palette is .modeDefault).
     var defaultColors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
         switch self {
@@ -349,6 +367,8 @@ struct OrbSnapshot: Equatable {
         result.morphAmplitude *= mode.morphIntensity
         result.morphSpeed *= mode.morphSpeedMul
         result.starAlpha *= mode.starIntensity
+        result.breathAmplitude *= mode.breathIntensity
+        result.innerGlow *= mode.innerGlowIntensity
         return result
     }
 }

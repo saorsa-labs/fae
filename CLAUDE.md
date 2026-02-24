@@ -644,17 +644,18 @@ text-only automatically.
 ### Model selection guidance (current)
 
 **Auto mode** (`VoiceModelPreset::Auto` in `src/config.rs`): `recommended_local_model()` always returns text-only GGUF:
+- `>=48 GiB` RAM → Qwen3-8B (Q4_K_M)
 - `>=32 GiB` RAM → Qwen3-4B (Q4_K_M)
 - `<32 GiB` RAM → Qwen3-1.7B (Q4_K_M)
 
-Forced presets: `Qwen3_4b`, `Qwen3_1_7b`, `Qwen3_0_6b` (ignores RAM).
+Forced presets: `Qwen3_8b`, `Qwen3_4b`, `Qwen3_1_7b`, `Qwen3_0_6b` (ignores RAM).
 
 | System RAM | Voice (auto) | Background (async) | Notes |
 |---|---|---|---|
 | 8-16 GB | 0.6B text | 0.6B text | Only option that fits |
 | 16-32 GB | 1.7B text | 1.7B text | Best voice quality at ~85 T/s |
-| 32-64 GB | 4B text | 4B text | Auto selects 4B at >=32 GiB |
-| 64+ GB | 4B text | 4B text | Same auto selection |
+| 32-48 GB | 4B text | 4B text | Auto selects 4B at >=32 GiB |
+| 48+ GB | 8B text | 8B text | Auto selects 8B at >=48 GiB |
 
 Vision is only enabled by explicit `enable_vision = true` in `config.toml`. Auto mode never selects a VL model. Vision models (Qwen3-VL-4B/8B) require ISQ quantization at startup and are better suited for the background channel.
 

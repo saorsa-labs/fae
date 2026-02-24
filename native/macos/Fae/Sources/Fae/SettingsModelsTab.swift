@@ -10,9 +10,11 @@ struct SettingsModelsTab: View {
     @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = true
     @State private var hydratingFromConfig: Bool = false
     @State private var hasLoadedConfig: Bool = false
+    @State private var showRestartNotice: Bool = false
 
     private let voiceModelOptions: [(label: String, value: String, description: String)] = [
-        ("Auto (Recommended)", "auto", "Uses Qwen3-4B on systems with at least 32 GB RAM, otherwise Qwen3-1.7B."),
+        ("Auto (Recommended)", "auto", "Uses Qwen3-8B on 48+ GB, Qwen3-4B on 32+ GB, otherwise Qwen3-1.7B."),
+        ("Qwen3-8B", "qwen3_8b", "Highest quality responses. Best for systems with 48+ GB RAM."),
         ("Qwen3-4B", "qwen3_4b", "Higher instruction quality, slightly slower first response."),
         ("Qwen3-1.7B", "qwen3_1_7b", "Good balance of quality and speed."),
         ("Qwen3-0.6B", "qwen3_0_6b", "Fastest response time, lower quality. Best for quick voice interactions.")
@@ -89,12 +91,24 @@ struct SettingsModelsTab: View {
                         name: "config.patch",
                         payload: ["key": "llm.voice_model_preset", "value": voiceModelPreset]
                     )
+                    if !hydratingFromConfig {
+                        showRestartNotice = true
+                    }
                 }
 
                 if let current = voiceModelOptions.first(where: { $0.value == voiceModelPreset }) {
                     Text(current.description)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+
+                if showRestartNotice {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Restart Fae for this change to take effect.")
+                            .font(.footnote)
+                    }
+                    .foregroundStyle(.orange)
                 }
             }
 

@@ -40,6 +40,10 @@ Fae is an always-present companion, not a summoned assistant. She listens contin
 
 Fae uses echo cancellation and voice activity detection to separate your speech from ambient noise and her own voice. She never interrupts without good reason.
 
+### Natural Conversation Flow
+
+Fae is a voice assistant, not a real-time duplex system. When you speak, Fae listens, thinks, and then responds — just like a real conversation. A brief thinking pause (typically 1-3 seconds) is normal and by design. The orb breathes and glows while Fae is thinking, so you always know she heard you.
+
 ### Remembers Everything That Matters
 
 Fae has a durable memory system that learns about you over time — your name, preferences, work context, relationships, and routines. All stored locally on your machine.

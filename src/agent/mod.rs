@@ -673,21 +673,12 @@ pub async fn spawn_background_agent(
         "selected background agent reasoning level"
     );
 
-    // Build a background-specific config with the agent prompt.
-    let bg_system_prompt = {
-        let perm_guard = shared_permissions.as_ref().and_then(|sp| sp.lock().ok());
-        let base = config.effective_system_prompt_with_vision_and_mode(
-            perm_guard.as_deref(),
-            config.enable_vision,
-            None,
-            false,
-        );
-        format!(
-            "{}\n\n{}",
-            crate::personality::BACKGROUND_AGENT_PROMPT.trim(),
-            base
-        )
-    };
+    // Background agents use a minimal prompt — just the task-focused instructions.
+    // The full system prompt (18KB+) would exceed the KV cache budget and get
+    // silently dropped by the paged-attention scheduler.
+    let bg_system_prompt = crate::personality::BACKGROUND_AGENT_PROMPT
+        .trim()
+        .to_owned();
 
     let credential_manager = crate::credentials::create_manager();
     let provider = build_provider(&config, preloaded_llm, credential_manager.as_ref()).await;
