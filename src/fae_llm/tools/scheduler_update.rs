@@ -56,6 +56,12 @@ impl Tool for SchedulerUpdateTool {
     }
 
     fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
+        if let Err(err) = scheduler::load_persisted_snapshot() {
+            return Ok(ToolResult::failure(format!(
+                "Scheduler preflight failed: {err}. Remediation: ensure ~/.fae/state/scheduler_snapshot.json is readable/writable and that scheduler persistence is not corrupted; then retry."
+            )));
+        }
+
         let task_id = args
             .get("task_id")
             .and_then(|v| v.as_str())

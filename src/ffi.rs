@@ -68,8 +68,9 @@ struct FaeRuntime {
     /// Shared audio injection channel, populated by the handler when the
     /// pipeline starts. Used by `fae_core_inject_audio` for low-latency
     /// companion mic audio (bypasses the JSON command path).
-    audio_injection_tx:
-        std::sync::Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::pipeline::messages::AudioChunk>>>>,
+    audio_injection_tx: std::sync::Arc<
+        Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::pipeline::messages::AudioChunk>>>,
+    >,
 }
 
 // SAFETY: All mutable interior state is behind `Mutex`. The raw

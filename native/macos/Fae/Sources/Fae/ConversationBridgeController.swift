@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Bridges backend pipeline events to native SwiftUI state controllers.
@@ -199,22 +200,39 @@ final class ConversationBridgeController: ObservableObject {
 
     private func handleToolExecution(userInfo: [AnyHashable: Any]) {
         let type_ = userInfo["type"] as? String ?? "executing"
-        let name = userInfo["name"] as? String ?? ""
+        let name = userInfo["name"] as? String ?? "tool"
 
         switch type_ {
         case "executing":
-            let message = "⚙ Using \(name)…"
-            subtitleState?.showToolMessage(message)
+            playToolCueExecuting()
+            let message = "⚙ Working: \(name)…"
+            subtitleState?.showPersistentToolMessage(message)
             conversationController?.appendMessage(role: .tool, content: message)
         case "result":
             let success = userInfo["success"] as? Bool ?? false
-            let icon = success ? "✓" : "✗"
-            let message = "\(icon) \(name)"
+            if success {
+                playToolCueSuccess()
+            } else {
+                playToolCueFailure()
+            }
+            let message = success ? "✓ Done: \(name)" : "✗ Failed: \(name)"
             subtitleState?.showToolMessage(message)
             conversationController?.appendMessage(role: .tool, content: message)
         default:
             break
         }
+    }
+
+    private func playToolCueExecuting() {
+        NSSound(named: NSSound.Name("Tink"))?.play()
+    }
+
+    private func playToolCueSuccess() {
+        NSSound(named: NSSound.Name("Submarine"))?.play()
+    }
+
+    private func playToolCueFailure() {
+        NSSound(named: NSSound.Name("Basso"))?.play()
     }
 
     // MARK: - Runtime Progress

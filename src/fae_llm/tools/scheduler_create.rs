@@ -73,6 +73,12 @@ impl Tool for SchedulerCreateTool {
     }
 
     fn execute(&self, args: serde_json::Value) -> Result<ToolResult, FaeLlmError> {
+        if let Err(err) = scheduler::load_persisted_snapshot() {
+            return Ok(ToolResult::failure(format!(
+                "Scheduler preflight failed: {err}. Remediation: ensure ~/.fae/state/scheduler_snapshot.json is readable/writable and that scheduler persistence is not corrupted; then retry."
+            )));
+        }
+
         let name = args.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
             FaeLlmError::ToolValidationError("missing required argument: name".into())
         })?;

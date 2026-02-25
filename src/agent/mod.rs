@@ -961,17 +961,28 @@ fn build_registry(config: &LlmConfig, channels: AgentChannels) -> Arc<ToolRegist
         }
     }
 
-    // Scheduler tools (mode gating handled by each tool's allowed_in_mode).
+    // Scheduler tools.
+    // - list stays direct in all non-Off modes.
+    // - mutating tools are approval-gated in modes that require approval.
+    // - FullNoApproval keeps direct registration.
     if !matches!(config.tool_mode, AgentToolMode::Off) {
         use crate::fae_llm::tools::{
             SchedulerCreateTool, SchedulerDeleteTool, SchedulerListTool, SchedulerTriggerTool,
             SchedulerUpdateTool,
         };
         registry.register(Arc::new(SchedulerListTool::new()));
-        registry.register(Arc::new(SchedulerCreateTool::new()));
-        registry.register(Arc::new(SchedulerUpdateTool::new()));
-        registry.register(Arc::new(SchedulerDeleteTool::new()));
-        registry.register(Arc::new(SchedulerTriggerTool::new()));
+
+        if matches!(config.tool_mode, AgentToolMode::FullNoApproval) {
+            registry.register(Arc::new(SchedulerCreateTool::new()));
+            registry.register(Arc::new(SchedulerUpdateTool::new()));
+            registry.register(Arc::new(SchedulerDeleteTool::new()));
+            registry.register(Arc::new(SchedulerTriggerTool::new()));
+        } else {
+            register_with_approval(Arc::new(SchedulerCreateTool::new()), &mut registry);
+            register_with_approval(Arc::new(SchedulerUpdateTool::new()), &mut registry);
+            register_with_approval(Arc::new(SchedulerDeleteTool::new()), &mut registry);
+            register_with_approval(Arc::new(SchedulerTriggerTool::new()), &mut registry);
+        }
     }
 
     // Apple ecosystem tools — always registered in non-Off modes.

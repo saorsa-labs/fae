@@ -797,6 +797,7 @@ pub fn start_scheduler_with_memory(
 pub fn start_scheduler_with_llm(
     config: SpeechConfig,
     shared_llm: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<LocalLlm>>>>,
+    channels: crate::agent::AgentChannels,
 ) -> (
     tokio::task::JoinHandle<()>,
     tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
@@ -841,7 +842,7 @@ pub fn start_scheduler_with_llm(
     let handle = scheduler.run();
 
     tokio::spawn(async move {
-        handle_conversation_requests(conversation_req_rx, config, shared_llm).await;
+        handle_conversation_requests(conversation_req_rx, config, shared_llm, channels).await;
     });
 
     (handle, rx)
@@ -912,6 +913,7 @@ pub fn start_scheduler_with_config(
             conversation_req_rx,
             scheduler_config,
             std::sync::Arc::new(std::sync::Mutex::new(None)),
+            crate::agent::AgentChannels::default(),
         )
         .await;
     });
@@ -927,6 +929,7 @@ async fn handle_conversation_requests(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::pipeline::messages::ConversationRequest>,
     config: SpeechConfig,
     shared_llm: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<LocalLlm>>>>,
+    channels: crate::agent::AgentChannels,
 ) {
     use crate::pipeline::messages::ConversationResponse;
     use tokio::time::{Duration, timeout};
@@ -943,7 +946,7 @@ async fn handle_conversation_requests(
         let conversation_timeout = Duration::from_secs(timeout_secs);
         let result = timeout(
             conversation_timeout,
-            execute_scheduled_conversation(&config, &request, &shared_llm),
+            execute_scheduled_conversation(&config, &request, &shared_llm, &channels),
         )
         .await;
 
@@ -983,6 +986,7 @@ async fn execute_scheduled_conversation(
     config: &SpeechConfig,
     request: &crate::pipeline::messages::ConversationRequest,
     shared_llm: &std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<LocalLlm>>>>,
+    channels: &crate::agent::AgentChannels,
 ) -> crate::error::Result<String> {
     use crate::agent::{AgentChannels, BackgroundAgentTask, spawn_background_agent};
 
@@ -1015,7 +1019,12 @@ async fn execute_scheduled_conversation(
         config.llm.clone(),
         llm_arc.as_deref(),
         None,
-        AgentChannels::default(),
+        AgentChannels {
+            tool_approval_tx: channels.tool_approval_tx.clone(),
+            canvas_registry: None,
+            shared_permissions: channels.shared_permissions.clone(),
+            jit_request_tx: channels.jit_request_tx.clone(),
+        },
     )
     .await;
 

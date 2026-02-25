@@ -1314,14 +1314,10 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         &self,
         envelope: &CommandEnvelope,
     ) -> Result<ResponseEnvelope> {
-        let sample_rate = envelope.payload["sample_rate"]
-            .as_u64()
-            .unwrap_or(16000) as u32;
+        let sample_rate = envelope.payload["sample_rate"].as_u64().unwrap_or(16000) as u32;
         let samples_b64 = envelope.payload["samples_b64"]
             .as_str()
-            .ok_or_else(|| {
-                SpeechError::Pipeline("missing samples_b64 field".to_owned())
-            })?;
+            .ok_or_else(|| SpeechError::Pipeline("missing samples_b64 field".to_owned()))?;
 
         // Decode base64 → raw bytes → Vec<f32> (little-endian).
         use base64::Engine as _;
