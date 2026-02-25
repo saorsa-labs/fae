@@ -16,7 +16,7 @@
 //! ## JIT permission requests
 //!
 //! When a `jit_request_tx` channel is configured via [`AvailabilityGatedTool::with_jit_channel`], the
-//! tool can emit a [`JitPermissionRequest`] and block (up to 60 seconds) while
+//! tool can emit a [`JitPermissionRequest`] and block (up to 20 seconds) while
 //! the native dialog awaits user response.  On grant the tool execution proceeds
 //! immediately; on deny a graceful failure is returned to the LLM.
 
@@ -33,7 +33,10 @@ use crate::permissions::{JitPermissionRequest, SharedPermissionStore};
 use super::trait_def::AppleEcosystemTool;
 
 /// Timeout for awaiting a JIT permission response from the native dialog.
-const JIT_TIMEOUT: Duration = Duration::from_millis(1200);
+///
+/// Must be kept in sync with the handler-side poll window in
+/// `src/host/handler.rs` (`JIT_HANDLER_TIMEOUT_SECS`).
+const JIT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A [`Tool`] wrapper that gates execution on a live permission check.
 ///
@@ -51,7 +54,7 @@ pub struct AvailabilityGatedTool {
     /// Optional JIT request channel.
     ///
     /// When `Some`, the gate emits a [`JitPermissionRequest`] and blocks up
-    /// to `JIT_TIMEOUT` (60 s) for a response before falling back to the
+    /// to `JIT_TIMEOUT` (20 s) for a response before falling back to the
     /// standard "permission not granted" failure.
     jit_request_tx: Option<mpsc::UnboundedSender<JitPermissionRequest>>,
 }
@@ -110,7 +113,7 @@ impl Tool for AvailabilityGatedTool {
     ///
     /// If the permission is not granted and a JIT channel is configured, emits
     /// a [`JitPermissionRequest`] and blocks (spin-loop, 25 ms intervals) until
-    /// the user responds via the native dialog or `JIT_TIMEOUT` (60 s) elapses.  On
+    /// the user responds via the native dialog or `JIT_TIMEOUT` (20 s) elapses.  On
     /// grant the permission store is expected to be updated externally (via
     /// `capability.grant`) so the re-check succeeds.
     ///
@@ -327,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn jit_timeout_is_fast_and_returns_failure() {
+    fn jit_timeout_returns_failure_within_bound() {
         let (jit_tx, _jit_rx) = mpsc::unbounded_channel::<JitPermissionRequest>();
         let tool = gated(PermissionStore::default()).with_jit_channel(jit_tx);
 
@@ -344,9 +347,10 @@ mod tests {
             err.contains("Permission request timed out"),
             "unexpected error: {err}"
         );
+        // Timeout is JIT_TIMEOUT (20s); allow a small buffer for slow CI runners.
         assert!(
-            elapsed < Duration::from_secs(3),
-            "jit timeout should be bounded and fast, got {:?}",
+            elapsed < Duration::from_secs(25),
+            "jit timeout should be bounded, got {:?}",
             elapsed
         );
     }

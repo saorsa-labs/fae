@@ -252,9 +252,7 @@ impl FaeDeviceTransferHandler {
     /// command server. When the pipeline starts, the handler populates the
     /// inner `Option` — at which point `fae_core_inject_audio` can send
     /// companion audio directly.
-    pub fn audio_injection_handle(
-        &self,
-    ) -> Arc<Mutex<Option<mpsc::UnboundedSender<AudioChunk>>>> {
+    pub fn audio_injection_handle(&self) -> Arc<Mutex<Option<mpsc::UnboundedSender<AudioChunk>>>> {
         Arc::clone(&self.audio_injection_tx)
     }
 
@@ -1889,12 +1887,14 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
                         // Wait for the grant/deny to propagate through the
                         // shared permission store, then resolve the oneshot.
-                        // We poll the store for up to 60 seconds — the handler's
-                        // `modify_capability()` updates it when `capability.grant`
-                        // or `capability.deny` arrives from Swift.
+                        // We poll the store for up to JIT_HANDLER_TIMEOUT_SECS —
+                        // must match `JIT_TIMEOUT` in availability_gate.rs.
+                        // `modify_capability()` updates the store when
+                        // `capability.grant` or `capability.deny` arrives from Swift.
+                        const JIT_HANDLER_TIMEOUT_SECS: u64 = 20;
                         let start = std::time::Instant::now();
                         let granted = loop {
-                            if start.elapsed() >= std::time::Duration::from_secs(60) {
+                            if start.elapsed() >= std::time::Duration::from_secs(JIT_HANDLER_TIMEOUT_SECS) {
                                 break false;
                             }
                             let is_granted = jit_shared_perms
@@ -2337,8 +2337,33 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         if should_start_scheduler {
             let sched_config = self.lock_config().map(|g| g.clone()).unwrap_or_default();
             let sched_llm = Arc::clone(&self.scheduler_llm);
-            let (sched_jh, _sched_rx) =
-                crate::startup::start_scheduler_with_llm(sched_config, sched_llm);
+            let scheduler_channels = crate::agent::AgentChannels {
+                tool_approval_tx: self
+                    .tool_approval_tx
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.as_ref().cloned()),
+                canvas_registry: None,
+                shared_permissions: Some(Arc::clone(&self.shared_permissions)),
+                jit_request_tx: None,
+            };
+            let (sched_jh, mut sched_rx) = crate::startup::start_scheduler_with_llm(
+                sched_config,
+                sched_llm,
+                scheduler_channels,
+            );
+            let event_tx = self.event_tx.clone();
+            drop(self.tokio_handle.spawn(async move {
+                while let Some(result) = sched_rx.recv().await {
+                    if let crate::scheduler::tasks::TaskResult::Error(msg) = result {
+                        let _ = event_tx.send(EventEnvelope::new(
+                            uuid::Uuid::new_v4().to_string(),
+                            "runtime.error".to_owned(),
+                            serde_json::json!({"source": "scheduler", "error": msg}),
+                        ));
+                    }
+                }
+            }));
             if let Ok(mut guard) = self.scheduler_handle.lock() {
                 *guard = Some(sched_jh);
             }
@@ -4245,6 +4270,20 @@ mod tests {
         let (name, payload) = map_runtime_event(&event);
         assert_eq!(name, "pipeline.canvas_visibility");
         assert_eq!(payload["visible"], true);
+    }
+
+    #[test]
+    fn scheduler_error_payload_shape_is_runtime_error_with_source() {
+        let payload = serde_json::json!({"source": "scheduler", "error": "boom"});
+        let envelope = EventEnvelope::new(
+            uuid::Uuid::new_v4().to_string(),
+            "runtime.error".to_owned(),
+            payload.clone(),
+        );
+
+        assert_eq!(envelope.event, "runtime.error");
+        assert_eq!(envelope.payload["source"], "scheduler");
+        assert_eq!(envelope.payload["error"], "boom");
     }
 
     #[test]
