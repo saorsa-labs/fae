@@ -1801,6 +1801,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         let (text_tx, text_rx) = mpsc::unbounded_channel::<TextInjection>();
         let (audio_inject_tx, audio_inject_rx) = mpsc::unbounded_channel::<AudioChunk>();
         let (gate_tx, gate_rx) = mpsc::unbounded_channel::<GateCommand>();
+        // Keep a second sender so the event bridge can auto-engage the gate
+        // when the LLM finishes generating, giving the user a fresh reply window.
+        let gate_tx_for_bridge = gate_tx.clone();
         // Tool approvals: pipeline sends ToolApprovalRequest objects via this
         // tx. The approval_rx is consumed by the approval bridge task which
         // stores them in `pending_approvals` until `approval.respond` arrives.
@@ -2006,6 +2009,12 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     event = runtime_event_rx.recv() => {
                         match event {
                             Ok(re) => {
+                                // When the LLM finishes generating, automatically
+                                // engage the gate so the user gets a fresh reply
+                                // window without needing to say "Fae" again.
+                                if matches!(re, RuntimeEvent::AssistantGenerating { active: false }) {
+                                    let _ = gate_tx_for_bridge.send(GateCommand::Engage);
+                                }
                                 let (name, payload) = map_runtime_event(&re);
                                 let envelope = EventEnvelope::new(
                                     uuid::Uuid::new_v4().to_string(),
