@@ -154,6 +154,22 @@ final class EmbeddedCoreSender: HostCommandSender, @unchecked Sendable {
         stop()
     }
 
+    // MARK: - Audio Injection
+
+    /// Inject raw PCM audio from a companion device into the speech pipeline.
+    ///
+    /// This is the low-latency binary path — no JSON serialisation, no base64.
+    /// Samples are mono f32 at the given sample rate (typically 16000 Hz).
+    ///
+    /// Safe to call from any thread; the Rust side handles synchronisation.
+    func injectAudio(samples: [Float], sampleRate: UInt32 = 16000) {
+        guard let handle else { return }
+        samples.withUnsafeBufferPointer { ptr in
+            guard let base = ptr.baseAddress else { return }
+            fae_core_inject_audio(handle, base, UInt32(ptr.count), sampleRate)
+        }
+    }
+
     // MARK: - Event polling
 
     /// Start a repeating timer that polls `fae_core_poll_event` to deliver

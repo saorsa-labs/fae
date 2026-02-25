@@ -99,6 +99,12 @@ pub struct PipelineCoordinator {
     runtime_tx: Option<broadcast::Sender<RuntimeEvent>>,
     tool_approval_tx: Option<mpsc::UnboundedSender<ToolApprovalRequest>>,
     text_injection_rx: Option<mpsc::UnboundedReceiver<TextInjection>>,
+    /// Receiver for companion device audio chunks injected via FFI.
+    ///
+    /// When present, audio from this channel is merged with local microphone
+    /// capture before the AEC/VAD stages so companion mic audio flows through
+    /// the same speech pipeline.
+    audio_injection_rx: Option<mpsc::UnboundedReceiver<AudioChunk>>,
     canvas_registry: Option<Arc<Mutex<CanvasSessionRegistry>>>,
     gate_cmd_rx: Option<mpsc::UnboundedReceiver<GateCommand>>,
     gate_active: Arc<AtomicBool>,
@@ -144,6 +150,7 @@ impl PipelineCoordinator {
             runtime_tx: None,
             tool_approval_tx: None,
             text_injection_rx: None,
+            audio_injection_rx: None,
             canvas_registry: None,
             gate_cmd_rx: None,
             gate_active: Arc::new(AtomicBool::new(false)),
@@ -200,6 +207,15 @@ impl PipelineCoordinator {
     /// into the LLM stage.
     pub fn with_text_injection(mut self, rx: mpsc::UnboundedReceiver<TextInjection>) -> Self {
         self.text_injection_rx = Some(rx);
+        self
+    }
+
+    /// Attach an audio injection channel for companion device microphone audio.
+    ///
+    /// Audio chunks received on this channel are merged with local capture
+    /// output before the AEC/VAD stages.
+    pub fn with_audio_injection(mut self, rx: mpsc::UnboundedReceiver<AudioChunk>) -> Self {
+        self.audio_injection_rx = Some(rx);
         self
     }
 
@@ -295,6 +311,7 @@ impl PipelineCoordinator {
         };
 
         let text_injection_rx = self.text_injection_rx.take();
+        let audio_injection_rx = self.audio_injection_rx.take();
 
         // Create channels between stages
         let (audio_tx, audio_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
@@ -326,9 +343,42 @@ impl PipelineCoordinator {
             let config = self.config.audio.clone();
             let cancel = cancel.clone();
             let rt_tx = runtime_tx.clone();
+            // Clone audio_tx before move so the companion injection task can share it.
+            let capture_audio_tx = audio_tx.clone();
             tokio::spawn(async move {
-                run_capture_stage(config, audio_tx, rt_tx, cancel).await;
+                run_capture_stage(config, capture_audio_tx, rt_tx, cancel).await;
             })
+        };
+
+        // Companion audio injection: merges external PCM audio (from companion
+        // devices via Multipeer Connectivity) into the same audio channel as
+        // local capture. The injected chunks flow through AEC → VAD → STT
+        // identically to local microphone audio.
+        let _companion_audio_handle = if let Some(mut injection_rx) = audio_injection_rx {
+            let cancel = cancel.clone();
+            let injection_tx = audio_tx;
+            Some(tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        () = cancel.cancelled() => break,
+                        chunk = injection_rx.recv() => {
+                            match chunk {
+                                Some(c) => {
+                                    if injection_tx.send(c).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                    }
+                }
+            }))
+        } else {
+            // No companion audio — drop the extra tx clone so the audio
+            // channel closes cleanly when capture finishes.
+            drop(audio_tx);
+            None
         };
 
         // AEC stage: sits between capture and VAD when enabled.

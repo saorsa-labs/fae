@@ -1,3 +1,4 @@
+import CLibFae
 import Foundation
 import MultipeerConnectivity
 import Combine
@@ -38,6 +39,8 @@ final class FaeRelayServer: NSObject, ObservableObject {
 
     weak var orbState: OrbStateController?
     weak var commandSender: HostCommandSender?
+    /// Direct reference for binary audio injection (bypasses JSON command path).
+    weak var audioSender: EmbeddedCoreSender?
 
     // MARK: - Internal State
 
@@ -248,7 +251,18 @@ final class FaeRelayServer: NSObject, ObservableObject {
         if data.count >= 4 {
             let frameType = data[0]
             if frameType == 0x01 { // micAudio
-                // TODO: Route mic PCM data to Rust audio pipeline.
+                // Parse header: [type(1)] [flags(1)] [length_hi(1)] [length_lo(1)] [PCM...]
+                let pcmData = data.dropFirst(4)
+                guard pcmData.count >= 4 else { return }
+                // Interpret raw bytes as f32 array and inject into Rust pipeline.
+                let floatCount = pcmData.count / MemoryLayout<Float>.size
+                let samples: [Float] = pcmData.withUnsafeBytes { raw in
+                    let bound = raw.bindMemory(to: Float.self)
+                    return Array(bound.prefix(floatCount))
+                }
+                Task { @MainActor in
+                    self.audioSender?.injectAudio(samples: samples)
+                }
                 return
             }
         }

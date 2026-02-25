@@ -454,6 +454,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::SkillChannelInstall => self.handle_skill_channel_install(envelope),
             CommandName::SkillChannelList => self.handle_skill_channel_list(envelope),
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
+            CommandName::ConversationInjectAudio => self.handle_conversation_inject_audio(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
             CommandName::ConversationLinkDetected => {
                 self.handle_conversation_link_detected(envelope)
@@ -1298,6 +1299,42 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
         ))
     }
 
+    fn handle_conversation_inject_audio(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<ResponseEnvelope> {
+        let sample_rate = envelope.payload["sample_rate"]
+            .as_u64()
+            .unwrap_or(16000) as u32;
+        let samples_b64 = envelope.payload["samples_b64"]
+            .as_str()
+            .ok_or_else(|| {
+                SpeechError::Pipeline("missing samples_b64 field".to_owned())
+            })?;
+
+        // Decode base64 → raw bytes → Vec<f32> (little-endian).
+        use base64::Engine as _;
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(samples_b64)
+            .map_err(|e| SpeechError::Pipeline(format!("base64 decode failed: {e}")))?;
+        let samples: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+
+        let chunk = crate::pipeline::messages::AudioChunk {
+            samples,
+            sample_rate,
+            captured_at: std::time::Instant::now(),
+        };
+        self.handler.request_conversation_inject_audio(chunk)?;
+
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
+        ))
+    }
+
     fn handle_conversation_link_detected(
         &self,
         envelope: &CommandEnvelope,
@@ -1500,6 +1537,7 @@ fn command_allowed_in_rescue_mode(command: CommandName) -> bool {
         CommandName::HostPing
             | CommandName::HostVersion
             | CommandName::ConversationInjectText
+            | CommandName::ConversationInjectAudio
             | CommandName::RuntimeStart
             | CommandName::RuntimeStop
             | CommandName::RuntimeStatus

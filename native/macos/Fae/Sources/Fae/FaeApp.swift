@@ -209,6 +209,7 @@ struct FaeApp: App {
                     // devices can discover this Mac on the local network.
                     relayServer.bindOrbState(orbState)
                     relayServer.commandSender = commandSender
+                    relayServer.audioSender = commandSender
                     relayServer.start()
 
                     if let sender = commandSender {

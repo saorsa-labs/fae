@@ -70,6 +70,11 @@ pub enum CommandName {
     OnboardingVoiceprintFinalize,
     #[serde(rename = "onboarding.voiceprint.reset")]
     OnboardingVoiceprintReset,
+    /// Inject raw PCM audio from a companion device into the pipeline.
+    ///
+    /// Payload: `{ "sample_rate": 16000, "samples_b64": "<base64 f32 LE>" }`
+    #[serde(rename = "conversation.inject_audio")]
+    ConversationInjectAudio,
     #[serde(rename = "conversation.link_detected")]
     ConversationLinkDetected,
     #[serde(rename = "config.get")]
@@ -192,6 +197,7 @@ impl CommandName {
             Self::OnboardingVoiceprintStartEnrollment => "onboarding.voiceprint.start_enrollment",
             Self::OnboardingVoiceprintFinalize => "onboarding.voiceprint.finalize",
             Self::OnboardingVoiceprintReset => "onboarding.voiceprint.reset",
+            Self::ConversationInjectAudio => "conversation.inject_audio",
             Self::ConversationLinkDetected => "conversation.link_detected",
             Self::ConfigGet => "config.get",
             Self::ConfigPatch => "config.patch",
@@ -257,6 +263,7 @@ impl CommandName {
             }
             "onboarding.voiceprint.finalize" => Some(Self::OnboardingVoiceprintFinalize),
             "onboarding.voiceprint.reset" => Some(Self::OnboardingVoiceprintReset),
+            "conversation.inject_audio" => Some(Self::ConversationInjectAudio),
             "conversation.link_detected" => Some(Self::ConversationLinkDetected),
             "config.get" => Some(Self::ConfigGet),
             "config.patch" => Some(Self::ConfigPatch),
@@ -464,6 +471,7 @@ mod tests {
         CommandName::OnboardingVoiceprintStartEnrollment,
         CommandName::OnboardingVoiceprintFinalize,
         CommandName::OnboardingVoiceprintReset,
+        CommandName::ConversationInjectAudio,
         CommandName::ConversationLinkDetected,
         CommandName::ConfigGet,
         CommandName::ConfigPatch,

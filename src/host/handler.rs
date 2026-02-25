@@ -12,7 +12,7 @@ use crate::host::runtime_events::{map_runtime_event, progress_event_to_json};
 use crate::onboarding::OnboardingPhase;
 use crate::permissions::{PermissionKind, SharedPermissionStore};
 use crate::pipeline::coordinator::PipelineCoordinator;
-use crate::pipeline::messages::{GateCommand, TextInjection};
+use crate::pipeline::messages::{AudioChunk, GateCommand, TextInjection};
 use crate::progress::ProgressEvent;
 use crate::runtime::RuntimeEvent;
 use crate::runtime_audit::{RuntimeAuditEntry, RuntimeAuditSource};
@@ -96,6 +96,11 @@ pub struct FaeDeviceTransferHandler {
     pipeline_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     event_bridge_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     text_injection_tx: Mutex<Option<mpsc::UnboundedSender<TextInjection>>>,
+    /// Sender for companion device audio injection into the pipeline.
+    ///
+    /// Shared with the FFI layer (`FaeRuntime`) so `fae_core_inject_audio`
+    /// can send audio directly without going through the JSON command path.
+    audio_injection_tx: Arc<Mutex<Option<mpsc::UnboundedSender<AudioChunk>>>>,
     gate_cmd_tx: Mutex<Option<mpsc::UnboundedSender<GateCommand>>>,
     tool_approval_tx: Mutex<Option<mpsc::UnboundedSender<ToolApprovalRequest>>>,
     /// Pending tool approval requests keyed by numeric request ID.
@@ -203,6 +208,7 @@ impl FaeDeviceTransferHandler {
             pipeline_handle: Mutex::new(None),
             event_bridge_handle: Mutex::new(None),
             text_injection_tx: Mutex::new(None),
+            audio_injection_tx: Arc::new(Mutex::new(None)),
             gate_cmd_tx: Mutex::new(None),
             tool_approval_tx: Mutex::new(None),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
@@ -229,6 +235,18 @@ impl FaeDeviceTransferHandler {
     /// visible through this clone.
     pub fn shared_permissions(&self) -> SharedPermissionStore {
         Arc::clone(&self.shared_permissions)
+    }
+
+    /// Get a shared reference to the audio injection sender.
+    ///
+    /// The FFI layer clones this `Arc` before the handler is moved into the
+    /// command server. When the pipeline starts, the handler populates the
+    /// inner `Option` — at which point `fae_core_inject_audio` can send
+    /// companion audio directly.
+    pub fn audio_injection_handle(
+        &self,
+    ) -> Arc<Mutex<Option<mpsc::UnboundedSender<AudioChunk>>>> {
+        Arc::clone(&self.audio_injection_tx)
     }
 
     /// Create a handler using the default config path.
@@ -1695,6 +1713,19 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(())
     }
 
+    /// Inject an audio chunk from a companion device into the pipeline.
+    fn request_conversation_inject_audio(&self, chunk: AudioChunk) -> Result<()> {
+        let guard = self
+            .audio_injection_tx
+            .lock()
+            .map_err(|e| SpeechError::Pipeline(format!("audio_injection lock poisoned: {e}")))?;
+        if let Some(tx) = guard.as_ref() {
+            tx.send(chunk)
+                .map_err(|e| SpeechError::Pipeline(format!("audio injection send failed: {e}")))?;
+        }
+        Ok(())
+    }
+
     fn request_conversation_gate_set(&self, active: bool) -> Result<()> {
         info!(active, "conversation.gate_set requested");
         let guard = self
@@ -1748,6 +1779,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
         // Create pipeline channels.
         let (text_tx, text_rx) = mpsc::unbounded_channel::<TextInjection>();
+        let (audio_inject_tx, audio_inject_rx) = mpsc::unbounded_channel::<AudioChunk>();
         let (gate_tx, gate_rx) = mpsc::unbounded_channel::<GateCommand>();
         // Tool approvals: pipeline sends ToolApprovalRequest objects via this
         // tx. The approval_rx is consumed by the approval bridge task which
@@ -1773,6 +1805,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         // Store senders so other commands can use them.
         if let Ok(mut guard) = self.text_injection_tx.lock() {
             *guard = Some(text_tx);
+        }
+        if let Ok(mut guard) = self.audio_injection_tx.lock() {
+            *guard = Some(audio_inject_tx);
         }
         if let Ok(mut guard) = self.gate_cmd_tx.lock() {
             *guard = Some(gate_tx);
@@ -1897,6 +1932,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
             let coordinator = PipelineCoordinator::with_models(config, models)
                 .with_runtime_events(runtime_event_tx)
                 .with_text_injection(text_rx)
+                .with_audio_injection(audio_inject_rx)
                 .with_gate_commands(gate_rx)
                 .with_tool_approvals(coordinator_approval_tx)
                 .with_approval_voice(approval_notification_rx, approval_response_tx)
@@ -2346,6 +2382,9 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
 
         // Drop channel senders (closes channels)
         if let Ok(mut guard) = self.text_injection_tx.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.audio_injection_tx.lock() {
             *guard = None;
         }
         if let Ok(mut guard) = self.gate_cmd_tx.lock() {

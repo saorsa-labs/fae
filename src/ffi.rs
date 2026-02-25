@@ -65,6 +65,11 @@ struct FaeRuntime {
     started: Mutex<bool>,
     server: Mutex<Option<HostCommandServer<FaeDeviceTransferHandler>>>,
     server_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Shared audio injection channel, populated by the handler when the
+    /// pipeline starts. Used by `fae_core_inject_audio` for low-latency
+    /// companion mic audio (bypasses the JSON command path).
+    audio_injection_tx:
+        std::sync::Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::pipeline::messages::AudioChunk>>>>,
 }
 
 // SAFETY: All mutable interior state is behind `Mutex`. The raw
@@ -250,6 +255,11 @@ pub unsafe extern "C" fn fae_core_init(config_json: *const c_char) -> *mut c_voi
             )
         }
     };
+    // Grab a shared handle to the audio injection channel before the handler
+    // is moved into the command server. The handler populates the inner Option
+    // when the pipeline starts; the FFI layer can then inject audio directly.
+    let audio_injection_handle = handler.audio_injection_handle();
+
     let (client, server) = command_channel_with_events(32, event_tx, handler);
     let event_rx = client.subscribe_events();
 
@@ -262,6 +272,7 @@ pub unsafe extern "C" fn fae_core_init(config_json: *const c_char) -> *mut c_voi
         started: Mutex::new(false),
         server: Mutex::new(Some(server)),
         server_handle: Mutex::new(None),
+        audio_injection_tx: audio_injection_handle,
     });
 
     Box::into_raw(runtime) as *mut c_void
@@ -482,6 +493,64 @@ pub unsafe extern "C" fn fae_core_destroy(handle: *mut c_void) {
     // SAFETY: handle was created by Box::into_raw in fae_core_init.
     // This reclaims ownership and drops all resources.
     let _ = unsafe { Box::from_raw(handle as *mut FaeRuntime) };
+}
+
+/// Inject raw PCM audio from a companion device into the speech pipeline.
+///
+/// This is the low-latency binary path for companion device microphone audio.
+/// The samples are mono f32 at the given sample rate (typically 16000 Hz).
+/// Bypasses the JSON command path entirely for minimal overhead.
+///
+/// Returns 0 on success, -1 on failure (null handle, null samples, or
+/// pipeline not running).
+///
+/// # Safety
+///
+/// `handle` must be a valid handle from `fae_core_init`. `samples` must point
+/// to `num_samples` contiguous `f32` values that remain valid for the
+/// duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fae_core_inject_audio(
+    handle: *mut c_void,
+    samples: *const f32,
+    num_samples: u32,
+    sample_rate: u32,
+) -> i32 {
+    // SAFETY: handle is from fae_core_init.
+    let rt = match unsafe { borrow_runtime(handle) } {
+        Some(r) => r,
+        None => return -1,
+    };
+
+    if samples.is_null() || num_samples == 0 {
+        return -1;
+    }
+
+    // SAFETY: caller guarantees samples points to num_samples f32 values.
+    let slice = unsafe { std::slice::from_raw_parts(samples, num_samples as usize) };
+    let audio_vec = slice.to_vec();
+
+    let chunk = crate::pipeline::messages::AudioChunk {
+        samples: audio_vec,
+        sample_rate,
+        captured_at: std::time::Instant::now(),
+    };
+
+    let guard = match rt.audio_injection_tx.lock() {
+        Ok(g) => g,
+        Err(_) => return -1,
+    };
+
+    match guard.as_ref() {
+        Some(tx) => {
+            if tx.send(chunk).is_ok() {
+                0
+            } else {
+                -1
+            }
+        }
+        None => -1, // Pipeline not running yet.
+    }
 }
 
 /// Free a string returned by `fae_core_send_command` or `fae_core_poll_event`.

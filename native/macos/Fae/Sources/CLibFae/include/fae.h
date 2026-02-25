@@ -134,6 +134,23 @@ void fae_core_destroy(FaeCoreHandle handle);
 void fae_string_free(char *s);
 
 /**
+ * Inject raw PCM audio from a companion device into the speech pipeline.
+ *
+ * Low-latency binary path — bypasses the JSON command envelope. The samples
+ * are mono float32 at the given sample rate (typically 16000 Hz).
+ *
+ * @param handle       Handle from fae_core_init.
+ * @param samples      Pointer to mono f32 PCM samples.
+ * @param num_samples  Number of f32 values pointed to by samples.
+ * @param sample_rate  Sample rate in Hz (e.g. 16000).
+ * @return 0 on success, -1 on failure (null handle, pipeline not running).
+ */
+int32_t fae_core_inject_audio(FaeCoreHandle handle,
+                              const float *samples,
+                              uint32_t num_samples,
+                              uint32_t sample_rate);
+
+/**
  * Linker dead-strip anchor — prevents the macOS linker from removing Rust
  * subsystems (ML models, audio, VAD, AEC) that are not directly reachable
  * from the 8 FFI entry points.
