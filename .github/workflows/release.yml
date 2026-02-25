@@ -194,6 +194,20 @@ jobs:
           cp -R "$SWIFT_RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
           chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
 
+          # Embed Sparkle.framework — required at runtime, not statically linked.
+          SPARKLE_FW="$(find native/macos/Fae/.build -path '*/release/Sparkle.framework' -type d | head -n 1)"
+          if [ -z "$SPARKLE_FW" ]; then
+            echo "::error::Sparkle.framework not found in SPM release build output"
+            exit 1
+          fi
+          cp -R "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
+
+          # Ensure the binary finds Sparkle at @executable_path/../Frameworks.
+          # @loader_path alone (the SPM default rpath) resolves to Contents/MacOS/,
+          # which is wrong for a bundled framework layout.
+          install_name_tool -add_rpath "@executable_path/../Frameworks" \
+            "$APP_BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
+
           # Use checked-in Info.plist with version substitution.
           cp native/macos/Fae/Info.plist "$APP_BUNDLE/Contents/Info.plist"
           sed -i '' "s/__VERSION__/${VERSION}/g" "$APP_BUNDLE/Contents/Info.plist"
@@ -216,27 +230,44 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
-          # Sign inside-out: nested bundles first, then binary, then top-level .app.
+          # Sign inside-out: deepest nested bundles first, then binary, then top-level .app.
 
-          # 1. SPM resource bundles contain static assets (HTML, CSS, images)
-          # and lack the Info.plist structure codesign requires. They are sealed
-          # by the top-level .app signature in step 4, so skip individual signing.
+          # 1. Sign Sparkle XPC services (deepest level).
+          for xpc in "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices"/*.xpc; do
+            [ -d "$xpc" ] && codesign --force --options runtime \
+              --sign "$MACOS_SIGNING_IDENTITY" \
+              --timestamp \
+              "$xpc"
+          done
 
-          # 2. Sign the main executable inside the bundle.
+          # 2. Sign Sparkle Updater.app (nested app bundle).
+          SPARKLE_UPDATER="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+          [ -d "$SPARKLE_UPDATER" ] && codesign --force --options runtime \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --timestamp \
+            "$SPARKLE_UPDATER"
+
+          # 3. Sign Sparkle.framework itself.
+          codesign --force --options runtime \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --timestamp \
+            "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+
+          # 4. Sign the main executable inside the bundle.
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
             "$APP_BUNDLE/Contents/MacOS/Fae"
 
-          # 3. Sign the standalone update binary (not in a bundle).
+          # 5. Sign the standalone update binary (not in a bundle).
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
             "$UPDATE_ASSET"
 
-          # 4. Sign the top-level .app bundle (seals everything).
+          # 6. Sign the top-level .app bundle (seals everything).
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \

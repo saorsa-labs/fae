@@ -239,40 +239,13 @@ _bundle-app:
     fi
     install_name_tool -add_rpath "@executable_path/../Frameworks" \
         "$BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
-    cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-      "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-        <key>CFBundleIdentifier</key>
-        <string>com.saorsalabs.fae</string>
-        <key>CFBundleName</key>
-        <string>Fae</string>
-        <key>CFBundleDisplayName</key>
-        <string>Fae</string>
-        <key>CFBundleExecutable</key>
-        <string>Fae</string>
-        <key>CFBundlePackageType</key>
-        <string>APPL</string>
-        <key>CFBundleVersion</key>
-        <string>0.7.1</string>
-        <key>CFBundleShortVersionString</key>
-        <string>0.7.1</string>
-        <key>LSMinimumSystemVersion</key>
-        <string>14.0</string>
-        <key>NSMicrophoneUsageDescription</key>
-        <string>Fae needs microphone access for voice conversations.</string>
-        <key>NSContactsUsageDescription</key>
-        <string>Fae can access your contacts to help you communicate.</string>
-        <key>NSCalendarsUsageDescription</key>
-        <string>Fae can access your calendar to help manage your schedule.</string>
-        <key>NSHighResolutionCapable</key>
-        <true/>
-    </dict>
-    </plist>
-    PLIST
-    echo "✓ Bundle assembled: $BUNDLE"
+    # Use the checked-in Info.plist (includes SUFeedURL + SUPublicEDKey for Sparkle).
+    # Substitute __VERSION__ with the current Cargo.toml version.
+    VERSION=$(grep '^version' "$(git rev-parse --show-toplevel)/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+    sed "s/__VERSION__/${VERSION}/g" \
+        "$(git rev-parse --show-toplevel)/native/macos/Fae/Info.plist" \
+        > "$BUNDLE/Contents/Info.plist"
+    echo "✓ Bundle assembled: $BUNDLE (v${VERSION})"
 
 # (internal) Sign the .app bundle with Developer ID.
 _sign-bundle:

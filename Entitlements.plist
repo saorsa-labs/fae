@@ -43,10 +43,5 @@
   <key>com.apple.security.personal-information.calendars</key>
   <true/>
 
-  <!-- Shared keychain access for future extensions -->
-  <key>keychain-access-groups</key>
-  <array>
-    <string>MEGSB2GXGZ.com.saorsalabs.fae</string>
-  </array>
 </dict>
 </plist>
