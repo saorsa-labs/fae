@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.4] - 2026-02-25
+
+### Fixed
+
+- **JIT permission timeout mismatch** — Tool-side `JIT_TIMEOUT` was 1200ms while the handler polled for up to 60s. JIT permission grants could never succeed because the tool returned "timed out" to the LLM long before the user saw the dialog. Both sides now use 20 seconds: `JIT_TIMEOUT` in `availability_gate.rs` and `JIT_HANDLER_TIMEOUT_SECS` in `handler.rs`.
+
 ## [v0.7.3] - 2026-02-25
 
 ### Added
