@@ -139,6 +139,9 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn request_conversation_gate_set(&self, _active: bool) -> Result<()> {
         Ok(())
     }
+    fn request_conversation_engage(&self) -> Result<()> {
+        Ok(())
+    }
     fn request_conversation_link_detected(&self, _url: &str) -> Result<()> {
         Ok(())
     }
@@ -463,6 +466,7 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
             CommandName::ConversationInjectText => self.handle_conversation_inject_text(envelope),
             CommandName::ConversationInjectAudio => self.handle_conversation_inject_audio(envelope),
             CommandName::ConversationGateSet => self.handle_conversation_gate_set(envelope),
+            CommandName::ConversationEngage => self.handle_conversation_engage(envelope),
             CommandName::ConversationLinkDetected => {
                 self.handle_conversation_link_detected(envelope)
             }
@@ -1384,6 +1388,14 @@ impl<H: DeviceTransferHandler> HostCommandServer<H> {
                 "accepted": true,
                 "active": active
             }),
+        ))
+    }
+
+    fn handle_conversation_engage(&self, envelope: &CommandEnvelope) -> Result<ResponseEnvelope> {
+        self.handler.request_conversation_engage()?;
+        Ok(ResponseEnvelope::ok(
+            envelope.request_id.clone(),
+            serde_json::json!({"accepted": true}),
         ))
     }
 

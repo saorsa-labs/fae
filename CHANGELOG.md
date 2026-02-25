@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.3] - 2026-02-25
+
+### Added
+
+- **Scheduled task execution via embedded LLM** — `execute_scheduled_conversation()` is now fully implemented. When a user-created scheduled task fires, it runs a background agent against the embedded Qwen3 model and speaks the result. Previously a stub.
+- **`start_scheduler_with_llm()`** — new startup function wires the loaded `LocalLlm` into the scheduler so background agents can run without an external API.
+- **`select_tool_allowlist_for_prompt()`** — tool routing for scheduled tasks excludes scheduler management tools (prevents recursive task creation); defaults to `web_search + fetch_url` when no intent is detected.
+- **`GateCommand::Engage`** — new gate command resets the follow-up engagement window on demand. Prevents long Fae responses from consuming the user's 30-second reply window.
+- **`conversation.engage` host command** — Swift can now send `conversation.engage` to refresh the follow-up window after the user interacts (e.g. clicks the orb to expand).
+- **Pending transcription buffer** (`ConversationBridgeController`) — user speech is held until the coordinator confirms it routed to the LLM (`AssistantGenerating { active: true }`), preventing ghost bubbles for noise-dropped segments.
+- **`SettingsSchedulesTab`** — new Settings tab showing all scheduled tasks (built-in and user-created) with next/last run times, failure streaks, manual trigger, and swipe-to-delete for user tasks.
+- **In-place orb collapse** (`WindowStateController`) — when the canvas opens, the orb collapses at its current position rather than jumping to a corner; frame is saved and restored when canvas closes.
+- **Input field auto-focus** — conversation input bar receives focus automatically after the window expands.
+- **Expanded scheduler intent keywords** — 56 natural-speech patterns now trigger scheduler routing (up from 9), catching phrases like "tell me daily", "notify me every morning", "check for me each week".
+
+### Changed
+
+- **Reasoning level tuning** — background agents default to `Low` reasoning for multi-tool tasks; `Medium` only for explicitly analytical queries. Prevents 100+ second thinking loops on simple tool calls (e.g. "list reminders").
+- **Background task fallback** — if streamed and final text are both empty, the agent synthesises "Done." so the coordinator always has something to speak.
+- **`ApprovalTool` blocking** — uses `tokio::task::block_in_place()` with a dedicated response-wait thread to prevent tokio worker starvation when waiting for user approval.
+- **Executor async semantics** — `executor_bridge.rs` now detects existing tokio runtimes and spawns a dedicated wait thread (`handle.block_on()`) instead of creating a nested runtime (fixes "Cannot start a runtime from within a runtime" panic).
+- **`TaskExecutor` type** — changed from `Box<dyn Fn>` to `Arc<dyn Fn>` for shared ownership across scheduler and executor.
+- **Scheduler persists across model reloads** — scheduler is started once per runtime session; subsequent pipeline restarts (model reload) skip re-starting the scheduler.
+- **`AssistantGenerating` on background task complete** — coordinator now emits `active: false` when a background agent finishes, keeping the orb state correct.
+- **Ack bubbles in conversation panel** — acknowledgment phrases (e.g. "on it") now appear as assistant messages in the conversation view.
+- **Channels tab simplified** — `SettingsChannelsTab` replaced detailed credential forms with a skills-first approach: master kill switch, per-channel summary, and disconnect buttons.
+- **`max_tokens` 128 → 512** — allows longer responses.
+- **TTS speed 1.0 → 1.1** — slightly faster speech cadence.
+- **SOUL.md rewritten** — character described as warm, upbeat, and playful rather than calm and restrained; sections restructured for clarity.
+- **Opening style** — one-word/short greeting rule: if user says hi/hello/hey, respond with a single short phrase only (e.g. "hey!", "what's up?").
+- **`create_scheduled_task` guidance** — system prompt now documents how to write self-contained task prompts with the correct JSON payload format.
+
+### Fixed
+
+- **Tokio-within-runtime panic** — `executor_bridge.rs` and `ApprovalTool` no longer call `Runtime::new().block_on()` from inside a tokio worker thread.
+- **Follow-up window starvation** — `GateCommand::Engage` resets `engaged_until` after Fae finishes speaking, giving the user a fresh 30-second reply window even after long responses.
+- **Partial streamed text lost on interruption** — `ConversationBridgeController` commits any partial assistant text when barge-in occurs, so interrupted responses appear in the conversation panel.
+- **`withAnimation` return value warning** in `SettingsSchedulesTab` (Swift compiler warning resolved).
+
 ## [v0.7.1] - 2026-02-24
 
 ### Added

@@ -3,10 +3,14 @@
 //! Wraps the [`fae_search`] crate's async search API behind the synchronous
 //! [`Tool`] trait interface using `tokio::runtime::Handle::current().block_on()`.
 
+use std::time::Duration;
+
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
 
 use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult, truncate_output};
+
+const DEFAULT_TIMEOUT_SECS: u64 = 15;
 
 /// Tool that searches the web using multiple search engines concurrently.
 ///
@@ -87,10 +91,44 @@ impl Tool for WebSearchTool {
         };
 
         // Bridge sync Tool::execute to async fae_search::search.
-        let handle = tokio::runtime::Handle::current();
-        let results = handle
-            .block_on(fae_search::search(query, &config))
-            .map_err(|e| FaeLlmError::ToolExecutionError(format!("web search failed: {e}")))?;
+        // Apply an explicit per-tool timeout so behavior is bounded even when
+        // outer executor-level timeouts are absent or larger.
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+        let results_result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(tokio::time::timeout(
+                timeout,
+                fae_search::search(query, &config),
+            )),
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| {
+                        FaeLlmError::ToolExecutionError(format!(
+                            "failed to create runtime for web_search: {e}"
+                        ))
+                    })?;
+                rt.block_on(tokio::time::timeout(
+                    timeout,
+                    fae_search::search(query, &config),
+                ))
+            }
+        };
+
+        let results = match results_result {
+            Ok(Ok(results)) => results,
+            Ok(Err(e)) => {
+                return Ok(ToolResult::failure(format!(
+                    "web_search failed for \"{query}\": {e}"
+                )));
+            }
+            Err(_) => {
+                return Ok(ToolResult::failure(format!(
+                    "web_search timed out after {}s for \"{query}\"",
+                    DEFAULT_TIMEOUT_SECS
+                )));
+            }
+        };
 
         if results.is_empty() {
             return Ok(ToolResult::success(format!(

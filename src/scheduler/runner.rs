@@ -18,13 +18,18 @@ use tracing::{debug, error, info, warn};
 /// Interval between scheduler ticks (seconds).
 const TICK_INTERVAL_SECS: u64 = 60;
 
+/// Hard execution bound for a single scheduled task callback.
+///
+/// Prevents a stuck executor from indefinitely stalling the scheduler tick loop.
+const TASK_EXECUTION_TIMEOUT_SECS: u64 = 30;
+
 /// Number of run-history entries to keep.
 const DEFAULT_HISTORY_LIMIT: usize = 400;
 
 /// Callback type for executing a task.
 ///
 /// Takes the full scheduled task and returns a [`TaskResult`].
-pub type TaskExecutor = Box<dyn Fn(&ScheduledTask) -> TaskResult + Send + Sync>;
+pub type TaskExecutor = std::sync::Arc<dyn Fn(&ScheduledTask) -> TaskResult + Send + Sync>;
 
 /// Public snapshot used by doctor/GUI tools.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -481,23 +486,41 @@ impl Scheduler {
         debug!("executing scheduled task: {}", task.id);
 
         if let Some(executor) = &self.executor {
-            return executor(task);
-        }
+            let executor = std::sync::Arc::clone(executor);
+            let task = task.clone();
+            let (tx, rx) = std::sync::mpsc::channel::<TaskResult>();
 
-        if task.kind == TaskKind::Builtin {
-            return crate::scheduler::tasks::execute_builtin(&task.id);
-        }
+            let _ = std::thread::Builder::new()
+                .name(format!("scheduler-task-{}", task.id))
+                .spawn(move || {
+                    let result = executor(&task);
+                    let _ = tx.send(result);
+                });
 
-        TaskResult::NeedsUserAction(crate::scheduler::tasks::UserPrompt {
-            title: format!("Task {} is ready", task.name),
-            message:
-                "This user task needs an execution handler. Open Doctor or assign an executor."
-                    .to_owned(),
-            actions: vec![crate::scheduler::tasks::PromptAction {
-                label: "Open Doctor".to_owned(),
-                id: "open_doctor".to_owned(),
-            }],
-        })
+            match rx.recv_timeout(std::time::Duration::from_secs(TASK_EXECUTION_TIMEOUT_SECS)) {
+                Ok(result) => result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => TaskResult::Error(format!(
+                    "scheduler task execution timed out after {}s",
+                    TASK_EXECUTION_TIMEOUT_SECS
+                )),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    TaskResult::Error("scheduler task response channel closed".to_owned())
+                }
+            }
+        } else if task.kind == TaskKind::Builtin {
+            crate::scheduler::tasks::execute_builtin(&task.id)
+        } else {
+            TaskResult::NeedsUserAction(crate::scheduler::tasks::UserPrompt {
+                title: format!("Task {} is ready", task.name),
+                message:
+                    "This user task needs an execution handler. Open Doctor or assign an executor."
+                        .to_owned(),
+                actions: vec![crate::scheduler::tasks::PromptAction {
+                    label: "Open Doctor".to_owned(),
+                    id: "open_doctor".to_owned(),
+                }],
+            })
+        }
     }
 
     /// Default path for scheduler state file.
@@ -711,7 +734,7 @@ mod tests {
     #[test]
     fn tick_executes_due_tasks_and_records_history() {
         let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.executor = Some(Box::new(|task| {
+        scheduler.executor = Some(std::sync::Arc::new(|task| {
             TaskResult::Success(format!("ran {}", task.id))
         }));
         scheduler.add_task(ScheduledTask::new(
@@ -732,7 +755,9 @@ mod tests {
     #[test]
     fn tick_marks_failure_and_backoff() {
         let (mut scheduler, mut rx) = make_scheduler();
-        scheduler.executor = Some(Box::new(|_| TaskResult::Error("boom".to_owned())));
+        scheduler.executor = Some(std::sync::Arc::new(|_| {
+            TaskResult::Error("boom".to_owned())
+        }));
 
         let mut task = ScheduledTask::new("err", "Error Task", Schedule::Interval { secs: 0 });
         task.retry_backoff_secs = 1;
@@ -757,7 +782,9 @@ mod tests {
     fn run_history_is_bounded() {
         let (mut scheduler, mut rx) = make_scheduler();
         scheduler.max_history_entries = 2;
-        scheduler.executor = Some(Box::new(|task| TaskResult::Success(task.id.clone())));
+        scheduler.executor = Some(std::sync::Arc::new(|task| {
+            TaskResult::Success(task.id.clone())
+        }));
 
         scheduler.add_task(ScheduledTask::new("a", "A", Schedule::Interval { secs: 0 }));
         scheduler.add_task(ScheduledTask::new("b", "B", Schedule::Interval { secs: 0 }));
@@ -849,7 +876,9 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut scheduler = Scheduler::new(tx);
         scheduler.state_path = None;
-        scheduler.executor = Some(Box::new(|_| TaskResult::Success("ran".to_owned())));
+        scheduler.executor = Some(std::sync::Arc::new(|_| {
+            TaskResult::Success("ran".to_owned())
+        }));
         scheduler.add_task(ScheduledTask::new(
             "async_test",
             "Async",
@@ -877,7 +906,7 @@ mod tests {
         scheduler.state_path = None;
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
-        scheduler.executor = Some(Box::new(move |_| {
+        scheduler.executor = Some(std::sync::Arc::new(move |_| {
             call_counter.fetch_add(1, Ordering::SeqCst);
             TaskResult::Success("ran".to_owned())
         }));
@@ -949,7 +978,7 @@ mod tests {
         let calls_a = Arc::clone(&calls);
         let mut scheduler_a = Scheduler::new(tx_a).with_run_key_ledger(ledger_a);
         scheduler_a.state_path = None;
-        scheduler_a.executor = Some(Box::new(move |_| {
+        scheduler_a.executor = Some(std::sync::Arc::new(move |_| {
             calls_a.fetch_add(1, Ordering::SeqCst);
             TaskResult::Success("ran-a".to_owned())
         }));
@@ -961,7 +990,7 @@ mod tests {
         let calls_b = Arc::clone(&calls);
         let mut scheduler_b = Scheduler::new(tx_b).with_run_key_ledger(ledger_b);
         scheduler_b.state_path = None;
-        scheduler_b.executor = Some(Box::new(move |_| {
+        scheduler_b.executor = Some(std::sync::Arc::new(move |_| {
             calls_b.fetch_add(1, Ordering::SeqCst);
             TaskResult::Success("ran-b".to_owned())
         }));

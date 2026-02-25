@@ -789,6 +789,64 @@ pub fn start_scheduler_with_memory(
     start_scheduler_with_config(&config)
 }
 
+/// Start the background scheduler with a shared LLM for scheduled conversations.
+///
+/// The `shared_llm` is set to `Some` once the pipeline loads the model. The
+/// scheduler waits for it when a user task fires. This is the preferred entry
+/// point when starting from the embedded runtime.
+pub fn start_scheduler_with_llm(
+    config: SpeechConfig,
+    shared_llm: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<LocalLlm>>>>,
+) -> (
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::tasks::TaskResult>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (conversation_req_tx, conversation_req_rx) = tokio::sync::mpsc::unbounded_channel();
+    let bridge = crate::scheduler::executor_bridge::TaskExecutorBridge::new(conversation_req_tx);
+    let mut scheduler = crate::scheduler::runner::Scheduler::new(tx);
+    let authority_root = crate::fae_dirs::config_dir();
+    let lease = crate::scheduler::authority::LeaderLease::new(
+        format!("fae-{}-{}", std::process::id(), uuid::Uuid::new_v4()),
+        std::process::id(),
+        authority_root.join("scheduler.leader.lock"),
+        crate::scheduler::authority::LeaderLeaseConfig::default(),
+    );
+    let run_key_ledger = crate::scheduler::authority::RunKeyLedger::new(
+        authority_root.join("scheduler.run_keys.jsonl"),
+    );
+    scheduler = scheduler
+        .with_leader_lease(lease)
+        .with_run_key_ledger(run_key_ledger);
+    scheduler.with_update_checks();
+    scheduler.with_memory_maintenance();
+    let memory_root = config.memory.root_dir.clone();
+    let retention_days = config.memory.retention_days;
+    let backup_keep_count = config.memory.backup_keep_count;
+
+    let bridge_executor = bridge.into_executor();
+    scheduler = scheduler.with_executor(std::sync::Arc::new(
+        move |task: &crate::scheduler::tasks::ScheduledTask| {
+            if task.kind == crate::scheduler::tasks::TaskKind::User {
+                return bridge_executor(task);
+            }
+            execute_scheduler_task(task, &memory_root, retention_days, backup_keep_count)
+        },
+    ));
+
+    info!(
+        "starting background scheduler (with LLM) with {} tasks",
+        scheduler.tasks().len()
+    );
+    let handle = scheduler.run();
+
+    tokio::spawn(async move {
+        handle_conversation_requests(conversation_req_rx, config, shared_llm).await;
+    });
+
+    (handle, rx)
+}
+
 /// Start the background scheduler using explicit runtime configuration.
 ///
 /// Scheduled conversations use this config directly instead of process defaults,
@@ -830,15 +888,17 @@ pub fn start_scheduler_with_config(
 
     // Wrap the bridge executor to also handle built-in tasks
     let bridge_executor = bridge.into_executor();
-    scheduler = scheduler.with_executor(Box::new(move |task| {
-        // User tasks with ConversationTrigger payloads go through bridge
-        if task.kind == crate::scheduler::tasks::TaskKind::User {
-            return bridge_executor(task);
-        }
+    scheduler = scheduler.with_executor(std::sync::Arc::new(
+        move |task: &crate::scheduler::tasks::ScheduledTask| {
+            // User tasks with ConversationTrigger payloads go through bridge
+            if task.kind == crate::scheduler::tasks::TaskKind::User {
+                return bridge_executor(task);
+            }
 
-        // Built-in tasks use the existing executor
-        execute_scheduler_task(task, &memory_root, retention_days, backup_keep_count)
-    }));
+            // Built-in tasks use the existing executor
+            execute_scheduler_task(task, &memory_root, retention_days, backup_keep_count)
+        },
+    ));
 
     info!(
         "starting background scheduler with {} tasks",
@@ -848,7 +908,12 @@ pub fn start_scheduler_with_config(
 
     // Spawn background task to handle conversation requests
     tokio::spawn(async move {
-        handle_conversation_requests(conversation_req_rx, scheduler_config).await;
+        handle_conversation_requests(
+            conversation_req_rx,
+            scheduler_config,
+            std::sync::Arc::new(std::sync::Mutex::new(None)),
+        )
+        .await;
     });
 
     (handle, rx)
@@ -861,6 +926,7 @@ pub fn start_scheduler_with_config(
 async fn handle_conversation_requests(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::pipeline::messages::ConversationRequest>,
     config: SpeechConfig,
+    shared_llm: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<LocalLlm>>>>,
 ) {
     use crate::pipeline::messages::ConversationResponse;
     use tokio::time::{Duration, timeout};
@@ -872,12 +938,12 @@ async fn handle_conversation_requests(
             request.task_id, request.prompt
         );
 
-        // Execute conversation with timeout (use request.timeout_secs or default to 300)
-        let timeout_secs = request.timeout_secs.unwrap_or(300);
+        // Execute conversation with timeout (use request.timeout_secs or default to 120)
+        let timeout_secs = request.timeout_secs.unwrap_or(120);
         let conversation_timeout = Duration::from_secs(timeout_secs);
         let result = timeout(
             conversation_timeout,
-            execute_scheduled_conversation(&config, &request),
+            execute_scheduled_conversation(&config, &request, &shared_llm),
         )
         .await;
 
@@ -911,19 +977,58 @@ async fn handle_conversation_requests(
 
 /// Execute a scheduled conversation using the embedded local agent.
 ///
-/// # TODO (Phase 6.2)
-/// Wire to the embedded local LLM instead of external API.
+/// Runs a background agent with intent-appropriate tools. If the LLM is not
+/// yet available (still loading), returns an error so the task can be retried.
 async fn execute_scheduled_conversation(
-    _config: &SpeechConfig,
+    config: &SpeechConfig,
     request: &crate::pipeline::messages::ConversationRequest,
+    shared_llm: &std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<LocalLlm>>>>,
 ) -> crate::error::Result<String> {
-    tracing::warn!(
-        "Scheduled conversation for task {} deferred: local LLM wiring pending (Phase 6.2)",
-        request.task_id
-    );
-    Err(SpeechError::Config(
-        "Scheduled conversation via embedded LLM not yet implemented (Phase 6.2)".to_owned(),
-    ))
+    use crate::agent::{AgentChannels, BackgroundAgentTask, spawn_background_agent};
+
+    // Get the shared LLM reference (set by the pipeline once models are loaded).
+    let llm_arc = shared_llm.lock().ok().and_then(|g| g.clone());
+
+    if llm_arc.is_none() {
+        warn!(
+            task_id = %request.task_id,
+            "scheduled conversation deferred: LLM not yet loaded"
+        );
+        return Err(SpeechError::Config(
+            "LLM not yet loaded — scheduled task deferred".to_owned(),
+        ));
+    }
+
+    // Classify the prompt to select the appropriate tool allowlist.
+    let tool_allowlist = crate::agent::select_tool_allowlist_for_prompt(&request.prompt);
+
+    let task = BackgroundAgentTask {
+        id: request.task_id.clone(),
+        description: format!("Scheduled task: {}", request.task_id),
+        user_message: request.prompt.clone(),
+        conversation_context: request.system_addon.clone().unwrap_or_default(),
+        tool_allowlist,
+    };
+
+    let result = spawn_background_agent(
+        task,
+        config.llm.clone(),
+        llm_arc.as_deref(),
+        None,
+        AgentChannels::default(),
+    )
+    .await;
+
+    if result.success {
+        info!(task_id = %request.task_id, "scheduled conversation completed");
+        Ok(result.spoken_summary)
+    } else {
+        warn!(task_id = %request.task_id, "scheduled conversation agent returned failure");
+        Err(SpeechError::Config(format!(
+            "scheduled agent did not complete successfully: {}",
+            result.spoken_summary
+        )))
+    }
 }
 
 fn execute_scheduler_task(

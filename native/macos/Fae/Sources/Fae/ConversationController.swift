@@ -38,6 +38,10 @@ final class ConversationController: ObservableObject {
     /// Whether the assistant is currently generating a response.
     @Published var isGenerating: Bool = false
 
+    /// Friendly label for the loaded LLM, e.g. "Qwen3 8B · Q4_K_M".
+    /// Set when the LLM finishes loading; empty until then.
+    @Published var loadedModelLabel: String = ""
+
     private let maxMessages = 200
 
     /// Set when a handoff snapshot is restored. The UI observes this to push
@@ -61,6 +65,9 @@ final class ConversationController: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         lastInteractionTimestamp = Date()
+        // Add to conversation panel immediately — typed messages don't go through
+        // STT/pendingUserTranscription, so we add them here directly.
+        appendMessage(role: .user, content: trimmed)
         NotificationCenter.default.post(
             name: .faeConversationInjectText,
             object: nil,
@@ -123,4 +130,11 @@ extension Notification.Name {
     static let faeConversationInjectText = Notification.Name("faeConversationInjectText")
     static let faeConversationGateSet = Notification.Name("faeConversationGateSet")
     static let faeConversationLinkDetected = Notification.Name("faeConversationLinkDetected")
+    /// Posted when the user clicks the collapsed orb to expand it.
+    /// The HostCommandBridge forwards this as "conversation.engage" to reset
+    /// the direct-address follow-up window so the next utterance is accepted.
+    static let faeConversationEngage = Notification.Name("faeConversationEngage")
+    /// Posted by WindowStateController when it expands from collapsed to compact.
+    /// InputBarView listens for this to restore keyboard focus on the text field.
+    static let faeWillFocusInputField = Notification.Name("faeWillFocusInputField")
 }

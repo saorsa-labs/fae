@@ -546,6 +546,33 @@ fn select_tool_allowlist(user_text: &str) -> Vec<String> {
     tools
 }
 
+/// Select the tool allowlist for a scheduled task execution prompt.
+///
+/// Similar to `select_tool_allowlist` but excludes scheduler management tools
+/// to prevent tasks from creating new tasks recursively. Falls back to
+/// `web_search + fetch_url` if no specific intent is detected, since most
+/// scheduled tasks involve fetching information.
+pub fn select_tool_allowlist_for_prompt(prompt: &str) -> Vec<String> {
+    let mut tools = select_tool_allowlist(prompt);
+    // Remove scheduler tools — fired tasks should not create new tasks.
+    tools.retain(|t| {
+        !matches!(
+            t.as_str(),
+            "list_scheduled_tasks"
+                | "create_scheduled_task"
+                | "update_scheduled_task"
+                | "delete_scheduled_task"
+                | "trigger_scheduled_task"
+        )
+    });
+    // If nothing matched, default to web search (most scheduled tasks fetch info).
+    if tools.is_empty() {
+        tools.push("fetch_url".to_owned());
+        tools.push("web_search".to_owned());
+    }
+    tools
+}
+
 /// Intent classification result from `classify_intent()`.
 ///
 /// Determines whether a user message requires background tool execution
@@ -643,9 +670,12 @@ pub struct BackgroundAgentResult {
 /// Select the reasoning level for a background agent task.
 ///
 /// Pure system-utility queries (bash-only + factual keywords like "what time")
-/// get [`ReasoningLevel::Off`]. Multi-tool tasks or analytical questions get
-/// [`ReasoningLevel::Medium`]. Everything else defaults to
-/// [`ReasoningLevel::Low`].
+/// get [`ReasoningLevel::Off`]. Explicitly analytical questions get
+/// [`ReasoningLevel::Medium`]. Everything else (including multi-tool tasks)
+/// defaults to [`ReasoningLevel::Low`].
+///
+/// Note: `Medium` is intentionally avoided for multi-tool tasks — on 8B models
+/// it produces 100+ second thinking loops for simple calls like "list reminders".
 fn select_background_reasoning_level(task: &BackgroundAgentTask) -> ReasoningLevel {
     let lower = task.user_message.to_ascii_lowercase();
     let only_bash = task.tool_allowlist.len() == 1 && task.tool_allowlist[0] == "bash";
@@ -655,12 +685,13 @@ fn select_background_reasoning_level(task: &BackgroundAgentTask) -> ReasoningLev
         return ReasoningLevel::Off;
     }
 
-    // Multi-tool tasks or analytical asks benefit from deeper reasoning.
-    if task.tool_allowlist.len() > 1 || needs_deeper_reasoning(task.user_message.as_str()) {
+    // Only use deeper reasoning for explicitly complex analytical queries.
+    // Multi-tool tasks default to Low to avoid excessive thinking latency.
+    if needs_deeper_reasoning(task.user_message.as_str()) {
         return ReasoningLevel::Medium;
     }
 
-    // Keep lightweight reasoning for ordinary tool tasks.
+    // Default: lightweight reasoning for all tool tasks.
     ReasoningLevel::Low
 }
 
@@ -755,10 +786,14 @@ pub async fn spawn_background_agent(
     match run_result {
         Ok(result) => {
             // Prefer streamed text; fall back to result's final_text.
-            let spoken = if collected_text.trim().is_empty() {
+            // If both are empty the agent produced no narration — synthesise a
+            // minimal fallback so the coordinator always has something to speak.
+            let spoken = if !collected_text.trim().is_empty() {
+                collected_text
+            } else if !result.final_text.trim().is_empty() {
                 result.final_text.trim().to_owned()
             } else {
-                collected_text
+                "Done.".to_string()
             };
 
             BackgroundAgentResult {
@@ -1137,36 +1172,52 @@ impl Tool for ApprovalTool {
             ));
         }
 
-        let start = Instant::now();
-        loop {
-            match response_rx.try_recv() {
-                Ok(ToolApprovalResponse::Approved(true)) => {
-                    tracing::info!("tool approved, executing: {}", self.inner.name());
-                    return self.inner.execute(args);
-                }
-                Ok(ToolApprovalResponse::Approved(false))
-                | Ok(ToolApprovalResponse::Cancelled)
-                | Ok(ToolApprovalResponse::Value(_)) => {
-                    tracing::warn!("tool denied by user: {}", self.inner.name());
-                    return Err(FaeLlmError::ToolExecutionError(
-                        "tool call denied by user".to_string(),
-                    ));
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
-                    if start.elapsed() >= self.timeout {
-                        tracing::error!("tool approval timed out after {:?}", self.timeout);
+        // Wait for user approval in a blocking fashion.
+        // We use `block_in_place` so the tokio runtime can migrate other tasks
+        // off this thread while we spin-wait, preventing worker thread starvation
+        // when this is called from inside a `tokio::spawn` task.
+        let approval_result = tokio::task::block_in_place(|| {
+            let start = Instant::now();
+            loop {
+                match response_rx.try_recv() {
+                    Ok(ToolApprovalResponse::Approved(true)) => {
+                        return Ok(true);
+                    }
+                    Ok(ToolApprovalResponse::Approved(false))
+                    | Ok(ToolApprovalResponse::Cancelled)
+                    | Ok(ToolApprovalResponse::Value(_)) => {
+                        return Ok(false);
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                        if start.elapsed() >= self.timeout {
+                            tracing::error!("tool approval timed out after {:?}", self.timeout);
+                            return Err(FaeLlmError::ToolExecutionError(
+                                "tool approval timed out".to_string(),
+                            ));
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                         return Err(FaeLlmError::ToolExecutionError(
-                            "tool approval timed out".to_string(),
+                            "tool approval response channel closed".to_string(),
                         ));
                     }
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    return Err(FaeLlmError::ToolExecutionError(
-                        "tool approval response channel closed".to_string(),
-                    ));
                 }
             }
+        });
+
+        match approval_result {
+            Ok(true) => {
+                tracing::info!("tool approved, executing: {}", self.inner.name());
+                self.inner.execute(args)
+            }
+            Ok(false) => {
+                tracing::warn!("tool denied by user: {}", self.inner.name());
+                Err(FaeLlmError::ToolExecutionError(
+                    "tool call denied by user".to_string(),
+                ))
+            }
+            Err(e) => Err(e),
         }
     }
 

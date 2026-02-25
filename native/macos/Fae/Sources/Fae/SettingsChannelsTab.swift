@@ -1,153 +1,129 @@
 import SwiftUI
 
-/// Channels settings tab: configure Discord and WhatsApp integrations.
+/// Channels settings tab.
+///
+/// Channels are set up by asking Fae to install a skill — she walks through
+/// configuration herself. This tab is the control panel: see what's connected,
+/// disconnect individual channels, or kill everything at once if things go
+/// sideways.
 struct SettingsChannelsTab: View {
+    @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
+
     var commandSender: HostCommandSender?
 
-    @AppStorage("channelsEnabled") private var channelsEnabled: Bool = false
-
-    // Discord
-    @State private var discordBotToken: String = ""
-    @State private var discordGuildId: String = ""
-    @State private var discordAllowedChannels: String = ""
-
-    // WhatsApp
-    @State private var whatsappAccessToken: String = ""
-    @State private var whatsappPhoneNumberId: String = ""
-    @State private var whatsappVerifyToken: String = ""
-    @State private var whatsappAllowedNumbers: String = ""
+    @AppStorage("fae.channels.enabled") private var channelsEnabled: Bool = true
 
     var body: some View {
         Form {
-            Section("Channels") {
-                Toggle("Enable External Channels", isOn: $channelsEnabled)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+            // MARK: - Master kill switch
+
+            Section {
+                Toggle("Channels Enabled", isOn: $channelsEnabled)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .onChange(of: channelsEnabled) {
                         commandSender?.sendCommand(
                             name: "config.patch",
                             payload: ["key": "channels.enabled", "value": channelsEnabled]
                         )
                     }
-                Text("Allow Fae to communicate through Discord and WhatsApp.")
+                Text("Master switch. Turn off to immediately silence all external channel integrations — Discord, WhatsApp, and anything else. Good if things go sideways.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            if channelsEnabled {
-                discordSection
-                whatsappSection
+            // MARK: - Discord
+
+            Section("Discord") {
+                channelInfoRow(
+                    icon: "bubble.left.and.bubble.right.fill",
+                    title: "Discord",
+                    description: "Chat with Fae in any server or DM."
+                )
+                Button("Disconnect Discord") {
+                    disconnectDiscord()
+                }
+                .buttonStyle(.bordered)
+                .foregroundStyle(.red)
+                Text("Clears the bot token and all Discord configuration from your local config.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            // MARK: - WhatsApp
+
+            Section("WhatsApp") {
+                channelInfoRow(
+                    icon: "phone.bubble.fill",
+                    title: "WhatsApp Business",
+                    description: "Message Fae directly from WhatsApp."
+                )
+                Button("Disconnect WhatsApp") {
+                    disconnectWhatsApp()
+                }
+                .buttonStyle(.bordered)
+                .foregroundStyle(.red)
+                Text("Clears the access token, phone number ID, and verify token from your local config.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            // MARK: - Setup
+
+            Section("Connecting new channels") {
+                Text("Just ask Fae — \"set up a Discord channel\" or \"connect me to WhatsApp\". She'll find the right skill and walk through setup herself. Credentials stay local.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Button("Ask Fae to set up a channel") {
+                    auxiliaryWindows.showConversation()
+                }
+                .buttonStyle(.bordered)
             }
         }
         .formStyle(.grouped)
     }
 
-    // MARK: - Discord
+    // MARK: - Row
 
-    private var discordSection: some View {
-        Section("Discord") {
-            SecureField("Bot Token", text: $discordBotToken)
-                .font(.system(size: 12, design: .monospaced))
-            TextField("Guild ID (optional)", text: $discordGuildId)
-                .font(.system(size: 12, design: .monospaced))
-            TextField("Allowed Channel IDs (comma-separated)", text: $discordAllowedChannels)
-                .font(.system(size: 12, design: .monospaced))
-
-            HStack {
-                Spacer()
-                Button("Save Discord Settings") {
-                    saveDiscordSettings()
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Text("Create a bot at discord.com/developers. The bot token is stored in your local config only.")
-                .font(.footnote)
+    private func channelInfoRow(icon: String, title: String, description: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.body)
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - WhatsApp
-
-    private var whatsappSection: some View {
-        Section("WhatsApp Business") {
-            SecureField("Access Token", text: $whatsappAccessToken)
-                .font(.system(size: 12, design: .monospaced))
-            TextField("Phone Number ID", text: $whatsappPhoneNumberId)
-                .font(.system(size: 12, design: .monospaced))
-            SecureField("Verify Token", text: $whatsappVerifyToken)
-                .font(.system(size: 12, design: .monospaced))
-            TextField("Allowed Numbers (comma-separated, E.164)", text: $whatsappAllowedNumbers)
-                .font(.system(size: 12, design: .monospaced))
-
-            HStack {
-                Spacer()
-                Button("Save WhatsApp Settings") {
-                    saveWhatsAppSettings()
-                }
-                .buttonStyle(.bordered)
+                .frame(width: 24, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(description)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
+        }
+        .padding(.vertical, 2)
+    }
 
-            Text("Configure via Meta Business Platform. Tokens are stored in your local config only.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    // MARK: - Disconnect
+
+    private func disconnectDiscord() {
+        let keys = [
+            "channels.discord.bot_token",
+            "channels.discord.guild_id",
+            "channels.discord.allowed_channel_ids"
+        ]
+        for key in keys {
+            commandSender?.sendCommand(name: "config.patch", payload: ["key": key, "value": ""])
         }
     }
 
-    // MARK: - Actions
-
-    private func saveDiscordSettings() {
-        if !discordBotToken.isEmpty {
-            commandSender?.sendCommand(
-                name: "config.patch",
-                payload: ["key": "channels.discord.bot_token", "value": discordBotToken]
-            )
-        }
-        if !discordGuildId.isEmpty {
-            commandSender?.sendCommand(
-                name: "config.patch",
-                payload: ["key": "channels.discord.guild_id", "value": discordGuildId]
-            )
-        }
-        let channelIds = discordAllowedChannels
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        if !channelIds.isEmpty {
-            commandSender?.sendCommand(
-                name: "config.patch",
-                payload: ["key": "channels.discord.allowed_channel_ids", "value": channelIds]
-            )
-        }
-    }
-
-    private func saveWhatsAppSettings() {
-        if !whatsappAccessToken.isEmpty {
-            commandSender?.sendCommand(
-                name: "config.patch",
-                payload: ["key": "channels.whatsapp.access_token", "value": whatsappAccessToken]
-            )
-        }
-        if !whatsappPhoneNumberId.isEmpty {
-            commandSender?.sendCommand(
-                name: "config.patch",
-                payload: ["key": "channels.whatsapp.phone_number_id", "value": whatsappPhoneNumberId]
-            )
-        }
-        if !whatsappVerifyToken.isEmpty {
-            commandSender?.sendCommand(
-                name: "config.patch",
-                payload: ["key": "channels.whatsapp.verify_token", "value": whatsappVerifyToken]
-            )
-        }
-        let numbers = whatsappAllowedNumbers
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        if !numbers.isEmpty {
-            commandSender?.sendCommand(
-                name: "config.patch",
-                payload: ["key": "channels.whatsapp.allowed_numbers", "value": numbers]
-            )
+    private func disconnectWhatsApp() {
+        let keys = [
+            "channels.whatsapp.access_token",
+            "channels.whatsapp.phone_number_id",
+            "channels.whatsapp.verify_token",
+            "channels.whatsapp.allowed_numbers"
+        ]
+        for key in keys {
+            commandSender?.sendCommand(name: "config.patch", payload: ["key": key, "value": ""])
         }
     }
 }

@@ -148,6 +148,13 @@ pub struct FaeDeviceTransferHandler {
     pipeline_mode: Mutex<crate::pipeline::coordinator::PipelineMode>,
     /// Cache state for skill discovery index rebuild decisions.
     skill_discovery_cache: Mutex<SkillDiscoveryCacheState>,
+    /// Shared LLM reference for the scheduler.
+    ///
+    /// Set to `Some` once the pipeline has initialized the model. The scheduler
+    /// reads this when a user task fires so it can run a background agent.
+    scheduler_llm: Arc<Mutex<Option<Arc<crate::llm::LocalLlm>>>>,
+    /// Handle for the background scheduler task.
+    scheduler_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for FaeDeviceTransferHandler {
@@ -225,6 +232,8 @@ impl FaeDeviceTransferHandler {
             x0x_listener_handle: Mutex::new(None),
             pipeline_mode: Mutex::new(crate::pipeline::coordinator::PipelineMode::Conversation),
             skill_discovery_cache: Mutex::new(SkillDiscoveryCacheState::default()),
+            scheduler_llm: Arc::new(Mutex::new(None)),
+            scheduler_handle: Mutex::new(None),
         }
     }
 
@@ -1744,6 +1753,19 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         Ok(())
     }
 
+    fn request_conversation_engage(&self) -> Result<()> {
+        info!("conversation.engage requested");
+        let guard = self
+            .gate_cmd_tx
+            .lock()
+            .map_err(|e| SpeechError::Pipeline(format!("gate_cmd lock poisoned: {e}")))?;
+        if let Some(tx) = guard.as_ref() {
+            tx.send(GateCommand::Engage)
+                .map_err(|e| SpeechError::Pipeline(format!("gate command send failed: {e}")))?;
+        }
+        Ok(())
+    }
+
     fn request_runtime_start(&self) -> Result<()> {
         info!("runtime.start requested");
         let current = self.pipeline_state();
@@ -1820,6 +1842,7 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         // (&self) so we capture clones of Arc/Sender values for move into
         // async blocks.
         let config = self.lock_config().map(|g| g.clone())?;
+        let scheduler_llm = Arc::clone(&self.scheduler_llm);
         let event_tx = self.event_tx.clone();
         let event_tx_bridge = self.event_tx.clone();
         let event_tx_approval = self.event_tx.clone();
@@ -1927,6 +1950,14 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
                     return;
                 }
             };
+
+            // Share LLM with the scheduler so it can run background agents
+            // when user-scheduled tasks fire.
+            if let Some(ref llm) = models.llm
+                && let Ok(mut guard) = scheduler_llm.lock()
+            {
+                *guard = Some(Arc::new(llm.shallow_clone()));
+            }
 
             // ── Task 4: Create and spawn PipelineCoordinator ─────
             let coordinator = PipelineCoordinator::with_models(config, models)
@@ -2294,6 +2325,26 @@ impl DeviceTransferHandler for FaeDeviceTransferHandler {
         if let Ok(mut guard) = self.pipeline_started_at.lock() {
             *guard = Some(Instant::now());
         }
+
+        // ── Background scheduler ─────────────────────────────────
+        // Start the scheduler only once per runtime session. It keeps running
+        // even if the pipeline restarts (model reload), so we skip if already running.
+        let should_start_scheduler = self
+            .scheduler_handle
+            .lock()
+            .map(|g| g.is_none())
+            .unwrap_or(true);
+        if should_start_scheduler {
+            let sched_config = self.lock_config().map(|g| g.clone()).unwrap_or_default();
+            let sched_llm = Arc::clone(&self.scheduler_llm);
+            let (sched_jh, _sched_rx) =
+                crate::startup::start_scheduler_with_llm(sched_config, sched_llm);
+            if let Ok(mut guard) = self.scheduler_handle.lock() {
+                *guard = Some(sched_jh);
+            }
+            info!("background scheduler started");
+        }
+
         self.emit_event("runtime.started", serde_json::json!({"status": "running"}));
         Ok(())
     }

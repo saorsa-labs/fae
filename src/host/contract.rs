@@ -22,6 +22,8 @@ pub enum CommandName {
     ConversationInjectText,
     #[serde(rename = "conversation.gate_set")]
     ConversationGateSet,
+    #[serde(rename = "conversation.engage")]
+    ConversationEngage,
     #[serde(rename = "approval.respond")]
     ApprovalRespond,
     #[serde(rename = "scheduler.list")]
@@ -173,6 +175,7 @@ impl CommandName {
             Self::RuntimeStatus => "runtime.status",
             Self::ConversationInjectText => "conversation.inject_text",
             Self::ConversationGateSet => "conversation.gate_set",
+            Self::ConversationEngage => "conversation.engage",
             Self::ApprovalRespond => "approval.respond",
             Self::SchedulerList => "scheduler.list",
             Self::SchedulerCreate => "scheduler.create",
@@ -237,6 +240,7 @@ impl CommandName {
             "runtime.status" => Some(Self::RuntimeStatus),
             "conversation.inject_text" => Some(Self::ConversationInjectText),
             "conversation.gate_set" => Some(Self::ConversationGateSet),
+            "conversation.engage" => Some(Self::ConversationEngage),
             "approval.respond" => Some(Self::ApprovalRespond),
             "scheduler.list" => Some(Self::SchedulerList),
             "scheduler.create" => Some(Self::SchedulerCreate),
@@ -447,6 +451,7 @@ mod tests {
         CommandName::RuntimeStatus,
         CommandName::ConversationInjectText,
         CommandName::ConversationGateSet,
+        CommandName::ConversationEngage,
         CommandName::ApprovalRespond,
         CommandName::SchedulerList,
         CommandName::SchedulerCreate,

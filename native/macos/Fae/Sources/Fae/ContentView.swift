@@ -51,6 +51,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.5), value: windowState.mode)
         .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
+        .animation(.easeInOut(duration: 0.2), value: auxiliaryWindows.isApprovalVisible)
     }
 
     // MARK: - Context Menu
@@ -137,6 +138,13 @@ struct ContentView: View {
                 onOrbClicked: {
                     if windowState.mode == .collapsed {
                         windowState.transitionToCompact()
+                        // Reset the conversation engagement window so Fae
+                        // responds to the next utterance without requiring
+                        // direct address ("Fae, ...").
+                        NotificationCenter.default.post(
+                            name: .faeConversationEngage,
+                            object: nil
+                        )
                     }
                 },
                 onOrbContextMenu: {
@@ -166,6 +174,34 @@ struct ContentView: View {
                 if pipelineAux.isPipelineReady {
                     InputBarView()
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                // Layer 4: Emergency stop — visible whenever a tool approval is
+                // pending. Lets the user kill everything quickly if Fae misbehaves.
+                if auxiliaryWindows.isApprovalVisible {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button(action: { auxiliaryWindows.emergencyStop() }) {
+                                Label("Stop", systemImage: "xmark.circle.fill")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.plain)
+                            .background(Color.red)
+                            .clipShape(Capsule())
+                            .shadow(color: .red.opacity(0.5), radius: 6)
+                            .padding(.trailing, 10)
+                            .padding(.top, 8)
+                        }
+                        Spacer()
+                    }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    ))
                 }
             }
 

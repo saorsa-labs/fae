@@ -2,18 +2,18 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Owns and positions two auxiliary `NSPanel` windows (conversation and canvas)
-/// near the main orb window.
+/// Owns and positions auxiliary `NSPanel` windows (conversation, canvas, and approval).
 ///
-/// When a panel opens the orb window shifts to make room and the panel slides in
-/// with a smooth animation.  Closing reverses the effect.  Both canvas and
-/// conversation windows share the same animation system.
+/// All panels slide in beside the compact orb window, which shifts sideways to make
+/// room. The orb always stays in compact mode — panels are additive, not replacements.
+/// All panels are `.nonactivatingPanel` so they never steal keyboard focus from the
+/// orb's input bar.
 @MainActor
 final class AuxiliaryWindowManager: ObservableObject {
 
     // MARK: - Published State
 
-    /// When true, auxiliary windows hide when the orb collapses.
+    /// When true, auxiliary windows hide when the orb collapses due to inactivity.
     @Published var autoHideOnCollapse: Bool {
         didSet { UserDefaults.standard.set(autoHideOnCollapse, forKey: Self.autoHideKey) }
     }
@@ -32,7 +32,7 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     private let panelGap: CGFloat = 12
     private let conversationSize = NSSize(width: 340, height: 500)
-    private let canvasSize = NSSize(width: 400, height: 520)
+    private let canvasSize = NSSize(width: 420, height: 540)
 
     /// The orb window frame saved *before* the first panel-induced shift.
     /// Restored when all panels close.
@@ -50,6 +50,7 @@ final class AuxiliaryWindowManager: ObservableObject {
     weak var conversationController: ConversationController?
     weak var canvasController: CanvasController?
     weak var windowState: WindowStateController?
+    weak var subtitleState: SubtitleStateController?
     var approvalController: ApprovalOverlayController?
 
     private var modeCancellable: AnyCancellable?
@@ -73,6 +74,7 @@ final class AuxiliaryWindowManager: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] newMode in
                 guard let self else { return }
+                // Auto-hide panels when orb collapses due to inactivity.
                 if newMode == .collapsed, self.autoHideOnCollapse {
                     self.hideConversation()
                     self.hideCanvas()
@@ -101,6 +103,7 @@ final class AuxiliaryWindowManager: ObservableObject {
         guard !isAnimating else { return }
         if canvasPanel == nil { canvasPanel = makeCanvasPanel() }
         guard let panel = canvasPanel else { return }
+        canvasPanel?.minSize = NSSize(width: 360, height: 400)
         animatedShow(panel: panel, panelSize: canvasSize, isCanvas: true)
     }
 
@@ -146,14 +149,26 @@ final class AuxiliaryWindowManager: ObservableObject {
         if approvalPanel == nil { approvalPanel = makeApprovalPanel(controller: controller) }
         guard let panel = approvalPanel, let orbWindow = windowState?.window else { return }
 
+        // Expand to compact so the approval card and conversation are both visible.
+        windowState?.transitionToCompact()
+
+        // Open conversation so the user can see the tool execution context
+        // (what was asked before the tool was invoked).
+        if !isConversationVisible {
+            showConversation()
+        }
+
         let orbFrame = orbWindow.frame
-        let panelSize = NSSize(width: 240, height: 120)
-        let y = orbFrame.minY - panelSize.height - 8
+        let panelSize = NSSize(width: 260, height: 130)
+        // Position ABOVE the orb — always on screen, never below the dock.
+        let y = orbFrame.maxY + 8
         let x = orbFrame.midX - panelSize.width / 2
         let frame = clampToScreen(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height))
 
         panel.setFrame(frame, display: false)
         panel.alphaValue = 0
+        // Float above conversation / canvas panels so it's never obscured.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 2)
         panel.orderFront(nil)
 
         NSAnimationContext.runAnimationGroup { ctx in
@@ -162,6 +177,16 @@ final class AuxiliaryWindowManager: ObservableObject {
             panel.animator().alphaValue = 1
         }
         isApprovalVisible = true
+    }
+
+    /// Deny any pending tool approval and send a `runtime.stop` command to the pipeline.
+    ///
+    /// Intended as an emergency kill-switch — call this when Fae is misbehaving
+    /// during tool execution. Denying the approval prevents any pending tool from
+    /// running; stopping the runtime halts generation completely.
+    func emergencyStop() {
+        approvalController?.deny()
+        NotificationCenter.default.post(name: .faeEmergencyStop, object: nil)
     }
 
     func hideApproval() {
@@ -574,4 +599,14 @@ private final class PanelCloseDelegate: NSObject, NSWindowDelegate {
         onClose()
         return false
     }
+}
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    /// Posted by `AuxiliaryWindowManager.emergencyStop()` to signal the pipeline
+    /// to halt all active generation immediately.
+    ///
+    /// Observed by `HostCommandBridge` which dispatches `"runtime.stop"` to Rust.
+    static let faeEmergencyStop = Notification.Name("faeEmergencyStop")
 }

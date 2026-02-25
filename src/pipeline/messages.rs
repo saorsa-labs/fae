@@ -131,6 +131,13 @@ pub enum GateCommand {
         /// Display name of the new audio input device (for telemetry/events).
         device_name: Option<String>,
     },
+    /// Refresh the direct-address follow-up engagement window.
+    ///
+    /// Sent by the GUI when the user explicitly interacts with Fae (e.g.
+    /// clicks the collapsed orb to expand it). Resets `engaged_until` so
+    /// that the next utterance is accepted without requiring the user to
+    /// say "Fae" first — even if the previous follow-up window had expired.
+    Engage,
 }
 
 /// A tool approval request forwarded to the pipeline coordinator.

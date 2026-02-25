@@ -3,10 +3,14 @@
 //! Wraps the [`fae_search`] crate's async `fetch_page_content` API behind the
 //! synchronous [`Tool`] trait interface using `tokio::runtime::Handle::current().block_on()`.
 
+use std::time::Duration;
+
 use crate::fae_llm::config::types::ToolMode;
 use crate::fae_llm::error::FaeLlmError;
 
 use super::types::{DEFAULT_MAX_BYTES, Tool, ToolResult, truncate_output};
+
+const DEFAULT_TIMEOUT_SECS: u64 = 15;
 
 /// Tool that fetches a web page and extracts readable text content.
 ///
@@ -78,11 +82,42 @@ impl Tool for FetchUrlTool {
         }
 
         // Bridge sync Tool::execute to async fae_search::fetch_page_content.
-        let handle = tokio::runtime::Handle::current();
-        let page = match handle.block_on(fae_search::fetch_page_content(url)) {
-            Ok(page) => page,
-            Err(e) => {
-                return Ok(ToolResult::failure(format!("Failed to fetch {url}: {e}")));
+        // Apply an explicit per-tool timeout so behavior is bounded even when
+        // outer executor-level timeouts are absent or larger.
+        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+        let page_result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(tokio::time::timeout(
+                timeout,
+                fae_search::fetch_page_content(url),
+            )),
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| {
+                        FaeLlmError::ToolExecutionError(format!(
+                            "failed to create runtime for fetch_url: {e}"
+                        ))
+                    })?;
+                rt.block_on(tokio::time::timeout(
+                    timeout,
+                    fae_search::fetch_page_content(url),
+                ))
+            }
+        };
+
+        let page = match page_result {
+            Ok(Ok(page)) => page,
+            Ok(Err(e)) => {
+                return Ok(ToolResult::failure(format!(
+                    "fetch_url failed for {url}: {e}"
+                )));
+            }
+            Err(_) => {
+                return Ok(ToolResult::failure(format!(
+                    "fetch_url timed out after {}s for {url}",
+                    DEFAULT_TIMEOUT_SECS
+                )));
             }
         };
 

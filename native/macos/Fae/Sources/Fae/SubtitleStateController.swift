@@ -106,6 +106,22 @@ final class SubtitleStateController: ObservableObject {
         }
     }
 
+    /// Show a persistent tool/status message with no auto-hide timer.
+    ///
+    /// The caller is responsible for clearing it (e.g. via ``clearToolMessage()``).
+    func showPersistentToolMessage(_ text: String) {
+        toolHideTask?.cancel()
+        toolHideTask = nil
+        toolText = text
+    }
+
+    /// Clear the tool/status message immediately.
+    func clearToolMessage() {
+        toolHideTask?.cancel()
+        toolHideTask = nil
+        toolText = ""
+    }
+
     /// Clear all subtitles immediately.
     func clearAll() {
         assistantHideTask?.cancel()

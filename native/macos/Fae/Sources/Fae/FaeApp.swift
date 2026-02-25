@@ -148,10 +148,14 @@ struct FaeApp: App {
                     pipelineAux.canvasController = canvasController
                     pipelineAux.auxiliaryWindows = auxiliaryWindows
                     pipelineAux.subtitleState = subtitles
+                    // Clear subtitle bubbles when the orb collapses so stale
+                    // bubbles don't reappear when the window re-expands.
+                    windowState.onCollapse = { [weak subtitles] in subtitles?.clearAll() }
                     // Wire auxiliary window manager to its dependencies.
                     auxiliaryWindows.windowState = windowState
                     auxiliaryWindows.conversationController = conversation
                     auxiliaryWindows.canvasController = canvasController
+                    auxiliaryWindows.subtitleState = subtitles
                     auxiliaryWindows.observeWindowState()
                     auxiliaryWindows.approvalController = approvalOverlay
                     auxiliaryWindows.observeApprovalController()
@@ -250,8 +254,37 @@ struct FaeApp: App {
                 .environmentObject(handoff)
                 .environmentObject(auxiliaryWindows)
                 .environmentObject(onboarding)
+                .environmentObject(conversation)
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Fae") {
+                    let model = conversation.loadedModelLabel
+                    var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
+                    if !model.isEmpty {
+                        options[.credits] = NSAttributedString(
+                            string: "Model: \(model)",
+                            attributes: [
+                                .font: NSFont.systemFont(ofSize: 11),
+                                .foregroundColor: NSColor.secondaryLabelColor
+                            ]
+                        )
+                    }
+                    NSApp.orderFrontStandardAboutPanel(options: options)
+                }
+            }
+            CommandGroup(after: .sidebar) {
+                Divider()
+                Button("Toggle Canvas") {
+                    auxiliaryWindows.toggleCanvas()
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+
+                Button("Toggle Discussions") {
+                    auxiliaryWindows.toggleConversation()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
             CommandGroup(replacing: .help) {
                 Button("Getting Started") {
                     helpWindow.showPage("getting-started")

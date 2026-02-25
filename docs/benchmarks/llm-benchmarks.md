@@ -588,6 +588,8 @@ documents every model that was tested and why it didn't work for Fae.
 | **IBM Granite 3.2 2B** | granite | N/A | Architecture not supported | `granite` not in GGUF arch list |
 | **EXAONE 3.5 2.4B** | exaone | N/A | Architecture not supported | `exaone` not in GGUF arch list |
 | **Gemma 3 1B/4B** | gemma3 | N/A | Architecture not in GGUF list | `gemma3` only available via non-GGUF ISQ path |
+| **Qwen3.5-27B** (Feb 2026) | qwen35 | ~16 GB Q4_K_M | `Unknown GGUF architecture 'qwen35'` | Entirely new architecture: Gated Delta Networks + sparse MoE hybrid; 64 layers, interleaved linear attention and gated attention; not a Qwen3 descendant in GGUF terms |
+| **Qwen3.5-35B-A3B MoE** (Feb 2026) | qwen35moe | ~22 GB Q4_K_M | `Unknown GGUF architecture 'qwen35moe'` | MoE variant of the qwen35 hybrid arch (35B total / 3B active); 256 experts, 8+1 active; same Gated DeltaNet hybrid; double incompatibility: unknown arch AND MoE kernel missing on Metal |
 
 **Ministral-3 benchmark detail** (loaded successfully, but generation is crippled):
 
@@ -608,10 +610,83 @@ same parameter count. This makes Ministral-3 unusable for voice (needs >60 T/s).
 Starcoder2, Qwen2, Qwen3, Qwen3MoE (MoE requires CUDA). Non-GGUF (safetensors/ISQ)
 adds: SmolLM3, Gemma, Gemma2, GLM4, DeepSeekV2/V3, GraniteMoEHybrid, GPT-OSS, Qwen3Next.
 
+**Qwen3.5 is a completely new architecture family, not an extension of Qwen3.**
+Verified by reading the `general.architecture` field directly from the GGUF binary headers:
+
+| Model | general.architecture |
+|---|---|
+| Qwen3-0.6B / 1.7B / 4B / 8B | `qwen3` |
+| Qwen3-30B-A3B (MoE) | `qwen3moe` |
+| Qwen3.5-27B | `qwen35` |
+| Qwen3.5-35B-A3B (MoE) | `qwen35moe` |
+
+The qwen35 architecture uses Gated Delta Networks (linear attention) interleaved with
+standard gated attention, a fundamentally different compute pattern from Qwen3's
+transformer-only design. mistral.rs has no Metal kernels for this pattern as of
+0.7.1-alpha.1. Support would require upstream implementation of both the qwen35 GGUF
+arch variant and the Gated DeltaNet forward pass — neither exists on master as of
+Feb 2026.
+
 **Conclusion: Qwen3 is the only viable model family for Fae on mistral.rs + Metal.**
 No other current-gen small model (sub-4B) achieves usable voice-quality T/s on Apple
 Silicon through mistral.rs. Older models (Llama 3.2, Qwen2.5) use the `llama`/`qwen2`
 arch and would load, but are superseded by Qwen3 in quality and instruction following.
+The Qwen3.5 series, while architecturally interesting, requires new backend support
+that does not yet exist in mistral.rs.
+
+### Qwen3.5 deep dive: fork vs wait analysis
+
+**Qwen3.5 is not a variant of Qwen3.** The two model families use fundamentally different
+attention mechanisms:
+
+| Aspect | Qwen3 | Qwen3.5 |
+|--------|-------|---------|
+| Attention | Standard GQA (softmax) | **Hybrid: 75% Gated DeltaNet + 25% full attention** |
+| Complexity | O(n²) per layer | O(n) for GDN layers, O(n²) for 1-in-4 full layers |
+| KV cache | Grows with context | **No KV cache growth for GDN layers** |
+| Positional encoding | RoPE | **Interleaved-MRoPE** |
+| Multimodal | Separate VL variant | Native multimodal from pretraining |
+| Languages | 119 | 201 |
+
+**Gated Delta Networks (GDN)** is a real architectural innovation (ICLR 2025, from NVIDIA).
+Each GDN block requires Q, K, V projections with 1D convolutions for short-context mixing,
+delta rule state updates (selective modification, not O(n²) attention), gating projections
+(`b_proj`, `a_proj`, `g_proj`), `FusedRMSNormSwishGate` activations, and interleaving with
+1 full-attention block per 4 total blocks.
+
+This is not a GGUF metadata issue that can be patched with a new enum entry — the forward
+pass itself is incompatible. Plugging Qwen3.5 weights into the Qwen3 forward pass would
+produce garbage output.
+
+**Estimated implementation scope to add Qwen3.5 support to mistral.rs:**
+
+| Component | Est. Lines | Notes |
+|-----------|----------:|-------|
+| Gated DeltaNet operator (CPU) | 1,000–1,500 | New from scratch |
+| GDN Metal kernel (Apple Silicon) | 500–800 | No existing template |
+| Hybrid attention scheduler | 300–500 | Interleave GDN + full attn blocks |
+| Interleaved-MRoPE | 200–300 | New positional encoding variant |
+| GGUF enum + model wiring | 200–300 | Straightforward plumbing |
+| MoE routing (35B-A3B only) | +500 | Optional; separate model variant |
+| **Total** | **~2,500–3,500** | **2–4 weeks, not 2 days** |
+
+**Recommendation: wait for upstream.** GitHub issue #1939 was filed on mistral.rs
+requesting Qwen3.5 support with the full architectural context. Upstream is incentivized
+to add it (mistral.rs needs Qwen3.5 to stay competitive); estimated timeline is 4–8 weeks
+based on past Qwen3 turnaround. A fork at this point creates ongoing rebase overhead
+against a rapidly moving project with no urgency — Qwen3-8B is still excellent for Fae's
+voice use case.
+
+**When to reconsider forking:**
+- No upstream activity on Qwen3.5 after 8 weeks
+- A community fork with Metal GDN support already exists (free starting point)
+- A specific Fae capability requires Qwen3.5 that Qwen3 cannot provide
+
+**When upstream lands, benchmark:**
+- Qwen3.5-27B (dense, ~16 GB Q4_K_M) — primary interest for 64GB+ systems
+- Qwen3.5-35B-A3B (MoE, ~22 GB Q4_K_M) — secondary; MoE kernel must also land
+- Follow the standard eval process: 7 context sizes, `/no_think` compliance, T/s ≥20 for voice
+- Files to update: this doc (add benchmark rows), `src/config.rs` (`recommended_local_model()`), `Cargo.toml`
 
 ### mistral.rs verify_arch_any bug
 

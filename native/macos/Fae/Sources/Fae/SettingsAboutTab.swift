@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsAboutTab: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var onboarding: OnboardingController
+    @EnvironmentObject private var conversation: ConversationController
     @State private var showResetConfirmation = false
     let commandSender: HostCommandSender?
     let sparkleUpdater: SparkleUpdaterController?
@@ -24,6 +25,14 @@ struct SettingsAboutTab: View {
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                     Spacer()
                     Text(appBuild)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Model")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Text(conversation.loadedModelLabel.isEmpty ? "Loading…" : conversation.loadedModelLabel)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

@@ -44,6 +44,17 @@ final class HostCommandBridge: ObservableObject {
         )
         observations.append(
             center.addObserver(
+                forName: .faeConversationEngage,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.dispatch("conversation.engage", payload: [:])
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
                 forName: .faeOnboardingAdvance,
                 object: nil,
                 queue: .main
@@ -162,6 +173,17 @@ final class HostCommandBridge: ObservableObject {
                         "approval.respond",
                         payload: ["request_id": requestId, "approved": approved]
                     )
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
+                forName: .faeEmergencyStop,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.dispatch("runtime.stop", payload: [:])
                 }
             }
         )

@@ -78,14 +78,14 @@ You are Fae, a proactive personal AI assistant.\n\
 \n\
 Core style:\n\
 - Be concise by default (1-3 short sentences) unless the user asks for depth.\n\
-- Be direct, practical, and calm.\n\
+- Be direct and practical. Let your natural warmth, brightness, and playfulness come through — you are upbeat and cheery by default.\n\
 - Do not expose hidden chain-of-thought.\n\
 - NEVER use emojis, emoticons, or special symbols — your output is spoken aloud via TTS.\n\
 \n\
-Greeting style:\n\
-- Greet warmly but never the same way twice. You are a companion, not a product demo.\n\
-- Vary tone and energy. A simple \"Hey\" can be better than a long introduction.\n\
-- Never start with formulaic self-descriptions.\n\
+Opening style:\n\
+- Respond directly to what the user said — no preamble, no greeting before the answer.\n\
+- Greeting rule: if the user says hi/hello/hey/howdy — your ENTIRE response is ONE short phrase and nothing else. Acceptable phrases: \"hey!\", \"hi!\", \"what's up?\", \"heya!\", \"hey, good to hear you.\". Pick one and stop. Do not add anything after it.\n\
+- Do not introduce yourself. Do not list your capabilities. Do not say \"I'm here to help\". The user already knows who you are.\n\
 \n\
 You are here for your user and they for you. You are a team.\n\
 Always be helpful, never noisy. Become friends with your user.\n\
@@ -128,7 +128,28 @@ Rules:\n\
 - If a tool fails, report the failure clearly.\n\
 - Include specific details (times, names, numbers) — the user is listening, not reading.\n\
 - Do not use markdown formatting, bullet points, or numbered lists — speak naturally.\n\
-- Keep the total response under 4 sentences unless the task requires more detail.";
+- Keep the total response under 4 sentences unless the task requires more detail.\n\
+\n\
+## Creating scheduled tasks\n\
+\n\
+When the user asks you to do something on a recurring schedule (e.g. \"tell me the\n\
+robotics news each morning\", \"remind me about X every day\"), use the\n\
+create_scheduled_task tool.\n\
+\n\
+The task payload MUST be a JSON object with this structure:\n\
+  {\"prompt\": \"<what to do when the task fires>\", \"timeout_secs\": 120}\n\
+\n\
+The prompt field should be a self-contained instruction that will be executed\n\
+automatically — it should NOT require user input. Write it as if giving a future\n\
+version of yourself an instruction.\n\
+\n\
+Example — user says \"tell me robotics news every morning\":\n\
+  name: \"Morning Robotics News\"\n\
+  schedule: {\"type\": \"daily\", \"hour\": 8, \"minute\": 0}\n\
+  payload: {\"prompt\": \"Search for the latest robotics news from the past 24 hours and give me a 2-sentence spoken summary of the most interesting developments.\", \"timeout_secs\": 120}\n\
+\n\
+After creating the task, confirm with a short spoken response like:\n\
+Done. I will check for robotics news every morning at 8 AM.";
 
 /// Canned acknowledgment phrases for when a background tool task is spawned.
 ///
@@ -419,7 +440,8 @@ mod tests {
 
     #[test]
     fn prompt_includes_companion_presence() {
-        let prompt = assemble_prompt("fae", "", None, false, None, false);
+        let prompt = assemble_prompt("fae", "", None, false, None, true);
+        // Companion presence guidance is covered by core prompt text.
         assert!(prompt.contains("Companion presence:"));
         assert!(prompt.contains("always present and listening"));
         assert!(prompt.contains("Direct address"));
@@ -430,9 +452,9 @@ mod tests {
     fn soul_includes_presence_principles() {
         // Use DEFAULT_SOUL (compiled-in) rather than load_soul() which reads
         // from the user's data directory and may have an older version.
-        assert!(DEFAULT_SOUL.contains("Presence Principles"));
-        assert!(DEFAULT_SOUL.contains("always-present companion"));
-        assert!(DEFAULT_SOUL.contains("Silence is a form of respect"));
+        assert!(DEFAULT_SOUL.contains("## Presence"));
+        assert!(DEFAULT_SOUL.contains("quiet when you don't"));
+        assert!(DEFAULT_SOUL.contains("Silence is comfortable"));
     }
 
     #[test]
@@ -521,7 +543,7 @@ mod tests {
         // Voice-optimized should still include core prompt and SOUL.
         assert!(voice.contains("You are Fae"));
         // SOUL content is loaded from disk; check compiled-in default instead.
-        assert!(DEFAULT_SOUL.contains("Presence Principles"));
+        assert!(DEFAULT_SOUL.contains("## Presence"));
 
         // But should NOT include skills or capability sections.
         assert!(!voice.contains("You have a canvas window."));

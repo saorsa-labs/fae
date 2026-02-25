@@ -6,6 +6,7 @@
 // Allow unwrap/expect in test code
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod hang_regressions;
 mod helpers;
 
 mod apple_tool_registration;

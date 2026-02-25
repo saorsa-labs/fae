@@ -36,6 +36,7 @@ pub mod scheduler_delete;
 pub mod scheduler_list;
 pub mod scheduler_trigger;
 pub mod scheduler_update;
+pub mod tool_timeouts;
 pub mod types;
 pub mod web_search;
 pub mod write;

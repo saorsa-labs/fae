@@ -66,9 +66,9 @@ struct ConversationWindowView: View {
                 scrollToBottom(proxy: proxy)
             }
             .onChange(of: conversationController.isGenerating) {
-                if conversationController.isGenerating {
-                    scrollToBottom(proxy: proxy)
-                }
+                // Scroll both when typing indicator appears and when it disappears
+                // (new message just arrived).
+                scrollToBottom(proxy: proxy)
             }
         }
     }
@@ -123,28 +123,31 @@ private struct MessageBubble: View {
 
     private var textColor: Color {
         switch message.role {
-        case .tool: return Color.white.opacity(0.6)
-        default: return Color.white.opacity(0.92)
+        case .user: return Color(white: 0.95)
+        case .assistant: return Color(white: 0.92)
+        case .tool: return Color.white.opacity(0.55)
         }
     }
 
     private var backgroundColor: Color {
         switch message.role {
         case .user:
-            return Color.white.opacity(0.1)
+            // iMessage blue-grey — clearly the "sent" bubble
+            return Color(red: 0.22, green: 0.28, blue: 0.42)
         case .assistant:
-            return Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.1)
+            // Fae's lavender-grey — distinct from user
+            return Color(red: 0.24, green: 0.20, blue: 0.30)
         case .tool:
-            return Color.white.opacity(0.04)
+            return Color.white.opacity(0.05)
         }
     }
 
     private var borderColor: Color {
         switch message.role {
         case .user:
-            return Color.white.opacity(0.14)
+            return Color(red: 0.35, green: 0.45, blue: 0.65).opacity(0.5)
         case .assistant:
-            return Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.18)
+            return Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.25)
         case .tool:
             return Color.white.opacity(0.07)
         }

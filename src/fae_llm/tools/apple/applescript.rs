@@ -11,7 +11,10 @@
 //! Latency is 100-500ms per call, acceptable for voice interactions where Fae
 //! speaks an acknowledgment while the background agent executes.
 
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::calendar::{
     CalendarEvent, CalendarInfo, CalendarStore, CalendarStoreError, EventPatch, EventQuery,
@@ -27,21 +30,65 @@ use super::reminders::{
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Run a JXA (JavaScript for Automation) script and parse the JSON output.
+const OSASCRIPT_TIMEOUT: Duration = Duration::from_secs(15);
+const OSASCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 fn run_jxa(script: &str) -> Result<serde_json::Value, String> {
-    let output = Command::new("osascript")
+    let mut child = Command::new("osascript")
         .arg("-l")
         .arg("JavaScript")
         .arg("-e")
         .arg(script)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("failed to execute osascript: {e}"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let started = Instant::now();
+    loop {
+        if let Some(_status) = child
+            .try_wait()
+            .map_err(|e| format!("failed waiting for osascript: {e}"))?
+        {
+            break;
+        }
+
+        if started.elapsed() >= OSASCRIPT_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "timeout|op=apple.applescript.execute timeout_ms={}",
+                OSASCRIPT_TIMEOUT.as_millis()
+            ));
+        }
+
+        thread::sleep(OSASCRIPT_POLL_INTERVAL);
+    }
+
+    let mut stdout_bytes = Vec::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        stdout
+            .read_to_end(&mut stdout_bytes)
+            .map_err(|e| format!("failed to collect osascript output: {e}"))?;
+    }
+
+    let mut stderr_bytes = Vec::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        stderr
+            .read_to_end(&mut stderr_bytes)
+            .map_err(|e| format!("failed to collect osascript output: {e}"))?;
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed waiting for osascript: {e}"))?;
+
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
         return Err(format!("osascript error: {stderr}"));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
         return Ok(serde_json::Value::Null);

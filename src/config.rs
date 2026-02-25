@@ -506,7 +506,7 @@ impl Default for LlmConfig {
             enable_vision,
             voice_model_preset,
             tool_mode: AgentToolMode::default(),
-            max_tokens: 128,
+            max_tokens: 512,
             context_size_tokens: default_llm_context_size_tokens(),
             temperature: 0.7,
             top_p: 0.9,
@@ -769,7 +769,7 @@ impl Default for TtsConfig {
             backend: TtsBackend::default(),
             voice: "fae".to_owned(),
             model_variant: "q8".to_owned(),
-            speed: 1.0,
+            speed: 1.1,
             sample_rate: 24_000,
         }
     }

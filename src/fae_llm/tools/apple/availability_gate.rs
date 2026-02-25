@@ -33,7 +33,7 @@ use crate::permissions::{JitPermissionRequest, SharedPermissionStore};
 use super::trait_def::AppleEcosystemTool;
 
 /// Timeout for awaiting a JIT permission response from the native dialog.
-const JIT_TIMEOUT: Duration = Duration::from_secs(60);
+const JIT_TIMEOUT: Duration = Duration::from_millis(1200);
 
 /// A [`Tool`] wrapper that gates execution on a live permission check.
 ///
@@ -324,5 +324,30 @@ mod tests {
         // Now blocked.
         let result = tool.execute(serde_json::json!({})).unwrap();
         assert!(!result.success, "should block after revocation");
+    }
+
+    #[test]
+    fn jit_timeout_is_fast_and_returns_failure() {
+        let (jit_tx, _jit_rx) = mpsc::unbounded_channel::<JitPermissionRequest>();
+        let tool = gated(PermissionStore::default()).with_jit_channel(jit_tx);
+
+        let start = Instant::now();
+        let result = tool.execute(serde_json::json!({})).unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            !result.success,
+            "expected timeout failure when no JIT response"
+        );
+        let err = result.error.unwrap_or_default();
+        assert!(
+            err.contains("Permission request timed out"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "jit timeout should be bounded and fast, got {:?}",
+            elapsed
+        );
     }
 }

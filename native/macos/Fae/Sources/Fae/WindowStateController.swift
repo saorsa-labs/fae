@@ -98,6 +98,19 @@ final class WindowStateController: ObservableObject {
         }
     }
 
+    // MARK: - Callbacks
+
+    /// Called whenever the window transitions to collapsed (orb) mode.
+    /// Wire this in `FaeApp` to clear subtitle bubbles on collapse.
+    var onCollapse: (() -> Void)?
+
+    // MARK: - In-Place Collapse (Canvas Mode)
+
+    /// Frame saved before `transitionToCollapsedInPlace()`. Used by
+    /// `transitionToCompact()` to return to the pre-canvas position rather
+    /// than the default top-left docking corner.
+    private var frameBeforeInPlaceCollapse: NSRect?
+
     // MARK: - Timer
 
     private var inactivityTimer: Timer?
@@ -149,6 +162,48 @@ final class WindowStateController: ObservableObject {
         }
 
         cancelInactivityTimer()
+        onCollapse?()
+    }
+
+    /// Collapse the orb in place (shrink to orb size at current centre).
+    ///
+    /// Used when the canvas opens — the orb steps aside to a small floating
+    /// cloud without docking to the screen corner.
+    func transitionToCollapsedInPlace() {
+        guard mode != .collapsed else { return }
+
+        mode = .collapsed
+
+        guard let window else { return }
+
+        // Save the current compact frame so we can restore it when the canvas closes.
+        frameBeforeInPlaceCollapse = window.frame
+
+        let targetSize = NSSize(width: collapsedSize, height: collapsedSize)
+
+        // Stay centred on the current window position.
+        let currentFrame = window.frame
+        let originX = currentFrame.midX - targetSize.width / 2
+        let originY = currentFrame.midY - targetSize.height / 2
+        let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.screens[0]
+        let visible = screen.visibleFrame
+        let clampedX = max(visible.minX + collapsedEdgePadding,
+                           min(originX, visible.maxX - targetSize.width - collapsedEdgePadding))
+        let clampedY = max(visible.minY + collapsedEdgePadding,
+                           min(originY, visible.maxY - targetSize.height - collapsedEdgePadding))
+        let targetFrame = NSRect(x: clampedX, y: clampedY, width: targetSize.width, height: targetSize.height)
+
+        window.level = .floating
+        window.minSize = NSSize(width: collapsedSize, height: collapsedSize)
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.4
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().setFrame(targetFrame, display: true)
+        }
+
+        cancelInactivityTimer()
+        onCollapse?()
     }
 
     func transitionToCompact() {
@@ -168,8 +223,14 @@ final class WindowStateController: ObservableObject {
         let originX: CGFloat
         let originY: CGFloat
 
-        if wasCollapsed {
-            // When expanding from collapsed orb in top-left, position the
+        if let savedFrame = frameBeforeInPlaceCollapse {
+            // Expanding from a canvas-triggered in-place collapse — restore the
+            // exact pre-canvas compact position rather than jumping to top-left.
+            frameBeforeInPlaceCollapse = nil
+            originX = max(visibleFrame.minX, min(savedFrame.minX, visibleFrame.maxX - targetSize.width))
+            originY = max(visibleFrame.minY, min(savedFrame.minY, visibleFrame.maxY - targetSize.height))
+        } else if wasCollapsed {
+            // Expanding from the inactivity-docked top-left orb — position the
             // compact window anchored at the top-left of the visible frame
             // so it feels like a natural expansion from the orb's docked position.
             originX = visibleFrame.minX + collapsedEdgePadding
@@ -196,7 +257,19 @@ final class WindowStateController: ObservableObject {
 
         // Bring the window to the front so the user can see Fae's response.
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
+
+        if wasCollapsed {
+            // After the expand animation, ask the input bar to claim focus so
+            // the user can type immediately without an extra click.
+            let delay = duration + 0.05
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                NotificationCenter.default.post(
+                    name: .faeWillFocusInputField,
+                    object: nil
+                )
+            }
+        }
 
         startInactivityTimer()
     }

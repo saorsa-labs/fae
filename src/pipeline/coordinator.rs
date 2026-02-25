@@ -2125,8 +2125,10 @@ async fn run_llm_stage(
                                 success: result.success,
                                 summary: result.spoken_summary.clone(),
                             });
+                            // Clear the thinking-mode orb state now that the agent is done.
+                            let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
                         }
-                        if result.success && !result.spoken_summary.trim().is_empty() {
+                        if !result.spoken_summary.trim().is_empty() {
                             engine.inject_background_result(&result.spoken_summary);
                             let spoken = result.spoken_summary.clone();
                             append_conversation_turn(
@@ -2134,6 +2136,13 @@ async fn run_llm_stage(
                                 format!("[background task {}]", result.task_id),
                                 spoken.clone(),
                             );
+                            // Emit AssistantSentence so the conversation panel shows the result.
+                            if let Some(rt) = &runtime_tx {
+                                let _ = rt.send(RuntimeEvent::AssistantSentence(SentenceChunk {
+                                    text: spoken.clone(),
+                                    is_final: true,
+                                }));
+                            }
                             let _ = tx
                                 .send(SentenceChunk {
                                     text: spoken,
@@ -2316,6 +2325,13 @@ async fn run_llm_stage(
                 ack_counter,
             );
             ack_counter += 1;
+            // Emit AssistantSentence so the conversation panel shows the ack bubble.
+            if let Some(rt) = &runtime_tx {
+                let _ = rt.send(RuntimeEvent::AssistantSentence(SentenceChunk {
+                    text: ack.to_owned(),
+                    is_final: true,
+                }));
+            }
             let _ = tx
                 .send(SentenceChunk {
                     text: ack.to_owned(),
@@ -2341,6 +2357,8 @@ async fn run_llm_stage(
                     task_id: task_id.clone(),
                     description: intent.task_description,
                 });
+                // Drive the orb to thinking mode while the background agent runs.
+                let _ = rt.send(RuntimeEvent::AssistantGenerating { active: true });
             }
 
             let bg_tx = bg_result_tx.clone();
@@ -2601,8 +2619,9 @@ async fn run_llm_stage(
                             success: bg_result.success,
                             summary: bg_result.spoken_summary.clone(),
                         });
+                        let _ = rt.send(RuntimeEvent::AssistantGenerating { active: false });
                     }
-                    if bg_result.success && !bg_result.spoken_summary.trim().is_empty() {
+                    if !bg_result.spoken_summary.trim().is_empty() {
                         // Queue the result text for injection + TTS after generation.
                         pending_bg_results.push(bg_result);
                     }
@@ -3283,6 +3302,10 @@ async fn run_conversation_gate(
     // Engaged window: once the user addresses Fae directly, allow follow-up
     // turns without repeating the name for a short period.
     let mut engaged_until: Option<Instant> = None;
+    // Track assistant-active transitions so the follow-up window resets when
+    // Fae finishes speaking — without this, a 25-second response consumes
+    // most of the 30-second window and the user's follow-up gets dropped.
+    let mut prev_assistant_active = false;
 
     info!("conversation gate active (always-on)");
 
@@ -3323,6 +3346,14 @@ async fn run_conversation_gate(
                             println!("\n[{display_name}] Standing by.\n");
                         }
                         info!("gate sleep command received, returning to idle");
+                    }
+                    GateCommand::Engage => {
+                        let now = Instant::now();
+                        if require_direct_address && !direct_address_followup.is_zero() {
+                            engaged_until = Some(now + direct_address_followup);
+                        }
+                        last_activity = now;
+                        info!("gate: engage command received — follow-up window refreshed");
                     }
                     GateCommand::RestartAudio { ref device_name } => {
                         let name = device_name.as_deref().unwrap_or("<default>");
@@ -3377,6 +3408,24 @@ async fn run_conversation_gate(
                                 let assistant_active =
                                     ctl.assistant_speaking.load(Ordering::Relaxed)
                                     || ctl.assistant_generating.load(Ordering::Relaxed);
+
+                                // When Fae finishes speaking, reset the follow-up
+                                // window so the user can respond without saying her
+                                // name again. Without this the 30-second window is
+                                // consumed by Fae's own response time.
+                                if prev_assistant_active && !assistant_active
+                                    && require_direct_address
+                                    && !direct_address_followup.is_zero()
+                                    && engaged_until.is_some()
+                                {
+                                    engaged_until =
+                                        Some(Instant::now() + direct_address_followup);
+                                    info!(
+                                        "gate: assistant finished speaking \
+                                         — follow-up window refreshed"
+                                    );
+                                }
+                                prev_assistant_active = assistant_active;
 
                                 // Name-gated barge-in: saying "Fae, stop that"
                                 // should interrupt even during assistant speech.

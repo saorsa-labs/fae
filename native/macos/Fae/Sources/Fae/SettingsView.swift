@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var onboarding: OnboardingController
+    @EnvironmentObject private var conversation: ConversationController
 
     /// Command sender for issuing backend commands (e.g. config.patch).
     /// Injected via the environment from FaeApp.
@@ -34,7 +35,13 @@ struct SettingsView: View {
                     Label("Tools", systemImage: "wrench.and.screwdriver")
                 }
 
+            SettingsSchedulesTab(commandSender: commandSender)
+                .tabItem {
+                    Label("Schedules", systemImage: "calendar.badge.clock")
+                }
+
             SettingsChannelsTab(commandSender: commandSender)
+                .environmentObject(auxiliaryWindows)
                 .tabItem {
                     Label("Channels", systemImage: "bubble.left.and.bubble.right")
                 }

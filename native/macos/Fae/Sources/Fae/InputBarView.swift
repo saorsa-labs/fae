@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Native input bar with microphone toggle, text field, send button, and action pills.
@@ -62,6 +63,11 @@ struct InputBarView: View {
                     .fill(Color.white.opacity(0.07))
                     .frame(height: 1)
             }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .faeWillFocusInputField)
+        ) { _ in
+            isTextFieldFocused = true
         }
     }
 

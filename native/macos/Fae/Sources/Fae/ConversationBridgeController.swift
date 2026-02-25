@@ -28,6 +28,13 @@ final class ConversationBridgeController: ObservableObject {
     private var streamingAssistantText: String = ""
     private var isStreamingAssistant: Bool = false
 
+    /// Buffered user transcription pending confirmation that the coordinator
+    /// actually accepted it. We hold it here until `AssistantGenerating { active: true }`
+    /// fires — which means the coordinator routed the turn to the LLM or a background agent.
+    /// Noise-level drops ("Mm.", "Yeah.", etc.) never trigger AssistantGenerating so they
+    /// are silently discarded when the next real transcription overwrites the buffer.
+    private var pendingUserTranscription: String? = nil
+
     init() {
         subscribe()
     }
@@ -138,7 +145,9 @@ final class ConversationBridgeController: ObservableObject {
 
     private func handleUserTranscription(text: String) {
         subtitleState?.showUserMessage(text)
-        conversationController?.appendMessage(role: .user, content: text)
+        // Buffer it — only commit to conversation when the coordinator confirms it was accepted
+        // (via AssistantGenerating { active: true }). Noise drops never trigger that event.
+        pendingUserTranscription = text
     }
 
     private func handleAssistantSentence(text: String, isFinal: Bool) {
@@ -146,6 +155,9 @@ final class ConversationBridgeController: ObservableObject {
         // a final sentence we flush the complete message.
         streamingAssistantText += (streamingAssistantText.isEmpty ? "" : " ") + text
         isStreamingAssistant = !isFinal
+
+        // First token — dismiss the persistent "Thinking…" bubble.
+        subtitleState?.clearToolMessage()
 
         if isFinal {
             let fullText = streamingAssistantText
@@ -161,7 +173,27 @@ final class ConversationBridgeController: ObservableObject {
         // Native generating state — the ConversationWindowView observes this directly.
         conversationController?.isGenerating = active
         if active {
-            subtitleState?.showToolMessage("Thinking...")
+            subtitleState?.showPersistentToolMessage("Thinking…")
+            // Flush the buffered user transcription — coordinator confirmed it was accepted.
+            if let pending = pendingUserTranscription, !pending.isEmpty {
+                conversationController?.appendMessage(role: .user, content: pending)
+                pendingUserTranscription = nil
+            }
+            // Reset streaming buffer so a new response never inherits stale content
+            // from an interrupted previous response.
+            streamingAssistantText = ""
+            isStreamingAssistant = false
+        } else {
+            // Generation stopped — clear the thinking bubble if still showing.
+            subtitleState?.clearToolMessage()
+            // If there's partial streamed text that never got an isFinal sentence
+            // (barge-in interruption), commit it now so it appears in the panel.
+            if !streamingAssistantText.isEmpty {
+                let partial = streamingAssistantText
+                streamingAssistantText = ""
+                isStreamingAssistant = false
+                conversationController?.appendMessage(role: .assistant, content: partial)
+            }
         }
     }
 
@@ -245,6 +277,10 @@ final class ConversationBridgeController: ObservableObject {
             let label = Self.friendlyLoadCompleteLabel(model: model)
             subtitleState?.showProgress(label: label, percent: 95)
             appendStatusMessage(label)
+            // Capture the LLM model label for the About tab.
+            if let llmLabel = Self.extractLLMLabel(from: model) {
+                conversationController?.loadedModelLabel = llmLabel
+            }
 
         case "error":
             let message = userInfo["message"] as? String ?? "unknown error"
@@ -283,6 +319,29 @@ final class ConversationBridgeController: ObservableObject {
         } else {
             return "Loaded \(model) ✓"
         }
+    }
+
+    /// Extracts a friendly LLM label from a raw model_name string.
+    ///
+    /// Input:  `"LLM (unsloth/Qwen3-8B-GGUF / Qwen3-8B-Q4_K_M.gguf)"`
+    /// Output: `"Qwen3 8B · Q4_K_M"`
+    static func extractLLMLabel(from modelName: String) -> String? {
+        guard modelName.hasPrefix("LLM ("), modelName.hasSuffix(")") else { return nil }
+        // Strip "LLM (" prefix and ")" suffix
+        let inner = String(modelName.dropFirst(5).dropLast())
+        // Take the GGUF filename — last component after "/"
+        let basename = inner
+            .components(separatedBy: "/")
+            .last?
+            .trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: ".gguf", with: "")
+            ?? inner
+        // "Qwen3-8B-Q4_K_M" → ["Qwen3", "8B", "Q4_K_M"]
+        let parts = basename.components(separatedBy: "-")
+        if parts.count >= 3 {
+            return "\(parts[0]) \(parts[1]) · \(parts[2])"
+        }
+        return basename
     }
 
     /// Human-friendly label for download progress.

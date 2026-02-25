@@ -5,8 +5,11 @@
 
 use crate::pipeline::messages::ConversationRequest;
 use crate::scheduler::tasks::{ConversationTrigger, ScheduledTask, TaskResult};
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
+
+const RESPONSE_WAIT_TIMEOUT_SECS: u64 = 30;
 
 /// Bridges scheduler task execution to the conversation pipeline.
 ///
@@ -27,8 +30,10 @@ impl TaskExecutorBridge {
     /// Convert this bridge into a boxed `TaskExecutor` callback.
     ///
     /// The returned callback can be passed to [`Scheduler::with_executor`](super::runner::Scheduler::with_executor).
-    pub fn into_executor(self) -> Box<dyn Fn(&ScheduledTask) -> TaskResult + Send + Sync> {
-        Box::new(move |task: &ScheduledTask| -> TaskResult {
+    pub fn into_executor(
+        self,
+    ) -> std::sync::Arc<dyn Fn(&ScheduledTask) -> TaskResult + Send + Sync> {
+        std::sync::Arc::new(move |task: &ScheduledTask| -> TaskResult {
             debug!("TaskExecutorBridge executing task: {}", task.id);
 
             // Parse conversation trigger from task payload
@@ -69,44 +74,103 @@ impl TaskExecutorBridge {
                 task.id
             );
 
-            // Wait for response from conversation handler
-            // We need to block on an async operation from a sync context.
-            // The scheduler runner calls this from a tokio::task::spawn_blocking context,
-            // so we can safely use block_on here.
+            // Wait for response from conversation handler.
+            // The scheduler's tick() is called from within a tokio::spawn async
+            // task, so we cannot create a new Runtime (that panics with
+            // "Cannot start a runtime from within a runtime").
+            // Use block_in_place + Handle::block_on — the idiomatic way to
+            // perform a blocking async wait from within a tokio worker thread.
             let response = match tokio::runtime::Handle::try_current() {
-                Ok(_handle) => {
-                    // We're inside a tokio runtime. Since the scheduler spawns task execution
-                    // in spawn_blocking, we create a new runtime to avoid blocking issues.
-                    match tokio::runtime::Runtime::new() {
-                        Ok(rt) => match rt.block_on(response_rx) {
-                            Ok(resp) => resp,
+                Ok(handle) => {
+                    let task_id = task.id.clone();
+                    let join = std::thread::Builder::new()
+                        .name(format!("scheduler-response-wait-{}", task_id))
+                        .spawn(move || {
+                            handle.block_on(async {
+                                tokio::time::timeout(
+                                    Duration::from_secs(RESPONSE_WAIT_TIMEOUT_SECS),
+                                    response_rx,
+                                )
+                                .await
+                            })
+                        });
+
+                    let wait_result = match join {
+                        Ok(thread) => match thread.join() {
+                            Ok(result) => result,
                             Err(_) => {
                                 warn!(
-                                    "ConversationRequest response channel closed for task {}",
+                                    "ConversationRequest response wait thread panicked for task {}",
                                     task.id
                                 );
-                                return TaskResult::Error("Response channel closed".to_owned());
+                                return TaskResult::Error(
+                                    "Response wait thread panicked".to_owned(),
+                                );
                             }
                         },
                         Err(e) => {
-                            warn!("Failed to create runtime for task {}: {e}", task.id);
-                            return TaskResult::Error(format!("Runtime creation failed: {e}"));
+                            warn!(
+                                "Failed to spawn response wait thread for task {}: {e}",
+                                task.id
+                            );
+                            return TaskResult::Error(format!(
+                                "Response wait thread spawn failed: {e}"
+                            ));
+                        }
+                    };
+
+                    match wait_result {
+                        Ok(Ok(resp)) => resp,
+                        Ok(Err(_)) => {
+                            warn!(
+                                "ConversationRequest response channel closed for task {}",
+                                task.id
+                            );
+                            return TaskResult::Error("Response channel closed".to_owned());
+                        }
+                        Err(_) => {
+                            warn!(
+                                "timeout|op=scheduler.executor_bridge.response_wait task={} timeout_secs={}",
+                                task.id, RESPONSE_WAIT_TIMEOUT_SECS
+                            );
+                            return TaskResult::Error(format!(
+                                "conversation response timeout after {}s",
+                                RESPONSE_WAIT_TIMEOUT_SECS
+                            ));
                         }
                     }
                 }
                 Err(_) => {
-                    // No tokio runtime - create one
+                    // No tokio runtime on this thread — create a local one.
                     match tokio::runtime::Runtime::new() {
-                        Ok(rt) => match rt.block_on(response_rx) {
-                            Ok(resp) => resp,
-                            Err(_) => {
-                                warn!(
-                                    "ConversationRequest response channel closed for task {}",
-                                    task.id
-                                );
-                                return TaskResult::Error("Response channel closed".to_owned());
+                        Ok(rt) => {
+                            match rt.block_on(async {
+                                tokio::time::timeout(
+                                    Duration::from_secs(RESPONSE_WAIT_TIMEOUT_SECS),
+                                    response_rx,
+                                )
+                                .await
+                            }) {
+                                Ok(Ok(resp)) => resp,
+                                Ok(Err(_)) => {
+                                    warn!(
+                                        "ConversationRequest response channel closed for task {}",
+                                        task.id
+                                    );
+                                    return TaskResult::Error("Response channel closed".to_owned());
+                                }
+                                Err(_) => {
+                                    warn!(
+                                        "timeout|op=scheduler.executor_bridge.response_wait task={} timeout_secs={}",
+                                        task.id, RESPONSE_WAIT_TIMEOUT_SECS
+                                    );
+                                    return TaskResult::Error(format!(
+                                        "conversation response timeout after {}s",
+                                        RESPONSE_WAIT_TIMEOUT_SECS
+                                    ));
+                                }
                             }
-                        },
+                        }
                         Err(e) => {
                             warn!("Failed to create runtime for task {}: {e}", task.id);
                             return TaskResult::Error(format!("Runtime creation failed: {e}"));
