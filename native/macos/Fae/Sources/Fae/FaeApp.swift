@@ -68,6 +68,10 @@ struct FaeApp: App {
     /// Sparkle 2 auto-update controller (EdDSA-verified, gentle reminders).
     @StateObject private var sparkleUpdater = SparkleUpdaterController()
 
+    /// Multipeer Connectivity relay — advertises on the local network so
+    /// companion devices (iPhone, iPad) can discover and connect.
+    @StateObject private var relayServer = FaeRelayServer()
+
     /// Retained observer token for `.faeDeviceTransfer` notifications.
     /// Stored to prevent duplicate observer registration if `onAppear` fires more than once.
     @State private var deviceTransferObserver: NSObjectProtocol?
@@ -201,6 +205,12 @@ struct FaeApp: App {
                             }
                         }
                     }
+                    // Start the Multipeer Connectivity relay so companion
+                    // devices can discover this Mac on the local network.
+                    relayServer.bindOrbState(orbState)
+                    relayServer.commandSender = commandSender
+                    relayServer.start()
+
                     if let sender = commandSender {
                         hostBridge.sender = sender
                         restoreOnboardingState(sender: sender)

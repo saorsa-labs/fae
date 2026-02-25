@@ -47,6 +47,14 @@
     </dict>
   </array>
 
+  <!-- Multipeer Connectivity / local network (companion device relay) -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Fae uses the local network to connect with your iPhone or iPad companion app.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_fae-relay._tcp</string>
+  </array>
+
   <!-- Privacy usage descriptions -->
   <key>NSMicrophoneUsageDescription</key>
   <string>Fae needs microphone access to hear your voice commands.</string>
