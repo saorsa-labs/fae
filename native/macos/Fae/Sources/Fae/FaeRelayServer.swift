@@ -1,4 +1,3 @@
-import CLibFae
 import Foundation
 import MultipeerConnectivity
 import Combine
@@ -137,7 +136,7 @@ final class FaeRelayServer: NSObject, ObservableObject {
         // Conversation turns (assistant sentences, user transcripts).
         notificationObservers.append(
             center.addObserver(
-                forName: .faeAssistantSentence,
+                forName: .faeAssistantMessage,
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
@@ -154,7 +153,7 @@ final class FaeRelayServer: NSObject, ObservableObject {
 
         notificationObservers.append(
             center.addObserver(
-                forName: .faeUserTranscript,
+                forName: .faeTranscription,
                 object: nil,
                 queue: .main
             ) { [weak self] notification in

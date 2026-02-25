@@ -129,6 +129,13 @@ pub trait DeviceTransferHandler: Send + Sync + 'static {
     fn request_conversation_inject_text(&self, _text: &str) -> Result<()> {
         Ok(())
     }
+    /// Inject raw PCM audio from a companion device into the pipeline.
+    fn request_conversation_inject_audio(
+        &self,
+        _chunk: crate::pipeline::messages::AudioChunk,
+    ) -> Result<()> {
+        Ok(())
+    }
     fn request_conversation_gate_set(&self, _active: bool) -> Result<()> {
         Ok(())
     }
