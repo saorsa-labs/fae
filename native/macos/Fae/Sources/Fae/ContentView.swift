@@ -17,15 +17,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            if !onboarding.isStateRestored || !onboarding.isComplete {
-                // Transparent surface while onboarding state is being restored
-                // or while the separate onboarding window is active.
-                Color.clear
-                    .ignoresSafeArea()
-            } else {
-                nativeConversationView
-                    .transition(.opacity)
-            }
+            nativeConversationView
+                .transition(.opacity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // SwiftUI-native frosted glass — .ultraThinMaterial in dark mode.

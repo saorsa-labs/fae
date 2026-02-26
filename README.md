@@ -218,7 +218,7 @@ Fae uses a dual-channel architecture with separate models for voice and backgrou
 | Voice | Qwen3-1.7B (Q4_K_M) | ~1.5K tokens | ~85 T/s | Fast conversational responses |
 | Background | Qwen3-4B+ (Q4_K_M) | Full window | Async | Tool-heavy tasks (calendar, search, etc.) |
 
-Auto mode selects based on system RAM: `>=32 GiB` → Qwen3-4B, otherwise Qwen3-1.7B.
+Auto mode selects based on system RAM, with a high-tier upgrade path available on capable machines. In the Swift rebuild path, `mlx-community/Qwen3.5-35B-A3B-4bit` is the top-tier game-changing option for high-memory systems, with smaller tiers retained for responsiveness and lower-memory hardware.
 
 The voice channel stays fast by using a condensed ~2KB prompt with no tool schemas. When Fae detects a request that needs tools (calendar, reminders, web search), she gives an immediate spoken acknowledgment and dispatches the work to the background channel asynchronously. The dual-channel architecture lets Fae remain conversationally responsive while executing tool-heavy tasks in parallel.
 

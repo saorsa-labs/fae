@@ -4,6 +4,16 @@
 
 - Primary build/test path is SwiftPM in `native/macos/Fae`.
 
+## Phase 1 status
+
+- Current Phase 1 parity status is tracked in [phase-1-parity.md](./phase-1-parity.md).
+- Latest pass completed:
+  - #28 config persistence (working load/save + defaults fallback behavior)
+  - #34 degraded mode transition reporting (additive, no routing changes)
+  - #35 baseline Phase 1 metrics hooks in pipeline (additive observability)
+- Current workspace Swift tests are passing after these updates.
+- Model tier update is now reflected in Swift config selection, including `mlx-community/Qwen3.5-35B-A3B-4bit` as the high-tier game-changing option on high-memory systems.
+
 ## Guardrails and cleanup tracking
 
 - Residue tracking: [residue-tracker.md](./residue-tracker.md)

@@ -10,10 +10,12 @@ import Foundation
 actor MemoryOrchestrator {
     private let store: SQLiteMemoryStore
     private let config: FaeConfig.MemoryConfig
+    private let embeddingEngine: MLXEmbeddingEngine
 
     init(store: SQLiteMemoryStore, config: FaeConfig.MemoryConfig) {
         self.store = store
         self.config = config
+        self.embeddingEngine = MLXEmbeddingEngine()
     }
 
     // MARK: - Recall
@@ -25,16 +27,17 @@ actor MemoryOrchestrator {
         do {
             let limit = max(config.maxRecallResults, 1)
             let hits = try await store.search(query: query, limit: limit)
+            let rerankedHits = await rerankHitsIfPossible(query: query, hits: hits)
 
-            guard !hits.isEmpty else { return nil }
+            guard !rerankedHits.isEmpty else { return nil }
 
             let minConfidence: Float = 0.5
 
             // Split durable vs episode hits.
-            let durableHits = hits.filter {
+            let durableHits = rerankedHits.filter {
                 $0.record.kind != .episode && $0.record.confidence >= minConfidence
             }
-            let episodeHits = hits.filter {
+            let episodeHits = rerankedHits.filter {
                 $0.record.kind == .episode
                     && $0.score >= MemoryConstants.episodeThresholdLexical
             }
@@ -163,6 +166,65 @@ actor MemoryOrchestrator {
     }
 
     // MARK: - Private Helpers
+
+    /// Blend lexical and semantic ranking, with safe fallback to lexical ordering.
+    private func rerankHitsIfPossible(query: String, hits: [MemorySearchHit]) async -> [MemorySearchHit] {
+        guard !hits.isEmpty else { return [] }
+
+        do {
+            if !(await embeddingEngine.isLoaded) {
+                try await embeddingEngine.load(modelID: "foundation-hash-384")
+            }
+
+            let queryEmbedding = try await embeddingEngine.embed(text: query)
+            let queryNorm = l2Norm(queryEmbedding)
+            guard queryNorm > 0 else { return hits }
+
+            let lexicalWeight: Float = 0.70
+            let semanticWeight: Float = 0.30
+
+            var reranked: [MemorySearchHit] = []
+            reranked.reserveCapacity(hits.count)
+
+            for hit in hits {
+                let recordEmbedding = try await embeddingEngine.embed(text: hit.record.text)
+                let semantic = cosineSimilarity(queryEmbedding, recordEmbedding)
+                let blended = (lexicalWeight * hit.score) + (semanticWeight * semantic)
+                reranked.append(MemorySearchHit(record: hit.record, score: blended))
+            }
+
+            reranked.sort { $0.score > $1.score }
+            return reranked
+        } catch {
+            NSLog("MemoryOrchestrator: semantic rerank fallback: %@", error.localizedDescription)
+            return hits
+        }
+    }
+
+    private func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
+        let length = min(lhs.count, rhs.count)
+        guard length > 0 else { return 0 }
+
+        var dot: Float = 0
+        var lhsSq: Float = 0
+        var rhsSq: Float = 0
+
+        for i in 0 ..< length {
+            let a = lhs[i]
+            let b = rhs[i]
+            dot += a * b
+            lhsSq += a * a
+            rhsSq += b * b
+        }
+
+        let denom = sqrt(lhsSq) * sqrt(rhsSq)
+        guard denom > 0 else { return 0 }
+        return dot / denom
+    }
+
+    private func l2Norm(_ vector: [Float]) -> Float {
+        sqrt(vector.reduce(Float(0)) { $0 + ($1 * $1) })
+    }
 
     /// Forget records matching a query.
     private func forgetMatching(query: String) async throws -> Int {

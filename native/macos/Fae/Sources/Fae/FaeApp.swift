@@ -76,10 +76,6 @@ struct FaeApp: App {
     /// Stored to prevent duplicate observer registration if `onAppear` fires more than once.
     @State private var deviceTransferObserver: NSObjectProtocol?
 
-    /// Glassmorphic onboarding window shown on first launch. The main
-    /// ``WindowGroup`` is hidden until onboarding completes.
-    @StateObject private var onboardingWindow = OnboardingWindowController()
-
     /// Help window controller for displaying HTML help pages.
     private let helpWindow = HelpWindowController()
 
@@ -207,24 +203,15 @@ struct FaeApp: App {
                     relayServer.start()
 
                     hostBridge.sender = faeCore
-                    restoreOnboardingState()
-                }
-                .onChange(of: onboarding.isStateRestored) {
-                    guard onboarding.isStateRestored else { return }
-                    if onboarding.isComplete {
-                        // Already onboarded — start pipeline immediately.
-                        startPipelineIfReady()
-                        return
-                    }
-                    // First launch — show glassmorphic onboarding, hide main window.
-                    showOnboardingWindow()
-                }
-                .onChange(of: onboarding.isComplete) {
-                    guard onboarding.isComplete, onboardingWindow.isVisible else { return }
-                    // Onboarding just finished — close onboarding, show main window.
-                    onboardingWindow.close()
-                    showMainWindow()
+
+                    // Always start pipeline on launch (no blocking onboarding).
                     startPipelineIfReady()
+
+                    // First launch: show intro crawl and request contacts.
+                    if !faeCore.isOnboarded {
+                        showIntroCanvas()
+                        requestContactsForFirstLaunch()
+                    }
                 }
                 .onContinueUserActivity("com.saorsalabs.fae.session.handoff") { activity in
                     handleIncomingHandoff(activity)
@@ -241,6 +228,22 @@ struct FaeApp: App {
                 .environmentObject(conversation)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Menu("Permissions") {
+                    Button("Microphone") {
+                        onboarding.requestMicrophone()
+                    }
+                    Button("Contacts") {
+                        onboarding.requestContacts()
+                    }
+                    Button("Calendar & Reminders") {
+                        onboarding.requestCalendar()
+                    }
+                    Button("Mail & Notes (System Settings)") {
+                        onboarding.requestMail()
+                    }
+                }
+            }
             CommandGroup(replacing: .appInfo) {
                 Button("About Fae") {
                     let model = conversation.loadedModelLabel
@@ -295,7 +298,7 @@ struct FaeApp: App {
     }
 
     /// Renders a static orb icon matching the DockIconAnimator style at
-    /// the default (heather-mist) palette stop.
+    /// the default (faeGold) palette stop.
     private static func renderStaticOrb() -> NSImage {
         let size: CGFloat = 256
         let nsSize = NSSize(width: size, height: size)
@@ -319,8 +322,8 @@ struct FaeApp: App {
         ctx.addPath(bgPath)
         ctx.fillPath()
 
-        // Use the heather-mist palette stop as the default colour.
-        let color = NSColor(hue: 270.0 / 360.0, saturation: 0.15, brightness: 0.77, alpha: 1)
+        // Use faeGold as the default colour.
+        let color = NSColor(hue: 35.0 / 360.0, saturation: 0.70, brightness: 0.65, alpha: 1)
 
         // Outer glow
         if let gradient = CGGradient(
@@ -361,44 +364,63 @@ struct FaeApp: App {
         return image
     }
 
-    // MARK: - Onboarding Window Lifecycle
+    // MARK: - Pipeline Startup
 
-    /// Configures and presents the glassmorphic onboarding window, hiding the
-    /// main window so the user only sees the focused onboarding experience.
-    private func showOnboardingWindow() {
-        onboardingWindow.configure(onboarding: onboarding)
-        onboardingWindow.show()
-
-        // Hide the main window while onboarding is active.
-        if let mainWindow = windowState.window {
-            mainWindow.orderOut(nil)
-        }
-    }
-
-    /// Makes the main conversation window key and visible after onboarding
-    /// completes. Centers on the primary screen (menu-bar screen) so it
-    /// doesn't appear on a secondary monitor.
-    private func showMainWindow() {
-        guard let mainWindow = windowState.window else { return }
-        // Center on the primary (menu-bar) screen, not NSScreen.main which
-        // tracks keyboard focus and may point to a secondary display.
-        if let screen = NSScreen.screens.first {
-            let visible = screen.visibleFrame
-            let size = mainWindow.frame.size
-            let x = visible.midX - size.width / 2
-            let y = visible.midY - size.height / 2
-            mainWindow.setFrameOrigin(NSPoint(x: x, y: y))
-        }
-        mainWindow.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-    }
-
-    /// Starts the FaeCore voice pipeline. Called after onboarding is confirmed
-    /// complete (either restored from config or just finished).
+    /// Starts the FaeCore voice pipeline immediately on launch.
     private func startPipelineIfReady() {
-        guard onboarding.isComplete else { return }
         try? faeCore.start()
         orbState.mode = .thinking // visual feedback during model loading
+    }
+
+    // MARK: - First Launch
+
+    /// Show the Star Wars-style intro crawl in the canvas window.
+    private func showIntroCanvas() {
+        canvasController.setContent(IntroCrawl.fullHTML)
+        auxiliaryWindows.showCanvas()
+    }
+
+    /// Request contacts access on first launch to learn the user's name.
+    ///
+    /// Uses a timeout to prevent hanging if the system dialog is dismissed
+    /// without a response. Always completes onboarding regardless of outcome.
+    private func requestContactsForFirstLaunch() {
+        Task {
+            // Small delay so the app window settles and models start loading.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+            // Request contacts with a 30-second timeout.
+            let learnedName: String? = await withTaskGroup(of: String?.self) { group in
+                group.addTask { @MainActor [onboarding] in
+                    // Request contacts — triggers macOS system dialog.
+                    onboarding.requestContacts()
+                    // Wait for Me Card read to complete.
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    return onboarding.userName
+                }
+                group.addTask {
+                    // Timeout after 30 seconds.
+                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    return nil
+                }
+                // Take whichever finishes first.
+                let result = await group.next() ?? nil
+                group.cancelAll()
+                return result
+            }
+
+            // Persist the user's name if learned.
+            if let name = learnedName, !name.isEmpty {
+                faeCore.userName = name
+                NSLog("Fae: learned user name from contacts: %@", name)
+            } else {
+                NSLog("Fae: contacts access not granted or Me Card not found")
+            }
+
+            // Always mark as onboarded regardless of contacts outcome.
+            faeCore.completeOnboarding()
+            onboarding.isComplete = true
+        }
     }
 
     // MARK: - Handoff Receiving
@@ -457,51 +479,4 @@ struct FaeApp: App {
         }
     }
 
-    /// Query FaeCore for persisted onboarding state so users who already
-    /// completed onboarding don't see it again after restart.
-    ///
-    /// A 5-second timeout prevents the UI from hanging on a black screen
-    /// indefinitely if the core is unresponsive.
-    private func restoreOnboardingState() {
-        Task {
-            defer { onboarding.isStateRestored = true }
-
-            let response: [String: Any]? = await withTaskGroup(of: [String: Any]?.self) { group in
-                group.addTask { [faeCore] in
-                    await faeCore.queryCommand(name: "onboarding.get_state", payload: [:])
-                }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
-                    return nil // timeout sentinel
-                }
-                // Return whichever finishes first.
-                let first = await group.next() ?? nil
-                group.cancelAll()
-                return first
-            }
-
-            guard let response else { return }
-
-            // The response envelope wraps the payload under "payload".
-            let payload = response["payload"] as? [String: Any] ?? response
-            if payload["onboarded"] as? Bool == true {
-                onboarding.isComplete = true
-                NSLog("Fae: restored onboarding state — already complete")
-            } else {
-                // Restore partial onboarding progress (phase + granted permissions).
-                if let phase = payload["phase"] as? String, phase != "welcome" {
-                    onboarding.initialPhase = phase
-                    NSLog("Fae: restoring onboarding at phase: %@", phase)
-                }
-                if let granted = payload["granted_permissions"] as? [String] {
-                    for perm in granted {
-                        onboarding.permissionStates[perm] = "granted"
-                    }
-                    if !granted.isEmpty {
-                        NSLog("Fae: restored %d granted permissions", granted.count)
-                    }
-                }
-            }
-        }
-    }
 }

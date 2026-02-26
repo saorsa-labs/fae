@@ -6,17 +6,17 @@ import AppKit
 @MainActor
 final class DockIconAnimator: ObservableObject {
 
-    // Fae palette stops (HSB) — extracted from the orb engine palettes.
+    // Fae palette stops (HSB) — gold/amber-centred with Scottish accents.
     // We interpolate through these continuously.
     private static let stops: [(h: CGFloat, s: CGFloat, b: CGFloat)] = [
-        (270 / 360, 0.15, 0.77),  // heather-mist  #B4A8C4
-        (150 / 360, 0.25, 0.50),  // glen-green     #5F7F6F
-        (155 / 360, 0.22, 0.61),  // loch-grey-green #7A9B8E
-        (24  / 360, 0.45, 0.65),  // autumn-bracken #A67B5B
-        (190 / 360, 0.05, 0.83),  // silver-mist    #C8D3D5
-        (348 / 360, 0.39, 0.55),  // rowan-berry    #8B4653
-        (150 / 360, 0.22, 0.36),  // moss-stone     #4A5D52
-        (32  / 360, 0.12, 0.91),  // dawn-light     #E8DED2
+        (35  / 360, 0.70, 0.65),  // faeGold         #D4A934
+        (150 / 360, 0.25, 0.50),  // glen-green      #5F7F6F
+        (155 / 360, 0.22, 0.61),  // loch-grey-green  #7A9B8E
+        (30  / 360, 0.75, 0.55),  // highlandAmber    #C17F24
+        (190 / 360, 0.05, 0.83),  // silver-mist      #C8D3D5
+        (348 / 360, 0.39, 0.55),  // rowan-berry      #8B4653
+        (40  / 360, 0.80, 0.60),  // cairngormTopaz   #E6B85C
+        (32  / 360, 0.12, 0.91),  // dawn-light       #E8DED2
     ]
 
     private var timer: Timer?

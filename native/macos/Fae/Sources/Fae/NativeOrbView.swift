@@ -1,25 +1,24 @@
 import AppKit
 import SwiftUI
 
-/// Pure SwiftUI + Metal view rendering the fog-cloud orb animation.
+/// Pure SwiftUI + Metal view rendering the nebula orb animation.
 ///
-/// Replaces `OrbAnimationWebView` (Phase 2 of native migration).
 /// Uses `TimelineView(.animation)` for display-rate rendering and
-/// `ShaderLibrary.bundle(Bundle.module).fogCloudOrb(...)` for the GPU-computed orb.
+/// `ShaderLibrary.bundle(Bundle.module).nebulaOrb(...)` for the GPU-computed orb.
 ///
 /// ## Architecture
 ///
 /// ```
-/// TimelineView(.animation)          ← fires every frame
-///   └─ GeometryReader               ← provides view size
-///        └─ Rectangle.colorEffect()  ← applies Metal fragment shader
+/// TimelineView(.animation)          <- fires every frame
+///   +- GeometryReader               <- provides view size
+///        +- Rectangle.colorEffect()  <- applies Metal fragment shader
 ///
-/// OrbClickTarget (overlay)           ← handles mouse clicks & hover
+/// OrbClickTarget (overlay)           <- handles mouse clicks & hover
 /// ```
 ///
 /// The shader runs as a single-pass fragment shader applied via
-/// `.colorEffect()`, computing fog layers, blobs, wisps, stars, and
-/// grain per-pixel on the GPU.
+/// `.colorEffect()`, computing volumetric nebula layers, embers, rim glow,
+/// and grain per-pixel on the GPU.
 struct NativeOrbView: View {
     @ObservedObject var orbAnimation: OrbAnimationState
     var audioRMS: Double
@@ -84,7 +83,7 @@ struct NativeOrbView: View {
         Rectangle()
             .fill(Color.black.opacity(0.001))
             .colorEffect(
-                Self.shaderLib.fogCloudOrb(
+                Self.shaderLib.nebulaOrb(
                     // Time & geometry
                     .float(time),
                     .float2(Float(size.width), Float(size.height)),

@@ -27,6 +27,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private let playbackManager = AudioPlaybackManager()
     private let conversationState = ConversationStateTracker()
     private lazy var modelManager = ModelManager(eventBus: eventBus)
+    private lazy var approvalManager = ApprovalManager(eventBus: eventBus)
     private var pipelineCoordinator: PipelineCoordinator?
     private var memoryOrchestrator: MemoryOrchestrator?
     private var scheduler: FaeScheduler?
@@ -67,7 +68,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     ttsEngine: ttsEngine,
                     config: config,
                     conversationState: conversationState,
-                    memoryOrchestrator: orchestrator
+                    memoryOrchestrator: orchestrator,
+                    approvalManager: approvalManager
                 )
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
@@ -84,6 +86,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 pipelineState = .running
                 eventBus.send(.runtimeState(.started))
                 NSLog("FaeCore: pipeline started")
+
+                // First launch greeting — Fae introduces herself.
+                if !config.onboarded {
+                    let greeting: String
+                    if let name = config.userName, !name.isEmpty {
+                        greeting = "Hello \(name). I'm Fae, your personal AI companion."
+                    } else {
+                        greeting = "Hello. I'm Fae, your personal AI companion."
+                    }
+                    await coordinator.speakDirect(greeting)
+                }
             } catch {
                 NSLog("FaeCore: failed to start pipeline: %@", error.localizedDescription)
                 pipelineState = .error
@@ -165,6 +178,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             if let name = payload["name"] as? String {
                 userName = name
                 config.userName = name
+                persistConfig(reason: "onboarding.set_user_name")
                 NSLog("FaeCore: user name set to '%@'", name)
             }
 
@@ -195,10 +209,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             NSLog("FaeCore: skills.reload — stub")
 
         case "scheduler.delete":
-            NSLog("FaeCore: scheduler.delete — stub")
+            if let taskId = payload["id"] as? String {
+                Task { await scheduler?.deleteUserTask(id: taskId) }
+            }
 
         case "scheduler.trigger_now":
-            NSLog("FaeCore: scheduler.trigger_now — stub")
+            if let taskId = payload["id"] as? String {
+                Task { await scheduler?.triggerTask(id: taskId) }
+            }
 
         case "data.delete_all":
             NSLog("FaeCore: data.delete_all — stub")
@@ -238,7 +256,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     func respondToApproval(requestID: UInt64, approved: Bool) {
         eventBus.send(.approvalResolved(id: requestID, approved: approved, source: "button"))
-        // TODO: Phase 3 — route to ApprovalManager
+        Task { await approvalManager.resolve(requestId: requestID, approved: approved) }
     }
 
     func patchConfig(key: String, payload: [String: Any]) {
@@ -247,18 +265,25 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "tool_mode":
             if let value = payload["value"] as? String {
                 toolMode = value
+                persistConfig(reason: "config.patch.tool_mode")
+            }
+        case "llm.voice_model_preset":
+            if let value = payload["value"] as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                config.llm.voiceModelPreset = value
+                persistConfig(reason: "config.patch.llm.voice_model_preset")
             }
         default:
-            // TODO: persist to config.toml via TOMLKit
-            break
+            NSLog("FaeCore: config.patch unhandled key '%@'", key)
         }
     }
 
     func completeOnboarding() {
         isOnboarded = true
         config.onboarded = true
+        persistConfig(reason: "onboarding.complete")
         NSLog("FaeCore: onboarding complete")
-        // TODO: persist to config.toml
     }
 
     // MARK: - Audio Injection (for companion relay)
@@ -276,6 +301,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
             continuation.resume(returning: [
                 "payload": ["onboarded": isOnboarded] as [String: Any],
             ])
+        }
+    }
+
+    private func persistConfig(reason: String) {
+        do {
+            try config.save()
+            NSLog("FaeCore: config persisted (%@)", reason)
+        } catch {
+            NSLog("FaeCore: failed to persist config (%@): %@", reason, error.localizedDescription)
         }
     }
 

@@ -248,6 +248,7 @@ final class BackendEventRouter: Sendable {
                 "pipeline.model_selection_prompt",
                 "pipeline.model_switch_requested",
                 "pipeline.provider_fallback",
+                "pipeline.degraded_mode",
                 "pipeline.permissions_changed",
                 "pipeline.conversation_snapshot",
                 "pipeline.canvas_visibility",

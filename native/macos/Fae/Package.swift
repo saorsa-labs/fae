@@ -40,10 +40,11 @@ let package = Package(
             ],
             path: "Sources/Fae",
             exclude: [
-                // Metal source is pre-compiled to Resources/default.metallib
-                // via: xcrun metal -c FogCloudOrb.metal -o /tmp/FogCloudOrb.air
-                //      xcrun metallib /tmp/FogCloudOrb.air -o Resources/default.metallib
+                // Metal sources are pre-compiled to Resources/default.metallib
+                // via: xcrun metal -c NebulaOrb.metal -o /tmp/NebulaOrb.air
+                //      xcrun metallib /tmp/NebulaOrb.air -o Resources/default.metallib
                 "FogCloudOrb.metal",
+                "NebulaOrb.metal",
             ],
             resources: [
                 .process("Resources"),
@@ -63,6 +64,7 @@ let package = Package(
         .testTarget(
             name: "HandoffTests",
             dependencies: [
+                "Fae",
                 .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
             ],
             path: "Tests/HandoffTests"

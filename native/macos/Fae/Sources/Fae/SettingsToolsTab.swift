@@ -4,13 +4,13 @@ import SwiftUI
 struct SettingsToolsTab: View {
     var commandSender: HostCommandSender?
 
-    @AppStorage("toolMode") private var toolMode: String = "read_only"
+    @AppStorage("toolMode") private var toolMode: String = "full"
 
     private let toolModes: [(label: String, value: String, description: String)] = [
         ("Off", "off", "Tools disabled. LLM-only conversational mode."),
         ("Read Only", "read_only", "Safe defaults: read files, search, list directories."),
         ("Read/Write", "read_write", "Adds file writing and editing capabilities."),
-        ("Full", "full", "All tools including shell and web search. Highest risk."),
+        ("Full", "full", "All tools with approval prompts before dangerous actions."),
         ("Full (No Approval)", "full_no_approval", "All tools without confirmation prompts."),
     ]
 

@@ -8,13 +8,22 @@ import MLXAudioSTT
 actor MLXSTTEngine: STTEngine {
     private var model: Qwen3ASRModel?
     private(set) var isLoaded: Bool = false
+    private(set) var loadState: MLEngineLoadState = .notStarted
 
     /// Load the STT model.
-    func load(modelID: String = "mlx-community/Qwen3-ASR-0.6B-4bit") async throws {
+    func load(modelID: String = "mlx-community/Qwen3-ASR-1.7B-4bit") async throws {
+        loadState = .loading
         NSLog("MLXSTTEngine: loading model %@", modelID)
-        model = try await Qwen3ASRModel.fromPretrained(modelID)
-        isLoaded = true
-        NSLog("MLXSTTEngine: model loaded")
+        do {
+            model = try await Qwen3ASRModel.fromPretrained(modelID)
+            isLoaded = true
+            loadState = .loaded
+            NSLog("MLXSTTEngine: model loaded")
+        } catch {
+            loadState = .failed(error.localizedDescription)
+            NSLog("MLXSTTEngine: load failed: %@", error.localizedDescription)
+            throw error
+        }
     }
 
     /// Transcribe a speech segment to text.

@@ -225,6 +225,9 @@ enum PersonalityManager {
                 """)
         }
 
+        // 6. Permission context.
+        parts.append(PermissionStatusProvider.promptFragment())
+
         return parts.joined(separator: "\n\n")
     }
 

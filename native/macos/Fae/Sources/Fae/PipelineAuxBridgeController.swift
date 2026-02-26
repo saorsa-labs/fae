@@ -150,6 +150,24 @@ final class PipelineAuxBridgeController: ObservableObject {
         }
 
         switch stage {
+        case "stt":
+            status = "Loading speech recognition…"
+
+        case "llm":
+            status = "Loading language model…"
+
+        case "tts":
+            status = "Loading voice synthesis…"
+
+        case "ready":
+            status = "Finalizing startup…"
+
+        case "verify_started":
+            status = "Verifying model readiness…"
+
+        case "verify_complete":
+            status = "Verification complete"
+
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
             status = "Loading \(model)…"

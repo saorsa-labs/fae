@@ -1,0 +1,2 @@
+{"id":"audit_1","op":"insert","target_id":"mem_fact_active","note":"fixture seed","at":1700000001}
+{"id":"audit_2","op":"supersede","target_id":"mem_fact_old","note":"fixture superseded","at":1700000002}

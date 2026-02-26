@@ -18,6 +18,16 @@ actor PipelineCoordinator {
         case llmOnly          // Capture → VAD → STT → LLM (no TTS)
     }
 
+    // MARK: - Degraded Mode
+
+    enum PipelineDegradedMode: String, Sendable {
+        case full
+        case noSTT
+        case noLLM
+        case noTTS
+        case unavailable
+    }
+
     // MARK: - Gate State
 
     enum GateState: Sendable {
@@ -36,10 +46,12 @@ actor PipelineCoordinator {
     private let config: FaeConfig
     private let conversationState: ConversationStateTracker
     private let memoryOrchestrator: MemoryOrchestrator?
+    private let approvalManager: ApprovalManager?
 
     // MARK: - Pipeline State
 
     private var mode: PipelineMode = .conversation
+    private var degradedMode: PipelineDegradedMode?
     private var gateState: GateState = .active
     private var vad = VoiceActivityDetector()
     private var echoSuppressor = EchoSuppressor()
@@ -60,6 +72,11 @@ actor PipelineCoordinator {
     // MARK: - Barge-In
 
     private var pendingBargeIn: PendingBargeIn?
+
+    // MARK: - Phase 1 Observability
+
+    private var pipelineStartedAt: Date?
+    private var firstAudioLatencyEmitted: Bool = false
 
     struct PendingBargeIn {
         var capturedAt: Date
@@ -83,7 +100,8 @@ actor PipelineCoordinator {
         ttsEngine: MLXTTSEngine,
         config: FaeConfig,
         conversationState: ConversationStateTracker,
-        memoryOrchestrator: MemoryOrchestrator? = nil
+        memoryOrchestrator: MemoryOrchestrator? = nil,
+        approvalManager: ApprovalManager? = nil
     ) {
         self.eventBus = eventBus
         self.capture = capture
@@ -94,6 +112,7 @@ actor PipelineCoordinator {
         self.config = config
         self.conversationState = conversationState
         self.memoryOrchestrator = memoryOrchestrator
+        self.approvalManager = approvalManager
 
         // Configure VAD from config.
         vad.threshold = config.vad.threshold
@@ -121,6 +140,8 @@ actor PipelineCoordinator {
         captureStream = stream
 
         eventBus.send(.pipelineStateChanged(.running))
+        pipelineStartedAt = Date()
+        await refreshDegradedModeIfNeeded(context: "startup")
         NSLog("PipelineCoordinator: pipeline started in %@ mode", mode.rawValue)
 
         // Main pipeline loop.
@@ -151,6 +172,13 @@ actor PipelineCoordinator {
         }
 
         await processTranscription(text: text, rms: nil, durationSecs: nil)
+    }
+
+    /// Speak text directly via TTS without going through the LLM.
+    ///
+    /// Used for system messages like the first-launch greeting.
+    func speakDirect(_ text: String) async {
+        await speakText(text, isFinal: true)
     }
 
     // MARK: - Gate Control
@@ -189,6 +217,15 @@ actor PipelineCoordinator {
 
             // Emit audio level for orb animation.
             eventBus.send(.audioLevel(vadOutput.rms))
+
+            if !firstAudioLatencyEmitted,
+               let startedAt = pipelineStartedAt,
+               (vadOutput.isSpeech || vadOutput.speechStarted || vadOutput.segment != nil)
+            {
+                let latencyMs = Date().timeIntervalSince(startedAt) * 1000
+                firstAudioLatencyEmitted = true
+                NSLog("phase1.first_audio_latency_ms=%.2f", latencyMs)
+            }
 
             // Track barge-in.
             if vadOutput.speechStarted {
@@ -245,6 +282,8 @@ actor PipelineCoordinator {
             return
         }
 
+        await refreshDegradedModeIfNeeded(context: "before_stt")
+
         // STT stage.
         guard await sttEngine.isLoaded else {
             NSLog("PipelineCoordinator: STT not loaded, dropping segment")
@@ -252,10 +291,13 @@ actor PipelineCoordinator {
         }
 
         do {
+            let sttStartedAt = Date()
             let result = try await sttEngine.transcribe(
                 samples: segment.samples,
                 sampleRate: segment.sampleRate
             )
+            let sttLatencyMs = Date().timeIntervalSince(sttStartedAt) * 1000
+            NSLog("phase1.stt_latency_ms=%.2f", sttLatencyMs)
 
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return }
@@ -319,8 +361,10 @@ actor PipelineCoordinator {
             await speakText(ack, isFinal: true)
             await conversationState.addUserMessage(queryText)
             await conversationState.addAssistantMessage(ack)
-            // TODO: Phase 3 — spawn background agent with tool allowlist
+
+            // Spawn background agent with filtered tool registry.
             NSLog("PipelineCoordinator: tool intent detected, tools: %@", intent.toolAllowlist.joined(separator: ", "))
+            await spawnBackgroundAgent(userText: queryText, toolAllowlist: intent.toolAllowlist)
             return
         }
 
@@ -335,6 +379,8 @@ actor PipelineCoordinator {
 
     /// Run LLM generation and stream output to TTS.
     private func generateAndSpeak(userText: String) async {
+        await refreshDegradedModeIfNeeded(context: "before_generation")
+
         guard await llmEngine.isLoaded else {
             NSLog("PipelineCoordinator: LLM not loaded")
             return
@@ -374,6 +420,8 @@ actor PipelineCoordinator {
         thinkTagStripper = TextProcessing.ThinkTagStripper()
         var fullResponse = ""
         var sentenceBuffer = ""
+        let llmStartedAt = Date()
+        var llmTokenCount = 0
 
         let tokenStream = await llmEngine.generate(
             messages: history,
@@ -383,6 +431,7 @@ actor PipelineCoordinator {
 
         do {
             for try await token in tokenStream {
+                llmTokenCount += 1
                 guard !interrupted else {
                     NSLog("PipelineCoordinator: generation interrupted")
                     break
@@ -420,6 +469,12 @@ actor PipelineCoordinator {
             NSLog("PipelineCoordinator: LLM error: %@", error.localizedDescription)
         }
 
+        let llmElapsed = Date().timeIntervalSince(llmStartedAt)
+        if llmElapsed > 0 {
+            let throughput = Double(llmTokenCount) / llmElapsed
+            NSLog("phase1.llm_token_throughput_tps=%.2f", throughput)
+        }
+
         // Flush remaining text.
         let remaining = thinkTagStripper.flush()
         sentenceBuffer += remaining
@@ -440,6 +495,11 @@ actor PipelineCoordinator {
                 userText: userText,
                 assistantText: fullResponse
             )
+
+            // Sentiment → orb feeling: classify the response and update the orb.
+            if let feeling = SentimentClassifier.classify(fullResponse) {
+                eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
+            }
         }
 
         assistantGenerating = false
@@ -463,8 +523,15 @@ actor PipelineCoordinator {
         echoSuppressor.onAssistantSpeechStart()
 
         do {
+            let ttsStartedAt = Date()
+            var ttsFirstChunkEmitted = false
             let audioStream = await ttsEngine.synthesize(text: text)
             for try await buffer in audioStream {
+                if !ttsFirstChunkEmitted {
+                    let latencyMs = Date().timeIntervalSince(ttsStartedAt) * 1000
+                    ttsFirstChunkEmitted = true
+                    NSLog("phase1.tts_first_chunk_latency_ms=%.2f", latencyMs)
+                }
                 guard !interrupted else { break }
                 // Convert AVAudioPCMBuffer to Float array and enqueue.
                 let samples = Self.extractSamples(from: buffer)
@@ -526,6 +593,126 @@ actor PipelineCoordinator {
         case .level(let rms):
             eventBus.send(.audioLevel(rms))
         }
+    }
+
+    // MARK: - Degraded Mode Helpers
+
+    private func evaluateDegradedMode() async -> PipelineDegradedMode {
+        let sttLoaded = await sttEngine.isLoaded
+        let llmLoaded = await llmEngine.isLoaded
+        let ttsLoaded = await ttsEngine.isLoaded
+
+        if sttLoaded && llmLoaded && ttsLoaded {
+            return .full
+        }
+        if !sttLoaded && !llmLoaded && !ttsLoaded {
+            return .unavailable
+        }
+        if !sttLoaded {
+            return .noSTT
+        }
+        if !llmLoaded {
+            return .noLLM
+        }
+        if !ttsLoaded {
+            return .noTTS
+        }
+        return .unavailable
+    }
+
+    private func refreshDegradedModeIfNeeded(context: String) async {
+        let current = await evaluateDegradedMode()
+        guard degradedMode != current else { return }
+        degradedMode = current
+        NSLog("phase1.degraded_mode=%@ context=%@", current.rawValue, context)
+    }
+
+    // MARK: - Background Agent Dispatch
+
+    /// Spawn a background agent with a filtered tool registry to handle tool-needing queries.
+    private func spawnBackgroundAgent(userText: String, toolAllowlist: [String]) async {
+        guard await llmEngine.isLoaded else {
+            NSLog("PipelineCoordinator: LLM not loaded, cannot spawn agent")
+            return
+        }
+
+        // Speak a context-specific progress cue.
+        if let cue = Self.toolProgressPhrase(toolAllowlist) {
+            await speakText(cue, isFinal: false)
+        }
+
+        // Emit tool executing event for UI feedback.
+        let primaryTool = toolAllowlist.first ?? "tool"
+        eventBus.send(.toolExecuting(name: primaryTool))
+
+        // Build filtered registry.
+        let registry = ToolRegistry.buildFiltered(allowlist: toolAllowlist)
+
+        // Build agent.
+        let agent = AgentLoop(
+            llmEngine: llmEngine,
+            registry: registry,
+            approvalManager: approvalManager,
+            config: config,
+            eventBus: eventBus
+        )
+
+        // Build system prompt with permission context.
+        let permissionContext = PermissionStatusProvider.promptFragment()
+        let systemPrompt = PersonalityManager.backgroundAgentPrompt
+            + "\n\n" + permissionContext
+            + "\n\nAvailable tools:\n" + registry.toolSchemas
+
+        let history = await conversationState.history
+
+        // Run the agent loop.
+        let result = await agent.run(
+            userText: userText,
+            systemPrompt: systemPrompt,
+            history: history
+        )
+
+        // Emit tool result event.
+        eventBus.send(.toolResult(id: UUID().uuidString, name: primaryTool, success: true, output: result))
+
+        // Add result to conversation history and speak it.
+        let cleanResult = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanResult.isEmpty {
+            await conversationState.addAssistantMessage(cleanResult)
+            eventBus.send(.assistantText(text: cleanResult, isFinal: true))
+            await speakText(cleanResult, isFinal: true)
+
+            // Memory capture.
+            let turnId = newMemoryId(prefix: "agent")
+            _ = await memoryOrchestrator?.capture(
+                turnId: turnId,
+                userText: userText,
+                assistantText: cleanResult
+            )
+
+            // Sentiment → orb feeling.
+            if let feeling = SentimentClassifier.classify(cleanResult) {
+                eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
+            }
+        }
+
+        // Refresh follow-up engagement window.
+        engagedUntil = Date().addingTimeInterval(
+            Double(config.conversation.directAddressFollowupS)
+        )
+    }
+
+    /// Context-specific progress phrase based on tool allowlist.
+    private static func toolProgressPhrase(_ allowlist: [String]) -> String? {
+        if allowlist.contains("calendar") { return "Checking your calendar." }
+        if allowlist.contains("reminders") { return "Looking at your reminders." }
+        if allowlist.contains("contacts") { return "Searching your contacts." }
+        if allowlist.contains("mail") { return "Checking your mail." }
+        if allowlist.contains("notes") { return "Looking through your notes." }
+        if allowlist.contains("bash") { return "Running that command." }
+        if allowlist.contains("web_search") || allowlist.contains("fetch_url") { return "Searching the web." }
+        if allowlist.contains("scheduler_list") || allowlist.contains("scheduler_create") { return "Checking your scheduled tasks." }
+        return nil
     }
 
     // MARK: - Helpers

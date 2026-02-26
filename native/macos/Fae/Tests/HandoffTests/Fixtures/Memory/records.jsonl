@@ -1,0 +1,5 @@
+{"id":"mem_fact_active","kind":"fact","status":"active","text":"User likes green tea","confidence":0.82,"updated_at":1749500000}
+{"id":"mem_fact_old","kind":"fact","status":"superseded","text":"User likes coffee","confidence":0.70,"updated_at":1680000000}
+{"id":"mem_ep_old","kind":"episode","status":"active","text":"Old conversation episode","confidence":0.55,"updated_at":1600000000}
+{"id":"mem_ep_new","kind":"episode","status":"active","text":"Recent conversation episode","confidence":0.58,"updated_at":1749900000}
+{"id":"mem_event_forgotten","kind":"event","status":"forgotten","text":"Expired event","confidence":0.50,"updated_at":1500000000}

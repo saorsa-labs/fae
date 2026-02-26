@@ -75,16 +75,17 @@ enum OrbMode: String, CaseIterable, Identifiable {
     }
 
     /// Default palette colours for each mode (when palette is .modeDefault).
+    /// Gold is the resting-state colour; Scottish greens/purples/reds accent different modes.
     var defaultColors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
         switch self {
         case .idle:
-            return (OrbColor.heatherMist, OrbColor.lochGreyGreen, OrbColor.silverMist)
+            return (OrbColor.faeGold, OrbColor.highlandAmber, OrbColor.lochGreyGreen)
         case .listening:
-            return (OrbColor.glenGreen, OrbColor.lochGreyGreen, OrbColor.silverMist)
+            return (OrbColor.cairngormTopaz, OrbColor.glenGreen, OrbColor.silverMist)
         case .thinking:
-            return (OrbColor.heatherMist, OrbColor.rowanBerry, OrbColor.lochGreyGreen)
+            return (OrbColor.highlandAmber, OrbColor.heatherMist, OrbColor.rowanBerry)
         case .speaking:
-            return (OrbColor.autumnBracken, OrbColor.rowanBerry, OrbColor.dawnLight)
+            return (OrbColor.faeGold, OrbColor.islaySunset, OrbColor.dawnLight)
         }
     }
 
@@ -143,6 +144,13 @@ enum OrbFeeling: String, CaseIterable, Identifiable {
     }
 
     /// Base property values for this feeling. Mode multipliers are applied on top.
+    ///
+    /// Tuned for the nebula shader where:
+    /// - `fogDensity` → nebula cloud density
+    /// - `morphAmplitude` → domain warp intensity (swirl amount)
+    /// - `morphSpeed` → nebula flow speed
+    /// - `starAlpha` → ember/hot-spot brightness
+    /// - `innerGlow` → core light intensity
     var properties: OrbSnapshot {
         switch self {
         case .neutral:
@@ -150,64 +158,64 @@ enum OrbFeeling: String, CaseIterable, Identifiable {
                 hueShift: 0, speedScale: 1.0, breathAmplitude: 0.012,
                 fogDensity: 0.6, morphAmplitude: 0.06, morphFreq: 2,
                 morphSpeed: 0.18, shimmer: 0.03, asymmetry: 0.04,
-                starAlpha: 0.55, outerAlpha: 0.35, wispSize: 0.25,
+                starAlpha: 0.5, outerAlpha: 0.35, wispSize: 0.25,
                 wispAlpha: 0.05, blobAlpha: 0.14, innerGlow: 0.2
             )
         case .calm:
             return OrbSnapshot(
-                hueShift: -5, speedScale: 0.7, breathAmplitude: 0.02,
+                hueShift: -15, speedScale: 0.5, breathAmplitude: 0.02,
                 fogDensity: 0.7, morphAmplitude: 0.04, morphFreq: 2,
-                morphSpeed: 0.12, shimmer: 0.02, asymmetry: 0.03,
-                starAlpha: 0.4, outerAlpha: 0.25, wispSize: 0.3,
+                morphSpeed: 0.1, shimmer: 0.02, asymmetry: 0.03,
+                starAlpha: 0.3, outerAlpha: 0.25, wispSize: 0.3,
                 wispAlpha: 0.06, blobAlpha: 0.12, innerGlow: 0.15
             )
         case .curiosity:
             return OrbSnapshot(
-                hueShift: 15, speedScale: 1.15, breathAmplitude: 0.014,
+                hueShift: 20, speedScale: 1.2, breathAmplitude: 0.014,
                 fogDensity: 0.65, morphAmplitude: 0.1, morphFreq: 3,
                 morphSpeed: 0.3, shimmer: 0.06, asymmetry: 0.1,
-                starAlpha: 0.55, outerAlpha: 0.3, wispSize: 0.38,
+                starAlpha: 0.5, outerAlpha: 0.3, wispSize: 0.38,
                 wispAlpha: 0.07, blobAlpha: 0.12, innerGlow: 0.2
             )
         case .warmth:
             return OrbSnapshot(
-                hueShift: 25, speedScale: 0.9, breathAmplitude: 0.016,
+                hueShift: 10, speedScale: 0.9, breathAmplitude: 0.016,
                 fogDensity: 0.65, morphAmplitude: 0.06, morphFreq: 2,
-                morphSpeed: 0.18, shimmer: 0.03, asymmetry: 0.04,
+                morphSpeed: 0.16, shimmer: 0.03, asymmetry: 0.04,
                 starAlpha: 0.5, outerAlpha: 0.35, wispSize: 0.25,
-                wispAlpha: 0.05, blobAlpha: 0.15, innerGlow: 0.25
+                wispAlpha: 0.05, blobAlpha: 0.15, innerGlow: 0.3
             )
         case .concern:
             return OrbSnapshot(
-                hueShift: -10, speedScale: 0.85, breathAmplitude: 0.008,
+                hueShift: -25, speedScale: 0.7, breathAmplitude: 0.008,
                 fogDensity: 0.85, morphAmplitude: 0.05, morphFreq: 2,
-                morphSpeed: 0.15, shimmer: 0.06, asymmetry: 0.06,
-                starAlpha: 0.35, outerAlpha: 0.2, wispSize: 0.4,
-                wispAlpha: 0.08, blobAlpha: 0.14, innerGlow: 0.12
+                morphSpeed: 0.12, shimmer: 0.06, asymmetry: 0.06,
+                starAlpha: 0.25, outerAlpha: 0.2, wispSize: 0.4,
+                wispAlpha: 0.08, blobAlpha: 0.14, innerGlow: 0.1
             )
         case .delight:
             return OrbSnapshot(
-                hueShift: 10, speedScale: 1.3, breathAmplitude: 0.018,
-                fogDensity: 0.55, morphAmplitude: 0.09, morphFreq: 3,
+                hueShift: 15, speedScale: 1.4, breathAmplitude: 0.018,
+                fogDensity: 0.5, morphAmplitude: 0.09, morphFreq: 3,
                 morphSpeed: 0.28, shimmer: 0.05, asymmetry: 0.08,
-                starAlpha: 0.65, outerAlpha: 0.35, wispSize: 0.35,
-                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.22
+                starAlpha: 0.7, outerAlpha: 0.35, wispSize: 0.35,
+                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.35
             )
         case .focus:
             return OrbSnapshot(
-                hueShift: 5, speedScale: 1.1, breathAmplitude: 0.01,
+                hueShift: 5, speedScale: 0.8, breathAmplitude: 0.01,
                 fogDensity: 0.75, morphAmplitude: 0.03, morphFreq: 2,
                 morphSpeed: 0.1, shimmer: 0.02, asymmetry: 0.02,
-                starAlpha: 0.4, outerAlpha: 0.2, wispSize: 0.35,
-                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.18
+                starAlpha: 0.3, outerAlpha: 0.2, wispSize: 0.35,
+                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.25
             )
         case .playful:
             return OrbSnapshot(
-                hueShift: 20, speedScale: 1.2, breathAmplitude: 0.015,
-                fogDensity: 0.6, morphAmplitude: 0.12, morphFreq: 3,
+                hueShift: 30, speedScale: 1.3, breathAmplitude: 0.015,
+                fogDensity: 0.55, morphAmplitude: 0.12, morphFreq: 3,
                 morphSpeed: 0.35, shimmer: 0.08, asymmetry: 0.12,
-                starAlpha: 0.6, outerAlpha: 0.35, wispSize: 0.38,
-                wispAlpha: 0.07, blobAlpha: 0.12, innerGlow: 0.2
+                starAlpha: 0.65, outerAlpha: 0.35, wispSize: 0.38,
+                wispAlpha: 0.07, blobAlpha: 0.12, innerGlow: 0.22
             )
         }
     }
@@ -232,6 +240,9 @@ enum OrbFeeling: String, CaseIterable, Identifiable {
 
 enum OrbPalette: String, CaseIterable, Identifiable {
     case modeDefault = "mode-default"
+    case faeAmber = "fae-amber"
+    case highlandFire = "highland-fire"
+    case goldenDawn = "golden-dawn"
     case heatherMist = "heather-mist"
     case glenGreen = "glen-green"
     case lochGreyGreen = "loch-grey-green"
@@ -247,6 +258,9 @@ enum OrbPalette: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .modeDefault: return "Mode Default"
+        case .faeAmber: return "Fae Amber"
+        case .highlandFire: return "Highland Fire"
+        case .goldenDawn: return "Golden Dawn"
         case .heatherMist: return "Heather Mist"
         case .glenGreen: return "Glen Green"
         case .lochGreyGreen: return "Loch Grey-Green"
@@ -263,6 +277,9 @@ enum OrbPalette: String, CaseIterable, Identifiable {
     var colors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)? {
         switch self {
         case .modeDefault: return nil
+        case .faeAmber: return (OrbColor.faeGold, OrbColor.highlandAmber, OrbColor.cairngormTopaz)
+        case .highlandFire: return (OrbColor.islaySunset, OrbColor.highlandAmber, OrbColor.peatEarth)
+        case .goldenDawn: return (OrbColor.cairngormTopaz, OrbColor.faeGold, OrbColor.dawnLight)
         case .heatherMist: return (OrbColor.heatherMist, OrbColor.lochGreyGreen, OrbColor.silverMist)
         case .glenGreen: return (OrbColor.glenGreen, OrbColor.lochGreyGreen, OrbColor.mossStone)
         case .lochGreyGreen: return (OrbColor.lochGreyGreen, OrbColor.silverMist, OrbColor.glenGreen)
@@ -282,6 +299,9 @@ enum OrbPalette: String, CaseIterable, Identifiable {
         if normalized.contains("reset orb color") || normalized.contains("reset orb palette") || normalized.contains("mode default") {
             return .modeDefault
         }
+        if normalized.contains("fae amber") { return .faeAmber }
+        if normalized.contains("highland fire") { return .highlandFire }
+        if normalized.contains("golden dawn") { return .goldenDawn }
         if normalized.contains("heather mist") { return .heatherMist }
         if normalized.contains("glen green") { return .glenGreen }
         if normalized.contains("loch grey green") || normalized.contains("loch green") { return .lochGreyGreen }
@@ -299,6 +319,7 @@ enum OrbPalette: String, CaseIterable, Identifiable {
 
 /// Named colour constants as linear RGB SIMD3<Float> values (0–1 range).
 enum OrbColor {
+    // Scottish landscape palette
     static let heatherMist = hexToRGB(0xB4A8C4)
     static let glenGreen = hexToRGB(0x5F7F6F)
     static let lochGreyGreen = hexToRGB(0x7A9B8E)
@@ -308,6 +329,13 @@ enum OrbColor {
     static let mossStone = hexToRGB(0x4A5D52)
     static let dawnLight = hexToRGB(0xE8DED2)
     static let peatEarth = hexToRGB(0x3D3630)
+
+    // Gold / amber family — Fae's signature warmth
+    static let faeGold = hexToRGB(0xD4A934)
+    static let highlandAmber = hexToRGB(0xC17F24)
+    static let cairngormTopaz = hexToRGB(0xE6B85C)
+    static let islaySunset = hexToRGB(0xE87D3E)
+    static let thistleGold = hexToRGB(0xB8962E)
 
     private static func hexToRGB(_ hex: UInt32) -> SIMD3<Float> {
         let r = Float((hex >> 16) & 0xFF) / 255.0

@@ -8,14 +8,23 @@ import MLXLMCommon
 actor MLXLLMEngine: LLMEngine {
     private var container: ModelContainer?
     private(set) var isLoaded: Bool = false
+    private(set) var loadState: MLEngineLoadState = .notStarted
 
     /// Load the LLM model.
     func load(modelID: String) async throws {
+        loadState = .loading
         NSLog("MLXLLMEngine: loading model %@", modelID)
-        let config = ModelConfiguration(id: modelID)
-        container = try await LLMModelFactory.shared.loadContainer(configuration: config)
-        isLoaded = true
-        NSLog("MLXLLMEngine: model loaded")
+        do {
+            let config = ModelConfiguration(id: modelID)
+            container = try await LLMModelFactory.shared.loadContainer(configuration: config)
+            isLoaded = true
+            loadState = .loaded
+            NSLog("MLXLLMEngine: model loaded")
+        } catch {
+            loadState = .failed(error.localizedDescription)
+            NSLog("MLXLLMEngine: load failed: %@", error.localizedDescription)
+            throw error
+        }
     }
 
     /// Generate a streaming response.

@@ -11,6 +11,7 @@ actor AgentLoop {
     private let registry: ToolRegistry
     private let approvalManager: ApprovalManager?
     private let config: FaeConfig
+    private let eventBus: FaeEventBus?
 
     static let maxTurns = 10
     static let maxToolsPerTurn = 5
@@ -20,12 +21,14 @@ actor AgentLoop {
         llmEngine: MLXLLMEngine,
         registry: ToolRegistry,
         approvalManager: ApprovalManager? = nil,
-        config: FaeConfig
+        config: FaeConfig,
+        eventBus: FaeEventBus? = nil
     ) {
         self.llmEngine = llmEngine
         self.registry = registry
         self.approvalManager = approvalManager
         self.config = config
+        self.eventBus = eventBus
     }
 
     /// Run the agent loop and return the final text response.
@@ -73,7 +76,22 @@ actor AgentLoop {
             messages.append(LLMMessage(role: .assistant, content: fullResponse))
 
             for call in toolCalls.prefix(Self.maxToolsPerTurn) {
+                let callId = UUID().uuidString
+                eventBus?.send(.toolCall(
+                    id: callId,
+                    name: call.name,
+                    inputJSON: Self.serializeArguments(call.arguments)
+                ))
+
                 let result = await executeTool(call)
+
+                eventBus?.send(.toolResult(
+                    id: callId,
+                    name: call.name,
+                    success: !result.isError,
+                    output: String(result.output.prefix(200))
+                ))
+
                 messages.append(LLMMessage(
                     role: .tool,
                     content: result.output,
@@ -129,6 +147,15 @@ actor AgentLoop {
     }
 
     // MARK: - Tool Execution
+
+    private static func serializeArguments(_ args: [String: Any]) -> String {
+        if let data = try? JSONSerialization.data(withJSONObject: args),
+           let str = String(data: data, encoding: .utf8)
+        {
+            return str
+        }
+        return "{}"
+    }
 
     private func executeTool(_ call: ToolCall) async -> ToolResult {
         guard let tool = registry.tool(named: call.name) else {

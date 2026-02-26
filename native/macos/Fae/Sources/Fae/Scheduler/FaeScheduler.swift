@@ -168,6 +168,35 @@ actor FaeScheduler {
         await action()
     }
 
+    // MARK: - External Task Control
+
+    /// Trigger a named task to run immediately (from FaeCore command or SchedulerTriggerTool).
+    func triggerTask(id: String) async {
+        NSLog("FaeScheduler: manual trigger for '%@'", id)
+        switch id {
+        case "memory_reflect":    await runMemoryReflect()
+        case "memory_reindex":    await runMemoryReindex()
+        case "memory_migrate":    await runMemoryMigrate()
+        case "memory_gc":         await runMemoryGC()
+        case "memory_backup":     await runMemoryBackup()
+        case "check_fae_update":  await runCheckUpdate()
+        case "morning_briefing":  await runMorningBriefing()
+        case "noise_budget_reset": await runNoiseBudgetReset()
+        case "skill_proposals":   await runSkillProposals()
+        case "stale_relationships": await runStaleRelationships()
+        case "skill_health_check": await runSkillHealthCheck()
+        default:
+            NSLog("FaeScheduler: unknown task id '%@'", id)
+        }
+    }
+
+    /// Delete a user-created scheduled task (builtin tasks cannot be deleted).
+    func deleteUserTask(id: String) async {
+        // User task deletion is handled by SchedulerDeleteTool via scheduler.json.
+        // This method is a stub for FaeCore command routing.
+        NSLog("FaeScheduler: deleteUserTask '%@' — delegated to SchedulerDeleteTool", id)
+    }
+
     // MARK: - Timer Helpers
 
     private func scheduleRepeating(

@@ -1,6 +1,28 @@
 import AVFoundation
 import Foundation
 
+// MARK: - Engine Load State
+
+/// Tracks the lifecycle of an ML engine's model loading.
+enum MLEngineLoadState: Sendable {
+    case notStarted
+    case loading
+    case loaded
+    case failed(String)
+
+    var isLoaded: Bool {
+        if case .loaded = self { return true }
+        return false
+    }
+
+    var isFailed: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+}
+
+// MARK: - Engine Protocols
+
 /// Speech-to-text engine protocol.
 ///
 /// Implementations: `MLXSTTEngine` (Phase 1, Qwen3-ASR via mlx-audio-swift).
@@ -8,6 +30,7 @@ protocol STTEngine: Actor {
     func load(modelID: String) async throws
     func transcribe(samples: [Float], sampleRate: Int) async throws -> STTResult
     var isLoaded: Bool { get }
+    var loadState: MLEngineLoadState { get }
 }
 
 /// Large language model engine protocol.
@@ -21,6 +44,7 @@ protocol LLMEngine: Actor {
         options: GenerationOptions
     ) -> AsyncThrowingStream<String, Error>
     var isLoaded: Bool { get }
+    var loadState: MLEngineLoadState { get }
 }
 
 /// Text-to-speech engine protocol.
@@ -28,8 +52,17 @@ protocol LLMEngine: Actor {
 /// Implementations: `MLXTTSEngine` (Phase 1, Qwen3-TTS via mlx-audio-swift).
 protocol TTSEngine: Actor {
     func load(modelID: String) async throws
+    func loadVoice(referenceAudioURL: URL, referenceText: String?) async throws
     func synthesize(text: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error>
     var isLoaded: Bool { get }
+    var isVoiceLoaded: Bool { get }
+    var loadState: MLEngineLoadState { get }
+}
+
+extension TTSEngine {
+    /// Default no-op for engines that don't support voice cloning.
+    func loadVoice(referenceAudioURL: URL, referenceText: String?) async throws {}
+    var isVoiceLoaded: Bool { false }
 }
 
 /// Text embedding engine protocol for semantic memory search.
@@ -39,4 +72,5 @@ protocol EmbeddingEngine: Actor {
     func load(modelID: String) async throws
     func embed(text: String) async throws -> [Float]
     var isLoaded: Bool { get }
+    var loadState: MLEngineLoadState { get }
 }
