@@ -6,14 +6,13 @@ on:
       - "v*"
 
 env:
-  CARGO_TERM_COLOR: always
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
 permissions:
   contents: write
 
 jobs:
-  # ── Verify tag matches Cargo.toml version ──────────────────────────
+  # ── Verify tag matches VERSION file ──────────────────────────────
   preflight:
     name: Pre-flight
     runs-on: ubuntu-latest
@@ -22,17 +21,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify tag matches Cargo.toml version
+      - name: Verify tag matches VERSION file
         id: version
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml ($CARGO_VERSION)"
+          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match VERSION file ($FILE_VERSION)"
             exit 1
           fi
-          echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing v$CARGO_VERSION"
+          echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$FILE_VERSION"
 
   # ── Run full test suite before building release artifacts ──────────
   test:
@@ -41,63 +40,41 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        with:
+          submodules: recursive
 
       - name: Run tests
-        run: cargo test --no-default-features
+        run: swift test --package-path native/macos/Fae
 
-  # ── Build macOS binary (Apple Silicon) ─────────────────────────────
+  # ── Build macOS app bundle (Apple Silicon) ────────────────────────
   build-macos:
     name: Build macOS (arm64)
     needs: test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-aarch64-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-aarch64-release-
+          submodules: recursive
 
-      - name: Build libfae.a static library
-        run: |
-          rustup target add aarch64-apple-darwin
-          cargo build --release --no-default-features --features metal --target aarch64-apple-darwin --lib
-          if [ ! -f "target/aarch64-apple-darwin/release/libfae.a" ]; then
-            echo "::error::libfae.a not found after build"
-            exit 1
-          fi
-          echo "Built libfae.a: $(du -h target/aarch64-apple-darwin/release/libfae.a | cut -f1)"
-
-      - name: Build native Swift shell (links against libfae.a)
+      - name: Build Swift app (xcodebuild release — compiles Metal shaders)
         run: |
           pushd native/macos/Fae
-          swift build -c release
-          SWIFT_BIN_REL="$(find .build -type f -perm -111 -name Fae | head -n 1)"
-          if [ -z "$SWIFT_BIN_REL" ]; then
-            echo "::error::Could not locate built Fae binary under native/macos/Fae/.build"
-            exit 1
-          fi
-          SWIFT_BIN_ABS="$(cd "$(dirname "$SWIFT_BIN_REL")" && pwd)/$(basename "$SWIFT_BIN_REL")"
-          echo "SWIFT_APP_BINARY=$SWIFT_BIN_ABS" >> "$GITHUB_ENV"
+          xcodebuild build \
+            -scheme Fae \
+            -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode \
+            -quiet
 
-          SWIFT_RES_REL="$(find .build -type d -name 'Fae_Fae.bundle' | head -n 1)"
-          if [ -z "$SWIFT_RES_REL" ]; then
-            echo "::error::Could not locate Fae_Fae.bundle resource bundle"
+          PRODUCTS=".build/xcode/Build/Products/Release"
+          SWIFT_BIN="$PRODUCTS/Fae"
+          if [ ! -f "$SWIFT_BIN" ]; then
+            echo "::error::Could not locate built Fae binary at $SWIFT_BIN"
             exit 1
           fi
-          SWIFT_RES_ABS="$(cd "$SWIFT_RES_REL" && pwd)"
-          echo "SWIFT_RESOURCE_BUNDLE=$SWIFT_RES_ABS" >> "$GITHUB_ENV"
+          SWIFT_BIN_ABS="$(cd "$(dirname "$SWIFT_BIN")" && pwd)/$(basename "$SWIFT_BIN")"
+          echo "SWIFT_APP_BINARY=$SWIFT_BIN_ABS" >> "$GITHUB_ENV"
+          echo "XCODE_PRODUCTS=$SWIFT_BIN_ABS/../" >> "$GITHUB_ENV"
           popd
 
       - name: Import signing certificate
@@ -182,29 +159,34 @@ jobs:
 
           rm -rf "$DIST_DIR" "$APP_BUNDLE" "$ARCHIVE_STAGING"
           mkdir -p "$DIST_DIR" "$ARCHIVE_STAGING"
-          mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+          mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Frameworks" "$APP_BUNDLE/Contents/Resources"
 
           # Standalone binary used by in-app self-update.
           cp "$SWIFT_APP_BINARY" "$UPDATE_ASSET"
           chmod +x "$UPDATE_ASSET"
 
-          # Build native macOS app bundle (single binary — Rust core is statically linked).
+          # Build native macOS app bundle (pure Swift + MLX).
           cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/Fae"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-          cp -R "$SWIFT_RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
           chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
 
+          # Copy all SPM resource bundles (Fae_Fae, mlx-swift_Cmlx, etc.)
+          for bundle_dir in "$XCODE_PRODUCTS"/*.bundle; do
+            if [ -d "$bundle_dir" ]; then
+              cp -R "$bundle_dir" "$APP_BUNDLE/Contents/Resources/"
+              echo "Copied $(basename "$bundle_dir")"
+            fi
+          done
+
           # Embed Sparkle.framework — required at runtime, not statically linked.
-          SPARKLE_FW="$(find native/macos/Fae/.build -path '*/release/Sparkle.framework' -type d | head -n 1)"
-          if [ -z "$SPARKLE_FW" ]; then
-            echo "::error::Sparkle.framework not found in SPM release build output"
+          SPARKLE_FW="$XCODE_PRODUCTS/Sparkle.framework"
+          if [ ! -d "$SPARKLE_FW" ]; then
+            echo "::error::Sparkle.framework not found at $SPARKLE_FW"
             exit 1
           fi
           cp -R "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
 
           # Ensure the binary finds Sparkle at @executable_path/../Frameworks.
-          # @loader_path alone (the SPM default rpath) resolves to Contents/MacOS/,
-          # which is wrong for a bundled framework layout.
           install_name_tool -add_rpath "@executable_path/../Frameworks" \
             "$APP_BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
 
@@ -387,125 +369,10 @@ jobs:
           name: fae-macos-arm64
           path: ${{ env.ARTIFACTS_DIR }}/*
 
-  # ── Build Linux binary (x86_64) ────────────────────────────────────
-  build-linux:
-    name: Build Linux (x86_64)
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            libasound2-dev \
-            libssl-dev \
-            libfontconfig1-dev
-
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-x86_64-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-x86_64-release-
-
-      - name: Build release binary (headless host bridge)
-        run: cargo build --release --bin fae-host
-
-      - name: Prepare release payloads
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          DIST_DIR="$RUNNER_TEMP/fae-dist"
-          ARCHIVE_STAGING="$RUNNER_TEMP/fae-archive-staging"
-          ARCHIVE="$DIST_DIR/fae-${VERSION}-linux-x86_64.tar.gz"
-          UPDATE_ASSET="$DIST_DIR/fae-linux-x86_64"
-
-          rm -rf "$DIST_DIR" "$ARCHIVE_STAGING"
-          mkdir -p "$DIST_DIR" "$ARCHIVE_STAGING"
-
-          cp target/release/fae-host "$UPDATE_ASSET"
-          chmod +x "$UPDATE_ASSET"
-
-          cp target/release/fae-host "$ARCHIVE_STAGING/fae-host"
-          cp README.md "$ARCHIVE_STAGING/"
-          cp LICENSE "$ARCHIVE_STAGING/" 2>/dev/null || true
-          chmod +x "$ARCHIVE_STAGING/fae-host"
-          tar -czf "$ARCHIVE" -C "$ARCHIVE_STAGING" .
-
-          echo "ARTIFACTS_DIR=$DIST_DIR" >> "$GITHUB_ENV"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fae-linux-x86_64
-          path: ${{ env.ARTIFACTS_DIR }}/*
-
-  # ── Build Windows binary (x86_64) ──────────────────────────────────
-  build-windows:
-    name: Build Windows (x86_64)
-    needs: test
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-x86_64-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-x86_64-release-
-
-      - name: Build release binary (headless host bridge)
-        run: cargo build --release --bin fae-host
-
-      - name: Prepare release payloads
-        shell: pwsh
-        run: |
-          $Version = "${env:GITHUB_REF}".Replace("refs/tags/v", "")
-          $DistDir = Join-Path $env:RUNNER_TEMP "fae-dist"
-          $ArchiveStaging = Join-Path $env:RUNNER_TEMP "fae-archive-staging"
-          $Archive = Join-Path $DistDir "fae-$Version-windows-x86_64.zip"
-          $UpdateAsset = Join-Path $DistDir "fae-windows-x86_64.exe"
-
-          Remove-Item -Recurse -Force $DistDir, $ArchiveStaging -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
-          New-Item -ItemType Directory -Force -Path $ArchiveStaging | Out-Null
-
-          Copy-Item "target/release/fae-host.exe" $UpdateAsset
-          Copy-Item "target/release/fae-host.exe" (Join-Path $ArchiveStaging "fae-host.exe")
-          Copy-Item "README.md" $ArchiveStaging
-          if (Test-Path "LICENSE") {
-            Copy-Item "LICENSE" $ArchiveStaging
-          }
-
-          Compress-Archive -Path (Join-Path $ArchiveStaging "*") -DestinationPath $Archive -Force
-          "ARTIFACTS_DIR=$DistDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fae-windows-x86_64
-          path: ${{ env.ARTIFACTS_DIR }}/*
-
-  # ── Create GitHub Release with all artifacts ───────────────────────
+  # ── Create GitHub Release ─────────────────────────────────────────
   release:
     name: Create Release
-    needs: [build-macos, build-linux, build-windows]
+    needs: [build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -572,11 +439,8 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/**/*.tar.gz
-            artifacts/**/*.zip
             artifacts/**/*.dmg
             artifacts/**/fae-darwin-aarch64
-            artifacts/**/fae-linux-x86_64
-            artifacts/**/fae-windows-x86_64.exe
             artifacts/**/appcast.xml
             artifacts/SHA256SUMS.txt
             artifacts/SHA256SUMS.txt.asc

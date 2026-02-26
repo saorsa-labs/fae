@@ -281,6 +281,14 @@ final class BackendEventRouter: Sendable {
     }
 }
 
+// MARK: - Backend Event (moved from EmbeddedCoreSender)
+
+extension Notification.Name {
+    /// Raw backend events — posted by `FaeEventBus` (was: C ABI callback in EmbeddedCoreSender).
+    /// `BackendEventRouter` observes this and fans out to typed notification names.
+    static let faeBackendEvent = Notification.Name("faeBackendEvent")
+}
+
 // MARK: - Notification Names
 
 extension Notification.Name {

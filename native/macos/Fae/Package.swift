@@ -14,21 +14,29 @@ let package = Package(
         .package(path: "../../apple/FaeHandoffKit"),
         // Sparkle 2 auto-update framework (EdDSA signature verification).
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+        // MLX ecosystem — local ML inference on Apple Silicon.
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", branch: "main"),
+        .package(url: "https://github.com/Blaizzy/mlx-audio-swift", branch: "main"),
+        // SQLite with ORM — memory store.
+        .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
+        // TOML config file parsing.
+        .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
     ],
     targets: [
-        // C module exposing the libfae FFI header to Swift.
-        .target(
-            name: "CLibFae",
-            path: "Sources/CLibFae",
-            publicHeadersPath: "include"
-        ),
-
         .executableTarget(
             name: "Fae",
             dependencies: [
-                "CLibFae",
                 .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
+                // MLX LLM inference.
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                // MLX Audio — STT and TTS.
+                .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
+                .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                // Data layer.
+                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "TOMLKit", package: "TOMLKit"),
             ],
             path: "Sources/Fae",
             exclude: [
@@ -41,45 +49,12 @@ let package = Package(
                 .process("Resources"),
             ],
             linkerSettings: [
-                // Path to Rust-built libfae.a (arm64 release).
-                // In CI, the release workflow builds this before swift build.
-                // For local dev, run: just build-staticlib
-                //
-                // -force_load ensures ALL symbols from libfae.a are linked,
-                // not just those directly reachable from the FFI entry points.
-                // Without this, the linker strips the ML inference (mistralrs),
-                // TTS (kokoro), STT (parakeet), and audio pipeline code because
-                // the command handler dispatches to them via async runtime calls
-                // that the linker's dead-code analysis cannot trace.
-                .unsafeFlags([
-                    "-L../../../target/aarch64-apple-darwin/release",
-                    "-L../../../target/debug",
-                    "-Xlinker", "-force_load",
-                    "-Xlinker", "../../../target/aarch64-apple-darwin/release/libfae.a",
-                ]),
-                // System frameworks required by libfae's Rust dependencies.
+                // System frameworks for native Swift pipeline.
                 .linkedFramework("Security"),
-                .linkedFramework("CoreFoundation"),
-                .linkedFramework("SystemConfiguration"),
-                // ONNX Runtime (C++ runtime)
-                .linkedLibrary("c++"),
-                // Metal GPU acceleration (mistralrs, candle)
                 .linkedFramework("Metal"),
-                .linkedFramework("MetalPerformanceShaders"),
-                // BLAS/LAPACK (candle, accelerate-src)
                 .linkedFramework("Accelerate"),
-                // winit keyboard layout queries (kTISPropertyUnicodeKeyLayoutData)
-                .linkedFramework("Carbon"),
-                // Audio I/O (cpal)
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("CoreAudio"),
-                // Hardware/device access (cpal, system info)
-                .linkedFramework("IOKit"),
-                // DNS resolver (reqwest/hyper)
-                .linkedLibrary("resolv"),
-                // Compression libraries (bzip2-sys, lzma-sys / xz2 — used by zip, ort, symphonia)
-                .linkedLibrary("bz2"),
-                .linkedLibrary("lzma"),
             ]
         ),
 

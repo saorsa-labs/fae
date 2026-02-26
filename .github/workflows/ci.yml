@@ -7,90 +7,34 @@ on:
     branches: [main]
 
 env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
 jobs:
-  check:
-    name: Check & Lint
+  build-and-test:
+    name: Build & Test (macOS arm64)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          submodules: recursive
 
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+      - name: Guard: no Rust reintroduction in active CI/default recipes
+        run: ./scripts/ci/guard-no-rust-reintro.sh
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Resolve SPM dependencies
+        run: xcodebuild -resolvePackageDependencies -scheme Fae -clonedSourcePackagesDirPath .build/spm-cache
+        working-directory: native/macos/Fae
 
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Clippy strict (production code only — no panic/unwrap/expect)
-        run: cargo clippy --lib --bins -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
-
-  test:
-    name: Tests
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-test-
+      - name: Build (xcodebuild — compiles Metal shaders)
+        run: >
+          xcodebuild build
+          -scheme Fae
+          -configuration Release
+          -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath .build/xcode
+          -clonedSourcePackagesDirPath .build/spm-cache
+          -quiet
+        working-directory: native/macos/Fae
 
       - name: Run tests
-        run: cargo test
-        env:
-          CARGO_BUILD_JOBS: "2"
-
-  build:
-    name: Build (macOS arm64 native Swift shell)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-aarch64-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-aarch64-cargo-build-
-
-      - name: Build Rust staticlib (release, aarch64)
-        run: cargo build --release --no-default-features --features metal --target aarch64-apple-darwin
-        env:
-          MACOSX_DEPLOYMENT_TARGET: '14.0'
-
-      - name: Build native Swift app (release)
-        run: swift build -c release --package-path native/macos/Fae
+        run: swift test --package-path native/macos/Fae

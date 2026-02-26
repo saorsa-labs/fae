@@ -1,0 +1,77 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "FaeOrbKit-arm64-apple-macosx26.0-debug.module": ["<FaeOrbKit-arm64-apple-macosx26.0-debug.module>"]
+  "FaeRelayKit-arm64-apple-macosx26.0-debug.module": ["<FaeRelayKit-arm64-apple-macosx26.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<FaeRelayKit-arm64-apple-macosx26.0-debug.module>"]
+  "test": ["<FaeRelayKit-arm64-apple-macosx26.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+commands:
+  "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/CompanionOrbView.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbAnimationState.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbTypes.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/DerivedSources/resource_bundle_accessor.swift"]
+    outputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources"]
+    description: "Write auxiliary file /Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources"
+
+  "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit_FaeOrbKit.bundle/FogCloudOrb.metal":
+    tool: copy-tool
+    inputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/Resources/FogCloudOrb.metal"]
+    outputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit_FaeOrbKit.bundle/FogCloudOrb.metal"]
+    description: "Copying /Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/Resources/FogCloudOrb.metal"
+
+  "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/FaeRelayClient.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/RelayProtocol.swift"]
+    outputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/sources"]
+    description: "Write auxiliary file /Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/sources"
+
+  "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<FaeOrbKit-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/CompanionOrbView.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbAnimationState.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbTypes.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/resource_bundle_accessor.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules/FaeOrbKit.swiftmodule"]
+    outputs: ["<FaeOrbKit-arm64-apple-macosx26.0-debug.module>"]
+
+  "<FaeRelayKit-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/FaeRelayClient.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/RelayProtocol.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules/FaeRelayKit.swiftmodule"]
+    outputs: ["<FaeRelayKit-arm64-apple-macosx26.0-debug.module>"]
+
+  "C.FaeOrbKit-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/CompanionOrbView.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbAnimationState.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbTypes.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/DerivedSources/resource_bundle_accessor.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","<FaeOrbKit-arm64-apple-macosx26.0-debug.module-resources>","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources"]
+    outputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/CompanionOrbView.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbAnimationState.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbTypes.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/resource_bundle_accessor.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules/FaeOrbKit.swiftmodule"]
+    description: "Compiling Swift Module 'FaeOrbKit' (4 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","FaeOrbKit","-emit-dependencies","-emit-module","-emit-module-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules/FaeOrbKit.swiftmodule","-output-file-map","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources","-I","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j12","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE","-module-cache-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/include/FaeOrbKit-Swift.h","-swift-version","5","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","faeorbkit"]
+
+  "C.FaeRelayKit-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/FaeRelayClient.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/RelayProtocol.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules/FaeOrbKit.swiftmodule","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/sources"]
+    outputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/FaeRelayClient.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/RelayProtocol.swift.o","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules/FaeRelayKit.swiftmodule"]
+    description: "Compiling Swift Module 'FaeRelayKit' (2 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","FaeRelayKit","-emit-dependencies","-emit-module","-emit-module-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules/FaeRelayKit.swiftmodule","-output-file-map","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/sources","-I","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j12","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/include/FaeRelayKit-Swift.h","-swift-version","5","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","faerelaykit"]
+
+  "FaeOrbKit-arm64-apple-macosx26.0-debug.module-resources":
+    tool: phony
+    inputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeOrbKit_FaeOrbKit.bundle/FogCloudOrb.metal"]
+    outputs: ["<FaeOrbKit-arm64-apple-macosx26.0-debug.module-resources>"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Package.swift","/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

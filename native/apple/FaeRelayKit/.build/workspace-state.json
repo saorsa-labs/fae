@@ -1,0 +1,27 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "faeorbkit",
+          "kind" : "fileSystem",
+          "location" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit",
+          "name" : "FaeOrbKit"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit"
+        },
+        "subpath" : "faeorbkit"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

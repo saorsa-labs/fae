@@ -39,7 +39,7 @@ final class FaeRelayServer: NSObject, ObservableObject {
     weak var orbState: OrbStateController?
     weak var commandSender: HostCommandSender?
     /// Direct reference for binary audio injection (bypasses JSON command path).
-    weak var audioSender: EmbeddedCoreSender?
+    weak var audioSender: FaeCore?
 
     // MARK: - Internal State
 

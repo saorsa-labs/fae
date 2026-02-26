@@ -333,16 +333,36 @@ Runtime system prompt assembly:
 
 ## Developer Commands
 
+### Current default (Swift app)
+
 ```bash
-just run              # Run headless host bridge (IPC mode)
-just run-native-swift # Run native macOS SwiftUI app
-just build            # Build Rust core library + binaries
-just build-staticlib  # Build libfae.a for Swift embedding
-just test             # Run tests
-just lint             # Run clippy (zero warnings)
-just fmt              # Format code
-just check            # Full CI validation
+cd native/macos/Fae
+swift build
+swift test
 ```
+
+### Workspace recipes
+
+```bash
+just run-native-swift # Run native macOS SwiftUI app
+just check            # Full validation across active components
+```
+
+### Legacy / archival (Rust core path)
+
+```bash
+just run              # Legacy headless host bridge (IPC mode)
+just build            # Legacy Rust core library + binaries
+just build-staticlib  # Legacy libfae.a staticlib build
+just test             # Legacy Rust tests
+just lint             # Legacy clippy
+just fmt              # Legacy rustfmt
+```
+
+### Known blockers
+
+- Swift build/test can fail when dependency fetch/submodule checkout cannot reach GitHub.
+- First app run may block on initial model downloads.
 
 ## Release Artifacts
 

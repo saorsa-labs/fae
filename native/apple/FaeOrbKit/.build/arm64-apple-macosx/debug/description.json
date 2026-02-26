@@ -1,0 +1,297 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+    "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit_FaeOrbKit.bundle/FogCloudOrb.metal" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/Resources/FogCloudOrb.metal"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit_FaeOrbKit.bundle/FogCloudOrb.metal"
+        }
+      ]
+    }
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.FaeOrbKit-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources",
+      "importPath" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/CompanionOrbView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbAnimationState.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/DerivedSources/resource_bundle_accessor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<FaeOrbKit-arm64-apple-macosx26.0-debug.module-resources>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "FaeOrbKit",
+      "moduleOutputPath" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/Modules/FaeOrbKit.swiftmodule",
+      "objects" : [
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/CompanionOrbView.swift.o",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbAnimationState.swift.o",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbTypes.swift.o",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/resource_bundle_accessor.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+        "-module-cache-path",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/include/FaeOrbKit-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "faeorbkit"
+      ],
+      "outputFileMapPath" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/CompanionOrbView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbAnimationState.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/OrbTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/Modules/FaeOrbKit.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/CompanionOrbView.swift",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbAnimationState.swift",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbTypes.swift",
+        "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/DerivedSources/resource_bundle_accessor.swift"
+      ],
+      "tempsPath" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "FaeOrbKit" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "FaeOrbKit",
+      "-package-name",
+      "faeorbkit",
+      "-c",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/CompanionOrbView.swift",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbAnimationState.swift",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbTypes.swift",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/DerivedSources/resource_bundle_accessor.swift",
+      "-I",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+      "-module-cache-path",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/include/FaeOrbKit-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "faeorbkit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "FaeOrbKit" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/CompanionOrbView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbAnimationState.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/Sources/FaeOrbKit/OrbTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/DerivedSources/resource_bundle_accessor.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/FaeOrbKit.build/sources"
+    },
+    "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}

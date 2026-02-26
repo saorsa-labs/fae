@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/master.swiftdeps"
+  },
+  "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/FaeRelayClient.swift": {
+    "dependencies": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/FaeRelayClient.d",
+    "object": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/FaeRelayClient.swift.o",
+    "swiftmodule": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/FaeRelayClient~partial.swiftmodule",
+    "swift-dependencies": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/FaeRelayClient.swiftdeps",
+    "diagnostics": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/FaeRelayClient.dia"
+  },
+  "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/Sources/FaeRelayKit/RelayProtocol.swift": {
+    "dependencies": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/RelayProtocol.d",
+    "object": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/RelayProtocol.swift.o",
+    "swiftmodule": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/RelayProtocol~partial.swiftmodule",
+    "swift-dependencies": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/RelayProtocol.swiftdeps",
+    "diagnostics": "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit/.build/arm64-apple-macosx/debug/FaeRelayKit.build/RelayProtocol.dia"
+  }
+}

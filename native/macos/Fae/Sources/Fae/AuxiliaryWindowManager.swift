@@ -110,6 +110,7 @@ final class AuxiliaryWindowManager: ObservableObject {
     func hideCanvas() {
         guard isCanvasVisible else {
             canvasPanel?.orderOut(nil)
+            canvasController?.clear()
             return
         }
         guard !isAnimating else { return }
@@ -319,7 +320,12 @@ final class AuxiliaryWindowManager: ObservableObject {
         guard let panel else { return }
         guard let orbWindow = windowState?.window else {
             panel.orderOut(nil)
-            if isCanvas { isCanvasVisible = false } else { isConversationVisible = false }
+            if isCanvas {
+                isCanvasVisible = false
+                canvasController?.clear()
+            } else {
+                isConversationVisible = false
+            }
             return
         }
 
@@ -361,6 +367,10 @@ final class AuxiliaryWindowManager: ObservableObject {
             Task { @MainActor [weak self] in
                 panel.orderOut(nil)
                 self?.isAnimating = false
+
+                // Clear canvas content after the panel has finished hiding so
+                // it is blank and ready for next use (not stale content).
+                if isCanvas { self?.canvasController?.clear() }
 
                 // Clean up saved orb position when all panels closed.
                 if self?.isConversationVisible != true, self?.isCanvasVisible != true {

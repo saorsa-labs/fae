@@ -1,5 +1,9 @@
 # CLAUDE.md — Fae Implementation Guide
 
+> **Current default workflow:** Swift-first macOS app development from `native/macos/Fae` using `swift build` and `swift test`.
+> 
+> **Legacy/archival note:** Rust `libfae` embedding, C-ABI, and host-IPC sections in this document are retained as historical context and for archived branches.
+
 Project-specific implementation notes for AI coding agents.
 
 ## Core objective
@@ -394,15 +398,28 @@ File picker flows call `bookmark_and_persist()` after user selection.
 
 ## Delivery quality requirements
 
-Always run:
+### Current default (Swift app)
+
+Always run from `native/macos/Fae`:
+
+```bash
+swift build
+swift test
+```
+
+Known blockers:
+- Dependency/submodule fetch requires working network access to GitHub.
+- First runtime readiness may require substantial model downloads.
+
+### Legacy / archival (Rust core)
+
+For legacy Rust-core paths or archival branches, use:
 
 ```bash
 cargo fmt --all
 cargo clippy --all-features -- -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
 cargo test
 ```
-
-**Important:** Use plain `cargo test`, NOT `cargo test --all-features`. The `--all-features` flag enables feature combinations that cause excessive memory usage (300GB+).
 
 When changing memory logic, add tests first (TDD), then implementation.
 

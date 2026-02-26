@@ -1,35 +1,30 @@
 # Fae (macOS SwiftUI)
 
-Native Swift app shell for Fae with an orb-first visual system and cross-device handoff controls.
+Swift-first native macOS app for Fae. This package is the primary app entrypoint and should be built/tested with SwiftPM.
 
 ## Current capabilities
 
-- Native SwiftUI window + WebKit orb renderer (`Resources/Orb/index.html`)
-- Orb modes: `idle`, `listening`, `thinking`, `speaking`
-- Orb palette overrides including `moss-stone` and `peat-earth`
-- Command parsing for device transfer intents:
-  - `move to my watch`
-  - `move to my phone`
-  - `go home`
-- Command parsing for orb control:
-  - `set moss stone`
-  - `set peat earth`
-  - `reset orb palette`
+- Native SwiftUI app with native orb/conversation/canvas windows
+- Voice pipeline integration, settings/onboarding, approvals, and handoff UI
 - Handoff payload publication via `NSUserActivity`
 - Native mic permission + discovery and output route picker surfaces
-- App icon set from the full-face asset (`Resources/App/AppIconFace.jpg`)
 
-## Run
+## Build & test
 
 From repository root:
 
 ```bash
 cd native/macos/Fae
-swift run
+swift build
+swift test
 ```
+
+## Known build blockers
+
+- First-time or clean builds may fail if SwiftPM cannot fetch remote dependencies/submodules (network/DNS required).
+- First run may require large model downloads before runtime is ready.
 
 ## Notes
 
-- This shell publishes handoff intents so iPhone/Watch counterparts can pick up the session.
-- Actual cross-device session continuation requires matching app targets on iPhone/Watch using the same activity type and payload contract.
-- Rust host IPC/C-ABI integration is the next layer; this app is the native UI foundation.
+- iPhone/Watch session continuation still requires matching companion targets using the same activity type/payload contract.
+- Legacy Rust embedding/IPC docs remain in root docs as archival context; SwiftPM app flow is the default for current development.

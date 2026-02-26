@@ -1,0 +1,55 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "faehandoffkit",
+          "kind" : "fileSystem",
+          "location" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeHandoffKit",
+          "name" : "FaeHandoffKit"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeHandoffKit"
+        },
+        "subpath" : "faehandoffkit"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "faeorbkit",
+          "kind" : "fileSystem",
+          "location" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit",
+          "name" : "FaeOrbKit"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeOrbKit"
+        },
+        "subpath" : "faeorbkit"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "faerelaykit",
+          "kind" : "fileSystem",
+          "location" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit",
+          "name" : "FaeRelayKit"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/davidirvine/Desktop/Devel/projects/fae/native/apple/FaeRelayKit"
+        },
+        "subpath" : "faerelaykit"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

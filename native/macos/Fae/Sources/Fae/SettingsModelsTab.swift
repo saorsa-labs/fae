@@ -130,7 +130,7 @@ struct SettingsModelsTab: View {
 
     @MainActor
     private func hydrateFromBackendConfig() async {
-        guard let sender = commandSender as? EmbeddedCoreSender else { return }
+        guard let sender = commandSender as? FaeCore else { return }
 
         async let voiceIdentityResponse = sender.queryCommand(
             name: "config.get",

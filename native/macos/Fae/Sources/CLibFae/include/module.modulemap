@@ -1,5 +1,0 @@
-module CLibFae {
-    header "fae.h"
-    link "fae"
-    export *
-}

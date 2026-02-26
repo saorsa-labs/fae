@@ -1,159 +1,71 @@
-# fae — Real-time speech-to-speech AI conversation system
-
-# espeak-rs-sys needs the macOS SDK sysroot for bindgen + cmake.
-# These are no-ops on Linux where the system headers are in the default search path.
-export CC := env("CC", "/usr/bin/cc")
-export BINDGEN_EXTRA_CLANG_ARGS := if os() == "macos" { "-isysroot " + `xcrun --show-sdk-path 2>/dev/null || echo ""` } else { "" }
-export CFLAGS := if os() == "macos" { "-isysroot " + `xcrun --show-sdk-path 2>/dev/null || echo ""` } else { "" }
+# fae — Real-time speech-to-speech AI conversation system (Pure Swift + MLX)
 
 # Show available recipes
 default:
     @just --list
 
-# Run the headless host bridge (IPC / Mode B)
-run:
-    cargo run --bin fae-host
+# ── Build & Test ───────────────────────────────────────────────────────────
 
-# Run the native macOS SwiftUI shell.
-run-native-swift:
-    cd native/macos/Fae && swift run
-
-# Build the native macOS SwiftUI shell.
-build-native-swift:
-    cd native/macos/Fae && swift build
-
-# Install the packaged native-device-handoff skill.
-install-native-handoff-skill:
-    cargo run --bin fae-skill-package -- install Skills/packages/native-device-handoff
-
-# Install the packaged native-orb-semantics skill.
-install-native-orb-skill:
-    cargo run --bin fae-skill-package -- install Skills/packages/native-orb-semantics
-
-# Slice an avatar sheet PNG into assets/avatar/*.png
-slice-avatar SHEET:
-    cargo run --features tools --bin fae-avatar-slicer -- {{SHEET}} assets/avatar
-
-
-# Format code
-fmt:
-    cargo fmt --all
-
-# Check formatting (CI mode)
-fmt-check:
-    cargo fmt --all -- --check
-
-# Lint with clippy (zero warnings)
-lint:
-    cargo clippy --all-targets -- -D warnings
-
-# Build debug
+# Build debug (xcodebuild — compiles Metal shaders)
 build:
-    cargo build
+    cd native/macos/Fae && xcodebuild build -scheme Fae -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode -quiet
 
 # Build release
 build-release:
-    cargo build --release
+    cd native/macos/Fae && xcodebuild build -scheme Fae -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode -quiet
 
-# Build with warnings as errors (uses clippy instead of RUSTFLAGS to avoid cache invalidation)
-build-strict:
-    cargo clippy --all-targets -- -D warnings
-
-# Run all tests (single integration binary — see tests/integration/main.rs)
+# Run all tests (swift test — Metal not needed for unit tests)
 test:
-    cargo test
-
-# Run tests with capped parallelism (CI-safe, ~14GB peak)
-test-ci:
-    CARGO_BUILD_JOBS=2 cargo test
-
-# Run a specific integration test module (e.g., just test-integration memory_integration)
-test-integration MOD:
-    cargo test --test integration {{MOD}}::
+    cd native/macos/Fae && swift test
 
 # Run tests with output visible
 test-verbose:
-    cargo test -- --nocapture
-
-# Run comprehensive tool-calling judgment eval suite
-tool-judgment-eval:
-    cargo test tool_judgment_ -- --nocapture
-
-# Scan for forbidden patterns (.unwrap, .expect, panic!, etc.)
-panic-scan:
-    @! grep -rn '\.unwrap()\|\.expect(\|panic!(\|todo!(\|unimplemented!(' src/ --include='*.rs' | grep -v '// SAFETY:' | grep -v '#\[cfg(test)\]' || true
-
-# Build documentation
-doc:
-    cargo doc --no-default-features --no-deps
+    cd native/macos/Fae && swift test --verbose
 
 # Clean build artifacts
 clean:
-    cargo clean
-
-# Clean native Swift build artifacts (prevents stale code/artifacts)
-clean-native:
     rm -rf native/macos/Fae/.build
 
-# Build libfae static library for macOS arm64 (for Swift embedding)
-build-staticlib:
-    cargo build --release --no-default-features --features metal --target aarch64-apple-darwin
+# Guard against Rust/cargo reintroduction in active CI/default dev paths
+guard-no-rust:
+    ./scripts/ci/guard-no-rust-reintro.sh
 
-# Build libfae static library for macOS x86_64 (Intel / CI)
-build-staticlib-x86:
-    cargo build --release --no-default-features --target x86_64-apple-darwin
+# Full validation (build + test)
+check: build test
+    @echo "✓ All checks passed"
 
-# Create a universal (fat) libfae.a for macOS (arm64 + x86_64)
-build-staticlib-universal: build-staticlib build-staticlib-x86
-    mkdir -p target/universal-apple-darwin/release
-    lipo -create \
-        target/aarch64-apple-darwin/release/libfae.a \
-        target/x86_64-apple-darwin/release/libfae.a \
-        -output target/universal-apple-darwin/release/libfae.a
-    @echo "Universal libfae.a: target/universal-apple-darwin/release/libfae.a"
+# ── Native App (macOS) ────────────────────────────────────────────────────
 
-# Check that libfae.a is large enough (subsystems not dead-stripped).
-# Threshold: 50 MB. A stripped binary is typically ~9 MB.
-check-binary-size target="aarch64-apple-darwin":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    LIB="target/{{target}}/release/libfae.a"
-    if [ ! -f "$LIB" ]; then
-        echo "ERROR: $LIB not found. Run 'just build-staticlib' first."
-        exit 1
-    fi
-    SIZE=$(stat -f%z "$LIB" 2>/dev/null || stat -c%s "$LIB")
-    MIN=$((50 * 1024 * 1024))
-    echo "libfae.a size: $((SIZE / 1024 / 1024)) MB ($SIZE bytes)"
-    if [ "$SIZE" -lt "$MIN" ]; then
-        echo "FAIL: libfae.a is only $((SIZE / 1024 / 1024)) MB — subsystems likely dead-stripped."
-        echo "Expected at least 50 MB. Check linker_anchor.rs."
-        exit 1
-    fi
-    echo "PASS: libfae.a is large enough (subsystems retained)."
-
-# Build libfae.a and verify subsystems are retained, then build Swift app.
-build-native-and-check: build-staticlib check-binary-size build-native-swift
-    @echo "Native build pipeline complete."
-
-# Full validation (CI equivalent)
-# Note: lint (clippy) already compiles + checks warnings, so build-strict is not needed here.
-# Keeping the pipeline to: format → lint → test → doc → panic-scan (single compilation cache).
-check: fmt-check lint test doc panic-scan
-
-# Quick check (format + lint + test only)
-quick-check: fmt-check lint test
-
-# ── macOS Code Signing & Bundle ──────────────────────────────────────────────
-
-# Directory paths
-_build_dir := "native/macos/Fae/.build/arm64-apple-macosx/debug"
-_app_bundle := _build_dir / "Fae.app"
+# xcodebuild output paths
+_xcode_products := "native/macos/Fae/.build/xcode/Build/Products/Debug"
+_app_bundle := _xcode_products / "Fae.app"
 _entitlements := "Entitlements-debug.plist"
 
+# Kill any running Fae process (prevents macOS from reactivating a stale process).
+_kill-fae:
+    #!/usr/bin/env bash
+    if pgrep -f "Fae.app/Contents/MacOS/Fae" > /dev/null 2>&1; then
+        echo "Killing existing Fae process…"
+        pkill -f "Fae.app/Contents/MacOS/Fae" 2>/dev/null || true
+        sleep 1
+    fi
+
+# Build, bundle, sign, and launch the native app.
+run-native: build _bundle-app _sign-bundle _kill-fae
+    open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+
+# Build the Swift app, create .app bundle, sign, and verify it (without launching).
+bundle-native: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
+    @echo "✓ Signed bundle ready: {{_app_bundle}}"
+
+# Full clean rebuild and launch.
+rebuild: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
+    open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+    @echo "✓ Fae launched — logs: tail -f /tmp/fae-test.log"
+
+# ── Code Signing ──────────────────────────────────────────────────────────
+
 # Set up the signing keychain (idempotent — safe to run multiple times).
-# Requires: MACOS_CERTIFICATE, MACOS_CERTIFICATE_PASSWORD, KEYCHAIN_PASSWORD
-# from env (sourced via ~/.zshrc → ~/.secrets).
 setup-signing-keychain:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -172,7 +84,6 @@ setup-signing-keychain:
         EXISTING=$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')
         security list-keychains -d user -s $EXISTING "$KC"
     fi
-    # Import certificate (idempotent — re-import is harmless)
     echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/_fae_cert.p12
     security import /tmp/_fae_cert.p12 -k "$KC" \
         -P "$MACOS_CERTIFICATE_PASSWORD" \
@@ -180,7 +91,6 @@ setup-signing-keychain:
     security set-key-partition-list -S apple-tool:,apple:,codesign: \
         -s -k "$KEYCHAIN_PASSWORD" "$KC" 2>/dev/null
     rm -f /tmp/_fae_cert.p12
-    # Fetch Apple intermediate CA if not present
     if ! security find-identity -v -p codesigning "$KC" 2>/dev/null | grep -q "valid"; then
         echo "Installing Apple Developer ID intermediate CA…"
         curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" -o /tmp/_devid_g2.cer
@@ -194,57 +104,42 @@ setup-signing-keychain:
     echo "✓ Signing identity ready:"
     security find-identity -v -p codesigning "$KC" | head -3
 
-# Kill any running Fae process (prevents macOS from reactivating a stale process).
-_kill-fae:
-    #!/usr/bin/env bash
-    if pgrep -f "Fae.app/Contents/MacOS/Fae" > /dev/null 2>&1; then
-        echo "Killing existing Fae process…"
-        pkill -f "Fae.app/Contents/MacOS/Fae" 2>/dev/null || true
-        sleep 1
-    fi
+# ── Internal Bundle Recipes ───────────────────────────────────────────────
 
-# Build, bundle, sign, and launch the native app.
-# Requires: MACOS_SIGNING_IDENTITY from env (sourced via ~/.zshrc → ~/.secrets).
-# Always kills any existing Fae process first — macOS `open` reactivates a running
-# process instead of launching the new binary, which silently ignores your fresh build.
-run-native: build-native-swift _bundle-app _sign-bundle _kill-fae
-    open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
-
-# Build the Swift app, create .app bundle, sign, and verify it (without launching).
-# Always cleans the Swift build first to prevent stale artifacts.
-# Kills any running Fae process — a running process locks the old binary and macOS
-# `open` will reactivate it instead of launching the newly built one.
-bundle-native: _kill-fae clean-native build-native-swift _bundle-app _sign-bundle _verify-bundle
-    @echo "✓ Signed bundle ready: {{_app_bundle}}"
-
-# (internal) Assemble the .app bundle from the SPM debug build.
+# (internal) Assemble the .app bundle from the xcodebuild output.
 _bundle-app:
     #!/usr/bin/env bash
     set -euo pipefail
-    BUILD="{{_build_dir}}"
+    BUILD="{{_xcode_products}}"
     BUNDLE="{{_app_bundle}}"
     rm -rf "$BUNDLE"
     mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Frameworks" "$BUNDLE/Contents/Resources"
+
+    # Copy executable
     cp "$BUILD/Fae" "$BUNDLE/Contents/MacOS/Fae"
+
+    # Copy Sparkle framework
     cp -R "$BUILD/Sparkle.framework" "$BUNDLE/Contents/Frameworks/"
-    # Copy SPM resource bundle (contains Metal shaders, icons, help HTML).
-    # Without this, the frosted-glass orb shader fails to load and the window is solid black.
-    RESOURCE_BUNDLE="$BUILD/Fae_Fae.bundle"
-    if [ -d "$RESOURCE_BUNDLE" ]; then
-        cp -R "$RESOURCE_BUNDLE" "$BUNDLE/Contents/Resources/"
-        echo "  → Copied resource bundle (metallib, icons, help)"
-    else
-        echo "WARNING: Resource bundle not found at $RESOURCE_BUNDLE"
-        echo "         Metal shaders will not load — window will be black."
-    fi
+
+    # Copy all SPM resource bundles (Fae_Fae, mlx-swift_Cmlx, etc.)
+    for bundle_dir in "$BUILD"/*.bundle; do
+        if [ -d "$bundle_dir" ]; then
+            BNAME=$(basename "$bundle_dir")
+            cp -R "$bundle_dir" "$BUNDLE/Contents/Resources/"
+            echo "  → Copied $BNAME"
+        fi
+    done
+
+    # Ensure rpath for Sparkle framework
     install_name_tool -add_rpath "@executable_path/../Frameworks" \
         "$BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
-    # Use the checked-in Info.plist (includes SUFeedURL + SUPublicEDKey for Sparkle).
-    # Substitute __VERSION__ with the current Cargo.toml version.
-    VERSION=$(grep '^version' "$(git rev-parse --show-toplevel)/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+    # Info.plist with version substitution
+    VERSION=$(cat "$(git rev-parse --show-toplevel)/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.8.0")
     sed "s/__VERSION__/${VERSION}/g" \
         "$(git rev-parse --show-toplevel)/native/macos/Fae/Info.plist" \
         > "$BUNDLE/Contents/Info.plist"
+
     echo "✓ Bundle assembled: $BUNDLE (v${VERSION})"
 
 # (internal) Sign the .app bundle with Developer ID.
@@ -255,9 +150,7 @@ _sign-bundle:
     KC="$HOME/Library/Keychains/fae-signing.keychain-db"
     BUNDLE="{{_app_bundle}}"
     ENT="{{_entitlements}}"
-    # Ensure keychain is unlocked
     security unlock-keychain -p "${KEYCHAIN_PASSWORD:-password}" "$KC" 2>/dev/null || true
-    # Sign deepest components first
     for xpc in "$BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices"/*.xpc; do
         [ -d "$xpc" ] && codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" "$xpc"
     done
@@ -272,51 +165,52 @@ _sign-bundle:
     codesign --verify --verbose "$BUNDLE" 2>&1 | tail -2
 
 # (internal) Verify the .app bundle has all required components.
-# Prevents regressions like missing Metal shaders causing black window.
 _verify-bundle:
     #!/usr/bin/env bash
     set -euo pipefail
     BUNDLE="{{_app_bundle}}"
     ERRORS=0
     echo "Verifying bundle integrity…"
-    # 1. Executable exists
     if [ ! -f "$BUNDLE/Contents/MacOS/Fae" ]; then
         echo "  ✗ FAIL: Missing executable"
         ERRORS=$((ERRORS+1))
     else
         echo "  ✓ Executable present"
     fi
-    # 2. Resource bundle with Metal shader
-    METALLIB="$BUNDLE/Contents/Resources/Fae_Fae.bundle/default.metallib"
+    # Check Fae's own Metal shader
+    METALLIB="$BUNDLE/Contents/Resources/Fae_Fae.bundle/Contents/Resources/default.metallib"
     if [ ! -f "$METALLIB" ]; then
-        echo "  ✗ FAIL: Missing Metal shader (default.metallib)"
-        echo "         Window will show solid black without this."
+        echo "  ✗ FAIL: Missing Fae Metal shader (default.metallib)"
         ERRORS=$((ERRORS+1))
     else
-        echo "  ✓ Metal shader present ($(du -h "$METALLIB" | cut -f1))"
+        echo "  ✓ Fae Metal shader present ($(du -h "$METALLIB" | cut -f1))"
     fi
-    # 3. App icon
-    ICON="$BUNDLE/Contents/Resources/Fae_Fae.bundle/AppIconFace.jpg"
+    # Check MLX Metal shader bundle
+    MLX_METALLIB="$BUNDLE/Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+    if [ ! -f "$MLX_METALLIB" ]; then
+        echo "  ✗ FAIL: Missing MLX Metal shader (mlx-swift_Cmlx.bundle)"
+        ERRORS=$((ERRORS+1))
+    else
+        echo "  ✓ MLX Metal shader present ($(du -h "$MLX_METALLIB" | cut -f1))"
+    fi
+    ICON="$BUNDLE/Contents/Resources/Fae_Fae.bundle/Contents/Resources/AppIconFace.jpg"
     if [ ! -f "$ICON" ]; then
         echo "  ⚠ WARNING: Missing app icon (AppIconFace.jpg)"
     else
         echo "  ✓ App icon present"
     fi
-    # 4. Sparkle framework
     if [ ! -d "$BUNDLE/Contents/Frameworks/Sparkle.framework" ]; then
         echo "  ✗ FAIL: Missing Sparkle.framework"
         ERRORS=$((ERRORS+1))
     else
         echo "  ✓ Sparkle framework present"
     fi
-    # 5. Info.plist
     if [ ! -f "$BUNDLE/Contents/Info.plist" ]; then
         echo "  ✗ FAIL: Missing Info.plist"
         ERRORS=$((ERRORS+1))
     else
         echo "  ✓ Info.plist present"
     fi
-    # 6. Code signature valid
     if ! codesign --verify "$BUNDLE" 2>/dev/null; then
         echo "  ✗ FAIL: Code signature invalid"
         ERRORS=$((ERRORS+1))

@@ -83,12 +83,12 @@ struct FaeApp: App {
     /// Help window controller for displaying HTML help pages.
     private let helpWindow = HelpWindowController()
 
-    /// Retained reference to the embedded Rust core sender.
-    private let commandSender: EmbeddedCoreSender?
+    /// Pure-Swift core replacing the embedded Rust runtime.
+    @StateObject private var faeCore = FaeCore()
 
     /// Routes generic `.faeBackendEvent` notifications to typed notifications
-    /// (e.g. `.faeCapabilityRequested`) so controllers receive events from the
-    /// embedded C-ABI path, not just the defunct subprocess path.
+    /// (e.g. `.faeCapabilityRequested`) so controllers receive events from
+    /// `FaeEventBus`, preserving the existing notification-based UI wiring.
     private static let backendEventRouter = BackendEventRouter()
 
     init() {
@@ -107,16 +107,6 @@ struct FaeApp: App {
         // Render an initial orb icon immediately so the dock never shows
         // the generic app icon. DockIconAnimator takes over in .onAppear.
         NSApplication.shared.applicationIconImage = Self.renderStaticOrb()
-
-        // Initialize and start the embedded Rust core.
-        let sender = EmbeddedCoreSender(configJSON: "{}")
-        do {
-            try sender.start()
-            commandSender = sender
-        } catch {
-            NSLog("Fae: failed to start embedded core: %@", error.localizedDescription)
-            commandSender = nil
-        }
     }
 
     var body: some Scene {
@@ -212,18 +202,12 @@ struct FaeApp: App {
                     // Start the Multipeer Connectivity relay so companion
                     // devices can discover this Mac on the local network.
                     relayServer.bindOrbState(orbState)
-                    relayServer.commandSender = commandSender
-                    relayServer.audioSender = commandSender
+                    relayServer.commandSender = faeCore
+                    relayServer.audioSender = faeCore
                     relayServer.start()
 
-                    if let sender = commandSender {
-                        hostBridge.sender = sender
-                        restoreOnboardingState(sender: sender)
-                    } else {
-                        // No backend — unblock the UI immediately so the user
-                        // isn't stuck on a permanent black screen.
-                        onboarding.isStateRestored = true
-                    }
+                    hostBridge.sender = faeCore
+                    restoreOnboardingState()
                 }
                 .onChange(of: onboarding.isStateRestored) {
                     guard onboarding.isStateRestored else { return }
@@ -249,7 +233,7 @@ struct FaeApp: App {
         .defaultSize(width: 340, height: 500)
 
         Settings {
-            SettingsView(commandSender: commandSender, sparkleUpdater: sparkleUpdater)
+            SettingsView(commandSender: faeCore, sparkleUpdater: sparkleUpdater)
                 .environmentObject(orbState)
                 .environmentObject(handoff)
                 .environmentObject(auxiliaryWindows)
@@ -409,12 +393,11 @@ struct FaeApp: App {
         NSApp.activate()
     }
 
-    /// Sends `runtime.start` to the Rust backend so the voice pipeline begins
-    /// downloading models and initialising. Called after onboarding is confirmed
+    /// Starts the FaeCore voice pipeline. Called after onboarding is confirmed
     /// complete (either restored from config or just finished).
     private func startPipelineIfReady() {
-        guard onboarding.isComplete, let sender = commandSender else { return }
-        sender.sendCommand(name: "runtime.start", payload: [:])
+        guard onboarding.isComplete else { return }
+        try? faeCore.start()
         orbState.mode = .thinking // visual feedback during model loading
     }
 
@@ -474,18 +457,18 @@ struct FaeApp: App {
         }
     }
 
-    /// Query the Rust backend for persisted onboarding state so users who
-    /// already completed onboarding don't see it again after restart.
+    /// Query FaeCore for persisted onboarding state so users who already
+    /// completed onboarding don't see it again after restart.
     ///
     /// A 5-second timeout prevents the UI from hanging on a black screen
-    /// indefinitely if the backend is unresponsive.
-    private func restoreOnboardingState(sender: EmbeddedCoreSender) {
+    /// indefinitely if the core is unresponsive.
+    private func restoreOnboardingState() {
         Task {
             defer { onboarding.isStateRestored = true }
 
             let response: [String: Any]? = await withTaskGroup(of: [String: Any]?.self) { group in
-                group.addTask {
-                    await sender.queryCommand(name: "onboarding.get_state", payload: [:])
+                group.addTask { [faeCore] in
+                    await faeCore.queryCommand(name: "onboarding.get_state", payload: [:])
                 }
                 group.addTask {
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
