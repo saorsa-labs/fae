@@ -37,11 +37,14 @@ jobs:
   test:
     name: Tests
     needs: preflight
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Select Xcode 26.2
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
 
       - name: Run tests
         run: swift test --package-path native/macos/Fae
@@ -50,11 +53,14 @@ jobs:
   build-macos:
     name: Build macOS (arm64)
     needs: test
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Select Xcode 26.2
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
 
       - name: Build Swift app (xcodebuild release — compiles Metal shaders)
         run: |
