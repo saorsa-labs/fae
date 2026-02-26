@@ -301,7 +301,8 @@ jobs:
             "$APP_BUNDLE"
 
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
-          spctl -a -vvv --type execute "$APP_BUNDLE"
+          # Note: spctl check skipped here — the app bundle is not yet notarized.
+          # The DMG (which contains this bundle) gets notarized and stapled below.
 
       - name: Build macOS installer (.dmg)
         run: |
