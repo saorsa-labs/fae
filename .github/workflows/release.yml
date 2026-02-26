@@ -79,8 +79,15 @@ jobs:
             exit 1
           fi
           SWIFT_BIN_ABS="$(cd "$(dirname "$SWIFT_BIN")" && pwd)/$(basename "$SWIFT_BIN")"
+          PRODUCTS_ABS="$(cd "$(dirname "$SWIFT_BIN")" && pwd)"
           echo "SWIFT_APP_BINARY=$SWIFT_BIN_ABS" >> "$GITHUB_ENV"
-          echo "XCODE_PRODUCTS=$SWIFT_BIN_ABS/../" >> "$GITHUB_ENV"
+          echo "XCODE_PRODUCTS=$PRODUCTS_ABS" >> "$GITHUB_ENV"
+
+          # Debug: show what's in the products directory
+          echo "Products directory contents:"
+          ls -la "$PRODUCTS_ABS/" || true
+          echo "Searching for Sparkle.framework:"
+          find .build/xcode -name "Sparkle.framework" -type d 2>/dev/null | head -5 || true
           popd
 
       - name: Import signing certificate
@@ -177,19 +184,50 @@ jobs:
           chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
 
           # Copy all SPM resource bundles (Fae_Fae, mlx-swift_Cmlx, etc.)
-          for bundle_dir in "$XCODE_PRODUCTS"/*.bundle; do
-            if [ -d "$bundle_dir" ]; then
-              cp -R "$bundle_dir" "$APP_BUNDLE/Contents/Resources/"
-              echo "Copied $(basename "$bundle_dir")"
-            fi
+          # Search both top-level and subdirectories for bundles
+          BUNDLE_COUNT=0
+          for search_dir in "$XCODE_PRODUCTS" "$XCODE_PRODUCTS/PackageFrameworks"; do
+            for bundle_dir in "$search_dir"/*.bundle; do
+              if [ -d "$bundle_dir" ]; then
+                BNAME=$(basename "$bundle_dir")
+                # Skip if already copied
+                if [ ! -d "$APP_BUNDLE/Contents/Resources/$BNAME" ]; then
+                  cp -R "$bundle_dir" "$APP_BUNDLE/Contents/Resources/"
+                  echo "Copied $BNAME"
+                  BUNDLE_COUNT=$((BUNDLE_COUNT+1))
+                fi
+              fi
+            done
           done
+          # If no bundles found at expected paths, search derived data
+          if [ "$BUNDLE_COUNT" -eq 0 ]; then
+            echo "No bundles at expected paths, searching derived data..."
+            find "$(dirname "$XCODE_PRODUCTS")" -name "*.bundle" -maxdepth 3 -type d | while read bundle_dir; do
+              BNAME=$(basename "$bundle_dir")
+              if [ ! -d "$APP_BUNDLE/Contents/Resources/$BNAME" ]; then
+                cp -R "$bundle_dir" "$APP_BUNDLE/Contents/Resources/"
+                echo "Copied $BNAME (from search)"
+              fi
+            done
+          fi
 
           # Embed Sparkle.framework — required at runtime, not statically linked.
           SPARKLE_FW="$XCODE_PRODUCTS/Sparkle.framework"
           if [ ! -d "$SPARKLE_FW" ]; then
-            echo "::error::Sparkle.framework not found at $SPARKLE_FW"
+            # Xcode 26+ may place frameworks in PackageFrameworks/
+            SPARKLE_FW="$XCODE_PRODUCTS/PackageFrameworks/Sparkle.framework"
+          fi
+          if [ ! -d "$SPARKLE_FW" ]; then
+            # Search the entire derived data tree as a last resort
+            SPARKLE_FW="$(find "$(dirname "$XCODE_PRODUCTS")" -name "Sparkle.framework" -type d | head -1)"
+          fi
+          if [ ! -d "$SPARKLE_FW" ]; then
+            echo "::error::Sparkle.framework not found anywhere in build products"
+            echo "Searched: $XCODE_PRODUCTS and derived data"
+            find "$(dirname "$XCODE_PRODUCTS")" -name "*.framework" -type d | head -20
             exit 1
           fi
+          echo "Found Sparkle.framework at: $SPARKLE_FW"
           cp -R "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
 
           # Ensure the binary finds Sparkle at @executable_path/../Frameworks.
