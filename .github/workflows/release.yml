@@ -257,8 +257,21 @@ jobs:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
           # Sign inside-out: deepest nested bundles first, then binary, then top-level .app.
+          # Apple notarization requires EVERY Mach-O in the bundle to be signed with
+          # Developer ID + hardened runtime + secure timestamp.
 
-          # 1. Sign Sparkle XPC services (deepest level).
+          echo "=== Signing all Mach-O binaries inside Sparkle.framework ==="
+          find "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework" -type f | while read f; do
+            if file "$f" | grep -q "Mach-O"; then
+              echo "  Signing: $f"
+              codesign --force --options runtime \
+                --sign "$MACOS_SIGNING_IDENTITY" \
+                --timestamp \
+                "$f"
+            fi
+          done
+
+          echo "=== Signing Sparkle XPC services ==="
           for xpc in "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices"/*.xpc; do
             [ -d "$xpc" ] && codesign --force --options runtime \
               --sign "$MACOS_SIGNING_IDENTITY" \
@@ -266,40 +279,62 @@ jobs:
               "$xpc"
           done
 
-          # 2. Sign Sparkle Updater.app (nested app bundle).
+          echo "=== Signing Sparkle Updater.app ==="
           SPARKLE_UPDATER="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
           [ -d "$SPARKLE_UPDATER" ] && codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --timestamp \
             "$SPARKLE_UPDATER"
 
-          # 3. Sign Sparkle.framework itself.
+          echo "=== Signing Sparkle.framework ==="
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --timestamp \
             "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 
-          # 4. Sign the main executable inside the bundle.
+          echo "=== Signing SPM resource bundles ==="
+          for bundle in "$APP_BUNDLE/Contents/Resources"/*.bundle; do
+            if [ -d "$bundle" ]; then
+              # Sign any Mach-O files inside the resource bundle first
+              find "$bundle" -type f | while read f; do
+                if file "$f" | grep -q "Mach-O"; then
+                  echo "  Signing: $f"
+                  codesign --force --options runtime \
+                    --sign "$MACOS_SIGNING_IDENTITY" \
+                    --timestamp \
+                    "$f"
+                fi
+              done
+              echo "  Signing bundle: $bundle"
+              codesign --force --options runtime \
+                --sign "$MACOS_SIGNING_IDENTITY" \
+                --timestamp \
+                "$bundle"
+            fi
+          done
+
+          echo "=== Signing main executable ==="
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
             "$APP_BUNDLE/Contents/MacOS/Fae"
 
-          # 5. Sign the standalone update binary (not in a bundle).
+          echo "=== Signing standalone update binary ==="
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
             "$UPDATE_ASSET"
 
-          # 6. Sign the top-level .app bundle (seals everything).
+          echo "=== Signing top-level .app bundle ==="
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
             --entitlements Entitlements.plist \
             --timestamp \
             "$APP_BUNDLE"
 
+          echo "=== Verifying signature ==="
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
           # Note: spctl check skipped here — the app bundle is not yet notarized.
           # The DMG (which contains this bundle) gets notarized and stapled below.
@@ -331,12 +366,43 @@ jobs:
           MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
           MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
         run: |
-          xcrun notarytool submit "$INSTALLER_DMG" \
+          # Submit and capture output to extract submission ID for log retrieval
+          set +e
+          SUBMIT_OUTPUT=$(xcrun notarytool submit "$INSTALLER_DMG" \
             --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
             --password "$MACOS_NOTARIZATION_PASSWORD" \
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
-            --wait
-          xcrun stapler staple "$INSTALLER_DMG"
+            --wait 2>&1)
+          SUBMIT_EXIT=$?
+          set -e
+
+          echo "$SUBMIT_OUTPUT"
+
+          # Extract submission ID (first 'id:' line)
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep -m1 'id:' | awk '{print $2}')
+          echo "Submission ID: $SUBMISSION_ID"
+
+          # Check result
+          if echo "$SUBMIT_OUTPUT" | grep -q "status: Accepted"; then
+            echo "Notarization accepted!"
+            xcrun stapler staple "$INSTALLER_DMG"
+          else
+            echo "::error::Notarization failed (status: Invalid or error)"
+
+            # Fetch detailed log from Apple showing exactly what's wrong
+            if [ -n "$SUBMISSION_ID" ]; then
+              echo "=== Apple Notarization Log ==="
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+                --password "$MACOS_NOTARIZATION_PASSWORD" \
+                --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
+                developer_log.json 2>&1 || true
+              cat developer_log.json 2>/dev/null || true
+              echo "=== End Notarization Log ==="
+            fi
+
+            exit 1
+          fi
 
       - name: Generate Sparkle EdDSA signature for DMG
         env:
