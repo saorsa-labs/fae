@@ -18,14 +18,14 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Guard: no Rust reintroduction in active CI/default recipes
+      - name: "Guard: no Rust reintroduction in active CI/default recipes"
         run: ./scripts/ci/guard-no-rust-reintro.sh
 
       - name: Resolve SPM dependencies
         run: xcodebuild -resolvePackageDependencies -scheme Fae -clonedSourcePackagesDirPath .build/spm-cache
         working-directory: native/macos/Fae
 
-      - name: Build (xcodebuild — compiles Metal shaders)
+      - name: "Build (xcodebuild — compiles Metal shaders)"
         run: >
           xcodebuild build
           -scheme Fae
