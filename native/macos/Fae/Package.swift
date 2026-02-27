@@ -56,6 +56,7 @@ let package = Package(
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("CoreAudio"),
+                .linkedFramework("CoreML"),
             ]
         ),
 
@@ -68,6 +69,16 @@ let package = Package(
                 .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
             ],
             path: "Tests/HandoffTests"
+        ),
+
+        // Search module tests — URL normalization, content extraction, engines, orchestrator.
+        // Includes live integration tests that fetch from real search engines.
+        .testTarget(
+            name: "SearchTests",
+            dependencies: [
+                "Fae",
+            ],
+            path: "Tests/SearchTests"
         ),
     ]
 )

@@ -11,26 +11,29 @@ struct EchoSuppressor {
 
     // MARK: - Configuration
 
-    /// Whether AEC (Acoustic Echo Cancellation) is enabled.
-    var aecEnabled: Bool = true
+    /// Whether hardware AEC (Acoustic Echo Cancellation) is active.
+    /// macOS AVAudioEngine does not expose hardware AEC, so this defaults
+    /// to false. With no AEC, longer suppression windows are needed to
+    /// prevent Fae from hearing her own voice through the speakers.
+    var aecEnabled: Bool = false
 
     // MARK: - Timing Constants
 
     /// Echo tail after assistant stops speaking.
-    var echoTailMs: Int { aecEnabled ? 1500 : 3000 }
+    var echoTailMs: Int { aecEnabled ? 1500 : 3500 }
     /// Short-utterance guard window after assistant stops.
-    var shortUtteranceGuardMs: Int { aecEnabled ? 3000 : 5000 }
+    var shortUtteranceGuardMs: Int { aecEnabled ? 3000 : 6000 }
     /// Echo tail for scheduling listening tone after approval.
-    var echoTailForToneMs: Int { aecEnabled ? 1500 : 3000 }
+    var echoTailForToneMs: Int { aecEnabled ? 1500 : 3500 }
 
     // MARK: - Amplitude Constants
 
     /// Minimum segment duration after playback (seconds).
-    static let minPostPlaybackSegmentSecs: Float = 0.4
+    static let minPostPlaybackSegmentSecs: Float = 0.5
     /// Maximum segment duration before force-drop (seconds).
     static let maxSegmentSecs: Float = 15.0
     /// RMS ceiling — segments louder than this are likely speaker bleed.
-    static let echoRmsCeiling: Float = 0.15
+    static let echoRmsCeiling: Float = 0.12
     /// Minimum segment for approval responses (seconds).
     static let minApprovalSegmentSecs: Float = 0.15
 

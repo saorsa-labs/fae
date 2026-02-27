@@ -13,16 +13,34 @@ final class FaeCore: ObservableObject, HostCommandSender {
     let eventBus = FaeEventBus()
 
     @Published var pipelineState: FaePipelineState = .stopped
-    @Published var isOnboarded: Bool = false
-    @Published var userName: String? = nil
+    @Published var isOnboarded: Bool
+    @Published var isLicenseAccepted: Bool
+    @Published var userName: String?
     @Published var toolMode: String = "full"
 
     // MARK: - Subsystems
 
-    private var config = FaeConfig.load()
+    private var config: FaeConfig
+
+    init() {
+        let loaded = FaeConfig.load()
+        self.config = loaded
+        self.isOnboarded = loaded.onboarded
+        self.isLicenseAccepted = loaded.licenseAccepted
+        self.userName = loaded.userName
+
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        let faeDir = appSupport.appendingPathComponent("fae")
+        self.speakerProfileStore = SpeakerProfileStore(
+            storePath: faeDir.appendingPathComponent("speakers.json")
+        )
+    }
     private let sttEngine = MLXSTTEngine()
     private let llmEngine = MLXLLMEngine()
     private let ttsEngine = MLXTTSEngine()
+    private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
     private let playbackManager = AudioPlaybackManager()
     private let conversationState = ConversationStateTracker()
@@ -30,6 +48,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private lazy var approvalManager = ApprovalManager(eventBus: eventBus)
     private var pipelineCoordinator: PipelineCoordinator?
     private var memoryOrchestrator: MemoryOrchestrator?
+    private let speakerProfileStore: SpeakerProfileStore
     private var scheduler: FaeScheduler?
 
     /// Pending query continuations keyed by command name.
@@ -38,6 +57,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     // MARK: - Lifecycle
 
     func start() throws {
+        guard pipelineState == .stopped || pipelineState == .error else {
+            NSLog("FaeCore: start() ignored — already %@", String(describing: pipelineState))
+            return
+        }
         eventBus.send(.runtimeState(.starting))
         pipelineState = .starting
 
@@ -48,6 +71,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     stt: sttEngine,
                     llm: llmEngine,
                     tts: ttsEngine,
+                    speaker: speakerEncoder,
+                    speakerProfileStore: speakerProfileStore,
                     config: config
                 )
 
@@ -59,6 +84,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
                 self.memoryOrchestrator = orchestrator
 
+                let registry = ToolRegistry.buildDefault()
                 let coordinator = PipelineCoordinator(
                     eventBus: eventBus,
                     capture: captureManager,
@@ -69,17 +95,23 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     config: config,
                     conversationState: conversationState,
                     memoryOrchestrator: orchestrator,
-                    approvalManager: approvalManager
+                    approvalManager: approvalManager,
+                    registry: registry,
+                    speakerEncoder: speakerEncoder,
+                    speakerProfileStore: speakerProfileStore
                 )
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
 
-                // Start scheduler.
+                // Start scheduler with speak handler wired to pipeline.
                 let sched = FaeScheduler(
                     eventBus: eventBus,
                     memoryOrchestrator: orchestrator,
                     memoryStore: memoryStore
                 )
+                await sched.setSpeakHandler { [weak coordinator] text in
+                    await coordinator?.speakDirect(text)
+                }
                 await sched.start()
                 self.scheduler = sched
 
@@ -277,6 +309,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
         default:
             NSLog("FaeCore: config.patch unhandled key '%@'", key)
         }
+    }
+
+    func acceptLicense() {
+        isLicenseAccepted = true
+        config.licenseAccepted = true
+        persistConfig(reason: "license.accept")
+        NSLog("FaeCore: AGPL-3.0 license accepted")
     }
 
     func completeOnboarding() {

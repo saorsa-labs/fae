@@ -126,13 +126,13 @@ struct SettingsAboutTab: View {
             }
 
             Section("Links") {
-                if let websiteURL = URL(string: "https://saorsalabs.com") {
+                if let websiteURL = URL(string: "https://the-fae.com") {
                     Link("Fae Website", destination: websiteURL)
                 }
                 if let issuesURL = URL(string: "https://github.com/saorsa-labs/fae/issues") {
                     Link("Report an Issue", destination: issuesURL)
                 }
-                if let privacyURL = URL(string: "https://saorsalabs.com/privacy") {
+                if let privacyURL = URL(string: "https://the-fae.com/privacy") {
                     Link("Privacy Policy", destination: privacyURL)
                 }
             }

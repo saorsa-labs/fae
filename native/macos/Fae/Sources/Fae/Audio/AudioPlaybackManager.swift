@@ -96,8 +96,16 @@ actor AudioPlaybackManager {
     }
 
     /// Signal that no more audio will be enqueued for the current utterance.
+    ///
+    /// If no buffers are currently playing, fires `.finished` immediately.
+    /// Otherwise sets `pendingFinal` so the next buffer completion fires it.
     func markEnd() {
-        pendingFinal = true
+        if isPlaying {
+            pendingFinal = true
+        } else {
+            // No audio in the queue — fire finished immediately.
+            onEvent?(.finished)
+        }
     }
 
     /// Immediately stop playback and discard queued audio.

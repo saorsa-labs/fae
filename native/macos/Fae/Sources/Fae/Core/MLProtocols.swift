@@ -74,3 +74,16 @@ protocol EmbeddingEngine: Actor {
     var isLoaded: Bool { get }
     var loadState: MLEngineLoadState { get }
 }
+
+/// Speaker embedding engine protocol for voice identity / speaker verification.
+///
+/// Produces a fixed-dimension embedding vector from raw audio that can be compared
+/// via cosine similarity to identify or verify speakers.
+///
+/// Implementations: `CoreMLSpeakerEncoder` (ECAPA-TDNN via Core ML).
+protocol SpeakerEmbeddingEngine: Actor {
+    func load() async throws
+    func embed(audio: [Float], sampleRate: Int) async throws -> [Float]
+    var isLoaded: Bool { get }
+    var loadState: MLEngineLoadState { get }
+}

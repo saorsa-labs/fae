@@ -105,6 +105,11 @@ final class FaeEventBus: @unchecked Sendable {
             payload["success"] = success
             payload["output_text"] = output
 
+        case .modelLoaded(let engine, let modelId):
+            eventName = "pipeline.model_loaded"
+            payload["engine"] = engine
+            payload["model_id"] = modelId
+
         case .capabilityRequested(let capability, let reason):
             eventName = "capability.requested"
             payload["capability"] = capability

@@ -56,7 +56,7 @@ final class WindowStateController: ObservableObject {
 
     weak var window: NSWindow? {
         didSet {
-            guard let window else { return }
+            guard let window, window !== oldValue else { return }
 
             // Disable macOS state restoration — stale frames from previous
             // sessions cause windows to appear in wrong positions.

@@ -134,6 +134,12 @@ _bundle-app:
     install_name_tool -add_rpath "@executable_path/../Frameworks" \
         "$BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
 
+    # Remove absolute rpaths left by xcodebuild — cause SIGABRT on launch
+    # when the app bundle is not at the exact build path.
+    for rp in $(otool -l "$BUNDLE/Contents/MacOS/Fae" | grep "path " | awk '{print $2}' | grep -v "^@" | grep -v "^/usr/lib"); do
+        install_name_tool -delete_rpath "$rp" "$BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
+    done
+
     # Info.plist with version substitution
     VERSION=$(cat "$(git rev-parse --show-toplevel)/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.8.0")
     sed "s/__VERSION__/${VERSION}/g" \

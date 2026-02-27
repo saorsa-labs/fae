@@ -269,6 +269,23 @@ actor SQLiteMemoryStore {
         }
     }
 
+    /// Fetch the most recent active records, ordered by updated_at descending.
+    func recentRecords(limit: Int) throws -> [MemoryRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM memory_records
+                    WHERE status = 'active'
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                arguments: [limit]
+            )
+            return rows.map { Self.recordFromRow($0) }
+        }
+    }
+
     // MARK: - Retention
 
     func applyRetentionPolicy(retentionDays: UInt64) throws -> Int {

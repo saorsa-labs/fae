@@ -146,6 +146,54 @@ actor MemoryOrchestrator {
                 report.extractedCount += 1
             }
 
+            // 6. Parse interest statements.
+            if let interest = extractInterest(from: lower, fullText: userText) {
+                _ = try await store.insertRecord(
+                    kind: .interest,
+                    text: interest,
+                    confidence: MemoryConstants.profilePreferenceConfidence,
+                    sourceTurnId: turnId,
+                    tags: ["interest"]
+                )
+                report.extractedCount += 1
+            }
+
+            // 7. Parse commitment statements (deadlines, promises).
+            if let commitment = extractCommitment(from: lower, fullText: userText) {
+                _ = try await store.insertRecord(
+                    kind: .commitment,
+                    text: commitment,
+                    confidence: MemoryConstants.factConversationalConfidence,
+                    sourceTurnId: turnId,
+                    tags: ["commitment"]
+                )
+                report.extractedCount += 1
+            }
+
+            // 8. Parse event mentions (birthdays, anniversaries, dates).
+            if let event = extractEvent(from: lower, fullText: userText) {
+                _ = try await store.insertRecord(
+                    kind: .event,
+                    text: event,
+                    confidence: MemoryConstants.factConversationalConfidence,
+                    sourceTurnId: turnId,
+                    tags: ["event"]
+                )
+                report.extractedCount += 1
+            }
+
+            // 9. Parse person mentions (relationships, people).
+            if let person = extractPerson(from: lower, fullText: userText) {
+                _ = try await store.insertRecord(
+                    kind: .person,
+                    text: person,
+                    confidence: MemoryConstants.factConversationalConfidence,
+                    sourceTurnId: turnId,
+                    tags: ["person"]
+                )
+                report.extractedCount += 1
+            }
+
         } catch {
             NSLog("MemoryOrchestrator: capture error: %@", error.localizedDescription)
         }
@@ -306,6 +354,109 @@ actor MemoryOrchestrator {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !pref.isEmpty {
                     return "User says: \(pref)"
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Extract interest statements like "I'm interested in X", "I'm passionate about X".
+    private func extractInterest(from lower: String, fullText: String) -> String? {
+        let patterns = [
+            "i'm interested in ", "i am interested in ",
+            "i'm passionate about ", "i am passionate about ",
+            "i'm into ", "i am into ",
+            "i'm fascinated by ", "i am fascinated by ",
+            "i'm curious about ", "i am curious about ",
+            "my hobby is ", "my hobbies are ",
+        ]
+        for pattern in patterns {
+            if lower.contains(pattern),
+               let range = lower.range(of: pattern)
+            {
+                let after = fullText[range.upperBound...]
+                let interest = String(after.prefix(200))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !interest.isEmpty, interest.count > 2 {
+                    return "User is interested in: \(interest)"
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Extract commitment statements like "I need to X by Y", "deadline is".
+    private func extractCommitment(from lower: String, fullText: String) -> String? {
+        let patterns = [
+            "i need to ", "i have to ", "i must ",
+            "i should ", "i promised to ",
+            "deadline is ", "the deadline is ",
+            "due by ", "due on ", "due date is ",
+            "i committed to ", "i agreed to ",
+        ]
+        for pattern in patterns {
+            if lower.contains(pattern),
+               let range = lower.range(of: pattern)
+            {
+                let after = fullText[range.lowerBound...]
+                let commitment = String(after.prefix(300))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !commitment.isEmpty {
+                    return "User commitment: \(commitment)"
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Extract event mentions like "my birthday is", "anniversary on".
+    private func extractEvent(from lower: String, fullText: String) -> String? {
+        let patterns = [
+            "my birthday is ", "birthday is on ",
+            "anniversary is ", "anniversary on ",
+            "wedding is ", "wedding on ",
+            "graduation is ", "graduation on ",
+            "appointment on ", "appointment is ",
+            "meeting on ", "event on ",
+            "party on ", "dinner on ",
+            "trip on ", "flight on ", "vacation on ",
+        ]
+        for pattern in patterns {
+            if lower.contains(pattern),
+               let range = lower.range(of: pattern)
+            {
+                let after = fullText[range.lowerBound...]
+                let event = String(after.prefix(200))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !event.isEmpty {
+                    return "User event: \(event)"
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Extract person mentions like "my sister X", "my friend X works at".
+    private func extractPerson(from lower: String, fullText: String) -> String? {
+        let patterns = [
+            "my wife ", "my husband ", "my partner ",
+            "my sister ", "my brother ", "my mom ", "my mum ", "my dad ",
+            "my daughter ", "my son ", "my child ",
+            "my friend ", "my colleague ", "my coworker ", "my co-worker ",
+            "my boss ", "my manager ", "my teacher ",
+            "my girlfriend ", "my boyfriend ",
+            "my uncle ", "my aunt ", "my cousin ",
+            "my grandmother ", "my grandfather ", "my grandma ", "my grandpa ",
+        ]
+        for pattern in patterns {
+            if lower.contains(pattern),
+               let range = lower.range(of: pattern)
+            {
+                let after = fullText[range.lowerBound...]
+                let person = String(after.prefix(200))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !person.isEmpty {
+                    return "User knows: \(person)"
                 }
             }
         }

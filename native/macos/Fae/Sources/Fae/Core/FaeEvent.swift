@@ -38,6 +38,10 @@ enum FaeEvent: Sendable {
     case toolCall(id: String, name: String, inputJSON: String)
     case toolResult(id: String, name: String, success: Bool, output: String)
 
+    // MARK: Model
+
+    case modelLoaded(engine: String, modelId: String)
+
     // MARK: Capability
 
     case capabilityRequested(capability: String, reason: String)

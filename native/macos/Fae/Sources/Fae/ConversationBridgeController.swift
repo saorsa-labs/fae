@@ -136,6 +136,24 @@ final class ConversationBridgeController: ObservableObject {
                 }
             }
         )
+
+        // Model loaded — capture LLM model label for About tab
+        observations.append(
+            center.addObserver(
+                forName: .faeModelLoaded, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo,
+                      let engine = userInfo["engine"] as? String,
+                      engine == "llm",
+                      let modelId = userInfo["model_id"] as? String,
+                      !modelId.isEmpty
+                else { return }
+                Task { @MainActor [weak self] in
+                    let label = Self.friendlyModelLabel(from: modelId)
+                    self?.conversationController?.loadedModelLabel = label
+                }
+            }
+        )
     }
 
     // MARK: - Handlers
@@ -358,6 +376,21 @@ final class ConversationBridgeController: ObservableObject {
         let parts = basename.components(separatedBy: "-")
         if parts.count >= 3 {
             return "\(parts[0]) \(parts[1]) · \(parts[2])"
+        }
+        return basename
+    }
+
+    /// Friendly model label from an MLX model ID.
+    ///
+    /// Input:  `"mlx-community/Qwen3-4B-4bit"` → `"Qwen3 4B · 4bit"`
+    /// Input:  `"mlx-community/Qwen3-8B-4bit"` → `"Qwen3 8B · 4bit"`
+    /// Input:  `"some-model"` → `"some-model"`
+    static func friendlyModelLabel(from modelId: String) -> String {
+        // Take the last path component: "mlx-community/Qwen3-4B-4bit" → "Qwen3-4B-4bit"
+        let basename = modelId.split(separator: "/").last.map(String.init) ?? modelId
+        let parts = basename.components(separatedBy: "-")
+        if parts.count >= 3 {
+            return "\(parts[0]) \(parts[1]) · \(parts.dropFirst(2).joined(separator: "-"))"
         }
         return basename
     }

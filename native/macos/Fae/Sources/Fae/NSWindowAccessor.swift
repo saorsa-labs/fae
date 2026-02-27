@@ -26,12 +26,8 @@ struct NSWindowAccessor: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            NSLog("NSWindowAccessor: viewDidMoveToWindow — window=%@ didFire=%d",
-                  String(describing: self.window), didFire ? 1 : 0)
             guard !didFire, let window = self.window else { return }
             didFire = true
-            NSLog("NSWindowAccessor: firing callback with window frame=%@",
-                  NSStringFromRect(window.frame))
             onWindow?(window)
         }
     }

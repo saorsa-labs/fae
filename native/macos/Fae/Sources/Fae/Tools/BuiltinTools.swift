@@ -103,6 +103,14 @@ struct BashTool: Tool {
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-c", command]
 
+        // Ensure user-installed tools (uv, homebrew, etc.) are in PATH.
+        // macOS GUI apps inherit a minimal PATH that excludes ~/.local/bin.
+        var env = ProcessInfo.processInfo.environment
+        let home = NSHomeDirectory()
+        let existing = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:\(existing)"
+        process.environment = env
+
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
@@ -132,47 +140,164 @@ struct BashTool: Tool {
     }
 }
 
-// MARK: - Web Search Tool
+// MARK: - Self Config Tool
 
-struct WebSearchTool: Tool {
-    let name = "web_search"
-    let description = "Search the web for information."
-    let parametersSchema = #"{"query": "string (required)"}"#
+struct SelfConfigTool: Tool {
+    let name = "self_config"
+    let description = """
+        Modify Fae's own behavior, personality style, or preferences. \
+        Use this when the user asks you to change how you communicate \
+        (e.g., "be more cheerful", "less chatty", "speak more formally"). \
+        Actions: get_instructions, set_instructions, append_instructions, clear_instructions.
+        """
+    let parametersSchema = #"""
+        {"action": "string (required: get_instructions|set_instructions|append_instructions|clear_instructions)", "value": "string (required for set/append)"}
+        """#
     let requiresApproval = false
 
+    private static var filePath: URL {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        return appSupport.appendingPathComponent("fae/custom_instructions.txt")
+    }
+
     func execute(input: [String: Any]) async throws -> ToolResult {
-        guard let query = input["query"] as? String else {
+        guard let action = input["action"] as? String else {
+            return .error("Missing required parameter: action")
+        }
+
+        switch action {
+        case "get_instructions":
+            let current = Self.readInstructions()
+            if current.isEmpty {
+                return .success("No custom instructions set. Using default personality.")
+            }
+            return .success(current)
+
+        case "set_instructions":
+            guard let value = input["value"] as? String else {
+                return .error("Missing required parameter: value")
+            }
+            Self.writeInstructions(value)
+            return .success("Custom instructions updated. Changes take effect on next response.")
+
+        case "append_instructions":
+            guard let value = input["value"] as? String else {
+                return .error("Missing required parameter: value")
+            }
+            let current = Self.readInstructions()
+            let updated = current.isEmpty ? value : current + "\n" + value
+            Self.writeInstructions(updated)
+            return .success("Appended to custom instructions. Changes take effect on next response.")
+
+        case "clear_instructions":
+            Self.writeInstructions("")
+            return .success("Custom instructions cleared. Reverting to default personality.")
+
+        default:
+            return .error("Unknown action: \(action). Use: get_instructions, set_instructions, append_instructions, clear_instructions")
+        }
+    }
+
+    static func readInstructions() -> String {
+        guard let data = try? Data(contentsOf: filePath),
+              let text = String(data: data, encoding: .utf8)
+        else { return "" }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func writeInstructions(_ text: String) {
+        let dir = filePath.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? text.write(to: filePath, atomically: true, encoding: .utf8)
+    }
+}
+
+// MARK: - Web Search Tool
+
+/// Searches the web using DuckDuckGo's HTML endpoint.
+///
+/// Ported from `fae-search/src/engines/duckduckgo.rs` — uses the no-JS
+/// HTML-only endpoint (`https://html.duckduckgo.com/html/`), parses
+/// `.result__a` titles and `.result__snippet` snippets, and unwraps
+/// DDG redirect URLs.
+struct WebSearchTool: Tool {
+    let name = "web_search"
+    let description = "Search the web using multiple engines (DuckDuckGo, Brave, Google, Bing). Results are deduplicated and ranked across engines for quality."
+    let parametersSchema = #"{"query": "string (required)", "max_results": "integer (optional, default 10)"}"#
+    let requiresApproval = false
+
+    private static let maxOutputChars = 100_000
+    private static let orchestrator = SearchOrchestrator()
+
+    func execute(input: [String: Any]) async throws -> ToolResult {
+        guard let query = input["query"] as? String, !query.trimmingCharacters(in: .whitespaces).isEmpty else {
             return .error("Missing required parameter: query")
         }
-        // Stub — real implementation would use a search API
-        return .success("Web search for '\(query)' — no search provider configured yet.")
+
+        let maxResults = (input["max_results"] as? Int) ?? 10
+        var config = SearchConfig.default
+        config.maxResults = maxResults
+
+        do {
+            let results = try await Self.orchestrator.search(query: query, config: config)
+            if results.isEmpty {
+                return .success("No results found for \"\(query)\".")
+            }
+
+            var output = "## Search Results for \"\(query)\"\n\n"
+            for (i, result) in results.enumerated() {
+                output += "\(i + 1). **\(result.title)**\n   URL: \(result.url)\n   \(result.snippet)\n\n"
+            }
+
+            if output.count > Self.maxOutputChars {
+                return .success(String(output.prefix(Self.maxOutputChars)) + "\n[truncated]")
+            }
+            return .success(output)
+        } catch {
+            return .error("Web search failed: \(error.localizedDescription)")
+        }
     }
 }
 
 // MARK: - Fetch URL Tool
 
+/// Fetches a web page and extracts readable text content.
+///
+/// Uses ContentExtractor to strip boilerplate (scripts, styles, nav, footer,
+/// header, aside), extract main content, and return clean text with word count.
 struct FetchURLTool: Tool {
     let name = "fetch_url"
-    let description = "Fetch the content of a URL."
-    let parametersSchema = #"{"url": "string (required)"}"#
+    let description = "Fetch a web page and extract its readable text content."
+    let parametersSchema = #"{"url": "string (required, must start with http:// or https://)"}"#
     let requiresApproval = false
+
+    private static let orchestrator = SearchOrchestrator()
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let urlString = input["url"] as? String,
-              let url = URL(string: urlString)
+              !urlString.trimmingCharacters(in: .whitespaces).isEmpty
         else {
-            return .error("Missing or invalid parameter: url")
+            return .error("Missing required parameter: url")
+        }
+
+        guard urlString.hasPrefix("http://") || urlString.hasPrefix("https://") else {
+            return .error("URL must start with http:// or https://")
         }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            let httpResponse = response as? HTTPURLResponse
-            let status = httpResponse?.statusCode ?? 0
-            let body = String(data: data, encoding: .utf8) ?? "[binary data, \(data.count) bytes]"
-            let truncated = body.count > 20_000
-                ? String(body.prefix(20_000)) + "\n[truncated]"
-                : body
-            return .success("HTTP \(status)\n\(truncated)")
+            let page = try await Self.orchestrator.fetchPageContent(urlString: urlString)
+
+            if page.text.isEmpty {
+                return .success("No extractable text content at \(urlString)")
+            }
+
+            var output = "## Page Content: \(page.title)\n\nURL: \(page.url)\nWords: \(page.wordCount)\n\n\(page.text)"
+            if output.count > ContentExtractor.maxChars {
+                output = String(output.prefix(ContentExtractor.maxChars)) + "\n\n[Content truncated]"
+            }
+            return .success(output)
         } catch {
             return .error("Fetch failed: \(error.localizedDescription)")
         }

@@ -170,6 +170,16 @@ final class BackendEventRouter: Sendable {
                 userInfo: ["rms": rms]
             )
 
+        // MARK: - Model Loaded
+
+        case "pipeline.model_loaded":
+            var userInfo: [String: Any] = [:]
+            if let engine = payload["engine"] as? String { userInfo["engine"] = engine }
+            if let modelId = payload["model_id"] as? String { userInfo["model_id"] = modelId }
+            NotificationCenter.default.post(
+                name: .faeModelLoaded, object: nil, userInfo: userInfo
+            )
+
         // MARK: - Memory Activity
 
         case "pipeline.memory_recall",
@@ -418,4 +428,13 @@ extension Notification.Name {
     /// - `approved: Bool` — whether the tool was approved
     /// - `source: String` — `"voice"`, `"button"`, or `"timeout"`
     static let faeApprovalResolved = Notification.Name("faeApprovalResolved")
+
+    // MARK: Model Loaded
+
+    /// Posted when an ML engine successfully loads a model.
+    ///
+    /// userInfo keys:
+    /// - `engine: String` — engine name (`"llm"`, `"stt"`, `"tts"`)
+    /// - `model_id: String` — the loaded model identifier
+    static let faeModelLoaded = Notification.Name("faeModelLoaded")
 }

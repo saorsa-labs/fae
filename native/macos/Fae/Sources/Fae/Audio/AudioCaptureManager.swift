@@ -30,7 +30,9 @@ actor AudioCaptureManager {
         let inputNode = engine.inputNode
         let nativeFormat = inputNode.outputFormat(forBus: 0)
 
-        // Install a tap that converts to mono 16kHz.
+        // Use native format for the tap to avoid format mismatch crashes,
+        // then downsample to 16kHz mono in the tap callback.
+        let converter: AVAudioConverter?
         let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: Double(Self.targetSampleRate),
@@ -38,20 +40,50 @@ actor AudioCaptureManager {
             interleaved: false
         )!
 
-        // AVAudioEngine handles format conversion when the tap format
-        // differs from the node's output format.
-        let bufferSize = AVAudioFrameCount(Self.chunkSize)
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: targetFormat) {
+        if nativeFormat.sampleRate != Double(Self.targetSampleRate)
+            || nativeFormat.channelCount != 1
+        {
+            converter = AVAudioConverter(from: nativeFormat, to: targetFormat)
+        } else {
+            converter = nil
+        }
+
+        // Tap at native format — convert in callback to avoid AVAudioEngine crash.
+        let nativeChunkSize = AVAudioFrameCount(
+            Double(Self.chunkSize) * nativeFormat.sampleRate / Double(Self.targetSampleRate)
+        )
+        inputNode.installTap(onBus: 0, bufferSize: nativeChunkSize, format: nativeFormat) {
             [weak self] buffer, _ in
             guard let self else { return }
-            let chunk = Self.extractChunk(from: buffer)
-            Task { await self.emitChunk(chunk) }
+
+            if let conv = converter {
+                // Convert to mono 16kHz.
+                let frameCapacity = AVAudioFrameCount(
+                    Double(buffer.frameLength) * Double(Self.targetSampleRate) / buffer.format.sampleRate
+                )
+                guard let converted = AVAudioPCMBuffer(
+                    pcmFormat: targetFormat,
+                    frameCapacity: frameCapacity
+                ) else { return }
+                var error: NSError?
+                conv.convert(to: converted, error: &error) { _, outStatus in
+                    outStatus.pointee = .haveData
+                    return buffer
+                }
+                if error == nil {
+                    let chunk = Self.extractChunk(from: converted)
+                    Task { await self.emitChunk(chunk) }
+                }
+            } else {
+                let chunk = Self.extractChunk(from: buffer)
+                Task { await self.emitChunk(chunk) }
+            }
         }
 
         try engine.start()
         isCapturing = true
-        NSLog("AudioCaptureManager: started capture at %d Hz (native: %.0f Hz)",
-              Self.targetSampleRate, nativeFormat.sampleRate)
+        NSLog("AudioCaptureManager: started capture at %d Hz (native: %.0f Hz, %d ch)",
+              Self.targetSampleRate, nativeFormat.sampleRate, nativeFormat.channelCount)
 
         return stream
     }

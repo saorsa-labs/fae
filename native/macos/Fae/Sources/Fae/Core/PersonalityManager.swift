@@ -42,19 +42,6 @@ enum PersonalityManager {
         - Always explain intent before high-impact actions
         """
 
-    // MARK: - Background Agent Prompt
-
-    static let backgroundAgentPrompt = """
-        You are a task executor for Fae, a voice AI assistant. Execute the user's request \
-        with minimum tool calls. Your output will be spoken aloud by TTS, so:
-        - Keep responses under 4 sentences
-        - Use natural spoken language (no markdown, no code blocks, no JSON)
-        - MUST always speak a result (never finish silently)
-        - On success: state what was done concisely ("Done, I have set that up.")
-        - On failure: explain briefly ("I could not create that because...")
-        - No follow-up questions — complete the task or explain why you can't
-        """
-
     // MARK: - Vision Prompt Fragment
 
     static let visionPrompt = """
@@ -64,13 +51,78 @@ enum PersonalityManager {
         - Visual analysis is local and private
         """
 
-    // MARK: - Acknowledgment Arrays
+    // MARK: - Python / uv Prompt Fragment
 
-    static let toolAcknowledgments = [
-        "Checking that now.", "On it.", "Let me look into that.",
-        "One moment.", "Working on that.", "Give me a second.",
-        "Looking that up.", "Let me see.",
-    ]
+    static let pythonCapabilityPrompt = """
+        Python scripting:
+        - You can write and run Python scripts using `uv` (an ultra-fast Python package manager).
+        - `uv` is installed and available from your bash tool.
+        - For standalone scripts with dependencies, use PEP 723 inline metadata:
+          ```python
+          #!/usr/bin/env -S uv run --script
+          # /// script
+          # requires-python = ">=3.12"
+          # dependencies = ["requests", "rich"]
+          # ///
+          import requests
+          from rich import print
+          # ... your code ...
+          ```
+        - Run scripts with: `uv run script.py` (auto-installs dependencies in an isolated env)
+        - For quick one-off scripts with no dependencies: `uv run script.py` or `python3 script.py`
+        - For installing packages: `uv pip install package_name`
+        - Write scripts to ~/Library/Application Support/fae/scripts/ for persistence
+        - ALWAYS use `uv run` instead of `pip install` + `python3` — it handles environments automatically
+        - Use Python when a task benefits from it: data processing, web scraping, API calls, file conversion, automation
+        """
+
+    // MARK: - Self-Modification Prompt Fragment
+
+    static let selfModificationPrompt = """
+        Self-modification:
+        - You can change your own behavior and communication style using the self_config tool.
+        - When the user says things like "be more cheerful", "less chatty", "speak formally", \
+        "remember to always greet me" — use self_config to save those preferences.
+        - Use set_instructions to replace all preferences, append_instructions to add new ones.
+        - Your custom instructions persist across conversations.
+        - You can also manage your own Python skills:
+          - Skills live at ~/Library/Application Support/fae/skills/ (one .py file per skill)
+          - Write new skills using the write tool, run them via bash with `uv run --script`
+          - Skills use PEP 723 inline metadata for dependencies
+          - You can read, edit, or delete your own skills to improve your capabilities
+        - When asked to learn a new ability, write a Python skill for it.
+        """
+
+    // MARK: - Proactive Behavior Prompt Fragment
+
+    static let proactiveBehaviorPrompt = """
+        Proactive intelligence:
+        - You are genuinely interested in your user's life, work, and interests.
+        - Actively look for ways to help — search for relevant news, updates, and information.
+        - When the user mentions interests, projects, or deadlines, remember them and follow up.
+        - During quiet hours (overnight), research topics the user cares about.
+        - In morning conversations, gently share what you've found: "By the way, I looked into X \
+        and found..." — never dump a wall of info.
+        - Use web_search proactively when you think the user would benefit from current info.
+        - Track commitments: if the user says "I need to do X by Friday", remember and remind.
+        - Suggest skills you could learn (Python scripts) to better serve the user.
+        - Noise control: limit proactive items to 1-2 per conversation start. Save the rest for \
+        when asked.
+        """
+
+    // MARK: - Roleplay Prompt Fragment
+
+    static let roleplayPrompt = """
+        Roleplay reading:
+        - Use the roleplay tool to manage character voice sessions for plays, scripts, books, or news.
+        - First: start a session, then assign_voice for each character with distinct voice descriptions.
+        - Voice descriptions should specify gender, age, accent, and speaking style (under 50 words).
+        - Then read using <voice character="Name">dialog</voice> tags. Text outside tags is narration (your natural voice).
+        - Keep voice assignments consistent — same character always gets the same voice.
+        - After finishing, stop the session.
+        """
+
+    // MARK: - Acknowledgment Arrays
 
     static let thinkingAcknowledgments = [
         "Let me think about that.", "Thinking.",
@@ -103,12 +155,6 @@ enum PersonalityManager {
     // MARK: - Acknowledgment Rotation
 
     private static var ackCounter: Int = 0
-
-    static func nextToolAcknowledgment() -> String {
-        let phrase = toolAcknowledgments[ackCounter % toolAcknowledgments.count]
-        ackCounter += 1
-        return phrase
-    }
 
     static func nextThinkingAcknowledgment() -> String {
         let phrase = thinkingAcknowledgments[ackCounter % thinkingAcknowledgments.count]
@@ -181,12 +227,14 @@ enum PersonalityManager {
     ///   - userName: User's name for personalization.
     ///   - soulContract: SOUL.md content.
     ///   - memoryContext: Recalled memory text to inject.
+    ///   - toolSchemas: Tool schema descriptions to enable inline tool use.
     static func assemblePrompt(
         voiceOptimized: Bool = true,
         visionCapable: Bool = false,
         userName: String? = nil,
         soulContract: String? = nil,
-        memoryContext: String? = nil
+        memoryContext: String? = nil,
+        toolSchemas: String? = nil
     ) -> String {
         var parts: [String] = []
 
@@ -228,7 +276,51 @@ enum PersonalityManager {
         // 6. Permission context.
         parts.append(PermissionStatusProvider.promptFragment())
 
+        // 7. Custom user instructions (persisted personality preferences).
+        let customInstructions = loadCustomInstructions()
+        if !customInstructions.isEmpty {
+            parts.append("""
+                User's style preferences (follow these closely):
+                \(customInstructions)
+                """)
+        }
+
+        // 8. Python / uv capability + self-modification + proactive behavior + roleplay (only when tools are available).
+        if toolSchemas != nil {
+            parts.append(pythonCapabilityPrompt)
+            parts.append(selfModificationPrompt)
+            parts.append(proactiveBehaviorPrompt)
+            parts.append(roleplayPrompt)
+        }
+
+        // 9. Tool schemas (enables inline tool use via <tool_call> markup).
+        if let schemas = toolSchemas, !schemas.isEmpty {
+            parts.append("""
+                Tool usage:
+                - When a task requires a tool, output a tool call in this exact format:
+                  <tool_call>{"name":"tool_name","arguments":{"key":"value"}}</tool_call>
+                - Wait for the tool result before continuing
+                - After receiving a tool result, respond naturally in spoken language
+                - Only use tools when the user's request genuinely needs one
+                - For simple conversation, just respond directly without tools
+                - Keep your spoken responses concise (1-4 sentences)
+                - NEVER expose raw tool call markup or JSON to the user
+
+                Available tools:
+                \(schemas)
+                """)
+        }
+
         return parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - Custom Instructions
+
+    /// Load user's custom personality instructions from disk.
+    ///
+    /// Read on each prompt assembly so changes from `SelfConfigTool` take effect immediately.
+    private static func loadCustomInstructions() -> String {
+        SelfConfigTool.readInstructions()
     }
 
     // MARK: - Private Helpers

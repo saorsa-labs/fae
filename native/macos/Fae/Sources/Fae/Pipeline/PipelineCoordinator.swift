@@ -4,7 +4,7 @@ import Foundation
 /// Central voice pipeline: AudioCapture → VAD → STT → LLM → TTS → Playback.
 ///
 /// Wires all pipeline stages together with echo suppression, barge-in,
-/// gate/sleep system, intent-based routing, and text injection.
+/// gate/sleep system, inline tool execution, and text injection.
 ///
 /// Replaces: `src/pipeline/coordinator.rs` (5,192 lines)
 actor PipelineCoordinator {
@@ -47,6 +47,9 @@ actor PipelineCoordinator {
     private let conversationState: ConversationStateTracker
     private let memoryOrchestrator: MemoryOrchestrator?
     private let approvalManager: ApprovalManager?
+    private let registry: ToolRegistry
+    private let speakerEncoder: CoreMLSpeakerEncoder?
+    private let speakerProfileStore: SpeakerProfileStore?
 
     // MARK: - Pipeline State
 
@@ -56,6 +59,7 @@ actor PipelineCoordinator {
     private var vad = VoiceActivityDetector()
     private var echoSuppressor = EchoSuppressor()
     private var thinkTagStripper = TextProcessing.ThinkTagStripper()
+    private var voiceTagStripper = VoiceTagStripper()
 
     // MARK: - Atomic-like Flags
 
@@ -64,10 +68,17 @@ actor PipelineCoordinator {
     private var interrupted: Bool = false
     private var awaitingApproval: Bool = false
 
-    // MARK: - Timing
+    // MARK: - Speaker Identity State
+
+    private var currentSpeakerLabel: String?
+    private var currentSpeakerIsOwner: Bool = false
+
+    // MARK: - Timing & Echo Detection
 
     private var lastAssistantStart: Date?
     private var engagedUntil: Date?
+    /// Last assistant response text — used to detect echo (mic picking up speaker output).
+    private var lastAssistantResponseText: String = ""
 
     // MARK: - Barge-In
 
@@ -101,7 +112,10 @@ actor PipelineCoordinator {
         config: FaeConfig,
         conversationState: ConversationStateTracker,
         memoryOrchestrator: MemoryOrchestrator? = nil,
-        approvalManager: ApprovalManager? = nil
+        approvalManager: ApprovalManager? = nil,
+        registry: ToolRegistry,
+        speakerEncoder: CoreMLSpeakerEncoder? = nil,
+        speakerProfileStore: SpeakerProfileStore? = nil
     ) {
         self.eventBus = eventBus
         self.capture = capture
@@ -113,6 +127,9 @@ actor PipelineCoordinator {
         self.conversationState = conversationState
         self.memoryOrchestrator = memoryOrchestrator
         self.approvalManager = approvalManager
+        self.registry = registry
+        self.speakerEncoder = speakerEncoder
+        self.speakerProfileStore = speakerProfileStore
 
         // Configure VAD from config.
         vad.threshold = config.vad.threshold
@@ -165,6 +182,10 @@ actor PipelineCoordinator {
 
     /// Inject text directly into the LLM (bypasses STT).
     func injectText(_ text: String) async {
+        // Text input is trusted (physically typed by the user at the device).
+        currentSpeakerLabel = "owner"
+        currentSpeakerIsOwner = true
+
         // If assistant is active, trigger barge-in.
         if assistantSpeaking || assistantGenerating {
             interrupted = true
@@ -282,6 +303,60 @@ actor PipelineCoordinator {
             return
         }
 
+        // Speaker identification (best-effort, non-blocking).
+        currentSpeakerLabel = nil
+        currentSpeakerIsOwner = false
+        if config.speaker.enabled,
+           let encoder = speakerEncoder, await encoder.isLoaded,
+           let store = speakerProfileStore
+        {
+            do {
+                let embedding = try await encoder.embed(
+                    audio: segment.samples,
+                    sampleRate: segment.sampleRate
+                )
+
+                // First-launch enrollment: first voice becomes the owner.
+                let hasOwner = await store.hasOwnerProfile()
+                if !hasOwner && !config.onboarded {
+                    await store.enroll(label: "owner", embedding: embedding)
+                    currentSpeakerLabel = "owner"
+                    currentSpeakerIsOwner = true
+                    NSLog("PipelineCoordinator: owner voice enrolled from first speech")
+                } else if let match = await store.match(
+                    embedding: embedding,
+                    threshold: config.speaker.threshold
+                ) {
+                    currentSpeakerLabel = match.label
+                    currentSpeakerIsOwner = match.label == "owner"
+
+                    // Progressive enrollment: strengthen known profiles (skip fae_self).
+                    if config.speaker.progressiveEnrollment, match.label != "fae_self" {
+                        await store.enrollIfBelowMax(
+                            label: match.label,
+                            embedding: embedding,
+                            max: config.speaker.maxEnrollments
+                        )
+                    }
+
+                    NSLog("PipelineCoordinator: speaker matched: %@, similarity: %.3f",
+                          match.label, match.similarity)
+                } else {
+                    NSLog("PipelineCoordinator: speaker not recognized")
+                }
+            } catch {
+                NSLog("PipelineCoordinator: speaker embed failed: %@", error.localizedDescription)
+            }
+        }
+
+        // Self-echo rejection: if the segment matches Fae's own voice, drop it.
+        // This catches echo that slips through the time-based echo suppressor
+        // (e.g. when the echo tail expires but Fae's voice is still in the room).
+        if currentSpeakerLabel == "fae_self" {
+            NSLog("PipelineCoordinator: dropping %.1fs segment (matched Fae's own voice)", durationSecs)
+            return
+        }
+
         await refreshDegradedModeIfNeeded(context: "before_stt")
 
         // STT stage.
@@ -299,10 +374,36 @@ actor PipelineCoordinator {
             let sttLatencyMs = Date().timeIntervalSince(sttStartedAt) * 1000
             NSLog("phase1.stt_latency_ms=%.2f", sttLatencyMs)
 
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return }
+            let rawText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !rawText.isEmpty else { return }
+
+            // Correct common ASR misrecognitions of "Fae".
+            let text = TextProcessing.correctNameRecognition(rawText)
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
+
+            // Echo detection — if the transcribed text is a fragment of the last
+            // assistant response, the mic picked up speaker output. Drop it.
+            if !lastAssistantResponseText.isEmpty {
+                let sttLower = text.lowercased()
+                let assistLower = lastAssistantResponseText.lowercased()
+                if assistLower.contains(sttLower) || sttLower.contains(assistLower) {
+                    NSLog("PipelineCoordinator: dropping echo (STT matched last assistant response)")
+                    return
+                }
+                // Check for significant overlap via shared words.
+                let sttWords = Set(sttLower.split(separator: " ").filter { $0.count > 2 })
+                let assistWords = Set(assistLower.split(separator: " ").filter { $0.count > 2 })
+                if sttWords.count >= 3, !assistWords.isEmpty {
+                    let overlap = sttWords.intersection(assistWords)
+                    if Double(overlap.count) / Double(sttWords.count) >= 0.6 {
+                        NSLog("PipelineCoordinator: dropping echo (%.0f%% word overlap with last response)",
+                              Double(overlap.count) / Double(sttWords.count) * 100)
+                        return
+                    }
+                }
+            }
+
             eventBus.send(.transcription(text: text, isFinal: true))
 
             // Gate check.
@@ -351,34 +452,21 @@ actor PipelineCoordinator {
             await playback.stop()
         }
 
-        // Intent classification.
-        let lastAssistant = await conversationState.lastAssistantText
-        let intent = IntentClassifier.classify(queryText, lastAssistantText: lastAssistant)
-
-        if intent.needsTools {
-            // Speak canned acknowledgment, then dispatch to background agent.
-            let ack = PersonalityManager.nextToolAcknowledgment()
-            await speakText(ack, isFinal: true)
-            await conversationState.addUserMessage(queryText)
-            await conversationState.addAssistantMessage(ack)
-
-            // Spawn background agent with filtered tool registry.
-            NSLog("PipelineCoordinator: tool intent detected, tools: %@", intent.toolAllowlist.joined(separator: ", "))
-            await spawnBackgroundAgent(userText: queryText, toolAllowlist: intent.toolAllowlist)
-            return
-        }
-
-        if intent.needsThinking {
-            let ack = PersonalityManager.nextThinkingAcknowledgment()
-            await speakText(ack, isFinal: false)
-        }
-
-        // Generate LLM response.
-        await generateAndSpeak(userText: queryText)
+        // Unified pipeline: LLM decides when to use tools via <tool_call> markup.
+        await generateWithTools(userText: queryText, isToolFollowUp: false, turnCount: 0)
     }
 
-    /// Run LLM generation and stream output to TTS.
-    private func generateAndSpeak(userText: String) async {
+    /// Unified LLM generation with inline tool execution.
+    ///
+    /// Streams tokens to TTS. If the model outputs `<tool_call>` markup, executes the
+    /// tools and re-generates with the results. Recurses up to `maxToolTurns` times.
+    private func generateWithTools(
+        userText: String,
+        isToolFollowUp: Bool,
+        turnCount: Int
+    ) async {
+        let maxToolTurns = 5
+
         await refreshDegradedModeIfNeeded(context: "before_generation")
 
         guard await llmEngine.isLoaded else {
@@ -386,28 +474,36 @@ actor PipelineCoordinator {
             return
         }
 
-        interrupted = false
-        assistantGenerating = true
-        eventBus.send(.assistantGenerating(true))
+        if !isToolFollowUp {
+            interrupted = false
+            assistantGenerating = true
+            eventBus.send(.assistantGenerating(true))
 
-        // Play thinking tone.
-        await playback.playThinkingTone()
+            // Play thinking tone.
+            await playback.playThinkingTone()
 
-        // Add user message to history.
-        await conversationState.addUserMessage(userText)
-        let history = await conversationState.history
+            // Add user message to history.
+            await conversationState.addUserMessage(userText)
 
-        // Memory recall — inject context before generation.
-        let memoryContext = await memoryOrchestrator?.recall(query: userText)
+            // Memory recall — inject context before generation.
+            let memoryContext = await memoryOrchestrator?.recall(query: userText)
 
-        // Build system prompt.
-        var systemPrompt = PersonalityManager.assemblePrompt(
-            voiceOptimized: true,
-            userName: config.userName
-        )
-        if let context = memoryContext {
-            systemPrompt += "\n\n" + context
+            // Build system prompt with tool schemas.
+            // Owner gating: non-owner voices don't see tool schemas → LLM won't use tools.
+            let includeTools = !(config.speaker.requireOwnerForTools && !currentSpeakerIsOwner)
+            var systemPrompt = PersonalityManager.assemblePrompt(
+                voiceOptimized: true,
+                userName: config.userName,
+                toolSchemas: includeTools ? registry.toolSchemas : nil
+            )
+            if let context = memoryContext {
+                systemPrompt += "\n\n" + context
+            }
+            self.currentSystemPrompt = systemPrompt
         }
+
+        let history = await conversationState.history
+        guard let systemPrompt = self.currentSystemPrompt else { return }
 
         let options = GenerationOptions(
             temperature: config.llm.temperature,
@@ -418,8 +514,11 @@ actor PipelineCoordinator {
 
         // Stream tokens.
         thinkTagStripper = TextProcessing.ThinkTagStripper()
+        voiceTagStripper = VoiceTagStripper()
+        let roleplayActive = await RoleplaySessionStore.shared.isActive
         var fullResponse = ""
         var sentenceBuffer = ""
+        var detectedToolCall = false
         let llmStartedAt = Date()
         var llmTokenCount = 0
 
@@ -441,27 +540,63 @@ actor PipelineCoordinator {
                 guard !visible.isEmpty else { continue }
 
                 fullResponse += visible
-                sentenceBuffer += visible
 
-                // Check for sentence boundary — send to TTS.
-                if let boundary = TextProcessing.findSentenceBoundary(in: sentenceBuffer) {
-                    let sentence = String(sentenceBuffer[..<boundary])
-                    let cleaned = TextProcessing.stripNonSpeechChars(sentence)
-                    if !cleaned.isEmpty {
-                        eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                        await speakText(cleaned, isFinal: false)
-                    }
-                    sentenceBuffer = String(sentenceBuffer[boundary...])
-                } else if sentenceBuffer.count > 200 {
-                    // Force-flush long buffer at clause boundary.
-                    if let clause = TextProcessing.findClauseBoundary(in: sentenceBuffer) {
-                        let text = String(sentenceBuffer[..<clause])
-                        let cleaned = TextProcessing.stripNonSpeechChars(text)
+                // Once we detect a tool call, stop streaming to TTS.
+                if !detectedToolCall && fullResponse.contains("<tool_call>") {
+                    detectedToolCall = true
+                    // Flush text before the tool call tag to TTS.
+                    if let tagRange = sentenceBuffer.range(of: "<tool_call>") {
+                        let beforeTag = String(sentenceBuffer[..<tagRange.lowerBound])
+                        let cleaned = TextProcessing.stripNonSpeechChars(beforeTag)
                         if !cleaned.isEmpty {
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
                             await speakText(cleaned, isFinal: false)
                         }
-                        sentenceBuffer = String(sentenceBuffer[clause...])
+                    }
+                    sentenceBuffer = ""
+                    continue
+                }
+
+                if detectedToolCall {
+                    // Accumulate tool call content without speaking.
+                    continue
+                }
+
+                // Roleplay mode: route through voice tag parser for per-character TTS.
+                if roleplayActive {
+                    let segments = voiceTagStripper.process(visible)
+                    for segment in segments {
+                        let voice = await segment.character.asyncFlatMap {
+                            await RoleplaySessionStore.shared.voiceForCharacter($0)
+                        }
+                        let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
+                        if !cleaned.isEmpty {
+                            eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                            await speakText(cleaned, isFinal: false, voiceInstruct: voice)
+                        }
+                    }
+                } else {
+                    // Standard sentence-boundary streaming flow.
+                    sentenceBuffer += visible
+
+                    if let boundary = TextProcessing.findSentenceBoundary(in: sentenceBuffer) {
+                        let sentence = String(sentenceBuffer[..<boundary])
+                        let cleaned = TextProcessing.stripNonSpeechChars(sentence)
+                        if !cleaned.isEmpty {
+                            eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                            await speakText(cleaned, isFinal: false)
+                        }
+                        sentenceBuffer = String(sentenceBuffer[boundary...])
+                    } else if sentenceBuffer.count > 200 {
+                        if let clause = TextProcessing.findClauseBoundary(in: sentenceBuffer) {
+                            let text = String(sentenceBuffer[..<clause])
+                            let cleaned = TextProcessing.stripNonSpeechChars(text)
+                            if !cleaned.isEmpty {
+                                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                                await speakText(cleaned, isFinal: false)
+                            }
+                            sentenceBuffer = String(sentenceBuffer[clause...])
+                        }
                     }
                 }
             }
@@ -477,43 +612,121 @@ actor PipelineCoordinator {
 
         // Flush remaining text.
         let remaining = thinkTagStripper.flush()
-        sentenceBuffer += remaining
-        let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
-        if !finalText.isEmpty {
-            eventBus.send(.assistantText(text: finalText, isFinal: true))
-            await speakText(finalText, isFinal: true)
-        }
-
         fullResponse += remaining
-        if !fullResponse.isEmpty {
-            await conversationState.addAssistantMessage(fullResponse)
 
-            // Memory capture — persist durable memories from this turn.
-            let turnId = newMemoryId(prefix: "turn")
-            _ = await memoryOrchestrator?.capture(
-                turnId: turnId,
-                userText: userText,
-                assistantText: fullResponse
-            )
+        // Parse tool calls from the full response.
+        let toolCalls = Self.parseToolCalls(from: fullResponse)
 
-            // Sentiment → orb feeling: classify the response and update the orb.
-            if let feeling = SentimentClassifier.classify(fullResponse) {
-                eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
+        if toolCalls.isEmpty {
+            // No tool calls — flush remaining speech and finish.
+            if roleplayActive {
+                // Flush voice tag stripper with remaining think-tag text.
+                let voiceRemaining = voiceTagStripper.process(remaining) + voiceTagStripper.flush()
+                var spokeSomething = false
+                for segment in voiceRemaining {
+                    let voice = await segment.character.asyncFlatMap {
+                        await RoleplaySessionStore.shared.voiceForCharacter($0)
+                    }
+                    let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
+                    if !cleaned.isEmpty {
+                        eventBus.send(.assistantText(text: cleaned, isFinal: true))
+                        await speakText(cleaned, isFinal: true, voiceInstruct: voice)
+                        spokeSomething = true
+                    }
+                }
+                if !spokeSomething && assistantSpeaking {
+                    await playback.markEnd()
+                }
+            } else {
+                sentenceBuffer += remaining
+                let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
+                if !finalText.isEmpty {
+                    eventBus.send(.assistantText(text: finalText, isFinal: true))
+                    await speakText(finalText, isFinal: true)
+                } else if assistantSpeaking {
+                    await playback.markEnd()
+                }
             }
+
+            let spokenText = Self.stripVoiceTagMarkup(Self.stripToolCallMarkup(fullResponse))
+            if !spokenText.isEmpty {
+                lastAssistantResponseText = spokenText
+                await conversationState.addAssistantMessage(spokenText)
+
+                // Memory capture.
+                let turnId = newMemoryId(prefix: "turn")
+                _ = await memoryOrchestrator?.capture(
+                    turnId: turnId,
+                    userText: userText,
+                    assistantText: spokenText
+                )
+
+                // Sentiment → orb feeling.
+                if let feeling = SentimentClassifier.classify(spokenText) {
+                    eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
+                }
+            }
+
+            assistantGenerating = false
+            eventBus.send(.assistantGenerating(false))
+
+            // Refresh follow-up window.
+            engagedUntil = Date().addingTimeInterval(
+                Double(config.conversation.directAddressFollowupS)
+            )
+            return
         }
 
-        assistantGenerating = false
-        eventBus.send(.assistantGenerating(false))
+        // Tool calls found — execute them.
+        guard turnCount < maxToolTurns else {
+            let msg = "I've used several tools but couldn't complete that. Could you try rephrasing?"
+            eventBus.send(.assistantText(text: msg, isFinal: true))
+            await speakText(msg, isFinal: true)
+            assistantGenerating = false
+            eventBus.send(.assistantGenerating(false))
+            return
+        }
 
-        // Refresh follow-up window after assistant responds.
-        engagedUntil = Date().addingTimeInterval(
-            Double(config.conversation.directAddressFollowupS)
+        // Add the assistant's tool-calling message to history.
+        await conversationState.addAssistantMessage(fullResponse)
+
+        for call in toolCalls.prefix(5) {
+            let callId = UUID().uuidString
+            let inputJSON = Self.serializeArguments(call.arguments)
+
+            eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))
+            NSLog("PipelineCoordinator: executing tool '%@'", call.name)
+
+            let result = await executeTool(call)
+
+            eventBus.send(.toolResult(
+                id: callId,
+                name: call.name,
+                success: !result.isError,
+                output: String(result.output.prefix(200))
+            ))
+
+            await conversationState.addToolResult(
+                id: callId,
+                name: call.name,
+                content: result.output
+            )
+        }
+
+        // Recurse: generate again with tool results in context.
+        await generateWithTools(
+            userText: userText,
+            isToolFollowUp: true,
+            turnCount: turnCount + 1
         )
     }
 
+    /// Cached system prompt for tool follow-up turns (avoids rebuilding each recursion).
+    private var currentSystemPrompt: String?
+
     // MARK: - TTS
 
-    private func speakText(_ text: String, isFinal: Bool) async {
+    private func speakText(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
         guard await ttsEngine.isLoaded else {
             NSLog("PipelineCoordinator: TTS not loaded, skipping speech")
             return
@@ -525,7 +738,7 @@ actor PipelineCoordinator {
         do {
             let ttsStartedAt = Date()
             var ttsFirstChunkEmitted = false
-            let audioStream = await ttsEngine.synthesize(text: text)
+            let audioStream = await ttsEngine.synthesize(text: text, voiceInstruct: voiceInstruct)
             for try await buffer in audioStream {
                 if !ttsFirstChunkEmitted {
                     let latencyMs = Date().timeIntervalSince(ttsStartedAt) * 1000
@@ -546,6 +759,9 @@ actor PipelineCoordinator {
             }
         } catch {
             NSLog("PipelineCoordinator: TTS error: %@", error.localizedDescription)
+            // Ensure assistantSpeaking is cleared on TTS failure.
+            assistantSpeaking = false
+            echoSuppressor.onAssistantSpeechEnd()
         }
     }
 
@@ -627,92 +843,113 @@ actor PipelineCoordinator {
         NSLog("phase1.degraded_mode=%@ context=%@", current.rawValue, context)
     }
 
-    // MARK: - Background Agent Dispatch
+    // MARK: - Tool Call Parsing
 
-    /// Spawn a background agent with a filtered tool registry to handle tool-needing queries.
-    private func spawnBackgroundAgent(userText: String, toolAllowlist: [String]) async {
-        guard await llmEngine.isLoaded else {
-            NSLog("PipelineCoordinator: LLM not loaded, cannot spawn agent")
-            return
+    private struct ToolCall: @unchecked Sendable {
+        let name: String
+        let arguments: [String: Any]
+    }
+
+    /// Parse `<tool_call>{"name":"...","arguments":{...}}</tool_call>` tags from response text.
+    private static func parseToolCalls(from text: String) -> [ToolCall] {
+        var calls: [ToolCall] = []
+        var searchRange = text.startIndex..<text.endIndex
+
+        while let openRange = text.range(of: "<tool_call>", range: searchRange),
+              let closeRange = text.range(of: "</tool_call>", range: openRange.upperBound..<text.endIndex)
+        {
+            let jsonStr = text[openRange.upperBound..<closeRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let data = jsonStr.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let name = json["name"] as? String
+            {
+                let args = json["arguments"] as? [String: Any] ?? [:]
+                calls.append(ToolCall(name: name, arguments: args))
+            }
+
+            searchRange = closeRange.upperBound..<text.endIndex
         }
 
-        // Speak a context-specific progress cue.
-        if let cue = Self.toolProgressPhrase(toolAllowlist) {
-            await speakText(cue, isFinal: false)
+        return calls
+    }
+
+    /// Strip tool call markup from response text, leaving only human-readable content.
+    private static func stripToolCallMarkup(_ text: String) -> String {
+        var result = text
+        while let open = result.range(of: "<tool_call>"),
+              let close = result.range(of: "</tool_call>", range: open.upperBound..<result.endIndex)
+        {
+            result.removeSubrange(open.lowerBound..<close.upperBound)
         }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
-        // Emit tool executing event for UI feedback.
-        let primaryTool = toolAllowlist.first ?? "tool"
-        eventBus.send(.toolExecuting(name: primaryTool))
-
-        // Build filtered registry.
-        let registry = ToolRegistry.buildFiltered(allowlist: toolAllowlist)
-
-        // Build agent.
-        let agent = AgentLoop(
-            llmEngine: llmEngine,
-            registry: registry,
-            approvalManager: approvalManager,
-            config: config,
-            eventBus: eventBus
-        )
-
-        // Build system prompt with permission context.
-        let permissionContext = PermissionStatusProvider.promptFragment()
-        let systemPrompt = PersonalityManager.backgroundAgentPrompt
-            + "\n\n" + permissionContext
-            + "\n\nAvailable tools:\n" + registry.toolSchemas
-
-        let history = await conversationState.history
-
-        // Run the agent loop.
-        let result = await agent.run(
-            userText: userText,
-            systemPrompt: systemPrompt,
-            history: history
-        )
-
-        // Emit tool result event.
-        eventBus.send(.toolResult(id: UUID().uuidString, name: primaryTool, success: true, output: result))
-
-        // Add result to conversation history and speak it.
-        let cleanResult = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleanResult.isEmpty {
-            await conversationState.addAssistantMessage(cleanResult)
-            eventBus.send(.assistantText(text: cleanResult, isFinal: true))
-            await speakText(cleanResult, isFinal: true)
-
-            // Memory capture.
-            let turnId = newMemoryId(prefix: "agent")
-            _ = await memoryOrchestrator?.capture(
-                turnId: turnId,
-                userText: userText,
-                assistantText: cleanResult
+    /// Strip `<voice character="...">...</voice>` tags, keeping inner text.
+    private static func stripVoiceTagMarkup(_ text: String) -> String {
+        var result = text
+        // Remove closing tags first (simpler).
+        result = result.replacingOccurrences(of: "</voice>", with: "")
+        // Remove opening tags: <voice character="..."> or <voice character='...'>
+        if let regex = try? NSRegularExpression(pattern: #"<voice\s+[^>]*>"#) {
+            result = regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: ""
             )
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
-            // Sentiment → orb feeling.
-            if let feeling = SentimentClassifier.classify(cleanResult) {
-                eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
+    private static func serializeArguments(_ args: [String: Any]) -> String {
+        if let data = try? JSONSerialization.data(withJSONObject: args),
+           let str = String(data: data, encoding: .utf8)
+        {
+            return str
+        }
+        return "{}"
+    }
+
+    // MARK: - Tool Execution
+
+    private static let toolTimeoutSeconds: TimeInterval = 30
+
+    private func executeTool(_ call: ToolCall) async -> ToolResult {
+        guard let tool = registry.tool(named: call.name) else {
+            return .error("Unknown tool: \(call.name)")
+        }
+
+        // Check approval if required.
+        if tool.requiresApproval {
+            if let manager = approvalManager {
+                let approved = await manager.requestApproval(
+                    toolName: call.name,
+                    description: "Execute \(call.name)"
+                )
+                if !approved {
+                    return .error("Tool execution denied by user.")
+                }
             }
         }
 
-        // Refresh follow-up engagement window.
-        engagedUntil = Date().addingTimeInterval(
-            Double(config.conversation.directAddressFollowupS)
-        )
-    }
-
-    /// Context-specific progress phrase based on tool allowlist.
-    private static func toolProgressPhrase(_ allowlist: [String]) -> String? {
-        if allowlist.contains("calendar") { return "Checking your calendar." }
-        if allowlist.contains("reminders") { return "Looking at your reminders." }
-        if allowlist.contains("contacts") { return "Searching your contacts." }
-        if allowlist.contains("mail") { return "Checking your mail." }
-        if allowlist.contains("notes") { return "Looking through your notes." }
-        if allowlist.contains("bash") { return "Running that command." }
-        if allowlist.contains("web_search") || allowlist.contains("fetch_url") { return "Searching the web." }
-        if allowlist.contains("scheduler_list") || allowlist.contains("scheduler_create") { return "Checking your scheduled tasks." }
-        return nil
+        // Execute with timeout.
+        do {
+            return try await withThrowingTaskGroup(of: ToolResult.self) { group in
+                group.addTask {
+                    try await tool.execute(input: call.arguments)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(Self.toolTimeoutSeconds * 1_000_000_000))
+                    return .error("Tool timed out after \(Int(Self.toolTimeoutSeconds))s")
+                }
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
+        } catch {
+            return .error("Tool error: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Helpers

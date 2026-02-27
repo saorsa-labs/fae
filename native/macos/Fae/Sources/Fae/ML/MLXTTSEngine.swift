@@ -19,9 +19,15 @@ actor MLXTTSEngine: TTSEngine {
     private(set) var loadState: MLEngineLoadState = .notStarted
 
     /// Load the TTS model.
-    func load(modelID: String = "mlx-community/Qwen3-TTS-1.7B-CustomVoice") async throws {
+    func load(modelID: String = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16") async throws {
         loadState = .loading
         NSLog("MLXTTSEngine: loading model %@", modelID)
+
+        // Patch cached config.json for CustomVoice models — mlx-audio-swift expects
+        // spk_id as [String: [Int]] but the HuggingFace config has [String: Int],
+        // and spk_is_dialect has mixed Bool/String values.
+        Self.patchConfigIfNeeded(modelID: modelID)
+
         do {
             model = try await TTS.loadModel(modelRepo: modelID)
             isLoaded = true
@@ -34,26 +40,133 @@ actor MLXTTSEngine: TTSEngine {
         }
     }
 
+    // MARK: - Config Patching
+
+    /// Patch the cached config.json to fix type mismatches between HuggingFace model
+    /// configs and what mlx-audio-swift expects.
+    ///
+    /// Known mismatches in CustomVoice models:
+    /// - `talker_config.spk_id`: HF has `{name: int}`, library expects `{name: [int]}`
+    /// - `talker_config.spk_is_dialect`: HF has mixed `bool|string`, library expects `{name: string}`
+    private static func patchConfigIfNeeded(modelID: String) {
+        // mlx-audio caches models at ~/.cache/huggingface/hub/mlx-audio/{org}_{repo}/
+        let cacheKey = modelID.replacingOccurrences(of: "/", with: "_")
+        let cacheDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub/mlx-audio")
+            .appendingPathComponent(cacheKey)
+        let configPath = cacheDir.appendingPathComponent("config.json")
+
+        guard FileManager.default.fileExists(atPath: configPath.path) else { return }
+
+        do {
+            let data = try Data(contentsOf: configPath)
+            guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            guard var talker = root["talker_config"] as? [String: Any] else { return }
+
+            var patched = false
+
+            // Fix spk_id: convert {name: Int} → {name: [Int]}
+            if let spkId = talker["spk_id"] as? [String: Any] {
+                var fixed = [String: [Int]]()
+                for (name, value) in spkId {
+                    if let intVal = value as? Int {
+                        fixed[name] = [intVal]
+                        patched = true
+                    } else if let arrVal = value as? [Int] {
+                        fixed[name] = arrVal
+                    }
+                }
+                if patched {
+                    talker["spk_id"] = fixed
+                }
+            }
+
+            // Fix spk_is_dialect: convert mixed Bool/String → all String
+            if let spkDialect = talker["spk_is_dialect"] as? [String: Any] {
+                var fixed = [String: String]()
+                for (name, value) in spkDialect {
+                    if let strVal = value as? String {
+                        fixed[name] = strVal
+                    } else if let boolVal = value as? Bool {
+                        fixed[name] = boolVal ? "true" : "false"
+                        patched = true
+                    } else {
+                        fixed[name] = String(describing: value)
+                        patched = true
+                    }
+                }
+                if patched || fixed.count != (spkDialect as NSDictionary).count {
+                    talker["spk_is_dialect"] = fixed
+                    patched = true
+                }
+            }
+
+            if patched {
+                root["talker_config"] = talker
+                let patchedData = try JSONSerialization.data(
+                    withJSONObject: root,
+                    options: [.prettyPrinted, .sortedKeys]
+                )
+                try patchedData.write(to: configPath, options: .atomic)
+                NSLog("MLXTTSEngine: patched config.json for CustomVoice compatibility")
+            }
+        } catch {
+            NSLog("MLXTTSEngine: config patch failed (non-fatal): %@", error.localizedDescription)
+        }
+    }
+
     /// Load a reference voice from a `.wav` file for voice cloning.
     ///
     /// The CustomVoice model uses ~3 seconds of reference audio to clone a voice.
     /// The reference audio must be 24kHz mono PCM 16-bit WAV.
+    /// Automatically skips leading silence and extracts the first voiced segment.
     func loadVoice(referenceAudioURL: URL, referenceText: String? = nil) async throws {
         let audioData = try Data(contentsOf: referenceAudioURL)
         let samples = Self.parseWAVToFloat32(audioData)
-        // Take first 3 seconds at 24kHz = 72000 samples.
-        let clipSamples = Array(samples.prefix(72_000))
+
+        // Skip leading silence: find first sample above threshold.
+        // TTS-generated WAVs often have silence at the start.
+        let silenceThreshold: Float = 0.01
+        let windowSize = 480  // 20ms at 24kHz
+        var speechStart = 0
+        for i in stride(from: 0, to: samples.count - windowSize, by: windowSize) {
+            let window = samples[i ..< i + windowSize]
+            let rms = sqrt(window.reduce(0) { $0 + $1 * $1 } / Float(windowSize))
+            if rms > silenceThreshold {
+                speechStart = max(0, i - windowSize)  // Back up one window for a clean start.
+                break
+            }
+        }
+
+        // Take 3 seconds of speech at 24kHz = 72000 samples.
+        let clipEnd = min(speechStart + 72_000, samples.count)
+        let clipSamples = Array(samples[speechStart ..< clipEnd])
+
         refAudio = MLXArray(clipSamples)
         refText = referenceText
         isVoiceLoaded = true
-        NSLog("MLXTTSEngine: voice loaded (%d samples)", clipSamples.count)
+        NSLog("MLXTTSEngine: voice loaded (%d samples, speech offset=%d)", clipSamples.count, speechStart)
     }
 
-    /// Synthesize text to a stream of audio buffers.
+    /// Synthesize text to a stream of audio buffers using Fae's cloned voice (ICL mode).
     func synthesize(text: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
+        synthesize(text: text, voiceInstruct: nil)
+    }
+
+    /// Synthesize text with a specific voice description (instruct mode).
+    ///
+    /// - Parameters:
+    ///   - text: The text to speak.
+    ///   - voiceInstruct: A voice description string for instruct mode (e.g. "A deep male British accent").
+    ///     Pass nil to use Fae's cloned voice via ICL (in-context learning) mode.
+    func synthesize(text: String, voiceInstruct: String?) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                await self.synthesizeInternal(text: text, continuation: continuation)
+                await self.synthesizeInternal(
+                    text: text,
+                    voiceInstruct: voiceInstruct,
+                    continuation: continuation
+                )
             }
         }
     }
@@ -61,6 +174,7 @@ actor MLXTTSEngine: TTSEngine {
     /// Internal synthesis — runs within actor isolation so model access is safe.
     private func synthesizeInternal(
         text: String,
+        voiceInstruct: String?,
         continuation: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation
     ) async {
         guard let model else {
@@ -68,13 +182,34 @@ actor MLXTTSEngine: TTSEngine {
             return
         }
 
+        // When using instruct mode (voiceInstruct != nil), pass the voice description
+        // and skip refAudio/refText. When nil, use ICL voice cloning.
+        let voice: String?
+        let ref: MLXArray?
+        let refTxt: String?
+
+        if let instruct = voiceInstruct {
+            voice = instruct
+            ref = nil
+            refTxt = nil
+        } else {
+            voice = nil
+            ref = refAudio
+            refTxt = refText
+
+            if refAudio == nil || refText == nil {
+                NSLog("MLXTTSEngine: WARNING — voice cloning inactive (refAudio=%@, refText=%@)",
+                      refAudio != nil ? "set" : "nil", refText != nil ? "set" : "nil")
+            }
+        }
+
         do {
             let sampleRate = model.sampleRate
             let stream = model.generateSamplesStream(
                 text: text,
-                voice: nil,
-                refAudio: refAudio,
-                refText: refText,
+                voice: voice,
+                refAudio: ref,
+                refText: refTxt,
                 language: nil
             )
             for try await samples in stream {
@@ -102,6 +237,24 @@ actor MLXTTSEngine: TTSEngine {
 
     // MARK: - WAV Parsing
 
+    /// Read a little-endian UInt16 from Data at the given byte offset.
+    private static func readU16(_ data: Data, at offset: Int) -> UInt16 {
+        UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+    }
+
+    /// Read a little-endian UInt32 from Data at the given byte offset.
+    private static func readU32(_ data: Data, at offset: Int) -> UInt32 {
+        UInt32(data[offset])
+            | (UInt32(data[offset + 1]) << 8)
+            | (UInt32(data[offset + 2]) << 16)
+            | (UInt32(data[offset + 3]) << 24)
+    }
+
+    /// Read a little-endian Int16 from Data at the given byte offset.
+    private static func readI16(_ data: Data, at offset: Int) -> Int16 {
+        Int16(bitPattern: readU16(data, at: offset))
+    }
+
     /// Parse a WAV file's raw bytes into Float32 samples normalized to [-1, 1].
     ///
     /// Expects PCM 16-bit mono WAV format. Returns an empty array if the format
@@ -120,25 +273,16 @@ actor MLXTTSEngine: TTSEngine {
         var offset = 12
         while offset + 8 < data.count {
             let chunkID = String(data: data[offset..<(offset + 4)], encoding: .ascii)
-            let chunkSize = data.withUnsafeBytes { ptr in
-                ptr.load(fromByteOffset: offset + 4, as: UInt32.self)
-            }
+            let chunkSize = readU32(data, at: offset + 4)
 
             if chunkID == "fmt " {
-                // Validate format: must be PCM (1), mono (1 channel), 16-bit.
                 guard Int(chunkSize) >= 16, offset + 8 + 16 <= data.count else {
                     NSLog("MLXTTSEngine: WAV fmt chunk too small (%d bytes)", chunkSize)
                     return []
                 }
-                let audioFormat = data.withUnsafeBytes { ptr in
-                    ptr.load(fromByteOffset: offset + 8, as: UInt16.self)
-                }
-                let numChannels = data.withUnsafeBytes { ptr in
-                    ptr.load(fromByteOffset: offset + 10, as: UInt16.self)
-                }
-                let bitsPerSample = data.withUnsafeBytes { ptr in
-                    ptr.load(fromByteOffset: offset + 22, as: UInt16.self)
-                }
+                let audioFormat = readU16(data, at: offset + 8)
+                let numChannels = readU16(data, at: offset + 10)
+                let bitsPerSample = readU16(data, at: offset + 22)
                 guard audioFormat == 1 else {
                     NSLog("MLXTTSEngine: WAV not PCM (format=%d)", audioFormat)
                     return []
@@ -161,15 +305,12 @@ actor MLXTTSEngine: TTSEngine {
                 }
                 let dataStart = offset + 8
                 let dataEnd = min(dataStart + Int(chunkSize), data.count)
-                let sampleCount = (dataEnd - dataStart) / 2  // 16-bit = 2 bytes per sample
+                let sampleCount = (dataEnd - dataStart) / 2
 
                 var samples = [Float](repeating: 0, count: sampleCount)
-                data.withUnsafeBytes { ptr in
-                    for i in 0..<sampleCount {
-                        let byteOffset = dataStart + i * 2
-                        let int16 = ptr.load(fromByteOffset: byteOffset, as: Int16.self)
-                        samples[i] = Float(int16) / 32768.0
-                    }
+                for i in 0..<sampleCount {
+                    let int16 = readI16(data, at: dataStart + i * 2)
+                    samples[i] = Float(int16) / 32768.0
                 }
                 return samples
             }

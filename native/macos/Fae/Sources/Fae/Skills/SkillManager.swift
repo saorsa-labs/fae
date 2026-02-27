@@ -54,7 +54,14 @@ actor SkillManager {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", scriptPath]
+        process.arguments = ["uv", "run", "--script", scriptPath]
+
+        // Ensure uv and user-installed tools are in PATH (GUI apps have minimal PATH).
+        var env = ProcessInfo.processInfo.environment
+        let home = NSHomeDirectory()
+        let existing = env["PATH"] ?? "/usr/bin:/bin"
+        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:\(existing)"
+        process.environment = env
 
         let stdin = Pipe()
         let stdout = Pipe()

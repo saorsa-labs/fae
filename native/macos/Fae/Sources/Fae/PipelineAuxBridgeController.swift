@@ -124,10 +124,18 @@ final class PipelineAuxBridgeController: ObservableObject {
     private func handleRuntimeLifecycle(event: String) {
         switch event {
         case "runtime.started":
-            // NOTE: runtime.started fires immediately after spawning the async
-            // pipeline task — models may still be loading. We do NOT set
-            // isPipelineReady here. It is set via load_complete progress events.
-            status = "Starting…"
+            // In the new Swift pipeline, runtime.started fires AFTER all models
+            // are loaded and the pipeline coordinator is running. Use it as a
+            // backup readiness signal alongside the Combine observation in
+            // FaeAppDelegate and the load_complete count.
+            if !isPipelineReady {
+                NSLog("PipelineAuxBridgeController: runtime.started → setting isPipelineReady")
+                isPipelineReady = true
+                status = "Running"
+                subtitleState?.hideProgress()
+            } else {
+                status = "Running"
+            }
         case "runtime.stopped", "runtime.error":
             isPipelineReady = false
             loadCompleteCount = 0
@@ -141,6 +149,8 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     private func handleRuntimeProgress(userInfo: [AnyHashable: Any]) {
         let stage = userInfo["stage"] as? String ?? ""
+        NSLog("PipelineAuxBridgeController: progress stage='%@' loadCompleteCount=%d isPipelineReady=%d",
+              stage, loadCompleteCount, isPipelineReady ? 1 : 0)
 
         // Show the loading canvas on the first progress event so users see
         // the Star Wars-style informational crawl while models download/load.
@@ -160,7 +170,17 @@ final class PipelineAuxBridgeController: ObservableObject {
             status = "Loading voice synthesis…"
 
         case "ready":
-            status = "Finalizing startup…"
+            // "ready" is sent by ModelManager after all 3 models complete
+            // (success or degraded). Use as another backup readiness signal.
+            if !isPipelineReady {
+                NSLog("PipelineAuxBridgeController: ready stage → setting isPipelineReady")
+                isPipelineReady = true
+                status = "Running"
+                subtitleState?.hideProgress()
+                transitionToReadyCanvas()
+            } else {
+                status = "Finalizing startup…"
+            }
 
         case "verify_started":
             status = "Verifying model readiness…"

@@ -20,13 +20,6 @@ final class ToolRegistry: Sendable {
         return ToolRegistry(tools: allTools)
     }
 
-    /// Build a registry filtered to a specific tool allowlist.
-    static func buildFiltered(allowlist: [String]) -> ToolRegistry {
-        let allTools: [any Tool] = Self.allBuiltinTools()
-        let filtered = allTools.filter { allowlist.contains($0.name) }
-        return ToolRegistry(tools: filtered)
-    }
-
     /// All built-in tools (core + Apple + scheduler).
     private static func allBuiltinTools() -> [any Tool] {
         [
@@ -35,6 +28,7 @@ final class ToolRegistry: Sendable {
             WriteTool(),
             EditTool(),
             BashTool(),
+            SelfConfigTool(),
             WebSearchTool(),
             FetchURLTool(),
             // Apple integration tools
@@ -49,6 +43,8 @@ final class ToolRegistry: Sendable {
             SchedulerUpdateTool(),
             SchedulerDeleteTool(),
             SchedulerTriggerTool(),
+            // Roleplay
+            RoleplayTool(),
         ]
     }
 

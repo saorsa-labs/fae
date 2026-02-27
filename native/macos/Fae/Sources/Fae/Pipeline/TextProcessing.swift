@@ -157,6 +157,67 @@ enum TextProcessing {
         }
     }
 
+    // MARK: - STT Post-Processing
+
+    /// Common ASR misrecognitions of "Fae" mapped to their corrections.
+    /// The ASR model doesn't know the name "Fae" and frequently garbles it
+    /// into phonetically similar words. We fix these at word boundaries.
+    private static let nameCorrections: [(pattern: String, replacement: String)] = [
+        // Multi-word garbles (check first — longer patterns before shorter).
+        ("hi fae", "Hi Fae"),
+        ("hey fae", "Hey Fae"),
+        ("high fay", "Hi Fae"),
+        ("high fae", "Hi Fae"),
+        ("i fae", "Hi Fae"),
+        ("i fay", "Hi Fae"),
+        // Single-word garbles at word boundaries.
+        ("ife", "Fae"),
+        ("ifae", "Fae"),
+        ("ifay", "Fae"),
+        ("faye", "Fae"),
+        ("fay", "Fae"),
+        ("fey", "Fae"),
+        ("fea", "Fae"),
+        ("fah", "Fae"),
+        ("feh", "Fae"),
+        ("fei", "Fae"),
+        ("fay.", "Fae."),
+        ("fey.", "Fae."),
+    ]
+
+    /// Correct common ASR misrecognitions of "Fae" in transcribed text.
+    static func correctNameRecognition(_ text: String) -> String {
+        var result = text
+        let lower = result.lowercased()
+
+        for (pattern, replacement) in nameCorrections {
+            // Case-insensitive word-boundary replacement.
+            guard let range = lower.range(of: pattern) else { continue }
+
+            // Check word boundary before.
+            if range.lowerBound != lower.startIndex {
+                let before = lower[lower.index(before: range.lowerBound)]
+                if before.isLetter || before.isNumber { continue }
+            }
+
+            // Check word boundary after.
+            if range.upperBound != lower.endIndex {
+                let after = lower[range.upperBound]
+                if after.isLetter || after.isNumber { continue }
+            }
+
+            // Replace in the original (preserving surrounding case).
+            let originalRange = result.index(result.startIndex, offsetBy: lower.distance(from: lower.startIndex, to: range.lowerBound))
+                ..< result.index(result.startIndex, offsetBy: lower.distance(from: lower.startIndex, to: range.upperBound))
+            result.replaceSubrange(originalRange, with: replacement)
+
+            // Only fix the first match per call to avoid cascading.
+            break
+        }
+
+        return result
+    }
+
     // MARK: - Name Detection
 
     /// Name variants for wake-word / direct-address detection.

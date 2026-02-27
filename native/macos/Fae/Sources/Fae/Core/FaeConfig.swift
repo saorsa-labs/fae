@@ -13,8 +13,10 @@ struct FaeConfig: Codable {
     var conversation: ConversationConfig = ConversationConfig()
     var bargeIn: BargeInConfig = BargeInConfig()
     var memory: MemoryConfig = MemoryConfig()
+    var speaker: SpeakerConfig = SpeakerConfig()
     var userName: String?
     var onboarded: Bool = false
+    var licenseAccepted: Bool = false
 
     // MARK: - Audio
 
@@ -54,10 +56,12 @@ struct FaeConfig: Codable {
 
     struct TtsConfig: Codable {
         var voice: String = "fae"
-        var modelId: String = "mlx-community/Qwen3-TTS-1.7B-CustomVoice"
+        var modelId: String = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
         var speed: Float = 1.1
         var sampleRate: Int = 24_000
-        var referenceText: String?
+        /// Transcript of the reference audio for voice cloning.
+        /// Must match the first ~3 seconds of speech in fae.wav.
+        var referenceText: String? = "Hello, I'm Fae, your personal voice assistant."
     }
 
     // MARK: - STT
@@ -98,6 +102,17 @@ struct FaeConfig: Codable {
         var maxRecallResults: Int = 5
     }
 
+    // MARK: - Speaker
+
+    struct SpeakerConfig: Codable {
+        var enabled: Bool = true
+        var threshold: Float = 0.70
+        var ownerThreshold: Float = 0.75
+        var requireOwnerForTools: Bool = true
+        var progressiveEnrollment: Bool = true
+        var maxEnrollments: Int = 50
+    }
+
     // MARK: - Model Selection
 
     /// Select the appropriate LLM model based on system RAM and preset.
@@ -121,9 +136,8 @@ struct FaeConfig: Codable {
         case "qwen3_0_6b":
             return ("mlx-community/Qwen3-0.6B-4bit", 4_096)
         default: // "auto"
-            if totalGB >= 64 {
-                return ("mlx-community/Qwen3.5-35B-A3B-4bit", 65_536)
-            } else if totalGB >= 48 {
+            // Qwen3.5 MoE not yet supported by mlx-swift — use Qwen3-8B for large RAM.
+            if totalGB >= 48 {
                 return ("mlx-community/Qwen3-8B-4bit", 32_768)
             } else if totalGB >= 32 {
                 return ("mlx-community/Qwen3-4B-4bit", 16_384)
@@ -158,9 +172,9 @@ struct FaeConfig: Codable {
     ) -> String {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
         if totalGB >= 32 {
-            return "mlx-community/Qwen3-TTS-1.7B-CustomVoice"
+            return "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
         } else {
-            return "mlx-community/Qwen3-TTS-0.6B"
+            return "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16"
         }
     }
 
@@ -246,7 +260,10 @@ struct FaeConfig: Codable {
                 continue
             }
             guard let eq = line.firstIndex(of: "=") else {
-                throw ParseError.malformedAssignment(line)
+                // Skip lines without '=' — may be continuation of a multi-line
+                // array from an older config format, or trailing commas.
+                NSLog("FaeConfig: skipping line without '=': %@", line)
+                continue
             }
 
             let key = String(line[..<eq]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -268,6 +285,11 @@ struct FaeConfig: Codable {
                         throw ParseError.malformedValue(key: key, value: rawValue)
                     }
                     config.onboarded = v
+                case "licenseAccepted":
+                    guard let v = parseBool(rawValue) else {
+                        throw ParseError.malformedValue(key: key, value: rawValue)
+                    }
+                    config.licenseAccepted = v
                 default: break
                 }
             case "audio":
@@ -419,6 +441,28 @@ struct FaeConfig: Codable {
                     config.memory.maxRecallResults = v
                 default: break
                 }
+            case "speaker":
+                switch key {
+                case "enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.enabled = v
+                case "threshold":
+                    guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.threshold = v
+                case "ownerThreshold":
+                    guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.ownerThreshold = v
+                case "requireOwnerForTools":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.requireOwnerForTools = v
+                case "progressiveEnrollment":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.progressiveEnrollment = v
+                case "maxEnrollments":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.maxEnrollments = v
+                default: break
+                }
             default:
                 break
             }
@@ -432,6 +476,7 @@ struct FaeConfig: Codable {
 
         lines.append("userName = \(encodeStringOrNil(userName))")
         lines.append("onboarded = \(onboarded ? "true" : "false")")
+        lines.append("licenseAccepted = \(licenseAccepted ? "true" : "false")")
         lines.append("")
 
         lines.append("[audio]")
@@ -494,6 +539,15 @@ struct FaeConfig: Codable {
         lines.append("[memory]")
         lines.append("enabled = \(memory.enabled ? "true" : "false")")
         lines.append("maxRecallResults = \(memory.maxRecallResults)")
+        lines.append("")
+
+        lines.append("[speaker]")
+        lines.append("enabled = \(speaker.enabled ? "true" : "false")")
+        lines.append("threshold = \(formatFloat(speaker.threshold))")
+        lines.append("ownerThreshold = \(formatFloat(speaker.ownerThreshold))")
+        lines.append("requireOwnerForTools = \(speaker.requireOwnerForTools ? "true" : "false")")
+        lines.append("progressiveEnrollment = \(speaker.progressiveEnrollment ? "true" : "false")")
+        lines.append("maxEnrollments = \(speaker.maxEnrollments)")
 
         return lines.joined(separator: "\n") + "\n"
     }
@@ -562,8 +616,10 @@ struct FaeConfig: Codable {
         }
 
         let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = parseString(tail) else { return nil }
-        result.append(value)
+        if !tail.isEmpty {
+            guard let value = parseString(tail) else { return nil }
+            result.append(value)
+        }
         return result
     }
 
