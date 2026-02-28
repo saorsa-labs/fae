@@ -48,6 +48,7 @@ actor PipelineCoordinator {
     private let memoryOrchestrator: MemoryOrchestrator?
     private let approvalManager: ApprovalManager?
     private let registry: ToolRegistry
+    private let rateLimiter = ToolRateLimiter()
     private let speakerEncoder: CoreMLSpeakerEncoder?
     private let speakerProfileStore: SpeakerProfileStore?
     private let toolAnalytics: ToolAnalytics?
@@ -511,7 +512,7 @@ actor PipelineCoordinator {
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
                 userName: config.userName,
-                toolSchemas: includeTools ? registry.toolSchemas : nil,
+                toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
                 installedSkills: skills
             )
             if let context = memoryContext {
@@ -993,8 +994,18 @@ actor PipelineCoordinator {
     private static let toolTimeoutSeconds: TimeInterval = 30
 
     private func executeTool(_ call: ToolCall) async -> ToolResult {
+        // Tool mode enforcement — reject tools not allowed in current mode.
+        guard registry.isToolAllowed(call.name, mode: config.toolMode) else {
+            return .error("Tool '\(call.name)' is not available in current mode (\(config.toolMode))")
+        }
+
         guard let tool = registry.tool(named: call.name) else {
             return .error("Unknown tool: \(call.name)")
+        }
+
+        // Rate limiting.
+        if let limitError = await rateLimiter.checkLimit(tool: call.name) {
+            return .error(limitError)
         }
 
         let voiceDecision = VoiceIdentityPolicy.evaluateSensitiveAction(
@@ -1023,13 +1034,16 @@ actor PipelineCoordinator {
             return .error(message)
         }
 
-        // Risk policy + approval routing.
+        // Risk policy + approval routing with enhanced descriptions.
         let decision = ToolRiskPolicy.decision(for: tool)
         if case .requireApproval(let reason) = decision {
             if let manager = approvalManager {
+                let approvalDesc = Self.buildApprovalDescription(
+                    toolName: call.name, reason: reason, arguments: call.arguments
+                )
                 let approved = await manager.requestApproval(
                     toolName: call.name,
-                    description: "Execute \(call.name) — \(reason)"
+                    description: approvalDesc
                 )
                 if !approved {
                     return .error("Tool execution denied by user.")
@@ -1081,6 +1095,34 @@ actor PipelineCoordinator {
         }
 
         return result
+    }
+
+    /// Build a descriptive approval message showing what the tool will do.
+    private static func buildApprovalDescription(
+        toolName: String, reason: String, arguments: [String: Any]
+    ) -> String {
+        switch toolName {
+        case "bash":
+            if let command = arguments["command"] as? String {
+                return BashTool.approvalDescription(for: command)
+            }
+        case "write":
+            if let path = arguments["path"] as? String {
+                return "Write to file: \(path)"
+            }
+        case "edit":
+            if let path = arguments["path"] as? String {
+                return "Edit file: \(path)"
+            }
+        case "self_config":
+            if let value = arguments["value"] as? String {
+                let truncated = value.count > 100 ? String(value.prefix(100)) + "..." : value
+                return "Modify custom instructions: \(truncated)"
+            }
+        default:
+            break
+        }
+        return "Execute \(toolName) — \(reason)"
     }
 
     // MARK: - Helpers

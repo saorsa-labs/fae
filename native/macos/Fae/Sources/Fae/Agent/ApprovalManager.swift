@@ -13,7 +13,7 @@ actor ApprovalManager {
     private var pendingApprovals: [UInt64: CheckedContinuation<Bool, Never>] = [:]
     private var nextRequestId: UInt64 = 1
 
-    static let timeoutSeconds: TimeInterval = 58
+    static let timeoutSeconds: TimeInterval = 20
 
     init(eventBus: FaeEventBus) {
         self.eventBus = eventBus

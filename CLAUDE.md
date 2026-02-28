@@ -179,15 +179,19 @@ Skills are discovered at prompt assembly time from `SkillManager.installedSkillN
 Skill proposals from the scheduler now store `.commitment` memory records so the LLM
 can follow up naturally in the next conversation.
 
-Tool modes (configurable via Settings > Tools):
+Tool modes (configurable via Settings > Tools) — **enforced by ToolRegistry + PipelineCoordinator**:
 
 | Mode | Access |
 |------|--------|
-| `off` | Conversation only — no tools |
-| `read_only` | Read tool only |
-| `read_write` | Read + Write + Edit |
-| `full` | All tools **(recommended default)** |
-| `full_no_approval` | All tools, no approval prompts |
+| `off` | Read-only tools (read, web_search, fetch_url, Apple reads, scheduler_list, roleplay) |
+| `read_only` | Same as off (explicit read-only intent) |
+| `read_write` | Read tools + write, edit, self_config, scheduler mutation |
+| `full` | All tools including bash **(recommended default)** |
+| `full_no_approval` | All tools, skip approval only if speaker is verified owner |
+
+Even "off" mode keeps read tools available — Fae is local, she should always be able to read.
+Tool mode is enforced at two levels: schema filtering (LLM never sees blocked tools) and
+execution guard (rejected even if LLM hallucinates a tool call).
 
 The LLM decides when to use tools via `<tool_call>` markup inline — no separate routing or intent classification.
 
@@ -207,6 +211,26 @@ only detectable from AppleScript error responses, not via a pre-flight API.
 Settings > Tools shows an **"Apple Tool Permissions"** section with per-tool Granted/Not Granted
 status badges and Grant buttons. See `docs/guides/scheduler-tooling-and-permissions.md`.
 
+### Tool security (v0.8.1)
+
+4-layer safety model for the tool system:
+
+| Layer | Implementation | Purpose |
+|-------|---------------|---------|
+| **Tool mode filtering** | `ToolRegistry.toolSchemas(for:)` | LLM never sees tools outside current mode |
+| **Execution guard** | `PipelineCoordinator.executeTool()` | Rejects tool calls even if LLM hallucinates them |
+| **Path validation** | `PathPolicy.validateWritePath()` | Blocks writes to dotfiles, system paths, Fae config |
+| **Rate limiting** | `ToolRateLimiter` | Per-tool sliding-window limits (bash: 5/min, write: 10/min) |
+
+Additional hardening:
+
+- **SelfConfigTool**: requires approval, jailbreak pattern detection, 2000-char limit
+- **BashTool**: process group kill on timeout, stderr filtered from LLM, command classification (known-safe vs unknown warning)
+- **EditTool**: first-occurrence-only replacement, occurrence count reporting
+- **FetchURLTool**: blocks cloud metadata endpoints (169.254.169.254, metadata.google.internal)
+- **WriteTool**: content null-byte sanitization via `InputSanitizer`
+- **ApprovalManager**: 20s timeout (was 58s)
+
 Implementation files:
 
 | File | Role |
@@ -216,7 +240,11 @@ Implementation files:
 | `Tools/SchedulerTools.swift` | Scheduler management tools |
 | `Tools/Tool.swift` | Tool protocol definition |
 | `Tools/RoleplayTool.swift` | Multi-voice roleplay session management |
-| `Tools/ToolRegistry.swift` | Dynamic tool registration and schema generation |
+| `Tools/ToolRegistry.swift` | Dynamic tool registration, schema generation, mode filtering |
+| `Tools/PathPolicy.swift` | Write-path validation (blocklist for dotfiles, system paths) |
+| `Tools/InputSanitizer.swift` | Shell metacharacter detection, bash command classification |
+| `Tools/ToolRateLimiter.swift` | Per-tool sliding-window rate limiter |
+| `Tools/ToolRiskPolicy.swift` | Risk-level → approval routing |
 
 ### Web search (DuckDuckGo)
 
@@ -472,7 +500,11 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `Tools/AppleTools.swift` | Apple integration tools (calendar, contacts, mail, reminders, notes) |
 | `Tools/SchedulerTools.swift` | Scheduler management tools |
 | `Tools/Tool.swift` | Tool protocol definition |
-| `Tools/ToolRegistry.swift` | Dynamic registration and schema generation |
+| `Tools/ToolRegistry.swift` | Dynamic registration, schema generation, mode filtering |
+| `Tools/PathPolicy.swift` | Write-path validation (dotfile/system path blocklist) |
+| `Tools/InputSanitizer.swift` | Shell metacharacter detection, bash command classification |
+| `Tools/ToolRateLimiter.swift` | Per-tool sliding-window rate limiter |
+| `Tools/ToolRiskPolicy.swift` | Risk-level → approval routing |
 
 ### Audio
 
@@ -634,3 +666,12 @@ Key metrics: T/s at voice context (needs >60), `/no_think` compliance, idle RAM,
   - Voice identity: ECAPA-TDNN Core ML speaker encoder
   - Proactive behavior: morning briefing, scheduler speak handler, noise budget
   - Enhanced memory capture: interests, commitments, events, persons
+- **v0.8.1** — Tool security hardening: 4-layer safety model
+  - Tool mode enforcement: schema filtering + execution guard (off/read_only/read_write/full)
+  - Write-path security: PathPolicy blocklist (dotfiles, system paths, Fae config)
+  - Self-config safety: approval required, jailbreak pattern detection, length limits
+  - Bash hardening: process group kill, stderr filtering, command classification
+  - Rate limiting: per-tool sliding-window limits
+  - Cloud metadata protection: blocks AWS/GCP/Azure metadata endpoints
+  - Edit safety: first-occurrence-only replacement
+  - Approval UX: 20s timeout (was 58s)

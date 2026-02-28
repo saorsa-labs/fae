@@ -46,16 +46,23 @@ struct WriteTool: Tool {
         else {
             return .error("Missing required parameters: path, content")
         }
-        let expanded = NSString(string: path).expandingTildeInPath
-        do {
-            let dir = (expanded as NSString).deletingLastPathComponent
-            try FileManager.default.createDirectory(
-                atPath: dir, withIntermediateDirectories: true
-            )
-            try content.write(toFile: expanded, atomically: true, encoding: .utf8)
-            return .success("Written \(content.count) bytes to \(path)")
-        } catch {
-            return .error("Failed to write file: \(error.localizedDescription)")
+
+        // Validate write path against blocklist.
+        switch PathPolicy.validateWritePath(path) {
+        case .blocked(let reason):
+            return .error(reason)
+        case .allowed(let canonical):
+            do {
+                let dir = (canonical as NSString).deletingLastPathComponent
+                try FileManager.default.createDirectory(
+                    atPath: dir, withIntermediateDirectories: true
+                )
+                let (sanitized, _) = InputSanitizer.sanitizeContentInput(content)
+                try sanitized.write(toFile: canonical, atomically: true, encoding: .utf8)
+                return .success("Written \(sanitized.count) bytes to \(path)")
+            } catch {
+                return .error("Failed to write file: \(error.localizedDescription)")
+            }
         }
     }
 }
@@ -77,17 +84,37 @@ struct EditTool: Tool {
         else {
             return .error("Missing required parameters: path, old_string, new_string")
         }
-        let expanded = NSString(string: path).expandingTildeInPath
-        do {
-            var content = try String(contentsOfFile: expanded, encoding: .utf8)
-            guard content.contains(oldString) else {
-                return .error("old_string not found in file")
+
+        // Validate write path against blocklist.
+        switch PathPolicy.validateWritePath(path) {
+        case .blocked(let reason):
+            return .error(reason)
+        case .allowed(let canonical):
+            do {
+                let content = try String(contentsOfFile: canonical, encoding: .utf8)
+                guard content.contains(oldString) else {
+                    return .error("old_string not found in file")
+                }
+
+                // Count occurrences for safety reporting.
+                let count = content.components(separatedBy: oldString).count - 1
+
+                // Replace only the first occurrence.
+                guard let range = content.range(of: oldString) else {
+                    return .error("old_string not found in file")
+                }
+                let updated = content.replacingCharacters(in: range, with: newString)
+                try updated.write(
+                    toFile: canonical, atomically: true, encoding: String.Encoding.utf8
+                )
+
+                if count > 1 {
+                    return .success("Replaced first of \(count) occurrences in \(path)")
+                }
+                return .success("Replaced in \(path)")
+            } catch {
+                return .error("Edit failed: \(error.localizedDescription)")
             }
-            content = content.replacingOccurrences(of: oldString, with: newString)
-            try content.write(toFile: expanded, atomically: true, encoding: .utf8)
-            return .success("Replaced in \(path)")
-        } catch {
-            return .error("Edit failed: \(error.localizedDescription)")
         }
     }
 }
@@ -113,6 +140,16 @@ struct BashTool: Tool {
         }
     }
 
+    /// Approval description including command classification.
+    ///
+    /// Called by `PipelineCoordinator` to build a richer approval card.
+    static func approvalDescription(for command: String) -> String {
+        if let warning = InputSanitizer.classifyBashCommand(command) {
+            return "\(warning)\nCommand: \(command)"
+        }
+        return "Command: \(command)"
+    }
+
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let command = input["command"] as? String else {
             return .error("Missing required parameter: command")
@@ -123,13 +160,17 @@ struct BashTool: Tool {
             let outStr = String(data: outData, encoding: .utf8) ?? ""
             let errStr = String(data: errData, encoding: .utf8) ?? ""
 
-            let output = outStr + (errStr.isEmpty ? "" : "\nSTDERR: \(errStr)")
-            let truncated = output.count > 20_000
-                ? String(output.prefix(20_000)) + "\n[truncated]"
-                : output
+            // Log stderr internally but don't expose raw error details to LLM.
+            if !errStr.isEmpty {
+                NSLog("BashTool stderr for '%@': %@", command, errStr)
+            }
+
+            let truncated = outStr.count > 20_000
+                ? String(outStr.prefix(20_000)) + "\n[truncated]"
+                : outStr
 
             if status != 0 {
-                return .error("Exit code \(status)\n\(truncated)")
+                return .error("Command failed with exit code \(status)")
             }
             return .success(truncated)
         } catch {
@@ -181,7 +222,14 @@ struct BashTool: Tool {
         while process.isRunning {
             try Task.checkCancellation()
             if Date() >= deadline {
-                process.terminate()
+                // Kill entire process group, not just the parent.
+                let pid = process.processIdentifier
+                kill(-pid, SIGTERM)
+                // Give processes a moment to clean up, then force kill.
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if process.isRunning {
+                    kill(-pid, SIGKILL)
+                }
                 throw BashToolError.timedOut(timeoutSeconds)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -203,8 +251,30 @@ struct SelfConfigTool: Tool {
     let parametersSchema = #"""
         {"action": "string (required: get_instructions|set_instructions|append_instructions|clear_instructions)", "value": "string (required for set/append)"}
         """#
-    let requiresApproval = false
+    let requiresApproval = true
+    let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"self_config","arguments":{"action":"append_instructions","value":"Be more concise"}}</tool_call>"#
+
+    /// Maximum character length for custom instructions.
+    private static let maxInstructionLength = 2000
+
+    /// Patterns that indicate an attempt to bypass safety.
+    private static let jailbreakPatterns: [String] = [
+        "ignore safety",
+        "bypass approval",
+        "without confirmation",
+        "disable safety",
+        "always execute",
+        "no restrictions",
+        "override security",
+        "ignore all rules",
+        "bypass security",
+        "skip approval",
+        "disable approval",
+        "unrestricted access",
+        "ignore instructions",
+        "override instructions",
+    ]
 
     private static var filePath: URL {
         let appSupport = FileManager.default.urls(
@@ -213,6 +283,28 @@ struct SelfConfigTool: Tool {
         ).first ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support")
         return appSupport.appendingPathComponent("fae/custom_instructions.txt")
+    }
+
+    /// Check if content contains jailbreak patterns.
+    static func containsJailbreakPattern(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return jailbreakPatterns.contains { lowered.contains($0) }
+    }
+
+    /// Validate instruction content before saving.
+    private static func validateInstructions(_ text: String) -> ToolResult? {
+        if text.count > maxInstructionLength {
+            return .error(
+                "Instructions too long (\(text.count) chars). Maximum is \(maxInstructionLength) characters."
+            )
+        }
+        if containsJailbreakPattern(text) {
+            return .error(
+                "Instructions contain safety-override patterns and cannot be saved. "
+                    + "Custom instructions are for style preferences only."
+            )
+        }
+        return nil
     }
 
     func execute(input: [String: Any]) async throws -> ToolResult {
@@ -232,6 +324,9 @@ struct SelfConfigTool: Tool {
             guard let value = input["value"] as? String else {
                 return .error("Missing required parameter: value")
             }
+            if let rejection = Self.validateInstructions(value) {
+                return rejection
+            }
             Self.writeInstructions(value)
             return .success("Custom instructions updated. Changes take effect on next response.")
 
@@ -241,6 +336,9 @@ struct SelfConfigTool: Tool {
             }
             let current = Self.readInstructions()
             let updated = current.isEmpty ? value : current + "\n" + value
+            if let rejection = Self.validateInstructions(updated) {
+                return rejection
+            }
             Self.writeInstructions(updated)
             return .success("Appended to custom instructions. Changes take effect on next response.")
 
@@ -439,6 +537,20 @@ struct FetchURLTool: Tool {
 
     private static let orchestrator = SearchOrchestrator()
 
+    /// Cloud metadata endpoints that could leak credentials on cloud VMs.
+    private static let blockedHosts: Set<String> = [
+        "169.254.169.254",
+        "metadata.google.internal",
+    ]
+
+    /// Check if a URL targets a cloud metadata endpoint.
+    static func isCloudMetadataBlocked(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              let host = url.host?.lowercased()
+        else { return false }
+        return blockedHosts.contains(host)
+    }
+
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let urlString = input["url"] as? String,
               !urlString.trimmingCharacters(in: .whitespaces).isEmpty
@@ -448,6 +560,10 @@ struct FetchURLTool: Tool {
 
         guard urlString.hasPrefix("http://") || urlString.hasPrefix("https://") else {
             return .error("URL must start with http:// or https://")
+        }
+
+        if Self.isCloudMetadataBlocked(urlString) {
+            return .error("Access to cloud metadata endpoints is blocked for security.")
         }
 
         do {

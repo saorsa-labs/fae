@@ -63,7 +63,55 @@ final class ToolRegistry: Sendable {
 
     /// JSON schema descriptions for all registered tools, with examples when available.
     var toolSchemas: String {
-        tools.values
+        schemaString(for: Array(tools.values))
+    }
+
+    /// JSON schema descriptions filtered by tool mode.
+    ///
+    /// - `off` / `read_only`: read-only tools (no writes, no bash)
+    /// - `read_write`: read tools + write/edit/self_config + scheduler mutation
+    /// - `full`: all tools (with approval for writes)
+    /// - `full_no_approval`: all tools
+    func toolSchemas(for mode: String) -> String {
+        let allowed = tools.values.filter { isToolAllowed($0.name, mode: mode) }
+        return schemaString(for: allowed)
+    }
+
+    /// Check whether a tool is allowed in the given mode.
+    func isToolAllowed(_ name: String, mode: String) -> Bool {
+        switch mode {
+        case "off", "read_only":
+            return Self.readOnlyTools.contains(name)
+        case "read_write":
+            return Self.readOnlyTools.contains(name) || Self.writeTools.contains(name)
+        case "full", "full_no_approval":
+            return tools[name] != nil
+        default:
+            // Unknown mode — treat as "full" for backward compatibility.
+            return tools[name] != nil
+        }
+    }
+
+    // MARK: - Tool Mode Sets
+
+    /// Tools available in "off" and "read_only" modes.
+    /// Reads are always safe — Fae is local.
+    private static let readOnlyTools: Set<String> = [
+        "read", "web_search", "fetch_url",
+        "calendar", "reminders", "contacts", "mail", "notes",
+        "scheduler_list", "roleplay", "run_skill",
+    ]
+
+    /// Additional tools available in "read_write" mode.
+    private static let writeTools: Set<String> = [
+        "write", "edit", "self_config",
+        "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
+    ]
+
+    // MARK: - Private
+
+    private func schemaString(for toolList: [any Tool]) -> String {
+        toolList
             .sorted { $0.name < $1.name }
             .map { tool in
                 var schema = "## \(tool.name)\n\(tool.description)\nRisk: \(tool.riskLevel.rawValue)\nParameters: \(tool.parametersSchema)"
