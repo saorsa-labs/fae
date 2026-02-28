@@ -28,6 +28,35 @@ enum SentimentClassifier {
         return best.key
     }
 
+    /// Map an OrbFeeling to a TTS instruct prefix for emotional prosody mode.
+    static func ttsInstruct(for feeling: OrbFeeling, warmth: Float = 3.0) -> String? {
+        let warmthAdj: String
+        switch warmth {
+        case ..<2: warmthAdj = "coolly"
+        case 2..<3: warmthAdj = "gently"
+        case 3..<4: warmthAdj = "warmly"
+        default: warmthAdj = "very warmly"
+        }
+        switch feeling {
+        case .delight:
+            return "Speak \(warmthAdj) with a happy, excited tone"
+        case .concern:
+            return "Speak \(warmthAdj) with a gentle, caring tone"
+        case .calm:
+            return "Speak with a relaxed, steady tone"
+        case .warmth:
+            return "Speak \(warmthAdj) with an affectionate tone"
+        case .curiosity:
+            return "Speak with an inquisitive, interested tone"
+        case .playful:
+            return "Speak with a playful, lighthearted tone"
+        case .focus:
+            return "Speak with a clear, precise tone"
+        case .neutral:
+            return nil
+        }
+    }
+
     private static let sentimentKeywords: [OrbFeeling: [String]] = [
         .warmth: [
             "glad", "happy", "love", "wonderful", "great to hear",

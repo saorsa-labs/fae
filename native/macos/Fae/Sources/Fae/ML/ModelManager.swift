@@ -89,22 +89,67 @@ actor ModelManager {
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.85))
         }
 
-        // Load Fae's voice if using a CustomVoice model and TTS loaded successfully.
+        // Load voice for CustomVoice TTS models. Priority:
+        // 1. Config-specified custom voice path
+        // 2. Default custom voice at ~/Library/Application Support/fae/custom_voice.wav
+        // 3. Bundled fae.wav
         if failedEngines.contains("TTS") == false, config.tts.modelId.contains("CustomVoice") {
-            if let voiceURL = Bundle.faeResources.url(
-                forResource: "fae", withExtension: "wav"
-            ) {
-                do {
-                    try await tts.loadVoice(
-                        referenceAudioURL: voiceURL,
-                        referenceText: config.tts.referenceText
-                    )
-                    NSLog("ModelManager: Fae voice loaded from bundle")
-                } catch {
-                    NSLog("ModelManager: voice load failed (using default): %@", error.localizedDescription)
+            var voiceLoaded = false
+
+            // Try config-specified custom voice.
+            if let customPath = config.tts.customVoicePath {
+                let customURL = URL(fileURLWithPath: customPath)
+                if FileManager.default.fileExists(atPath: customPath) {
+                    do {
+                        try await tts.loadCustomVoice(
+                            url: customURL,
+                            referenceText: config.tts.customReferenceText
+                        )
+                        NSLog("ModelManager: custom voice loaded from config path")
+                        voiceLoaded = true
+                    } catch {
+                        NSLog("ModelManager: custom voice at config path failed: %@", error.localizedDescription)
+                    }
                 }
-            } else {
-                NSLog("ModelManager: fae.wav not found in bundle, using default voice")
+            }
+
+            // Try default custom voice location.
+            if !voiceLoaded {
+                let appSupport = FileManager.default.urls(
+                    for: .applicationSupportDirectory, in: .userDomainMask
+                ).first
+                let defaultCustom = appSupport?.appendingPathComponent("fae/custom_voice.wav")
+                if let url = defaultCustom, FileManager.default.fileExists(atPath: url.path) {
+                    do {
+                        try await tts.loadCustomVoice(
+                            url: url,
+                            referenceText: config.tts.customReferenceText ?? config.tts.referenceText
+                        )
+                        NSLog("ModelManager: custom voice loaded from default location")
+                        voiceLoaded = true
+                    } catch {
+                        NSLog("ModelManager: default custom voice failed: %@", error.localizedDescription)
+                    }
+                }
+            }
+
+            // Fall back to bundled fae.wav.
+            if !voiceLoaded {
+                if let voiceURL = Bundle.faeResources.url(
+                    forResource: "fae", withExtension: "wav"
+                ) {
+                    do {
+                        try await tts.loadVoice(
+                            referenceAudioURL: voiceURL,
+                            referenceText: config.tts.referenceText
+                        )
+                        NSLog("ModelManager: Fae voice loaded from bundle")
+                    } catch {
+                        NSLog("ModelManager: voice load failed (using default): %@", error.localizedDescription)
+                    }
+                } else {
+                    NSLog("ModelManager: fae.wav not found in bundle, using default voice")
+                }
             }
         }
 

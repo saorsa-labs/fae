@@ -19,6 +19,30 @@ actor SkillManager {
         return appSupport.appendingPathComponent("fae/skills")
     }
 
+    /// Audio input directory for skill file handoff.
+    static var audioInputDirectory: URL {
+        skillsDirectory.deletingLastPathComponent()
+            .appendingPathComponent("skill_audio/input")
+    }
+
+    /// Audio output directory for skill file handoff.
+    static var audioOutputDirectory: URL {
+        skillsDirectory.deletingLastPathComponent()
+            .appendingPathComponent("skill_audio/output")
+    }
+
+    /// Build audio context paths for skill execution (creates directories if needed).
+    static func audioContextForSkill() -> [String: Any] {
+        let inputDir = audioInputDirectory
+        let outputDir = audioOutputDirectory
+        try? FileManager.default.createDirectory(at: inputDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        return [
+            "audio_input_dir": inputDir.path,
+            "audio_output_dir": outputDir.path,
+        ]
+    }
+
     /// List installed skills by scanning the skills directory.
     func listSkills() -> [String] {
         Self.installedSkillNames()

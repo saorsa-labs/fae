@@ -27,7 +27,12 @@ struct SettingsView: View {
 
             SettingsModelsTab(commandSender: commandSender)
                 .tabItem {
-                    Label("Voice", systemImage: "waveform")
+                    Label("Models", systemImage: "cpu")
+                }
+
+            SettingsSpeakerTab(commandSender: commandSender)
+                .tabItem {
+                    Label("Voice Identity", systemImage: "person.wave.2")
                 }
 
             SettingsToolsTab(commandSender: commandSender)

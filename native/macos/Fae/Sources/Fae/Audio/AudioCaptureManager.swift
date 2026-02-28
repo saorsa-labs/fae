@@ -104,6 +104,91 @@ actor AudioCaptureManager {
         NSLog("AudioCaptureManager: stopped")
     }
 
+    /// Record a fixed-length audio segment and return the raw samples.
+    ///
+    /// Used for on-demand recording during speaker enrollment (not the streaming pipeline).
+    /// Creates a temporary audio engine that records for the specified duration.
+    func captureSegment(durationSeconds: Double) async throws -> [Float] {
+        let tempEngine = AVAudioEngine()
+        let inputNode = tempEngine.inputNode
+        let nativeFormat = inputNode.outputFormat(forBus: 0)
+
+        guard let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(Self.targetSampleRate),
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw NSError(
+                domain: "AudioCaptureManager",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create target format for segment capture"]
+            )
+        }
+
+        let converter: AVAudioConverter?
+        if nativeFormat.sampleRate != Double(Self.targetSampleRate) || nativeFormat.channelCount != 1 {
+            converter = AVAudioConverter(from: nativeFormat, to: targetFormat)
+        } else {
+            converter = nil
+        }
+
+        let totalSamples = Int(Double(Self.targetSampleRate) * durationSeconds)
+        var collected = [Float]()
+        collected.reserveCapacity(totalSamples)
+
+        let nativeChunkSize = AVAudioFrameCount(
+            Double(Self.chunkSize) * nativeFormat.sampleRate / Double(Self.targetSampleRate)
+        )
+
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Float], Error>) in
+            var finished = false
+
+            inputNode.installTap(onBus: 0, bufferSize: nativeChunkSize, format: nativeFormat) {
+                buffer, _ in
+                guard !finished else { return }
+
+                let chunk: AudioChunk
+                if let conv = converter {
+                    let frameCapacity = AVAudioFrameCount(
+                        Double(buffer.frameLength) * Double(Self.targetSampleRate)
+                            / buffer.format.sampleRate
+                    )
+                    guard let converted = AVAudioPCMBuffer(
+                        pcmFormat: targetFormat,
+                        frameCapacity: frameCapacity
+                    ) else { return }
+                    var error: NSError?
+                    conv.convert(to: converted, error: &error) { _, outStatus in
+                        outStatus.pointee = .haveData
+                        return buffer
+                    }
+                    guard error == nil else { return }
+                    chunk = Self.extractChunk(from: converted)
+                } else {
+                    chunk = Self.extractChunk(from: buffer)
+                }
+
+                collected.append(contentsOf: chunk.samples)
+
+                if collected.count >= totalSamples {
+                    finished = true
+                    inputNode.removeTap(onBus: 0)
+                    tempEngine.stop()
+                    let result = Array(collected.prefix(totalSamples))
+                    cont.resume(returning: result)
+                }
+            }
+
+            do {
+                try tempEngine.start()
+            } catch {
+                finished = true
+                cont.resume(throwing: error)
+            }
+        }
+    }
+
     // MARK: - Private
 
     private func emitChunk(_ chunk: AudioChunk) {

@@ -73,7 +73,11 @@ actor PipelineCoordinator {
     // MARK: - Speaker Identity State
 
     private var currentSpeakerLabel: String?
+    private var currentSpeakerDisplayName: String?
+    private var currentSpeakerRole: SpeakerRole?
     private var currentSpeakerIsOwner: Bool = false
+    private var previousSpeakerLabel: String?
+    private var utterancesSinceOwnerVerified: Int = 0
 
     // MARK: - Timing & Echo Detection
 
@@ -153,8 +157,9 @@ actor PipelineCoordinator {
 
         eventBus.send(.pipelineStateChanged(.starting))
 
-        // Set up playback event handler.
+        // Set up playback event handler and voice speed.
         try await playback.setup()
+        await playback.setSpeed(config.tts.speed)
         await setPlaybackEventHandler()
 
         // Start audio capture.
@@ -189,6 +194,8 @@ actor PipelineCoordinator {
     func injectText(_ text: String) async {
         // Text input is trusted (physically typed by the user at the device).
         currentSpeakerLabel = "owner"
+        currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
+        currentSpeakerRole = .owner
         currentSpeakerIsOwner = true
 
         // If assistant is active, trigger barge-in.
@@ -205,6 +212,41 @@ actor PipelineCoordinator {
     /// Used for system messages like the first-launch greeting.
     func speakDirect(_ text: String) async {
         await speakText(text, isFinal: true)
+    }
+
+    /// Speak text with a specific voice description, bypassing the LLM.
+    ///
+    /// Used for voice preview in roleplay and settings.
+    func speakWithVoice(_ text: String, voiceInstruct: String) async {
+        await speakText(text, isFinal: true, voiceInstruct: voiceInstruct)
+    }
+
+    /// Test speaker match: record 2 seconds, embed, match against profiles.
+    func testSpeakerMatch() async {
+        guard let encoder = speakerEncoder, await encoder.isLoaded,
+              let store = speakerProfileStore
+        else {
+            NSLog("PipelineCoordinator: testSpeakerMatch — speaker system not ready")
+            return
+        }
+        do {
+            let samples = try await capture.captureSegment(durationSeconds: 2.0)
+            let embedding = try await encoder.embed(
+                audio: samples,
+                sampleRate: AudioCaptureManager.targetSampleRate
+            )
+            if let match = await store.match(
+                embedding: embedding,
+                threshold: config.speaker.threshold
+            ) {
+                NSLog("PipelineCoordinator: testSpeakerMatch — Match: %@ (%.2f)",
+                      match.displayName, match.similarity)
+            } else {
+                NSLog("PipelineCoordinator: testSpeakerMatch — No match")
+            }
+        } catch {
+            NSLog("PipelineCoordinator: testSpeakerMatch failed: %@", error.localizedDescription)
+        }
     }
 
     /// Inject remote PCM audio into the speech pipeline (e.g. companion handoff).
@@ -322,6 +364,8 @@ actor PipelineCoordinator {
 
         // Speaker identification (best-effort, non-blocking).
         currentSpeakerLabel = nil
+        currentSpeakerDisplayName = nil
+        currentSpeakerRole = nil
         currentSpeakerIsOwner = false
         if config.speaker.enabled,
            let encoder = speakerEncoder, await encoder.isLoaded,
@@ -336,8 +380,14 @@ actor PipelineCoordinator {
                 // First-launch enrollment: first voice becomes the owner.
                 let hasOwner = await store.hasOwnerProfile()
                 if !hasOwner && !config.onboarded {
-                    await store.enroll(label: "owner", embedding: embedding)
+                    let ownerName = config.userName ?? "Owner"
+                    await store.enroll(
+                        label: "owner", embedding: embedding,
+                        role: .owner, displayName: ownerName
+                    )
                     currentSpeakerLabel = "owner"
+                    currentSpeakerDisplayName = ownerName
+                    currentSpeakerRole = .owner
                     currentSpeakerIsOwner = true
                     NSLog("PipelineCoordinator: owner voice enrolled from first speech")
                 } else if let match = await store.match(
@@ -345,10 +395,12 @@ actor PipelineCoordinator {
                     threshold: config.speaker.threshold
                 ) {
                     currentSpeakerLabel = match.label
-                    currentSpeakerIsOwner = match.label == "owner"
+                    currentSpeakerDisplayName = match.displayName
+                    currentSpeakerRole = match.role
+                    currentSpeakerIsOwner = match.role == .owner
 
                     // Progressive enrollment: strengthen known profiles (skip fae_self).
-                    if config.speaker.progressiveEnrollment, match.label != "fae_self" {
+                    if config.speaker.progressiveEnrollment, match.role != .faeSelf {
                         await store.enrollIfBelowMax(
                             label: match.label,
                             embedding: embedding,
@@ -356,8 +408,8 @@ actor PipelineCoordinator {
                         )
                     }
 
-                    NSLog("PipelineCoordinator: speaker matched: %@, similarity: %.3f",
-                          match.label, match.similarity)
+                    NSLog("PipelineCoordinator: speaker matched: %@ (%@), similarity: %.3f",
+                          match.displayName, match.label, match.similarity)
                 } else {
                     NSLog("PipelineCoordinator: speaker not recognized")
                 }
@@ -373,6 +425,30 @@ actor PipelineCoordinator {
             NSLog("PipelineCoordinator: dropping %.1fs segment (matched Fae's own voice)", durationSecs)
             return
         }
+
+        // Liveness enforcement: reject speech with low liveness score in enforce mode.
+        if config.voiceIdentity.enabled,
+           config.voiceIdentity.mode == "enforce",
+           config.speaker.livenessThreshold > 0,
+           let encoder = speakerEncoder,
+           let liveness = await encoder.lastLivenessResult,
+           liveness.score < config.speaker.livenessThreshold
+        {
+            NSLog("PipelineCoordinator: rejecting speech — liveness score %.3f below threshold %.2f",
+                  liveness.score, config.speaker.livenessThreshold)
+            await speakDirect("I'm not sure that's a live voice. Could you speak directly to me?")
+            return
+        }
+
+        // Speaker change detection.
+        if let prevLabel = previousSpeakerLabel,
+           let currLabel = currentSpeakerLabel,
+           prevLabel != currLabel
+        {
+            NSLog("PipelineCoordinator: speaker change detected: %@ → %@", prevLabel, currLabel)
+        }
+        previousSpeakerLabel = currentSpeakerLabel
+        utterancesSinceOwnerVerified = currentSpeakerIsOwner ? 0 : utterancesSinceOwnerVerified + 1
 
         await refreshDegradedModeIfNeeded(context: "before_stt")
 
@@ -500,7 +576,7 @@ actor PipelineCoordinator {
             await playback.playThinkingTone()
 
             // Add user message to history.
-            await conversationState.addUserMessage(userText)
+            await conversationState.addUserMessage(userText, speakerDisplayName: currentSpeakerDisplayName)
 
             // Memory recall — inject context before generation.
             let memoryContext = await memoryOrchestrator?.recall(query: userText)
@@ -512,6 +588,8 @@ actor PipelineCoordinator {
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
                 userName: config.userName,
+                speakerDisplayName: currentSpeakerDisplayName,
+                speakerRole: currentSpeakerRole,
                 toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
                 installedSkills: skills
             )
@@ -587,7 +665,12 @@ actor PipelineCoordinator {
                     for segment in segments {
                         let voice: String?
                         if let character = segment.character {
-                            let matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
+                            // Check session first, then fall back to global character voice library.
+                            var matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
+                            if matched == nil {
+                                let globalEntry = await CharacterVoiceLibrary.shared.find(name: character)
+                                matched = globalEntry?.voiceInstruct
+                            }
                             if matched == nil {
                                 NSLog("PipelineCoordinator: unassigned character '%@' — using narrator voice", character)
                             }
@@ -652,7 +735,11 @@ actor PipelineCoordinator {
                 for segment in voiceRemaining {
                     let voice: String?
                     if let character = segment.character {
-                        let matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
+                        var matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
+                        if matched == nil {
+                            let globalEntry = await CharacterVoiceLibrary.shared.find(name: character)
+                            matched = globalEntry?.voiceInstruct
+                        }
                         if matched == nil {
                             NSLog("PipelineCoordinator: unassigned character '%@' — using narrator voice", character)
                         }
@@ -691,7 +778,8 @@ actor PipelineCoordinator {
                 _ = await memoryOrchestrator?.capture(
                     turnId: turnId,
                     userText: userText,
-                    assistantText: spokenText
+                    assistantText: spokenText,
+                    speakerId: currentSpeakerLabel
                 )
 
                 // Sentiment → orb feeling.
@@ -739,6 +827,17 @@ actor PipelineCoordinator {
                 output: String(result.output.prefix(200))
             ))
 
+            // Check for audio file output from skills — play WAV files automatically.
+            if call.name == "run_skill", !result.isError,
+               let audioPath = Self.extractAudioFilePath(from: result.output)
+            {
+                let audioURL = URL(fileURLWithPath: audioPath)
+                if FileManager.default.fileExists(atPath: audioPath) {
+                    NSLog("PipelineCoordinator: playing skill audio output: %@", audioURL.lastPathComponent)
+                    await playback.playFile(url: audioURL)
+                }
+            }
+
             await conversationState.addToolResult(
                 id: callId,
                 name: call.name,
@@ -768,10 +867,24 @@ actor PipelineCoordinator {
         assistantSpeaking = true
         echoSuppressor.onAssistantSpeechStart()
 
+        // Emotional prosody: when enabled and no explicit voiceInstruct (i.e. not roleplay),
+        // classify sentiment and use instruct mode with emotion description.
+        let effectiveVoiceInstruct: String?
+        if voiceInstruct != nil {
+            effectiveVoiceInstruct = voiceInstruct
+        } else if config.tts.emotionalProsody {
+            let feeling = SentimentClassifier.classify(text) ?? .neutral
+            effectiveVoiceInstruct = SentimentClassifier.ttsInstruct(
+                for: feeling, warmth: config.tts.warmth
+            )
+        } else {
+            effectiveVoiceInstruct = nil
+        }
+
         do {
             let ttsStartedAt = Date()
             var ttsFirstChunkEmitted = false
-            let audioStream = await ttsEngine.synthesize(text: text, voiceInstruct: voiceInstruct)
+            let audioStream = await ttsEngine.synthesize(text: text, voiceInstruct: effectiveVoiceInstruct)
             for try await buffer in audioStream {
                 if !ttsFirstChunkEmitted {
                     let latencyMs = Date().timeIntervalSince(ttsStartedAt) * 1000
@@ -989,6 +1102,16 @@ actor PipelineCoordinator {
         return "{}"
     }
 
+    /// Extract an audio file path from skill output JSON (looks for "audio_file" key).
+    private static func extractAudioFilePath(from output: String) -> String? {
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let path = json["audio_file"] as? String,
+              path.hasSuffix(".wav")
+        else { return nil }
+        return path
+    }
+
     // MARK: - Tool Execution
 
     private static let toolTimeoutSeconds: TimeInterval = 30
@@ -1008,11 +1131,13 @@ actor PipelineCoordinator {
             return .error(limitError)
         }
 
+        let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
         let voiceDecision = VoiceIdentityPolicy.evaluateSensitiveAction(
             config: config.speaker,
             isOwner: currentSpeakerIsOwner,
             risk: tool.riskLevel,
-            toolName: call.name
+            toolName: call.name,
+            livenessScore: livenessScore
         )
 
         switch voiceDecision {

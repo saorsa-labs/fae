@@ -503,11 +503,9 @@ struct RunSkillTool: Tool {
             return .error("Missing required parameter: name")
         }
 
-        let skillInput: [String: Any]
+        var skillInput: [String: Any] = SkillManager.audioContextForSkill()
         if let text = input["input"] as? String {
-            skillInput = ["input": text]
-        } else {
-            skillInput = [:]
+            skillInput["input"] = text
         }
 
         do {

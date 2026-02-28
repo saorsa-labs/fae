@@ -122,9 +122,20 @@ enum PersonalityManager {
         - Use the roleplay tool to manage character voice sessions for plays, scripts, books, or news.
         - First: start a session, then assign_voice for each character with distinct voice descriptions.
         - Voice descriptions should specify gender, age, accent, and speaking style (under 50 words).
+        - Use specific descriptive words: deep, crisp, fast-paced, resonant, breathy, gravelly.
+        - Combine multiple dimensions: pitch + speed + emotion + accent (e.g. "Deep male British voice, slow and measured, with gravitas").
+        - Avoid vague terms like "nice", "normal", "good" — be specific about voice characteristics.
         - Then read using <voice character="Name">dialog</voice> tags. Text outside tags is narration (your natural voice).
         - Keep voice assignments consistent — same character always gets the same voice.
+        - You can resume previous sessions by title using the resume action.
+        - Save frequently-used character voices to the global library with save_voice for reuse across sessions.
         - After finishing, stop the session.
+
+        News reading:
+        - When asked to "read me the news about X" or similar, search for relevant articles, then read with a professional \
+        news anchor style using <voice character="Anchor">headline text</voice> tags.
+        - Attribute sources: "According to [Source]..." — always credit where information came from.
+        - No roleplay session needed for news — just use voice tags inline.
         """
 
     // MARK: - Acknowledgment Arrays
@@ -219,6 +230,8 @@ enum PersonalityManager {
         voiceOptimized: Bool = true,
         visionCapable: Bool = false,
         userName: String? = nil,
+        speakerDisplayName: String? = nil,
+        speakerRole: SpeakerRole? = nil,
         soulContract: String? = nil,
         memoryContext: String? = nil,
         toolSchemas: String? = nil,
@@ -255,16 +268,34 @@ enum PersonalityManager {
                 """)
         }
 
-        // 6. Current date/time.
+        // 6. Speaker identity context.
+        if let name = speakerDisplayName {
+            let roleDesc: String
+            switch speakerRole {
+            case .owner:
+                roleDesc = "your owner"
+            case .trusted:
+                roleDesc = "a trusted speaker"
+            case .guest:
+                roleDesc = "an unregistered speaker"
+            case .faeSelf, .none:
+                roleDesc = "unknown"
+            }
+            parts.append("The current speaker is \(name) (\(roleDesc)).")
+        } else {
+            parts.append("The speaker has not been identified.")
+        }
+
+        // 7. Current date/time.
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         parts.append("Current date and time: \(dateFormatter.string(from: Date()))")
 
-        // 7. Permission context.
+        // 8. Permission context.
         parts.append(PermissionStatusProvider.promptFragment())
 
-        // 8. Custom user instructions (persisted personality preferences).
+        // 9. Custom user instructions (persisted personality preferences).
         let customInstructions = loadCustomInstructions()
         if !customInstructions.isEmpty {
             parts.append("""
@@ -273,14 +304,14 @@ enum PersonalityManager {
                 """)
         }
 
-        // 9. Python / uv capability + self-modification + proactive behavior + roleplay (only when tools are available).
+        // 10. Python / uv capability + self-modification + proactive behavior + roleplay (only when tools are available).
         if toolSchemas != nil {
             parts.append(pythonCapabilityPrompt)
             parts.append(selfModificationPrompt)
             parts.append(proactiveBehaviorPrompt)
             parts.append(roleplayPrompt)
 
-            // 9b. Installed skill inventory — lets the LLM know what it can already do.
+            // 10b. Installed skill inventory — lets the LLM know what it can already do.
             if !installedSkills.isEmpty {
                 parts.append(
                     "Your installed Python skills (run via run_skill tool): \(installedSkills.joined(separator: ", "))"
@@ -288,7 +319,7 @@ enum PersonalityManager {
             }
         }
 
-        // 10. Tool schemas (enables inline tool use via <tool_call> markup).
+        // 11. Tool schemas (enables inline tool use via <tool_call> markup).
         if let schemas = toolSchemas, !schemas.isEmpty {
             parts.append("""
                 Tool usage:

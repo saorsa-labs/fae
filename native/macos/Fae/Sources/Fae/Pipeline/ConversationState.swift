@@ -40,9 +40,15 @@ actor ConversationStateTracker {
 
     // MARK: - History Management
 
-    /// Add a user message to history.
-    func addUserMessage(_ text: String) {
-        history.append(LLMMessage(role: .user, content: text))
+    /// Add a user message to history, optionally annotated with speaker name.
+    func addUserMessage(_ text: String, speakerDisplayName: String? = nil) {
+        let content: String
+        if let name = speakerDisplayName {
+            content = "[\(name)]: \(text)"
+        } else {
+            content = text
+        }
+        history.append(LLMMessage(role: .user, content: content))
         trimHistory()
     }
 

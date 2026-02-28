@@ -49,6 +49,7 @@ struct MemoryRecord: Sendable {
     var staleAfterSecs: UInt64?
     var metadata: String?
     var cachedEmbedding: [Float]?
+    var speakerId: String?
 }
 
 struct MemoryAuditEntry: Sendable {
@@ -74,7 +75,7 @@ struct MemoryCaptureReport: Sendable {
 // MARK: - Constants
 
 enum MemoryConstants {
-    static let schemaVersion: UInt32 = 6
+    static let schemaVersion: UInt32 = 7
     static let maxRecordTextLen: Int = 32_768
     static let truncationSuffix: String = " [truncated]"
 

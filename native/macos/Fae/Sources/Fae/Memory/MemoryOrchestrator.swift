@@ -108,7 +108,8 @@ actor MemoryOrchestrator {
     func capture(
         turnId: String,
         userText: String,
-        assistantText: String
+        assistantText: String,
+        speakerId: String? = nil
     ) async -> MemoryCaptureReport {
         guard config.enabled else { return MemoryCaptureReport() }
 
@@ -129,7 +130,8 @@ actor MemoryOrchestrator {
                 sourceTurnId: turnId,
                 tags: ["turn"],
                 importanceScore: 0.30,
-                staleAfterSecs: 7_776_000  // 90 days
+                staleAfterSecs: 7_776_000,  // 90 days
+                speakerId: speakerId
             )
             report.episodeId = episode.id
 

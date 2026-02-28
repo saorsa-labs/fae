@@ -331,6 +331,21 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 respondToApproval(requestID: requestId, approved: approved)
             }
 
+        case "speaker.rename":
+            if let label = payload["label"] as? String,
+               let displayName = payload["displayName"] as? String
+            {
+                Task {
+                    await speakerProfileStore.rename(label: label, newDisplayName: displayName)
+                    NSLog("FaeCore: speaker '%@' renamed to '%@'", label, displayName)
+                }
+            }
+
+        case "speaker.test":
+            Task {
+                await pipelineCoordinator?.testSpeakerMatch()
+            }
+
         case "skills.reload":
             Task {
                 await scheduler?.triggerTask(id: "skill_health_check")
@@ -404,12 +419,30 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         case "config.get":
             let key = payload["key"] as? String ?? ""
+            if key == "speaker_profiles" {
+                return await speakerProfilesResponse()
+            }
             return configGetResponse(key: key)
 
         default:
             NSLog("FaeCore: unhandled query '%@'", name)
             return nil
         }
+    }
+
+    private func speakerProfilesResponse() async -> [String: Any] {
+        let summaries = await speakerProfileStore.profileSummaries()
+        let formatter = ISO8601DateFormatter()
+        let profiles: [[String: Any]] = summaries.map { s in
+            [
+                "id": s.id,
+                "displayName": s.displayName,
+                "role": s.role.rawValue,
+                "enrollmentCount": s.enrollmentCount,
+                "lastSeen": formatter.string(from: s.lastSeen),
+            ]
+        }
+        return ["payload": ["speaker_profiles": profiles] as [String: Any]]
     }
 
     // MARK: - Commands
@@ -752,6 +785,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     ] as [String: Any],
                 ] as [String: Any],
             ]
+        case "speaker_profiles":
+            // Build speaker profiles synchronously from the actor.
+            // The caller should use queryCommand for async access.
+            return ["payload": ["speaker_profiles": [] as [[String: Any]]] as [String: Any]]
         case "llm.voice_model_preset":
             return [
                 "payload": [

@@ -17,6 +17,14 @@ actor AudioPlaybackManager {
     /// Default TTS output sample rate.
     static let ttsSampleRate: Double = 24_000
 
+    /// Playback speed multiplier (0.8-1.4). Adjusts resample ratio.
+    private var speed: Float = 1.0
+
+    /// Set the playback speed multiplier. Clamped to [0.8, 1.4].
+    func setSpeed(_ newSpeed: Float) {
+        speed = min(max(newSpeed, 0.8), 1.4)
+    }
+
     /// Callback for playback events.
     private var onEvent: ((PlaybackEvent) -> Void)?
 
@@ -53,10 +61,14 @@ actor AudioPlaybackManager {
         let outputFormat = engine.outputNode.outputFormat(forBus: 0)
         let outputRate = outputFormat.sampleRate
 
-        // Resample if TTS rate differs from output device rate.
+        // Apply speed: treat source rate as higher to speed up, lower to slow down.
+        // This changes pitch proportionally — acceptable for voice speed adjustment.
+        let effectiveSourceRate = Double(sampleRate) * Double(speed)
+
+        // Resample if effective source rate differs from output device rate.
         let resampled: [Float]
-        if Double(sampleRate) != outputRate {
-            resampled = Self.linearResample(samples, from: Double(sampleRate), to: outputRate)
+        if effectiveSourceRate != outputRate {
+            resampled = Self.linearResample(samples, from: effectiveSourceRate, to: outputRate)
         } else {
             resampled = samples
         }
@@ -128,6 +140,23 @@ actor AudioPlaybackManager {
     func playListeningTone() {
         let samples = AudioToneGenerator.listeningTone()
         enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
+    }
+
+    // MARK: - File Playback
+
+    /// Play a WAV file from disk (for skill audio output).
+    func playFile(url: URL) async {
+        do {
+            let data = try Data(contentsOf: url)
+            let samples = MLXTTSEngine.parseWAVToFloat32(data)
+            guard !samples.isEmpty else {
+                NSLog("AudioPlaybackManager: empty or unsupported WAV at %@", url.lastPathComponent)
+                return
+            }
+            enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
+        } catch {
+            NSLog("AudioPlaybackManager: failed to play %@: %@", url.lastPathComponent, error.localizedDescription)
+        }
     }
 
     // MARK: - Private

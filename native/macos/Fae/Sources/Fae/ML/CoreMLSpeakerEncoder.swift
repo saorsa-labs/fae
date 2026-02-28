@@ -21,6 +21,8 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     private var usingMelFallback = false
     private(set) var isLoaded = false
     private(set) var loadState: MLEngineLoadState = .notStarted
+    /// Last liveness analysis result — queried by pipeline for threshold enforcement.
+    private(set) var lastLivenessResult: LivenessResult?
 
     // MARK: - Constants
 
@@ -107,11 +109,13 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
             throw MLEngineError.notLoaded("SpeakerEncoder: audio too short for mel spectrogram")
         }
 
-        // Liveness check (non-blocking — log only).
-        let liveness = Self.checkLiveness(mel: mel, numFrames: numFrames)
-        if liveness.isSuspicious {
-            NSLog("CoreMLSpeakerEncoder: liveness warning — low spectral variance (%.4f) and low high-freq ratio (%.4f), possible replay",
-                  liveness.spectralVariance, liveness.highFreqRatio)
+        // Liveness check — result stored for pipeline threshold enforcement.
+        let liveness = Self.checkLiveness(mel: mel, numFrames: numFrames, audio: audio24k)
+        lastLivenessResult = liveness
+        if liveness.suspicious {
+            NSLog("CoreMLSpeakerEncoder: liveness warning — score %.3f (spectral=%.4f, highFreq=%.4f, f0=%.4f, proximity=%.4f)",
+                  liveness.score, liveness.spectralVariance, liveness.highFreqRatio,
+                  liveness.f0Variance, liveness.proximityRatio)
         }
 
         // Mel-spectral fallback: mean + std of each mel band → 256-dim vector.
@@ -411,29 +415,42 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
 
     // MARK: - Liveness Heuristics
 
-    /// Result of basic replay/liveness checks on audio.
-    struct LivenessCheck: Sendable {
-        /// Variance of mel-band energy across frames (low = potential replay).
+    /// Result of enhanced replay/liveness analysis on audio.
+    ///
+    /// Four independent checks aggregated into a composite score:
+    /// - **Spectral variance**: formant dynamics across frames (replays are flatter)
+    /// - **High-frequency ratio**: codec compression attenuates above ~16 kHz
+    /// - **F0 variance**: pitch contour variation via autocorrelation (replays flatten dynamics)
+    /// - **Proximity ratio**: direct-to-reverberant energy (speakers diffuse transients)
+    struct LivenessResult: Sendable {
         let spectralVariance: Float
-        /// Ratio of high-frequency energy to total (low = codec compression artifacts).
         let highFreqRatio: Float
-        /// Whether the audio looks suspicious (not blocking — informational only).
-        let isSuspicious: Bool
+        let f0Variance: Float
+        let proximityRatio: Float
+        /// Aggregate liveness score (0-1, higher = more likely live speech).
+        let score: Float
+        /// Per-check raw values for diagnostics.
+        let checks: [String: Float]
+        /// Whether the audio looks suspicious (score below threshold).
+        let suspicious: Bool
     }
 
-    /// Run lightweight liveness heuristics on a log-mel spectrogram.
+    /// Run enhanced liveness heuristics combining mel-spectral and time-domain analysis.
     ///
-    /// Checks for two replay indicators:
-    /// 1. **Spectral variance**: Real speech has dynamic formant variation across frames.
-    ///    Recordings played through speakers tend to be spectrally flatter.
-    /// 2. **High-frequency energy**: Codec compression (MP3, AAC, Opus) attenuates
-    ///    energy above ~16 kHz. Raw microphone input preserves full bandwidth.
+    /// Four independent checks aggregated into a composite score:
+    /// 1. **Spectral variance**: Real speech has dynamic formant variation.
+    /// 2. **High-frequency energy**: Codec compression attenuates above ~16 kHz.
+    /// 3. **F0 variance**: Pitch contour variation via autocorrelation (vDSP).
+    /// 4. **Proximity ratio**: Direct-to-reverberant energy (transient sharpness).
     ///
-    /// Returns a `LivenessCheck` with findings. Does NOT block embedding —
-    /// suspicion is logged for diagnostics only.
-    static func checkLiveness(mel: [Float], numFrames: Int) -> LivenessCheck {
+    /// Returns a `LivenessResult` — the pipeline queries `lastLivenessResult`
+    /// to enforce thresholds when `voiceIdentity.mode == "enforce"`.
+    static func checkLiveness(mel: [Float], numFrames: Int, audio: [Float]) -> LivenessResult {
         guard numFrames > 1 else {
-            return LivenessCheck(spectralVariance: 0, highFreqRatio: 0, isSuspicious: false)
+            return LivenessResult(
+                spectralVariance: 0, highFreqRatio: 0, f0Variance: 0,
+                proximityRatio: 0, score: 0, checks: [:], suspicious: false
+            )
         }
 
         // 1. Spectral variance: compute per-frame energy, then variance across frames.
@@ -457,7 +474,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         let spectralVariance = sumSqDiff / Float(numFrames)
 
         // 2. High-frequency energy ratio: compare top 1/4 mel bands vs total.
-        let highBandStart = numMels * 3 / 4  // top 32 of 128 bands
+        let highBandStart = numMels * 3 / 4
         var totalEnergy: Float = 0
         var highEnergy: Float = 0
         for m in 0..<numMels {
@@ -471,16 +488,145 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         }
         let highFreqRatio = totalEnergy > 1e-10 ? highEnergy / totalEnergy : 0
 
-        // Thresholds (empirically tuned — conservative to minimize false positives).
-        let lowVariance = spectralVariance < 0.05
-        let lowHighFreq = highFreqRatio < 0.02
-        let isSuspicious = lowVariance && lowHighFreq
+        // 3. F0 variance (pitch contour variation via autocorrelation).
+        let f0Var = estimateF0Variance(audio)
 
-        return LivenessCheck(
+        // 4. Proximity ratio (direct-to-reverberant energy via crest factor).
+        let proxRatio = estimateProximityRatio(audio)
+
+        // Normalize each check to [0, 1] for weighted aggregation.
+        let normSpectral = min(spectralVariance / 0.5, 1.0)
+        let normHighFreq = min(highFreqRatio / 0.15, 1.0)
+        let normF0 = min(f0Var / 0.3, 1.0)
+        let score = 0.3 * normSpectral + 0.3 * normHighFreq + 0.25 * normF0 + 0.15 * proxRatio
+
+        let checks: [String: Float] = [
+            "spectralVariance": spectralVariance,
+            "highFreqRatio": highFreqRatio,
+            "f0Variance": f0Var,
+            "proximityRatio": proxRatio,
+        ]
+
+        return LivenessResult(
             spectralVariance: spectralVariance,
             highFreqRatio: highFreqRatio,
-            isSuspicious: isSuspicious
+            f0Variance: f0Var,
+            proximityRatio: proxRatio,
+            score: score,
+            checks: checks,
+            suspicious: score < 0.3
         )
+    }
+
+    /// Estimate F0 (fundamental frequency) variance from raw audio via autocorrelation.
+    ///
+    /// Real speech has natural pitch variation (coefficient of variation >0.15).
+    /// Recordings played through speakers tend to flatten pitch dynamics (<0.10).
+    /// Uses vDSP for efficient dot-product computation at each lag.
+    private static func estimateF0Variance(_ audio: [Float]) -> Float {
+        let frameLen = modelSampleRate * 30 / 1000   // 30ms = 720 samples at 24kHz
+        let hopSamples = modelSampleRate * 10 / 1000  // 10ms hop = 240 samples
+        let minLag = modelSampleRate / 400            // 400 Hz max F0 -> lag 60
+        let maxLag = modelSampleRate / 80             // 80 Hz min F0 -> lag 300
+
+        guard audio.count >= frameLen, maxLag < frameLen else { return 0 }
+
+        var f0Values: [Float] = []
+
+        audio.withUnsafeBufferPointer { buf in
+            var offset = 0
+            while offset + frameLen <= buf.count {
+                let framePtr = buf.baseAddress! + offset
+
+                // Skip silence.
+                var rms: Float = 0
+                vDSP_rmsqv(framePtr, 1, &rms, vDSP_Length(frameLen))
+                guard rms > 0.01 else {
+                    offset += hopSamples
+                    continue
+                }
+
+                // Find dominant pitch via autocorrelation peak in F0 range.
+                var bestLag = 0
+                var bestCorr: Float = -1
+
+                for lag in minLag...min(maxLag, frameLen - 1) {
+                    var corr: Float = 0
+                    let count = vDSP_Length(frameLen - lag)
+                    vDSP_dotpr(framePtr, 1, framePtr + lag, 1, &corr, count)
+                    // Normalize by frame energy for comparable correlation values.
+                    var energy: Float = 0
+                    vDSP_dotpr(framePtr, 1, framePtr, 1, &energy, count)
+                    if energy > 1e-10 { corr /= energy }
+                    if corr > bestCorr {
+                        bestCorr = corr
+                        bestLag = lag
+                    }
+                }
+
+                if bestLag > 0 && bestCorr > 0.3 {
+                    f0Values.append(Float(modelSampleRate) / Float(bestLag))
+                }
+
+                offset += hopSamples
+            }
+        }
+
+        guard f0Values.count > 2 else { return 0 }
+
+        // Coefficient of variation = std / mean.
+        var mean: Float = 0
+        vDSP_meanv(f0Values, 1, &mean, vDSP_Length(f0Values.count))
+        guard mean > 1 else { return 0 }
+
+        var sumSq: Float = 0
+        for v in f0Values {
+            let d = v - mean
+            sumSq += d * d
+        }
+        return sqrtf(sumSq / Float(f0Values.count)) / mean
+    }
+
+    /// Estimate proximity ratio (direct-to-reverberant energy) from raw audio.
+    ///
+    /// Direct speech has sharper transients (higher crest factor = peak/RMS)
+    /// than speech played through a speaker, where room acoustics diffuse energy.
+    /// Returns a value in [0, 1] where higher = more likely direct speech.
+    private static func estimateProximityRatio(_ audio: [Float]) -> Float {
+        let windowSize = modelSampleRate * 20 / 1000  // 20ms windows at 24kHz
+        let hopSamples = modelSampleRate * 10 / 1000
+
+        guard audio.count >= windowSize else { return 0 }
+
+        var crestFactors: [Float] = []
+
+        audio.withUnsafeBufferPointer { buf in
+            var offset = 0
+            while offset + windowSize <= buf.count {
+                let ptr = buf.baseAddress! + offset
+
+                var rms: Float = 0
+                vDSP_rmsqv(ptr, 1, &rms, vDSP_Length(windowSize))
+                guard rms > 0.005 else {
+                    offset += hopSamples
+                    continue
+                }
+
+                var peak: Float = 0
+                vDSP_maxmgv(ptr, 1, &peak, vDSP_Length(windowSize))
+                crestFactors.append(peak / rms)
+
+                offset += hopSamples
+            }
+        }
+
+        guard !crestFactors.isEmpty else { return 0 }
+
+        var mean: Float = 0
+        vDSP_meanv(crestFactors, 1, &mean, vDSP_Length(crestFactors.count))
+
+        // Normalize: direct speech crest ~6-10, speaker playback ~3-5.
+        return min(max((mean - 3.0) / 7.0, 0), 1)
     }
 
     // MARK: - L2 Normalization

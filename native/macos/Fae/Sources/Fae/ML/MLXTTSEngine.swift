@@ -148,9 +148,57 @@ actor MLXTTSEngine: TTSEngine {
         NSLog("MLXTTSEngine: voice loaded (%d samples, speech offset=%d)", clipSamples.count, speechStart)
     }
 
+    /// Load a custom voice from a user-provided WAV file with validation.
+    ///
+    /// Validates format (mono PCM 16-bit) and duration (2-8 seconds of speech).
+    /// Falls through to the standard `loadVoice` path after validation.
+    func loadCustomVoice(url: URL, referenceText: String?) async throws {
+        let audioData = try Data(contentsOf: url)
+        let samples = Self.parseWAVToFloat32(audioData)
+
+        guard !samples.isEmpty else {
+            throw MLEngineError.loadFailed("TTS", NSError(
+                domain: "MLXTTSEngine", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "WAV must be mono PCM 16-bit format"]
+            ))
+        }
+
+        // Validate duration: 2-8 seconds at 24kHz.
+        let durationSecs = Float(samples.count) / 24_000
+        guard durationSecs >= 2.0, durationSecs <= 8.0 else {
+            throw MLEngineError.loadFailed("TTS", NSError(
+                domain: "MLXTTSEngine", code: 3,
+                userInfo: [NSLocalizedDescriptionKey:
+                    String(format: "WAV duration %.1fs — must be 2-8 seconds of clear speech", durationSecs)]
+            ))
+        }
+
+        try await loadVoice(referenceAudioURL: url, referenceText: referenceText)
+        NSLog("MLXTTSEngine: custom voice loaded from %@", url.lastPathComponent)
+    }
+
     /// Synthesize text to a stream of audio buffers using Fae's cloned voice (ICL mode).
     func synthesize(text: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         synthesize(text: text, voiceInstruct: nil)
+    }
+
+    /// Synthesize text with a cloned voice from a specific reference audio (per-character cloning).
+    ///
+    /// - Parameters:
+    ///   - text: The text to speak.
+    ///   - refAudio: MLXArray of reference audio samples for voice cloning.
+    ///   - refText: Transcript of the reference audio.
+    func synthesize(text: String, refAudio: MLXArray, refText: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                await self.synthesizeWithRef(
+                    text: text,
+                    refAudio: refAudio,
+                    refText: refText,
+                    continuation: continuation
+                )
+            }
+        }
     }
 
     /// Synthesize text with a specific voice description (instruct mode).
@@ -210,6 +258,77 @@ actor MLXTTSEngine: TTSEngine {
                 voice: voice,
                 refAudio: ref,
                 refText: refTxt,
+                language: nil
+            )
+            for try await samples in stream {
+                guard let format = AVAudioFormat(
+                    standardFormatWithSampleRate: Double(sampleRate),
+                    channels: 1
+                ) else { continue }
+                guard let buffer = AVAudioPCMBuffer(
+                    pcmFormat: format,
+                    frameCapacity: AVAudioFrameCount(samples.count)
+                ) else { continue }
+                buffer.frameLength = AVAudioFrameCount(samples.count)
+                if let dest = buffer.floatChannelData?[0] {
+                    samples.withUnsafeBufferPointer { src in
+                        dest.update(from: src.baseAddress!, count: samples.count)
+                    }
+                }
+                continuation.yield(buffer)
+            }
+            continuation.finish()
+        } catch {
+            continuation.finish(throwing: error)
+        }
+    }
+
+    /// Load reference audio from a WAV file and return as MLXArray for per-character cloning.
+    func loadRefAudioFromFile(url: URL) throws -> MLXArray {
+        let data = try Data(contentsOf: url)
+        let samples = Self.parseWAVToFloat32(data)
+        guard !samples.isEmpty else {
+            throw MLEngineError.loadFailed("TTS", NSError(
+                domain: "MLXTTSEngine", code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid WAV file: \(url.lastPathComponent)"]
+            ))
+        }
+
+        // Same silence-skipping and clipping as loadVoice.
+        let silenceThreshold: Float = 0.01
+        let windowSize = 480
+        var speechStart = 0
+        for i in stride(from: 0, to: samples.count - windowSize, by: windowSize) {
+            let window = samples[i..<i + windowSize]
+            let rms = sqrt(window.reduce(0) { $0 + $1 * $1 } / Float(windowSize))
+            if rms > silenceThreshold {
+                speechStart = max(0, i - windowSize)
+                break
+            }
+        }
+        let clipEnd = min(speechStart + 72_000, samples.count)
+        return MLXArray(Array(samples[speechStart..<clipEnd]))
+    }
+
+    /// Internal synthesis with per-call reference audio (for character voice cloning).
+    private func synthesizeWithRef(
+        text: String,
+        refAudio: MLXArray,
+        refText: String,
+        continuation: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation
+    ) async {
+        guard let model else {
+            continuation.finish(throwing: MLEngineError.notLoaded("TTS"))
+            return
+        }
+
+        do {
+            let sampleRate = model.sampleRate
+            let stream = model.generateSamplesStream(
+                text: text,
+                voice: nil,
+                refAudio: refAudio,
+                refText: refText,
                 language: nil
             )
             for try await samples in stream {

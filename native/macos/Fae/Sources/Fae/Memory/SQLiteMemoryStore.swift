@@ -241,6 +241,19 @@ actor SQLiteMemoryStore {
             )
         }
 
+        // Migration: v6 → v7 — speaker_id on memory_records.
+        let recordColumnsV7 = try Row.fetchAll(db, sql: "PRAGMA table_info(memory_records)")
+            .compactMap { $0["name"] as? String }
+        if !recordColumnsV7.contains("speaker_id") {
+            try db.execute(sql: "ALTER TABLE memory_records ADD COLUMN speaker_id TEXT")
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_records_speaker ON memory_records(speaker_id)"
+            )
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '7')"
+            )
+        }
+
         // vec0 virtual tables are created lazily by VectorStore after embedding dimension is known.
     }
 
@@ -268,10 +281,11 @@ actor SQLiteMemoryStore {
         tags: [String],
         importanceScore: Float? = nil,
         staleAfterSecs: UInt64? = nil,
-        embedding: [Float]? = nil
+        embedding: [Float]? = nil,
+        speakerId: String? = nil
     ) throws -> MemoryRecord {
         let now = UInt64(Date().timeIntervalSince1970)
-        let record = MemoryRecord(
+        var record = MemoryRecord(
             id: newMemoryId(prefix: kind.rawValue),
             kind: kind,
             status: .active,
@@ -284,6 +298,7 @@ actor SQLiteMemoryStore {
             importanceScore: importanceScore,
             staleAfterSecs: staleAfterSecs
         )
+        record.speakerId = speakerId
 
         let embeddingData: Data? = embedding.map { floats in
             floats.withUnsafeBufferPointer { Data(buffer: $0) }
@@ -295,8 +310,9 @@ actor SQLiteMemoryStore {
                 sql: """
                     INSERT INTO memory_records
                         (id, kind, status, text, confidence, source_turn_id, tags, supersedes,
-                         created_at, updated_at, importance_score, stale_after_secs, metadata, embedding)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         created_at, updated_at, importance_score, stale_after_secs, metadata,
+                         embedding, speaker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     record.id, record.kind.rawValue, record.status.rawValue,
@@ -305,7 +321,7 @@ actor SQLiteMemoryStore {
                     record.createdAt, record.updatedAt,
                     record.importanceScore.map { Double($0) },
                     record.staleAfterSecs, record.metadata,
-                    embeddingData,
+                    embeddingData, record.speakerId,
                 ]
             )
 
@@ -600,6 +616,25 @@ actor SQLiteMemoryStore {
         }
     }
 
+    // MARK: - Speaker Query
+
+    /// Find active records associated with a specific speaker.
+    func findBySpeaker(id: String, limit: Int = 50) throws -> [MemoryRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM memory_records
+                    WHERE status = 'active' AND speaker_id = ?
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                arguments: [id, limit]
+            )
+            return rows.map { Self.recordFromRow($0) }
+        }
+    }
+
     // MARK: - Schema Meta
 
     /// Read a value from the schema_meta key-value table.
@@ -640,7 +675,7 @@ actor SQLiteMemoryStore {
             }
         }
 
-        return MemoryRecord(
+        var record = MemoryRecord(
             id: row["id"],
             kind: MemoryKind(rawValue: row["kind"] as String) ?? .fact,
             status: MemoryStatus(rawValue: row["status"] as String) ?? .active,
@@ -656,6 +691,8 @@ actor SQLiteMemoryStore {
             metadata: row["metadata"],
             cachedEmbedding: cachedEmbedding
         )
+        record.speakerId = row["speaker_id"]
+        return record
     }
 
     private static func encodeTags(_ tags: [String]) -> String {

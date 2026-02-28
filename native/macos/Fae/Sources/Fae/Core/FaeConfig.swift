@@ -66,6 +66,14 @@ struct FaeConfig: Codable {
         /// Transcript of the reference audio for voice cloning.
         /// Must match the first ~3 seconds of speech in fae.wav.
         var referenceText: String? = "Hello, I'm Fae, your personal voice assistant."
+        /// Path to a custom voice WAV file (overrides bundled fae.wav).
+        var customVoicePath: String?
+        /// Reference text for the custom voice WAV.
+        var customReferenceText: String?
+        /// Enable emotional prosody via instruct mode (trades voice fidelity for emotion).
+        var emotionalProsody: Bool = false
+        /// Voice warmth level (1-5 scale), adjusts instruct baseline.
+        var warmth: Float = 3.0
     }
 
     // MARK: - STT
@@ -115,6 +123,10 @@ struct FaeConfig: Codable {
         var requireOwnerForTools: Bool = true
         var progressiveEnrollment: Bool = true
         var maxEnrollments: Int = 50
+        /// Minimum liveness score (0 = disabled, 1 = maximum strictness).
+        var livenessThreshold: Float = 0.5
+        /// Re-verify speaker identity every N utterances when not owner.
+        var reVerifyEveryN: Int = 5
     }
 
     // MARK: - Voice Identity
@@ -467,6 +479,16 @@ struct FaeConfig: Codable {
                     } else {
                         throw ParseError.malformedValue(key: key, value: rawValue)
                     }
+                case "customVoicePath":
+                    config.tts.customVoicePath = rawValue == "nil" ? nil : parseString(rawValue)
+                case "customReferenceText":
+                    config.tts.customReferenceText = rawValue == "nil" ? nil : parseString(rawValue)
+                case "emotionalProsody":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.tts.emotionalProsody = v
+                case "warmth":
+                    guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.tts.warmth = v
                 default: break
                 }
             case "stt":
@@ -597,6 +619,12 @@ struct FaeConfig: Codable {
                 case "maxEnrollments":
                     guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.speaker.maxEnrollments = v
+                case "livenessThreshold":
+                    guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.livenessThreshold = v
+                case "reVerifyEveryN":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.speaker.reVerifyEveryN = v
                 default: break
                 }
             default:
@@ -650,6 +678,10 @@ struct FaeConfig: Codable {
         lines.append("speed = \(formatFloat(tts.speed))")
         lines.append("sampleRate = \(tts.sampleRate)")
         lines.append("referenceText = \(encodeStringOrNil(tts.referenceText))")
+        lines.append("customVoicePath = \(encodeStringOrNil(tts.customVoicePath))")
+        lines.append("customReferenceText = \(encodeStringOrNil(tts.customReferenceText))")
+        lines.append("emotionalProsody = \(tts.emotionalProsody ? "true" : "false")")
+        lines.append("warmth = \(formatFloat(tts.warmth))")
         lines.append("")
 
         lines.append("[stt]")
@@ -690,6 +722,8 @@ struct FaeConfig: Codable {
         lines.append("requireOwnerForTools = \(speaker.requireOwnerForTools ? "true" : "false")")
         lines.append("progressiveEnrollment = \(speaker.progressiveEnrollment ? "true" : "false")")
         lines.append("maxEnrollments = \(speaker.maxEnrollments)")
+        lines.append("livenessThreshold = \(formatFloat(speaker.livenessThreshold))")
+        lines.append("reVerifyEveryN = \(speaker.reVerifyEveryN)")
         lines.append("")
 
         lines.append("[voiceIdentity]")
