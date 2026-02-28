@@ -7,12 +7,19 @@ import XCTest
 /// They verify that our HTML parsing actually works against the live
 /// HTML served by each engine. If an engine changes its HTML structure,
 /// these tests will catch the regression.
+///
+/// Skipped automatically in CI environments (set `CI=true` or `SKIP_LIVE_SEARCH_TESTS=true`).
 final class LiveSearchTests: XCTestCase {
 
     // Generous timeout — network requests can be slow.
     override func setUp() {
         super.setUp()
         continueAfterFailure = true
+        // Skip all live network tests in CI environments.
+        if ProcessInfo.processInfo.environment["CI"] == "true"
+            || ProcessInfo.processInfo.environment["SKIP_LIVE_SEARCH_TESTS"] == "true" {
+            throw XCTSkip("Live search tests skipped in CI environment")
+        }
     }
 
     // MARK: - DuckDuckGo
