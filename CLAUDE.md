@@ -65,9 +65,19 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
 Auto mode selects the LLM based on system RAM:
-- 48+ GiB → Qwen3-8B
-- 32-48 GiB → Qwen3-4B
-- <32 GiB → Qwen3-1.7B
+- 96+ GiB → Qwen3.5-35B-A3B (65K context)
+- 80-95 GiB → Qwen3.5-35B-A3B (49K context)
+- 64-79 GiB → Qwen3.5-35B-A3B (32K context)
+- 48-63 GiB → Qwen3-8B (32K context)
+- 32-47 GiB → Qwen3-4B (16K context)
+- 16-31 GiB → Qwen3-1.7B (8K context)
+- <16 GiB → Qwen3-1.7B (4K context)
+
+Context window is now properly wired from model selection through to the pipeline.
+`FaeConfig.recommendedMaxHistory()` scales conversation history with context size
+(formula: `(contextSize - 5000 - maxTokens) / 400`, clamped to [6, 50]).
+`ConversationStateTracker` also performs token-aware truncation (chars / 3.5 estimate)
+to prevent overflow when individual messages are very long.
 
 ### Unified pipeline
 
@@ -153,15 +163,21 @@ Implementation: `Scheduler/FaeScheduler.swift`
 
 ## Tool system
 
-Tools are registered dynamically in `ToolRegistry.buildDefault()`. Full inventory (18 tools):
+Tools are registered dynamically in `ToolRegistry.buildDefault()`. Full inventory (19 tools):
 
 | Category | Tools |
 |----------|-------|
 | Core | `read`, `write`, `edit`, `bash`, `self_config` |
 | Web | `web_search` (DuckDuckGo HTML), `fetch_url` (with content extraction) |
+| Skills | `run_skill` (run installed Python skills by name) |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
 | Roleplay | `roleplay` (multi-voice reading sessions) |
+
+The LLM is told which skills are installed via `PersonalityManager.assemblePrompt(installedSkills:)`.
+Skills are discovered at prompt assembly time from `SkillManager.installedSkillNames()`.
+Skill proposals from the scheduler now store `.commitment` memory records so the LLM
+can follow up naturally in the next conversation.
 
 Tool modes (configurable via Settings > Tools):
 
