@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.3] - 2026-02-28
+
+### Added
+
+- **Memory v2 — neural embeddings, ANN search, knowledge graph** — `NeuralEmbeddingEngine` with tiered Qwen3-Embedding (8B / 4B / 0.6B / hash-384 fallback); sqlite-vec `vec0` virtual tables (`memory_vec`, `fact_vec`) for ANN recall; hybrid 60% ANN + 40% FTS5 lexical scoring.
+- **Entity graph** — typed entity store (persons, organisations, locations, skills, projects, concepts) with bidirectional relationships, temporal facts, and `EntityLinker` auto-extraction of `works_at` / `lives_in` edges.
+- **PersonQueryDetector** — graph queries like "who works at X?" or "who lives in X?" routed through the entity store.
+- **EmbeddingBackfillRunner** — background paged backfill of all existing memory records into the ANN index after a model upgrade.
+- **Speaker identity (ECAPA-TDNN)** — `CoreMLSpeakerEncoder` runs the ECAPA-TDNN speaker model on the Neural Engine, producing 1024-dim x-vectors for speaker verification. First-launch auto-enrollment, progressive profile averaging (up to 50 embeddings), owner gating.
+- **Multi-voice roleplay** — `RoleplayTool` manages character voice sessions; `VoiceTagStripper` extracts `<voice character="Name">` tags from the token stream; each character routes to TTS with its own voice description.
+- **Conversation streaming** — per-token live bubble with blinking cursor in the conversation panel; replaces the three-dot typing indicator.
+- **Canvas activity feed** — glassmorphic tool-call cards with live spinner → checkmark transitions; archived turn history with collapsible summaries.
+- **Stop button** — prominent stop control in the input bar (replaces send while generating) + Cmd+. menu item.
+- **Global hotkey** — `GlobalHotkeyManager` registers Ctrl+Shift+A system-wide to summon Fae from any app (requires Accessibility permission).
+- **Input-required flow** — `input_request` tool lets the LLM ask for credentials; the input bar transforms into a secure-field prompt with purple border.
+- **Message box expansion** — input window grows with text (up to 700pt), orb stays untouched.
+- **Orb enchantment** — sparkle intensity, tremor, liquid flow, and radius bias shader params; strongly differentiated presets per `OrbFeeling` (curiosity sparkles, concern tremor, delight bounce).
+- **Settings Personality tab** — soul contract editor, custom instructions editor, rescue mode toggle.
+- **`input_request` tool** — LLM can request user input (text or password) without failing silently on missing credentials.
+- **JIT Apple tool permissions** — when an Apple tool call lacks a macOS permission, the permission request fires automatically and the tool retries on grant.
+- **Python skills** — `SkillManager`, `run_skill` tool, `SkillImportView`; skills run via `uv run --script` with PEP 723 inline metadata.
+- **`self_config` tool** — Fae can persist personality preferences (`custom_instructions.txt`) across sessions.
+
+### Changed
+
+- **Pure Swift migration** — MLX-based STT / LLM / TTS engines; no Rust core, no `libfae.a`.
+- **Unified pipeline** — single `PipelineCoordinator` with inline `<tool_call>` markup; no separate intent classifier or agent loop.
+- **Tool security (4-layer)** — schema filtering, execution guard, `PathPolicy` write-path blocklist, per-tool rate limiting.
+- **`SelfConfigTool`** — requires approval, jailbreak pattern detection, 2000-char limit.
+- **`BashTool`** — process-group kill on timeout, stderr filtered from LLM.
+- **Approval timeout** — reduced from 58s to 20s.
+- **Canvas** — replaced Star Wars crawl with native SwiftUI glassmorphic activity feed.
+
+### Fixed
+
+- **GRDB/SQLiteVec module conflict** — replaced upstream `SQLiteVec` SPM dep with local `CSQLiteVecCore` C target to eliminate the GRDB ambiguity error.
+- **CI build** — switched from `xcodebuild` to `swift build` for the main CI job; `FaeBenchmark` entry-point corrected.
+
 ## [v0.7.4] - 2026-02-25
 
 ### Fixed
