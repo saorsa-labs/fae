@@ -1,11 +1,12 @@
 import Foundation
 import GRDB
-import SQLiteVec
+// CSQLiteVecCore is registered per-connection in SQLiteMemoryStore.
+// VectorStore uses vec0 virtual tables via pure SQL through GRDB.
 
 /// ANN vector search backed by sqlite-vec vec0 virtual tables.
 /// Shares the DatabaseQueue from SQLiteMemoryStore — no second connection.
 ///
-/// sqlite-vec is registered globally via SQLiteVec.initialize() in SQLiteMemoryStore.init.
+/// sqlite-vec is registered globally via sqlite_vec_core_init() in SQLiteMemoryStore.init.
 /// After that, vec0 virtual tables work in any DatabaseQueue opened against the same file.
 actor VectorStore {
     private let dbQueue: DatabaseQueue

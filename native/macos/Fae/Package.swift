@@ -20,8 +20,10 @@ let package = Package(
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift", branch: "main"),
         // SQLite with ORM — memory store.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
-        // sqlite-vec ANN vector extension for semantic search.
-        .package(url: "https://github.com/jkrukowski/SQLiteVec", from: "0.0.1"),
+        // NOTE: SQLiteVec upstream removed — its CSQLiteVec C module exposes
+        // sqlite3ext.h as a public header, whose macros redefine sqlite3_db_config
+        // and break GRDB's shim.h. Local CSQLiteVecCore target bundles sqlite-vec.c
+        // with SQLITE_CORE defined to avoid the conflict.
         // TOML config file parsing.
         .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
     ],
@@ -40,7 +42,7 @@ let package = Package(
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
                 // Data layer.
                 .product(name: "GRDB", package: "GRDB.swift"),
-                .product(name: "SQLiteVec", package: "SQLiteVec"),
+                "CSQLiteVecCore",
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ],
             path: "Sources/Fae",
@@ -74,6 +76,21 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "Sources/FaeBenchmark"
+        ),
+
+        // Local sqlite-vec C target — bundles sqlite-vec.c with SQLITE_CORE to avoid
+        // header macro conflicts with GRDB's GRDBSQLite module.
+        .target(
+            name: "CSQLiteVecCore",
+            path: "Sources/CSQLiteVecCore",
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("SQLITE_CORE"),
+                .define("SQLITE_ENABLE_FTS5"),
+            ],
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+            ]
         ),
 
         // Handoff unit tests — depends only on FaeHandoffKit (no libfae.a required).

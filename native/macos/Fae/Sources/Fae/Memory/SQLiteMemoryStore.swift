@@ -1,6 +1,6 @@
 import Foundation
 import GRDB
-import SQLiteVec
+import CSQLiteVecCore
 
 /// SQLite-backed memory store using GRDB.
 ///
@@ -16,10 +16,20 @@ actor SQLiteMemoryStore {
             withIntermediateDirectories: true
         )
 
-        // Register sqlite-vec globally so vec0 virtual tables are available in all connections.
-        try SQLiteVec.initialize()
+        // Register sqlite-vec per-connection (Apple's system SQLite deprecates
+        // sqlite3_auto_extension, so we register on each connection via GRDB's
+        // prepareDatabase hook).
+        var config = Configuration()
+        config.prepareDatabase { db in
+            let rawDB = db.sqliteConnection
+            let rc = sqlite_vec_register(rawDB)
+            guard rc == 0 /* SQLITE_OK */ else {
+                throw NSError(domain: "CSQLiteVecCore", code: Int(rc),
+                              userInfo: [NSLocalizedDescriptionKey: "sqlite-vec register failed: \(rc)"])
+            }
+        }
 
-        dbQueue = try DatabaseQueue(path: path)
+        dbQueue = try DatabaseQueue(path: path, configuration: config)
         try dbQueue.write { db in
             try db.execute(sql: "PRAGMA journal_mode = WAL")
             try db.execute(sql: "PRAGMA foreign_keys = ON")
