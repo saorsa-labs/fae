@@ -143,6 +143,33 @@ final class OnboardingController: ObservableObject {
         }
     }
 
+    /// Request reminders access via EventKit and report the result.
+    ///
+    /// Uses `EKEventStore.requestFullAccessToReminders()` on macOS 14+ and the
+    /// legacy `requestAccess(to:completion:)` API on earlier systems.
+    func requestReminders() {
+        let store = EKEventStore()
+        if #available(macOS 14.0, *) {
+            store.requestFullAccessToReminders { [weak self] granted, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let state = granted ? "granted" : "denied"
+                    self.permissionStates["reminders"] = state
+                    self.onPermissionResult?("reminders", state)
+                }
+            }
+        } else {
+            store.requestAccess(to: .reminder) { [weak self] granted, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let state = granted ? "granted" : "denied"
+                    self.permissionStates["reminders"] = state
+                    self.onPermissionResult?("reminders", state)
+                }
+            }
+        }
+    }
+
     /// Request mail and notes access.
     ///
     /// Mail and Notes on macOS require Full Disk Access or Automation entitlements

@@ -87,9 +87,14 @@ enum PersonalityManager {
         - Your custom instructions persist across conversations.
         - You can also manage your own Python skills:
           - Skills live at ~/Library/Application Support/fae/skills/ (one .py file per skill)
-          - Write new skills using the write tool, run them via bash with `uv run --script`
+          - Write new skills using the write tool, test via bash with `uv run --script`
+          - Run installed skills via the run_skill tool (by name, no need to construct paths)
           - Skills use PEP 723 inline metadata for dependencies
           - You can read, edit, or delete your own skills to improve your capabilities
+        - Before creating a new Python skill, tell the user what you plan to build and ask: \
+        "I could create a skill for [description]. Want me to go ahead?"
+        - Only proceed with skill creation if the user confirms.
+        - After creating and testing a skill, tell the user it's installed and what it does.
         - When asked to learn a new ability, write a Python skill for it.
         """
 
@@ -216,7 +221,8 @@ enum PersonalityManager {
         userName: String? = nil,
         soulContract: String? = nil,
         memoryContext: String? = nil,
-        toolSchemas: String? = nil
+        toolSchemas: String? = nil,
+        installedSkills: [String] = []
     ) -> String {
         var parts: [String] = []
 
@@ -273,6 +279,13 @@ enum PersonalityManager {
             parts.append(selfModificationPrompt)
             parts.append(proactiveBehaviorPrompt)
             parts.append(roleplayPrompt)
+
+            // 9b. Installed skill inventory — lets the LLM know what it can already do.
+            if !installedSkills.isEmpty {
+                parts.append(
+                    "Your installed Python skills (run via run_skill tool): \(installedSkills.joined(separator: ", "))"
+                )
+            }
         }
 
         // 10. Tool schemas (enables inline tool use via <tool_call> markup).

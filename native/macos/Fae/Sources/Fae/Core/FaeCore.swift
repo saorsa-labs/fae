@@ -90,6 +90,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 self.memoryStore = memoryStore
                 self.memoryOrchestrator = orchestrator
 
+                // Wire context-aware history limits from model selection.
+                let contextSize = await modelManager.recommendedContextSize
+                let maxHistory = FaeConfig.recommendedMaxHistory(
+                    contextSize: contextSize, maxTokens: config.llm.maxTokens
+                )
+                await conversationState.setMaxHistory(maxHistory)
+                await conversationState.setContextBudget(
+                    contextSize: contextSize,
+                    reservedTokens: 5000 + config.llm.maxTokens
+                )
+                NSLog("FaeCore: context=%d maxHistory=%d", contextSize, maxHistory)
+
                 let registry = ToolRegistry.buildDefault()
                 let coordinator = PipelineCoordinator(
                     eventBus: eventBus,

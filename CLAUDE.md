@@ -175,6 +175,22 @@ Tool modes (configurable via Settings > Tools):
 
 The LLM decides when to use tools via `<tool_call>` markup inline — no separate routing or intent classification.
 
+### Apple tool permission request flow
+
+When an Apple tool is invoked but the required macOS permission is missing, it triggers the
+JIT permission flow automatically rather than returning a dead-end error:
+
+1. Tool calls `requestPermission(capability:)` — a private async helper in `AppleTools.swift`
+2. Posts `.faeCapabilityRequested` (same channel `JitPermissionController` already handles)
+3. Native macOS permission dialog appears (or System Settings opens for mail/notes)
+4. If granted → tool retries and returns result; if denied → friendly error
+
+MailTool and NotesTool use a try→detect→request→retry pattern since their permissions are
+only detectable from AppleScript error responses, not via a pre-flight API.
+
+Settings > Tools shows an **"Apple Tool Permissions"** section with per-tool Granted/Not Granted
+status badges and Grant buttons. See `docs/guides/scheduler-tooling-and-permissions.md`.
+
 Implementation files:
 
 | File | Role |

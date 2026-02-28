@@ -184,19 +184,42 @@ struct FaeConfig: Codable {
         case "qwen3_0_6b":
             return ("mlx-community/Qwen3-0.6B-4bit", 4_096)
         default: // "auto"
-            // 64+ GB: Qwen3.5-35B-A3B — best quality MoE (3B active), 11.7 T/s is
-            // fine for chat with audio/visual feedback while thinking. 18.8 GB RAM.
+            // 96+ GB: Qwen3.5-35B-A3B with full 65K context — plenty of headroom.
+            // 80-95 GB: Qwen3.5-35B-A3B with 49K context — comfortable headroom.
+            // 64-79 GB: Qwen3.5-35B-A3B with 32K context — MoE ~18.8 GB + 4.5 GB KV.
             // 48-63 GB: Qwen3-8B — 52.8 T/s, 100% tool calling, 4.5 GB RAM.
-            if totalGB >= 64 {
+            // 32-47 GB: Qwen3-4B — good balance at 16K context.
+            // 16-31 GB: Qwen3-1.7B — 8K context, tight but workable.
+            // <16 GB: Qwen3-1.7B — 4K context, very tight with 3 models loaded.
+            if totalGB >= 96 {
                 return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
+            } else if totalGB >= 80 {
+                return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 49_152)
+            } else if totalGB >= 64 {
+                return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 32_768)
             } else if totalGB >= 48 {
                 return ("mlx-community/Qwen3-8B-4bit", 32_768)
             } else if totalGB >= 32 {
                 return ("mlx-community/Qwen3-4B-4bit", 16_384)
-            } else {
+            } else if totalGB >= 16 {
                 return ("mlx-community/Qwen3-1.7B-4bit", 8_192)
+            } else {
+                return ("mlx-community/Qwen3-1.7B-4bit", 4_096)
             }
         }
+    }
+
+    /// Compute a sensible `maxHistoryMessages` from context size and generation budget.
+    ///
+    /// Formula: available = contextSize - systemPromptBudget(~5000) - maxTokens.
+    /// Each conversation turn ≈ 400 tokens (user ~100 + assistant ~300).
+    /// Clamped to [6, 50].
+    static func recommendedMaxHistory(contextSize: Int, maxTokens: Int) -> Int {
+        let systemBudget = 5000
+        let available = contextSize - systemBudget - maxTokens
+        guard available > 0 else { return 6 }
+        let computed = available / 400
+        return min(max(computed, 6), 50)
     }
 
     // MARK: - STT Model Selection

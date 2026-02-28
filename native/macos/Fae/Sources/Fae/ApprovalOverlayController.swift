@@ -113,25 +113,119 @@ final class ApprovalOverlayController: ObservableObject {
     }
 
     /// Generate a human-readable description for the overlay card.
+    ///
+    /// Descriptions must fit a 240px-wide card (≤2 lines at 13pt).
     private static func formatDescription(toolName: String, inputJson: String?) -> String {
-        guard let json = inputJson,
-              let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return "Wants to use \(toolName)"
+        let obj: [String: Any]?
+        if let json = inputJson,
+           let data = json.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            obj = parsed
+        } else {
+            obj = nil
         }
 
         switch toolName {
+
+        // MARK: Core tools
+
         case "bash":
-            let cmd = obj["command"] as? String ?? "a command"
-            let truncated = cmd.count > 60 ? String(cmd.prefix(60)) + "..." : cmd
-            return "Run: \(truncated)"
+            let cmd = obj?["command"] as? String ?? "a command"
+            return "Run: \(truncate(cmd, to: 60))"
+        case "read":
+            let path = obj?["path"] as? String ?? obj?["file_path"] as? String ?? "a file"
+            return "Read: \(path)"
         case "write":
-            let path = obj["file_path"] as? String ?? obj["path"] as? String ?? "a file"
+            let path = obj?["file_path"] as? String ?? obj?["path"] as? String ?? "a file"
             return "Create: \(path)"
         case "edit":
-            let path = obj["file_path"] as? String ?? obj["path"] as? String ?? "a file"
+            let path = obj?["file_path"] as? String ?? obj?["path"] as? String ?? "a file"
             return "Edit: \(path)"
+        case "self_config":
+            return "Update Fae settings"
+
+        // MARK: Web tools
+
+        case "web_search":
+            let query = obj?["query"] as? String ?? "the web"
+            return "Search: \(truncate(query, to: 50))"
+        case "fetch_url":
+            let url = obj?["url"] as? String ?? "a URL"
+            return "Fetch: \(truncate(url, to: 40))"
+
+        // MARK: Apple tools
+
+        case "calendar":
+            let action = obj?["action"] as? String
+            if action == "create" {
+                let title = obj?["title"] as? String ?? "an event"
+                return "Add event: \(truncate(title, to: 40))"
+            }
+            return "Read your calendar"
+
+        case "reminders":
+            let action = obj?["action"] as? String
+            if action == "create" {
+                let title = obj?["title"] as? String ?? "a reminder"
+                return "Add reminder: \(truncate(title, to: 40))"
+            } else if action == "complete" {
+                let title = obj?["title"] as? String ?? "a reminder"
+                return "Complete: \(truncate(title, to: 40))"
+            }
+            return "Read your reminders"
+
+        case "contacts":
+            let action = obj?["action"] as? String
+            if action == "search" {
+                let query = obj?["query"] as? String ?? obj?["name"] as? String ?? "contacts"
+                return "Search contacts: \(truncate(query, to: 30))"
+            } else if action == "get_phone" || action == "get_email" {
+                let name = obj?["name"] as? String ?? "a contact"
+                return "Look up: \(truncate(name, to: 40))"
+            }
+            return "Access contacts"
+
+        case "mail":
+            let action = obj?["action"] as? String
+            if action == "check_inbox" || action == "read_recent" {
+                return "Read recent emails"
+            }
+            return "Access mail"
+
+        case "notes":
+            let action = obj?["action"] as? String
+            if action == "search" {
+                let query = obj?["query"] as? String ?? "notes"
+                return "Search notes: \(truncate(query, to: 40))"
+            } else if action == "list_recent" {
+                return "Read recent notes"
+            }
+            return "Access notes"
+
+        // MARK: Scheduler tools
+
+        case "scheduler_list":
+            return "List schedules"
+        case "scheduler_create":
+            let name = obj?["name"] as? String ?? "a task"
+            return "Schedule: \(truncate(name, to: 40))"
+        case "scheduler_update":
+            let name = obj?["name"] as? String ?? "a task"
+            return "Update schedule: \(truncate(name, to: 30))"
+        case "scheduler_delete":
+            let name = obj?["name"] as? String ?? "a task"
+            return "Delete schedule: \(truncate(name, to: 30))"
+        case "scheduler_trigger":
+            let name = obj?["name"] as? String ?? "a task"
+            return "Run: \(truncate(name, to: 40))"
+
+        // MARK: Roleplay
+
+        case "roleplay":
+            return "Start roleplay session"
+
+        // MARK: Other
+
         case "desktop", "desktop_automation":
             return "Desktop automation"
         case "python_skill":
@@ -139,6 +233,14 @@ final class ApprovalOverlayController: ObservableObject {
         default:
             return "Use \(toolName)"
         }
+    }
+
+    /// Truncate a string to a maximum length, appending "..." if trimmed.
+    private static func truncate(_ text: String, to maxLength: Int) -> String {
+        if text.count > maxLength {
+            return String(text.prefix(maxLength)) + "..."
+        }
+        return text
     }
 }
 

@@ -28,6 +28,9 @@ actor ModelManager {
     /// The loaded LLM model ID (set after successful load).
     private(set) var loadedModelId: String?
 
+    /// The recommended context size (tokens) for the loaded model, based on RAM tier.
+    private(set) var recommendedContextSize: Int = 16_384
+
     /// Load all pipeline models (STT, LLM, TTS, Speaker) with progress events.
     ///
     /// Uses degraded-mode loading: if one engine fails, the others still load.
@@ -42,7 +45,8 @@ actor ModelManager {
         speakerProfileStore: SpeakerProfileStore? = nil,
         config: FaeConfig
     ) async throws {
-        let (modelId, _) = FaeConfig.recommendedModel(preset: config.llm.voiceModelPreset)
+        let (modelId, recommendedContext) = FaeConfig.recommendedModel(preset: config.llm.voiceModelPreset)
+        self.recommendedContextSize = recommendedContext
         var failedEngines: [String] = []
 
         // STT — degraded mode if it fails (text input only).

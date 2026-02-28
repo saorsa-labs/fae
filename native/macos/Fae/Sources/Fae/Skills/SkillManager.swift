@@ -21,7 +21,12 @@ actor SkillManager {
 
     /// List installed skills by scanning the skills directory.
     func listSkills() -> [String] {
-        let dir = Self.skillsDirectory
+        Self.installedSkillNames()
+    }
+
+    /// List installed skill names (static — no actor instance needed).
+    static func installedSkillNames() -> [String] {
+        let dir = skillsDirectory
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil
         ) else { return [] }
@@ -29,6 +34,7 @@ actor SkillManager {
         return contents
             .filter { $0.pathExtension == "py" }
             .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted()
     }
 
     /// Execute a skill by name with the given input.

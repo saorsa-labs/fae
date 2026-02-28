@@ -17,7 +17,8 @@ import Foundation
 /// - `"contacts"` → `CNContactStore.requestAccess(for: .contacts)`
 /// - `"calendar"` → `EKEventStore.requestFullAccessToEvents()`
 /// - `"reminders"` → `EKEventStore.requestFullAccessToReminders()`
-/// - `"mail"` → opens System Settings > Privacy & Security > Automation
+/// - `"mail"` → opens System Settings > Privacy & Security > Automation (polls Mail.app)
+/// - `"notes"` → opens System Settings > Privacy & Security > Automation (polls Notes.app)
 /// - Any other value → deny immediately (unsupported JIT permission)
 @MainActor
 final class JitPermissionController: ObservableObject {
@@ -62,6 +63,8 @@ final class JitPermissionController: ObservableObject {
             requestReminders(capability: capability)
         case "mail":
             requestMail(capability: capability)
+        case "notes":
+            requestNotes(capability: capability)
         case "desktop_automation":
             requestDesktopAutomation(capability: capability)
         default:
@@ -142,6 +145,17 @@ final class JitPermissionController: ObservableObject {
         pollForAutomationPermission(capability: capability, bundleId: "com.apple.mail")
     }
 
+    // MARK: - Notes (System Settings fallback with polling)
+
+    private func requestNotes(capability: String) {
+        // Notes automation has no direct permission API; open Privacy settings
+        // so the user can grant access manually, then poll for up to 30 seconds.
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+            NSWorkspace.shared.open(url)
+        }
+        pollForAutomationPermission(capability: capability, bundleId: "com.apple.Notes")
+    }
+
     // MARK: - Desktop Automation (Accessibility)
 
     private func requestDesktopAutomation(capability: String) {
@@ -181,6 +195,8 @@ final class JitPermissionController: ObservableObject {
         switch bundleId {
         case "com.apple.mail":
             script = "tell application \"Mail\" to return name"
+        case "com.apple.Notes":
+            script = "tell application \"Notes\" to return name"
         default:
             script = "tell application id \"\(bundleId)\" to return name"
         }

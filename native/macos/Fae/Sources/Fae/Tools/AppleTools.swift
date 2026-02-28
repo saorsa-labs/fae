@@ -14,6 +14,72 @@ private func isEventKitAuthorized(for entityType: EKEntityType) -> Bool {
     }
 }
 
+// MARK: - Permission Gate
+
+/// Single-fire flag used to prevent double-resumption of `withCheckedContinuation`.
+private final class ResumeOnce {
+    var fired = false
+}
+
+/// Requests a JIT permission via `NotificationCenter` and awaits the grant/deny response.
+///
+/// Posts `.faeCapabilityRequested` so `JitPermissionController` triggers the native
+/// macOS permission dialog, then listens for `.faeCapabilityGranted` or
+/// `.faeCapabilityDenied`. Returns `true` if granted within 30 seconds.
+private func requestPermission(capability: String) async -> Bool {
+    await withCheckedContinuation { continuation in
+        let center = NotificationCenter.default
+        var grantedObserver: NSObjectProtocol?
+        var deniedObserver: NSObjectProtocol?
+        var timerItem: DispatchWorkItem?
+        let once = ResumeOnce()
+
+        func cleanup() {
+            if let obs = grantedObserver { center.removeObserver(obs) }
+            if let obs = deniedObserver { center.removeObserver(obs) }
+            timerItem?.cancel()
+        }
+
+        func finish(_ result: Bool) {
+            guard !once.fired else { return }
+            once.fired = true
+            cleanup()
+            continuation.resume(returning: result)
+        }
+
+        grantedObserver = center.addObserver(
+            forName: .faeCapabilityGranted, object: nil, queue: .main
+        ) { notification in
+            guard let cap = notification.userInfo?["capability"] as? String,
+                  cap == capability else { return }
+            finish(true)
+        }
+
+        deniedObserver = center.addObserver(
+            forName: .faeCapabilityDenied, object: nil, queue: .main
+        ) { notification in
+            guard let cap = notification.userInfo?["capability"] as? String,
+                  cap == capability else { return }
+            finish(false)
+        }
+
+        let timeout = DispatchWorkItem { finish(false) }
+        timerItem = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
+
+        center.post(
+            name: .faeCapabilityRequested,
+            object: nil,
+            userInfo: ["capability": capability]
+        )
+    }
+}
+
+/// Returns `true` if an AppleScript error message indicates a missing Automation permission.
+private func isAppleScriptPermissionError(_ message: String) -> Bool {
+    message.contains("Automation permission") || message.contains("not allowed") || message.contains("permission")
+}
+
 // MARK: - Calendar Tool
 
 /// Fae tool for reading macOS Calendar events via EventKit.
@@ -39,8 +105,10 @@ struct CalendarTool: Tool {
     func execute(input: [String: Any]) async throws -> ToolResult {
         let store = EKEventStore()
 
-        guard isEventKitAuthorized(for: .event) else {
-            return .error("I don't have calendar access. You can grant it in System Settings > Privacy & Security > Calendars.")
+        if !isEventKitAuthorized(for: .event) {
+            guard await requestPermission(capability: "calendar") else {
+                return .error("I need calendar access to do that. You can grant it in System Settings > Privacy & Security.")
+            }
         }
 
         guard let action = input["action"] as? String else {
@@ -168,8 +236,10 @@ struct RemindersTool: Tool {
     func execute(input: [String: Any]) async throws -> ToolResult {
         let store = EKEventStore()
 
-        guard isEventKitAuthorized(for: .reminder) else {
-            return .error("I don't have reminders access. You can grant it in System Settings > Privacy & Security > Reminders.")
+        if !isEventKitAuthorized(for: .reminder) {
+            guard await requestPermission(capability: "reminders") else {
+                return .error("I need reminders access to do that. You can grant it in System Settings > Privacy & Security.")
+            }
         }
 
         guard let action = input["action"] as? String else {
@@ -271,8 +341,10 @@ struct ContactsTool: Tool {
     let example = #"<tool_call>{"name":"contacts","arguments":{"action":"search","query":"Sarah"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
-        guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else {
-            return .error("I don't have contacts access. You can grant it in System Settings > Privacy & Security > Contacts.")
+        if CNContactStore.authorizationStatus(for: .contacts) != .authorized {
+            guard await requestPermission(capability: "contacts") else {
+                return .error("I need contacts access to do that. You can grant it in System Settings > Privacy & Security.")
+            }
         }
 
         guard let action = input["action"] as? String else {
@@ -369,7 +441,14 @@ struct MailTool: Tool {
         switch action {
         case "check_inbox", "read_recent":
             let count = input["count"] as? Int ?? 5
-            return runMailScript(count: min(count, 20))
+            let firstAttempt = runMailScript(count: min(count, 20))
+            if firstAttempt.isError, isAppleScriptPermissionError(firstAttempt.output) {
+                guard await requestPermission(capability: "mail") else {
+                    return .error("I need Mail access to do that. You can grant it in System Settings > Privacy & Security.")
+                }
+                return runMailScript(count: min(count, 20))
+            }
+            return firstAttempt
 
         default:
             return .error("Unknown action: \(action). Use check_inbox or read_recent.")
@@ -439,13 +518,28 @@ struct NotesTool: Tool {
         switch action {
         case "list_recent":
             let count = input["count"] as? Int ?? 5
-            return runNotesListScript(count: min(count, 20))
+            let firstAttempt = runNotesListScript(count: min(count, 20))
+            if firstAttempt.isError, isAppleScriptPermissionError(firstAttempt.output) {
+                guard await requestPermission(capability: "notes") else {
+                    return .error("I need Notes access to do that. You can grant it in System Settings > Privacy & Security.")
+                }
+                return runNotesListScript(count: min(count, 20))
+            }
+            return firstAttempt
 
         case "search":
             guard let query = input["query"] as? String, !query.isEmpty else {
                 return .error("Missing required parameter: query")
             }
-            return runNotesSearchScript(query: sanitizeForAppleScript(query))
+            let sanitized = sanitizeForAppleScript(query)
+            let firstAttempt = runNotesSearchScript(query: sanitized)
+            if firstAttempt.isError, isAppleScriptPermissionError(firstAttempt.output) {
+                guard await requestPermission(capability: "notes") else {
+                    return .error("I need Notes access to do that. You can grant it in System Settings > Privacy & Security.")
+                }
+                return runNotesSearchScript(query: sanitized)
+            }
+            return firstAttempt
 
         default:
             return .error("Unknown action: \(action). Use search or list_recent.")

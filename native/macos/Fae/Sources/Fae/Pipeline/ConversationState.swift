@@ -6,13 +6,37 @@ import Foundation
 actor ConversationStateTracker {
 
     /// Maximum number of history messages to retain.
-    var maxHistoryMessages: Int = 10
+    private(set) var maxHistoryMessages: Int = 10
+
+    /// Context budget in tokens (set from model selection). Used for token-aware truncation.
+    private var contextBudget: Int = 0
+
+    /// Reserved tokens for system prompt + generation. Conversation must fit in the remainder.
+    private var reservedTokens: Int = 0
 
     /// Conversation history for LLM context.
     private(set) var history: [LLMMessage] = []
 
     /// The last assistant response text (for context-aware intent classification).
     private(set) var lastAssistantText: String?
+
+    // MARK: - Configuration
+
+    /// Set the maximum history message count (called by FaeCore after pipeline setup).
+    func setMaxHistory(_ count: Int) {
+        maxHistoryMessages = max(count, 4)
+        trimHistory()
+    }
+
+    /// Set the context budget for token-aware truncation.
+    ///
+    /// - Parameters:
+    ///   - contextSize: Total context window in tokens.
+    ///   - reservedTokens: Tokens reserved for system prompt + generation output.
+    func setContextBudget(contextSize: Int, reservedTokens: Int) {
+        self.contextBudget = contextSize
+        self.reservedTokens = reservedTokens
+    }
 
     // MARK: - History Management
 
@@ -51,8 +75,29 @@ actor ConversationStateTracker {
     // MARK: - Private
 
     private func trimHistory() {
+        // First pass: message-count cap.
         if history.count > maxHistoryMessages {
             history = Array(history.suffix(maxHistoryMessages))
         }
+
+        // Second pass: token-aware truncation (if budget is configured).
+        guard contextBudget > 0 else { return }
+        let available = contextBudget - reservedTokens
+        guard available > 0 else { return }
+
+        while history.count > 2, estimateTokenCount() > available {
+            history.removeFirst()
+        }
+    }
+
+    /// Lightweight token estimate: characters / 3.5 for English text.
+    private func estimateTokenCount() -> Int {
+        var totalChars = 0
+        for message in history {
+            totalChars += message.content.count
+            // Role/framing overhead: ~4 tokens per message.
+            totalChars += 14
+        }
+        return Int(Double(totalChars) / 3.5)
     }
 }

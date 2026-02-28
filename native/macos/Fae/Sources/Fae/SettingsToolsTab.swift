@@ -2,9 +2,12 @@ import SwiftUI
 
 /// Tools settings tab: control tool mode for the embedded agent.
 struct SettingsToolsTab: View {
+    @EnvironmentObject private var onboarding: OnboardingController
+
     var commandSender: HostCommandSender?
 
     @AppStorage("toolMode") private var toolMode: String = "full"
+    @State private var permissionSnapshot = PermissionStatusProvider.current()
 
     private let toolModes: [(label: String, value: String, description: String)] = [
         ("Off", "off", "Tools disabled. LLM-only conversational mode."),
@@ -37,15 +40,100 @@ struct SettingsToolsTab: View {
                 }
             }
 
-            Section("About Tools") {
-                Text("Tools give Fae the ability to interact with your system — reading files, managing calendar events, sending emails, and more. The tool mode controls the maximum capability level.")
+            Section("Apple Tool Permissions") {
+                permissionRow(
+                    icon: "calendar",
+                    label: "Calendar",
+                    granted: permissionSnapshot.calendar,
+                    action: {
+                        onboarding.requestCalendar()
+                        refreshAfterDelay()
+                    }
+                )
+
+                permissionRow(
+                    icon: "checklist",
+                    label: "Reminders",
+                    granted: permissionSnapshot.reminders,
+                    action: {
+                        onboarding.requestReminders()
+                        refreshAfterDelay()
+                    }
+                )
+
+                permissionRow(
+                    icon: "person.crop.circle",
+                    label: "Contacts",
+                    granted: permissionSnapshot.contacts,
+                    action: {
+                        onboarding.requestContacts()
+                        refreshAfterDelay()
+                    }
+                )
+
+                HStack {
+                    Label("Mail & Notes", systemImage: "envelope")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Button("Open Settings") {
+                        onboarding.requestMail()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Text("Mail and Notes require Automation access. Grant it in System Settings > Privacy & Security > Automation.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("Individual tool permissions (Calendar, Contacts, Mail, etc.) are managed through macOS System Settings > Privacy & Security.")
+            }
+
+            Section("About Tools") {
+                Text("Tools give Fae the ability to interact with your system — reading files, managing calendar events, sending emails, and more. The tool mode controls the maximum capability level.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            permissionSnapshot = PermissionStatusProvider.current()
+        }
+    }
+
+    // MARK: - Helpers
+
+    @ViewBuilder
+    private func permissionRow(
+        icon: String,
+        label: String,
+        granted: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack {
+            Label(label, systemImage: icon)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+            Spacer()
+            if granted {
+                Text("Granted")
+                    .font(.footnote)
+                    .foregroundStyle(.green)
+            } else {
+                Text("Not Granted")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                Button("Grant") {
+                    action()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func refreshAfterDelay() {
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run {
+                permissionSnapshot = PermissionStatusProvider.current()
+            }
+        }
     }
 }

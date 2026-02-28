@@ -385,6 +385,45 @@ struct WebSearchTool: Tool {
     }
 }
 
+// MARK: - Run Skill Tool
+
+/// Run an installed Python skill by name.
+struct RunSkillTool: Tool {
+    let name = "run_skill"
+    let description = "Run an installed Python skill by name. Use this instead of composing bash commands with skill paths."
+    let parametersSchema = #"{"name": "string (required — skill name without .py)", "input": "string (optional — input text for the skill)"}"#
+    let requiresApproval = true
+    let riskLevel: ToolRiskLevel = .medium
+    let example = #"<tool_call>{"name":"run_skill","arguments":{"name":"weather_check","input":"London"}}</tool_call>"#
+
+    private let skillManager = SkillManager()
+
+    func execute(input: [String: Any]) async throws -> ToolResult {
+        guard let skillName = input["name"] as? String,
+              !skillName.trimmingCharacters(in: .whitespaces).isEmpty
+        else {
+            return .error("Missing required parameter: name")
+        }
+
+        let skillInput: [String: Any]
+        if let text = input["input"] as? String {
+            skillInput = ["input": text]
+        } else {
+            skillInput = [:]
+        }
+
+        do {
+            let output = try await skillManager.execute(skillName: skillName, input: skillInput)
+            let truncated = output.count > 20_000
+                ? String(output.prefix(20_000)) + "\n[truncated]"
+                : output
+            return .success(truncated)
+        } catch {
+            return .error("Skill execution failed: \(error.localizedDescription)")
+        }
+    }
+}
+
 // MARK: - Fetch URL Tool
 
 /// Fetches a web page and extracts readable text content.

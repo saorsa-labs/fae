@@ -31,6 +31,7 @@ final class ToolRegistry: Sendable {
             SelfConfigTool(),
             WebSearchTool(),
             FetchURLTool(),
+            RunSkillTool(),
             // Apple integration tools
             CalendarTool(),
             RemindersTool(),

@@ -357,6 +357,17 @@ actor FaeScheduler {
             // Mark as suggested so we don't repeat.
             suggestedInterestIDs.insert(interest.id)
 
+            // Store a commitment memory so the LLM can follow up naturally
+            // on the next conversation (memory recall will surface this).
+            _ = try await store.insertRecord(
+                kind: .commitment,
+                text: "Fae suggested creating a Python skill for \(topic) — awaiting user response.",
+                confidence: 0.80,
+                sourceTurnId: "scheduler:skill_proposals",
+                tags: ["skill_proposal", "pending"],
+                importanceScore: 0.60
+            )
+
             let phrases = [
                 "I noticed you're into \(topic). I could write a quick script to track updates on that. Want me to?",
                 "Hey, since you're interested in \(topic), I could build a little skill to help with that. Shall I?",

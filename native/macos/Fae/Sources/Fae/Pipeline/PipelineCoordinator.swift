@@ -507,10 +507,12 @@ actor PipelineCoordinator {
             // Build system prompt with tool schemas.
             // Owner gating: non-owner voices don't see tool schemas → LLM won't use tools.
             let includeTools = !(config.speaker.requireOwnerForTools && !currentSpeakerIsOwner)
+            let skills = includeTools ? SkillManager.installedSkillNames() : []
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
                 userName: config.userName,
-                toolSchemas: includeTools ? registry.toolSchemas : nil
+                toolSchemas: includeTools ? registry.toolSchemas : nil,
+                installedSkills: skills
             )
             if let context = memoryContext {
                 systemPrompt += "\n\n" + context
