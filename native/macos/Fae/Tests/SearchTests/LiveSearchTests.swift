@@ -12,8 +12,7 @@ import XCTest
 final class LiveSearchTests: XCTestCase {
 
     // Generous timeout — network requests can be slow.
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
         continueAfterFailure = true
         // Skip all live network tests in CI environments.
         if ProcessInfo.processInfo.environment["CI"] == "true"
