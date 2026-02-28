@@ -47,13 +47,18 @@ actor MLXLLMEngine: LLMEngine {
 
                 do {
                     // Build chat messages with system prompt.
+                    // NOTE: Qwen3's /no_think token only works when placed at the
+                    // START of the final user message (not in the system message).
+                    // We inject it in the loop below when appending the last user turn.
                     var chatMessages: [Chat.Message] = [
-                        .system("/no_think\n" + systemPrompt),
+                        .system(systemPrompt),
                     ]
-                    for msg in messages {
+                    let lastUserIndex = messages.indices.last(where: { messages[$0].role == .user })
+                    for (i, msg) in messages.enumerated() {
                         switch msg.role {
                         case .user:
-                            chatMessages.append(.user(msg.content))
+                            let content = (i == lastUserIndex) ? "/no_think\n" + msg.content : msg.content
+                            chatMessages.append(.user(content))
                         case .assistant:
                             chatMessages.append(.assistant(msg.content))
                         case .system:

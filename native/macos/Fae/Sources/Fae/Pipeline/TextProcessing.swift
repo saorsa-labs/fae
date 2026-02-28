@@ -104,45 +104,44 @@ enum TextProcessing {
         private var tagBuffer: String = ""
 
         /// Process a new token and return any visible (non-think) text.
+        ///
+        /// Only characters starting with `<` are buffered (as potential `<think>` tags).
+        /// All other characters are emitted immediately, fixing the edge case where
+        /// text like `"world<think>"` would flush the buffer before the tag was matched.
         mutating func process(_ token: String) -> String {
             var visible = ""
 
             for ch in token {
                 if insideThink {
                     tagBuffer.append(ch)
-                    // Check for closing tag.
                     if tagBuffer.hasSuffix("</think>") {
                         insideThink = false
                         tagBuffer = ""
                     }
+                } else if tagBuffer.isEmpty {
+                    if ch == "<" {
+                        tagBuffer.append(ch)
+                    } else {
+                        visible.append(ch)
+                    }
                 } else {
+                    // tagBuffer starts with '<' — building potential <think> prefix.
                     tagBuffer.append(ch)
-                    if tagBuffer.hasSuffix("<think>") {
-                        // Entered think block — remove the tag from visible output.
-                        let tagLen = "<think>".count
-                        if visible.count >= tagLen {
-                            visible.removeLast(tagLen)
-                        } else {
-                            visible = ""
-                        }
+                    if tagBuffer == "<think>" {
                         insideThink = true
                         tagBuffer = ""
-                    } else if tagBuffer.count > 7 {
-                        // Not a tag — flush tagBuffer to visible.
+                    } else if !"<think>".hasPrefix(tagBuffer) {
+                        // Can't be <think> — flush buffer to visible.
                         visible += tagBuffer
                         tagBuffer = ""
                     }
                 }
             }
 
-            // If not in a tag and have accumulated text, flush it.
-            if !insideThink && !tagBuffer.isEmpty {
-                // Keep tagBuffer — might be partial tag like "<thi"
-                // Only flush if it can't be a prefix of "<think>"
-                if !("<think>".hasPrefix(tagBuffer)) {
-                    visible += tagBuffer
-                    tagBuffer = ""
-                }
+            // Flush anything that provably can't start a <think> tag.
+            if !insideThink && !tagBuffer.isEmpty && !"<think>".hasPrefix(tagBuffer) {
+                visible += tagBuffer
+                tagBuffer = ""
             }
 
             return visible
