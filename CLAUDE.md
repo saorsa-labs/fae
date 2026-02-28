@@ -9,10 +9,24 @@ Project-specific implementation notes for AI coding agents.
 
 Fae should be:
 
+- **correct over fast** — Fae is not a real-time conversational chatbot. She is a thoughtful voice-first assistant that takes time to think, search, and verify before responding. Speed will improve as models improve, but correctness and thoroughness always come first.
 - reliable in conversation
 - memory-strong over long horizons
 - proactive where useful
 - quiet by default (no noise/clutter)
+
+## Interaction model
+
+Fae is **not** a real-time voice chat app. The current interaction pattern is:
+
+1. User speaks (or types)
+2. Fae acknowledges via **visual feedback** (orb breathing/glowing) and **audio feedback** (thinking tone)
+3. Fae thinks — this may take seconds to tens of seconds depending on complexity (memory recall, web search, tool use)
+4. Fae responds with a considered, correct answer via TTS
+
+The orb and thinking tone are the primary UX bridge — they tell the user "Fae heard you and is working on it" during the thinking phase. This is essential because local LLM inference + multi-tool pipelines have inherent latency that cloud-based assistants hide with server farms.
+
+As on-device models get faster and more capable, the latency gap will close naturally. The architecture is designed so that faster models = faster responses with zero code changes. But the design philosophy is always: **think carefully, then speak** — never rush to give a poor answer.
 
 ## Architecture overview
 
@@ -67,6 +81,8 @@ Single pipeline where the LLM decides tool use via `<tool_call>` markup inline �
 6. **LLM** — Qwen3 with inline tool calling (max 5 tool turns per query)
 7. **TTS** — Qwen3-TTS with voice cloning, sentence-level streaming
 8. **Playback** — with barge-in interruption support
+
+**Latency note:** This is not a low-latency conversational pipeline. Steps 5-7 each involve ML inference on local hardware. The LLM may chain multiple tool calls (web search, memory, file ops) before responding. Total end-to-end time ranges from ~3s (simple greetings) to ~30s (complex multi-tool queries). The orb visual state and thinking tone provide continuous user feedback throughout.
 
 ## Memory-first architecture
 
@@ -311,6 +327,17 @@ Fae should work continuously without becoming noisy.
 - Prefer digests over repeated single-event interruptions.
 - Morning briefing: max 1-3 sentences, only when meaningful content exists.
 - Proactive interjections: max 1-2 per conversation start.
+
+## User feedback during thinking
+
+Since Fae is not a low-latency chatbot, continuous feedback during the thinking phase is critical:
+
+- **Orb visual state**: transitions to `thinking` mode immediately on speech detection — the orb breathes and glows to show Fae is working.
+- **Thinking tone**: a warm ascending two-note tone (A3→C4, 300ms) plays when Fae begins thinking — audio confirmation that she heard you.
+- **Tool use indicator**: the orb shifts to `focus` state when tools are executing, so the user can distinguish thinking from active tool work.
+- **Sentence-level TTS streaming**: Fae begins speaking as soon as the first sentence is ready, rather than waiting for the full response.
+
+These feedback mechanisms are not cosmetic — they are the primary UX that makes Fae usable despite the inherent latency of on-device ML inference.
 
 ## Configuration
 

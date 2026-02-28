@@ -11,8 +11,8 @@
 
 Fae's core promise is privacy — all intelligence runs on the user's Mac with no remote servers. The LLM backend must support:
 
-- Fast conversational responses for the voice channel (<100ms TTFT)
-- Tool calling for background tasks (calendar, search, reminders)
+- Correct, thorough responses that leverage tools (memory, web search, file ops) before answering
+- Tool calling for all tasks (calendar, search, reminders, file management)
 - Personality steering via system prompts
 - Reasonable capability within local model size constraints
 

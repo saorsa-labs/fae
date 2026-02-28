@@ -10,6 +10,8 @@ Fae is a personal AI companion who listens, remembers, and helps — like having
 
 **The vision is simple:** imagine a computer that your grandmother could use. Fae handles the complexity — setting up software, managing files, scheduling reminders, researching topics, and keeping track of the people and events that matter to you. You just talk to her.
 
+> **Note:** Fae is not a real-time chatbot. She is a thoughtful voice-first assistant that prioritises correctness and thorough tool use over speed. When you ask Fae something, she thinks carefully — searching her memory, consulting the web, reading files, running tools — and then responds with a considered answer. The orb breathes and glows while she works, and a gentle thinking tone plays so you always know she heard you and is on it. As local models improve, conversational latency will naturally decrease, but Fae will always favour getting things right over getting things fast.
+
 **Website:** [the-fae.com](https://the-fae.com)
 
 ## Platform
@@ -36,9 +38,17 @@ Fae is an always-present companion, not a summoned assistant. She listens contin
 
 Fae uses echo cancellation, voice activity detection, and speaker identity to separate your speech from ambient noise and her own voice.
 
-### Natural Conversation Flow
+### Thoughtful, Not Instant
 
-When you speak, Fae listens, thinks, and then responds — just like a real conversation. A brief thinking pause (typically 1-3 seconds) is normal and by design. The orb breathes and glows while Fae is thinking, so you always know she heard you.
+Fae is not designed for rapid-fire chat. When you speak, she listens, thinks, and then responds with care. Depending on the complexity of your request, this can take anywhere from a few seconds (simple questions) to tens of seconds (multi-tool tasks like searching the web, reading files, and cross-referencing memory).
+
+**What you see and hear while Fae is working:**
+
+- The **orb breathes and glows** — visual confirmation that Fae heard you and is thinking
+- A gentle **thinking tone** plays — audio feedback so you know she's on it, even if you're not looking at the screen
+- When tools are in use, the orb shifts to a **focused state** — so you can tell the difference between thinking and working
+
+This is by design. Fae prioritises giving you a correct, well-researched answer over giving you a fast one. As on-device models improve, response times will decrease naturally — but Fae will always think before she speaks.
 
 ### Remembers Everything That Matters
 
@@ -182,6 +192,8 @@ The unified pipeline handles everything in a single pass — the LLM decides whe
 6. **LLM** — Qwen3 with inline tool calling (max 5 tool turns per query)
 7. **TTS** — Qwen3-TTS with voice cloning, sentence-level streaming
 8. **Playback** — with barge-in interruption support
+
+**Latency profile:** End-to-end response time depends on request complexity. Simple greetings take a few seconds; tool-heavy tasks (web search + memory recall + file operations) can take 10-30 seconds. The orb and thinking tone provide continuous feedback throughout. Fae favours correctness over speed — she will search, verify, and cross-reference rather than guess.
 
 ### Tools (18 Built-in)
 

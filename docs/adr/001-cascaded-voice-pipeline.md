@@ -9,12 +9,12 @@
 
 ## Context
 
-Fae requires a voice-to-voice conversational system with real-time audio processing that:
+Fae requires a voice-to-voice system with on-device audio processing that:
 
 - Supports personality steering via system prompts (critical for Fae's identity)
 - Runs entirely on-device with no API keys or remote servers
 - Has native Rust support for embedding in `libfae`
-- Achieves low enough latency for natural conversation
+- Provides audio and visual feedback during processing so users know Fae is working
 
 We evaluated unified speech-to-speech models, omni-modal models, and cascaded pipeline approaches.
 
@@ -81,7 +81,7 @@ Mic (16kHz) -> AEC -> Silero VAD -> Parakeet STT (ONNX) -> LLM Agent -> Kokoro T
 
 ### Negative
 
-- **Higher total latency** than unified models (~1-3s end-to-end vs ~200ms theoretical for unified S2S). This is perceived as a natural thinking pause rather than a technical limitation.
+- **Higher total latency** than unified models (~3-30s end-to-end depending on tool use, vs ~200ms theoretical for unified S2S). Fae favours correctness over speed — the orb and thinking tone provide continuous user feedback during processing. Latency will decrease as on-device models improve.
 - **More moving parts** — 5 components to maintain vs 1 unified model
 - **No voice cloning yet** — Kokoro has fixed voices (future: Fish Speech, Qwen3-TTS)
 
