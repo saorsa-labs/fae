@@ -25,19 +25,13 @@ jobs:
         run: ./scripts/ci/guard-no-rust-reintro.sh
 
       - name: Resolve SPM dependencies
-        run: xcodebuild -resolvePackageDependencies -scheme Fae -clonedSourcePackagesDirPath .build/spm-cache
+        run: swift package resolve
         working-directory: native/macos/Fae
 
-      - name: "Build (xcodebuild — compiles Metal shaders)"
-        run: >
-          xcodebuild build
-          -scheme Fae
-          -configuration Release
-          -destination 'platform=macOS,arch=arm64'
-          -derivedDataPath .build/xcode
-          -clonedSourcePackagesDirPath .build/spm-cache
-          -quiet
+      - name: Build (release)
+        run: swift build -c release
         working-directory: native/macos/Fae
 
       - name: Run tests
-        run: swift test --package-path native/macos/Fae
+        run: swift test
+        working-directory: native/macos/Fae
