@@ -446,12 +446,18 @@ struct FaeApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView(commandSender: appDelegate.faeCore, sparkleUpdater: appDelegate.sparkleUpdater)
-                .environmentObject(appDelegate.orbState)
-                .environmentObject(appDelegate.handoff)
-                .environmentObject(appDelegate.auxiliaryWindows)
-                .environmentObject(appDelegate.onboarding)
-                .environmentObject(appDelegate.conversation)
+            SettingsView(
+                commandSender: appDelegate.faeCore,
+                sparkleUpdater: appDelegate.sparkleUpdater,
+                personalityEditor: appDelegate.personalityEditor,
+                onToggleRescue: { [appDelegate] in appDelegate.toggleRescueMode() }
+            )
+            .environmentObject(appDelegate.orbState)
+            .environmentObject(appDelegate.handoff)
+            .environmentObject(appDelegate.auxiliaryWindows)
+            .environmentObject(appDelegate.onboarding)
+            .environmentObject(appDelegate.conversation)
+            .environmentObject(appDelegate.rescueMode)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {

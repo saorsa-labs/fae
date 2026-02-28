@@ -342,6 +342,43 @@ Implementation files:
 | `Skills/SkillManager.swift` | Skill lifecycle (create, run, list, delete) |
 | `Core/PersonalityManager.swift` | Python/uv capability prompt + self-modification prompt |
 
+## Rescue mode
+
+Safe boot that bypasses all user customizations without deleting data.
+
+| Component | Normal | Rescue Mode |
+|-----------|--------|-------------|
+| Soul contract | User's `soul.md` | Bundled default |
+| Custom instructions | `custom_instructions.txt` | Empty (bypassed, not deleted) |
+| Tool mode | config value (default: "full") | `read_only` |
+| Scheduler | All 12 tasks active | Not started |
+| Memory capture | Enabled | Disabled (recall still works) |
+| Orb palette | Dynamic | Forced `.silverMist` |
+
+Activation: **Help > Rescue Mode...** (Cmd+Opt+R) — always accessible even when pipeline is stuck. Stops pipeline, activates rescue flag, restarts with overrides. Deactivation reverses the process.
+
+Visual indicators: orb forced to `.silverMist` palette, "Rescue Mode" capsule badge on ContentView.
+
+Implementation: `Core/RescueMode.swift` (state), `FaeApp.swift` (menu + toggle), `FaeCore.swift` (rescue-aware start), `OrbStateBridgeController.swift` (palette enforcement).
+
+## SoulManager
+
+Manages SOUL.md as runtime config — bundled default, user-editable copy, loaded fresh every turn.
+
+| Method | Purpose |
+|--------|---------|
+| `defaultSoul()` | Read bundled `Resources/SOUL.md` |
+| `loadSoul()` | Read user copy, fall back to bundled default |
+| `saveSoul(_:)` | Write to user path |
+| `resetToDefault()` | Copy bundled default over user copy |
+| `ensureUserCopy()` | Copy bundled default if user file doesn't exist |
+| `isModified` | Whether user copy differs from bundled default |
+| `lineCount` | Line count of current soul |
+
+User path: `~/Library/Application Support/fae/soul.md`
+
+Implementation: `Core/SoulManager.swift`
+
 ## Proactive behavior
 
 Fae doesn't just respond — she actively learns from conversations and acts on discoveries.
@@ -374,18 +411,20 @@ Fae doesn't just respond — she actively learns from conversations and acts on 
 `PersonalityManager.assemblePrompt()` builds the system prompt:
 
 1. Core system prompt (identity, style, warmth, companion presence)
-2. SOUL contract (`SOUL.md`)
+2. SOUL contract — loaded via `SoulManager.loadSoul()` (user copy, falls back to bundled default)
 3. User name context (when known from memory)
-4. Custom instructions (from `custom_instructions.txt`)
+4. Custom instructions (from `custom_instructions.txt`, overridable via `customInstructionsOverride:`)
 5. Memory context (injected by MemoryOrchestrator.recall)
 6. Tool schemas (when tools available — LLM sees full tool definitions inline)
 7. Python/uv capability prompt (when tools available)
 8. Self-modification prompt (when tools available)
 9. Proactive behavior prompt (when tools available)
 
+In **rescue mode**, step 2 uses the bundled default soul and step 4 uses empty string (bypassed, not deleted).
+
 Implementation: `Core/PersonalityManager.swift`
 
-Human contract document: `SOUL.md`
+Human contract document: `SOUL.md` (bundled at `Resources/SOUL.md`, user copy at `~/Library/Application Support/fae/soul.md`)
 
 ## Quiet operation policy
 
@@ -439,6 +478,7 @@ directAddressFollowupS = 20
 Data paths:
 - Config: `~/Library/Application Support/fae/config.toml`
 - Memory: `~/Library/Application Support/fae/fae.db`
+- Soul contract: `~/Library/Application Support/fae/soul.md`
 - Custom instructions: `~/Library/Application Support/fae/custom_instructions.txt`
 - Skills: `~/Library/Application Support/fae/skills/`
 - Speaker profiles: `~/Library/Application Support/fae/speakers.json`
@@ -465,6 +505,8 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `Core/VoiceCommandParser.swift` | Voice command detection (show/hide conversation, etc.) |
 | `Core/SentimentClassifier.swift` | Sentiment analysis for orb mood |
 | `Core/CredentialManager.swift` | Keychain credential management |
+| `Core/SoulManager.swift` | Soul lifecycle: load, save, reset, ensure user copy (bundled default → user dir) |
+| `Core/RescueMode.swift` | Rescue mode state (ObservableObject): safe boot bypassing customizations |
 | `Core/DiagnosticsManager.swift` | Diagnostics and debug info |
 | `Core/PermissionStatusProvider.swift` | macOS permission status checks |
 | `Core/IntroCrawl.swift` | Intro text crawl animation |
@@ -580,12 +622,15 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `SettingsView.swift` | TabView settings |
 | `SettingsGeneralTab.swift` | General settings (listening, theme, updates) |
 | `SettingsModelsTab.swift` | Model selection and download |
+| `SettingsSpeakerTab.swift` | Voice identity configuration |
 | `SettingsToolsTab.swift` | Tool mode picker |
-| `SettingsSkillsTab.swift` | Skill management |
-| `SettingsChannelsTab.swift` | Channel configuration |
+| `SettingsPersonalityTab.swift` | Personality: soul contract, custom instructions, rescue mode |
 | `SettingsSchedulesTab.swift` | Scheduler task configuration |
+| `SettingsChannelsTab.swift` | Channel configuration |
+| `SettingsSkillsTab.swift` | Skill management |
 | `SettingsAboutTab.swift` | About, version info |
-| `SettingsDeveloperTab.swift` | Developer diagnostics |
+| `SettingsDeveloperTab.swift` | Developer diagnostics (Option-held) |
+| `PersonalityEditorController.swift` | Opens soul.md / custom_instructions.txt in system text editor |
 
 ### System & Misc
 
@@ -714,3 +759,7 @@ Key metrics: T/s at voice context (needs >60), `/no_think` compliance, idle RAM,
   - Global hotkey: `GlobalHotkeyManager` (Ctrl+Shift+A) via `AXIsProcessTrustedWithOptions`; Settings shortcut display
   - Message box expansion: window grows dynamically with text (max 700pt); top edge fixed; auto-releases on submit
   - Input-required flow: `InputRequestBridge` actor with 120s timeout; `InputRequestTool` for LLM; floating `InputCard` overlay with SecureField support; `.faeInputRequired`/`.faeInputResponse` notifications
+  - Rescue mode: safe boot bypassing customizations (read_only tools, default soul, no scheduler, silverMist palette); Help menu toggle (Cmd+Opt+R)
+  - SoulManager: SOUL.md as runtime config — bundled default, user-editable copy at `~/Library/Application Support/fae/soul.md`, loaded fresh every turn
+  - Personality editor: Edit menu (Cmd+Shift+E soul, Cmd+Shift+I instructions); Settings > Personality tab with soul/instructions/rescue controls
+  - PersonalityEditorController: opens soul.md and custom_instructions.txt in system default text editor

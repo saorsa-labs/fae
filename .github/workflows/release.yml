@@ -439,6 +439,62 @@ jobs:
             echo "Sparkle signature generated (${#SIGNATURE} chars)"
           fi
 
+      - name: Extract release notes from CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          python3 -c "
+          import re, html, sys
+
+          version = '$VERSION'
+          try:
+              with open('CHANGELOG.md', 'r') as f:
+                  text = f.read()
+          except FileNotFoundError:
+              print(f'Version {version}', end='')
+              sys.exit(0)
+
+          # Extract section for this version (## [vX.Y.Z] until next ## [)
+          pattern = rf'## \[v{re.escape(version)}\].*?\n(.*?)(?=\n## \[|$)'
+          match = re.search(pattern, text, re.DOTALL)
+          if not match:
+              print(f'Version {version}', end='')
+              sys.exit(0)
+
+          body = match.group(1).strip()
+          lines = body.split('\n')
+          out = []
+          in_list = False
+          for line in lines:
+              stripped = line.strip()
+              if stripped.startswith('### '):
+                  if in_list:
+                      out.append('</ul>')
+                      in_list = False
+                  heading = html.escape(stripped[4:])
+                  out.append(f'<h3>{heading}</h3>')
+              elif stripped.startswith('- '):
+                  if not in_list:
+                      out.append('<ul>')
+                      in_list = True
+                  item = html.escape(stripped[2:])
+                  # Bold markers
+                  item = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', item)
+                  # Inline code
+                  item = re.sub(r'\x60(.+?)\x60', r'<code>\1</code>', item)
+                  # mdash
+                  item = item.replace(' — ', ' &mdash; ')
+                  out.append(f'  <li>{item}</li>')
+              elif stripped == '':
+                  if in_list:
+                      out.append('</ul>')
+                      in_list = False
+          if in_list:
+              out.append('</ul>')
+
+          print('\n'.join(out), end='')
+          " > "$RUNNER_TEMP/release_notes.html"
+          echo "Release notes extracted ($(wc -c < "$RUNNER_TEMP/release_notes.html") bytes)"
+
       - name: Stage release artifacts
         run: |
           ARTIFACTS_DIR="$RUNNER_TEMP/release-artifacts"
@@ -455,6 +511,7 @@ jobs:
             DMG_FILENAME="fae-${VERSION}-macos-arm64.dmg"
             REPO="${GITHUB_REPOSITORY}"
             DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${DMG_FILENAME}"
+            RELEASE_NOTES="$(cat "$RUNNER_TEMP/release_notes.html")"
 
             cat > "$ARTIFACTS_DIR/appcast.xml" << APPCAST_EOF
           <?xml version="1.0" encoding="utf-8"?>
@@ -470,6 +527,7 @@ jobs:
                 <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
                 <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
                 <pubDate>$(date -R)</pubDate>
+                <description><![CDATA[${RELEASE_NOTES}]]></description>
                 <enclosure
                   url="${DOWNLOAD_URL}"
                   sparkle:edSignature="${SPARKLE_SIGNATURE}"

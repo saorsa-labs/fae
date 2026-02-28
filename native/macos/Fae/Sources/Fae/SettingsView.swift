@@ -46,6 +46,14 @@ struct SettingsView: View {
                     Label("Tools", systemImage: "wrench.and.screwdriver")
                 }
 
+            SettingsPersonalityTab(
+                personalityEditor: personalityEditor,
+                onToggleRescue: onToggleRescue
+            )
+            .tabItem {
+                Label("Personality", systemImage: "heart")
+            }
+
             SettingsSchedulesTab(commandSender: commandSender)
                 .tabItem {
                     Label("Schedules", systemImage: "calendar.badge.clock")
