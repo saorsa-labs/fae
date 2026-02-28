@@ -100,7 +100,7 @@ Storage: SQLite with GRDB (`~/Library/Application Support/fae/fae.db`)
 
 Key behavior:
 
-- automatic recall before LLM generation (hybrid: 70% lexical + 30% cosine semantic)
+- automatic recall before LLM generation (hybrid: 60% ANN neural + 40% FTS5 lexical)
 - automatic capture after each completed turn
 - explicit edit operations with audit history
 - daily automated backups with rotation
@@ -131,15 +131,22 @@ Implementation files:
 
 | File | Role |
 |------|------|
-| `Memory/MemoryOrchestrator.swift` | Recall, capture, garbage collection, semantic reranking |
+| `Memory/MemoryOrchestrator.swift` | Recall (ANN+FTS5 hybrid), capture, GC, graph context |
 | `Memory/SQLiteMemoryStore.swift` | GRDB-backed SQLite store, search, CRUD, retention |
 | `Memory/MemoryTypes.swift` | MemoryRecord, MemoryKind, MemoryStatus, constants |
 | `Memory/MemoryBackup.swift` | Backup and rotation |
-| `ML/MLXEmbeddingEngine.swift` | Hash-384 embedding for semantic search |
+| `Memory/VectorStore.swift` | sqlite-vec ANN tables (`memory_vec`, `fact_vec`) |
+| `Memory/EntityStore.swift` | Entity graph: persons, orgs, locations, typed relationships |
+| `Memory/EntityLinker.swift` | Extract entities and edges from person records |
+| `Memory/EntityBackfillRunner.swift` | One-time backfill of legacy person records → entity graph |
+| `Memory/EmbeddingBackfillRunner.swift` | Background backfill of all records/facts into ANN index |
+| `Memory/PersonQueryDetector.swift` | Detect person/org/location queries ("who works at X?") |
+| `Memory/EntityContextFormatter.swift` | Format entity profiles with relationship edges |
+| `ML/NeuralEmbeddingEngine.swift` | Tiered Qwen3-Embedding (8B/4B/0.6B by RAM; hash fallback) |
 
 ## Scheduler
 
-Tick interval: 60s. All 11 built-in tasks:
+Tick interval: 60s. All 12 built-in tasks:
 
 | Task | Schedule | Purpose |
 |------|----------|---------|
@@ -154,6 +161,7 @@ Tick interval: 60s. All 11 built-in tasks:
 | `morning_briefing` | daily 08:00 | Compile and speak morning briefing |
 | `skill_proposals` | daily 11:00 | Detect skill opportunities from interests |
 | `skill_health_check` | every 5min | Python skill health checks |
+| `embedding_reindex` | weekly Sun 03:00 | Re-embed records missing ANN vectors after model change |
 
 ### Scheduler speak handler
 
@@ -487,10 +495,17 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 
 | File | Role |
 |------|------|
-| `Memory/MemoryOrchestrator.swift` | Recall, capture, GC, semantic reranking |
+| `Memory/MemoryOrchestrator.swift` | Recall (ANN+FTS5 hybrid), capture, GC, graph context |
 | `Memory/SQLiteMemoryStore.swift` | GRDB-backed SQLite: insert, search, supersede, retain |
 | `Memory/MemoryTypes.swift` | MemoryRecord, MemoryKind, MemoryStatus, constants |
 | `Memory/MemoryBackup.swift` | Database backup and rotation |
+| `Memory/VectorStore.swift` | sqlite-vec ANN tables (`memory_vec`, `fact_vec`) |
+| `Memory/EntityStore.swift` | Entity graph: persons, orgs, locations, typed relationships |
+| `Memory/EntityLinker.swift` | Extract and persist entities/edges from person records |
+| `Memory/EntityBackfillRunner.swift` | One-time backfill: legacy person records → entity graph |
+| `Memory/EmbeddingBackfillRunner.swift` | Background paged backfill of all records/facts into ANN |
+| `Memory/PersonQueryDetector.swift` | Detect person/org/location queries ("who works at X?") |
+| `Memory/EntityContextFormatter.swift` | Format entity profiles including relationship edges |
 
 ### Tools
 
@@ -675,3 +690,14 @@ Key metrics: T/s at voice context (needs >60), `/no_think` compliance, idle RAM,
   - Cloud metadata protection: blocks AWS/GCP/Azure metadata endpoints
   - Edit safety: first-occurrence-only replacement
   - Approval UX: 20s timeout (was 58s)
+- **v0.9.0** — Memory v2: neural embeddings, ANN search, knowledge graph
+  - NeuralEmbeddingEngine: tiered Qwen3-Embedding (64 GB→8B, 32 GB→4B, 16 GB→0.6B, <16 GB→hash)
+  - VectorStore: sqlite-vec `vec0` ANN tables (`memory_vec`, `fact_vec`) inside `fae.db`
+  - Hybrid recall: 60% ANN cosine + 40% FTS5 lexical (was 70/30 hash-only)
+  - Schema v6: `entity_relationships`, temporal facts (`started_at`/`ended_at`), `entity_type` column
+  - EntityStore: typed entity graph — persons, organisations, locations with bidirectional edges
+  - EntityLinker: auto-extract `works_at`, `lives_in`, `knows`, `reports_to` edges
+  - PersonQueryDetector: graph queries — "who works at X?", "who lives in X?"
+  - EmbeddingBackfillRunner: background paged backfill of all records/facts into ANN index
+  - EntityBackfillRunner: one-time migration of legacy person records → entity graph
+  - Scheduler: `embedding_reindex` weekly task (Sunday 03:00)
