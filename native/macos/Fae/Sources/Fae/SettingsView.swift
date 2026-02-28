@@ -11,9 +11,6 @@ struct SettingsView: View {
     /// Injected via the environment from FaeApp.
     var commandSender: HostCommandSender?
 
-    /// Sparkle auto-update controller for "Check for Updates" UI.
-    var sparkleUpdater: SparkleUpdaterController?
-
     /// Personality editor controller for opening soul/instructions editors.
     var personalityEditor: PersonalityEditorController?
 
@@ -70,7 +67,7 @@ struct SettingsView: View {
                     Label("Skills", systemImage: "sparkles")
                 }
 
-            SettingsAboutTab(commandSender: commandSender, sparkleUpdater: sparkleUpdater)
+            SettingsAboutTab(commandSender: commandSender)
                 .environmentObject(handoff)
                 .environmentObject(onboarding)
                 .tabItem {

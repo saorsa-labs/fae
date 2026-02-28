@@ -77,6 +77,13 @@ struct InputBarView: View {
         ) { _ in
             isTextFieldFocused = true
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .faePrefillInput)
+        ) { note in
+            if let text = note.userInfo?["text"] as? String {
+                messageText = text
+            }
+        }
         .onChange(of: messageText) { _, newText in
             updateWindowHeightForText(newText)
         }

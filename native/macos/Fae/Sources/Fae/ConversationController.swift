@@ -170,6 +170,9 @@ extension Notification.Name {
     /// Posted by WindowStateController when it expands from collapsed to compact.
     /// InputBarView listens for this to restore keyboard focus on the text field.
     static let faeWillFocusInputField = Notification.Name("faeWillFocusInputField")
+    /// Posted by Help menu items to pre-fill the input bar with a topic question.
+    /// userInfo: ["text": String]
+    static let faePrefillInput = Notification.Name("faePrefillInput")
     /// Posted by the stop button or Cmd+. menu item to cancel the current generation.
     static let faeCancelGeneration = Notification.Name("faeCancelGeneration")
 }

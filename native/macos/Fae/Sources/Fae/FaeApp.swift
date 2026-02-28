@@ -114,7 +114,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let approvalOverlay = ApprovalOverlayController()
     let sparkleUpdater = SparkleUpdaterController()
     let relayServer = FaeRelayServer()
-    let helpWindow = HelpWindowController()
+    let aboutWindow = AboutWindowController()
     let hotkeyManager = GlobalHotkeyManager()
     let faeCore = FaeCore()
 
@@ -210,6 +210,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        aboutWindow.conversation = conversation
+        aboutWindow.sparkleUpdater = sparkleUpdater
+        aboutWindow.faeCore = faeCore
         relayServer.bindOrbState(orbState)
         relayServer.commandSender = faeCore
         relayServer.audioSender = faeCore
@@ -448,7 +451,6 @@ struct FaeApp: App {
         Settings {
             SettingsView(
                 commandSender: appDelegate.faeCore,
-                sparkleUpdater: appDelegate.sparkleUpdater,
                 personalityEditor: appDelegate.personalityEditor,
                 onToggleRescue: { [appDelegate] in appDelegate.toggleRescueMode() }
             )
@@ -462,23 +464,12 @@ struct FaeApp: App {
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About Fae") {
-                    let model = appDelegate.conversation.loadedModelLabel
-                    var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
-                    if !model.isEmpty {
-                        options[.credits] = NSAttributedString(
-                            string: "Model: \(model)",
-                            attributes: [
-                                .font: NSFont.systemFont(ofSize: 11),
-                                .foregroundColor: NSColor.secondaryLabelColor
-                            ]
-                        )
-                    }
-                    NSApp.orderFrontStandardAboutPanel(options: options)
+                    appDelegate.aboutWindow.show()
                 }
 
                 Divider()
 
-                Button("Check for Updates…") {
+                Button("Check for Updates\u{2026}") {
                     appDelegate.sparkleUpdater.checkForUpdates()
                 }
                 .disabled(!appDelegate.sparkleUpdater.canCheckForUpdates)
@@ -529,33 +520,48 @@ struct FaeApp: App {
                 .keyboardShortcut("d", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .help) {
-                Button("Getting Started") {
-                    appDelegate.helpWindow.showPage("getting-started")
+                Button("Ask Fae\u{2026}") {
+                    appDelegate.auxiliaryWindows.showConversation()
+                    NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
                 }
-                Button("Keyboard Shortcuts") {
-                    appDelegate.helpWindow.showPage("shortcuts")
-                }
-                Button("Model & Voice Reference") {
-                    appDelegate.helpWindow.showPage("models-and-voice")
-                }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+
                 Divider()
-                Button("Privacy & Security") {
-                    appDelegate.helpWindow.showPage("privacy")
+
+                Button("Ask About Shortcuts") {
+                    askFae("What keyboard shortcuts and voice commands do you support?")
                 }
+                Button("Ask About Models") {
+                    askFae("What models are you running and how were they selected?")
+                }
+                Button("Ask About Privacy") {
+                    askFae("How do you handle my privacy and data security?")
+                }
+                Button("Ask About Tools") {
+                    askFae("What tools do you have and how do I configure them?")
+                }
+
                 Divider()
-                if let websiteURL = URL(string: "https://the-fae.com") {
-                    Link("Fae Website", destination: websiteURL)
-                }
-                if let issuesURL = URL(string: "https://github.com/saorsa-labs/fae/issues") {
-                    Link("Report an Issue", destination: issuesURL)
-                }
-                Divider()
+
                 Button(appDelegate.rescueMode.isActive ? "Exit Rescue Mode" : "Rescue Mode\u{2026}") {
                     appDelegate.toggleRescueMode()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
             }
         }
+    }
+
+    // MARK: - Ask Fae Helper
+
+    /// Show the conversation panel and pre-fill the input bar with a topic question.
+    private func askFae(_ question: String) {
+        appDelegate.auxiliaryWindows.showConversation()
+        NotificationCenter.default.post(
+            name: .faePrefillInput,
+            object: nil,
+            userInfo: ["text": question]
+        )
+        NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
     }
 
     // MARK: - Static Orb Rendering

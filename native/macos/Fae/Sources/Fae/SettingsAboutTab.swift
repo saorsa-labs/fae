@@ -1,13 +1,12 @@
 import SwiftUI
 
-/// About settings tab: version info, updates, onboarding reset, handoff settings.
+/// About settings tab: version info, onboarding reset, handoff settings.
 struct SettingsAboutTab: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var conversation: ConversationController
     @State private var showResetConfirmation = false
     let commandSender: HostCommandSender?
-    let sparkleUpdater: SparkleUpdaterController?
 
     var body: some View {
         Form {
@@ -32,48 +31,13 @@ struct SettingsAboutTab: View {
                     Text("Model")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                     Spacer()
-                    Text(conversation.loadedModelLabel.isEmpty ? "Loading…" : conversation.loadedModelLabel)
+                    Text(conversation.loadedModelLabel.isEmpty ? "Loading\u{2026}" : conversation.loadedModelLabel)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 Text("by Saorsa Labs")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            }
-
-            if let updater = sparkleUpdater {
-                Section("Updates") {
-                    HStack {
-                        Button("Check for Updates") {
-                            updater.checkForUpdates()
-                        }
-                        .buttonStyle(.bordered)
-
-                        Spacer()
-
-                        if let lastCheck = updater.lastUpdateCheck {
-                            Text("Last checked \(lastCheck, style: .relative) ago")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    if updater.isConfigured {
-                        Toggle("Automatic Updates", isOn: Binding(
-                            get: { updater.automaticallyChecksForUpdates },
-                            set: { updater.automaticallyChecksForUpdates = $0 }
-                        ))
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    }
-
-                    Text("Fae checks for updates every 6 hours and notifies you when one is available.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if let changelogURL = URL(string: "https://github.com/saorsa-labs/fae/blob/main/CHANGELOG.md") {
-                        Link("View Changelog", destination: changelogURL)
-                    }
-                }
             }
 
             Section("Onboarding") {
@@ -127,18 +91,6 @@ struct SettingsAboutTab: View {
                         Spacer()
                     }
                     .accessibilityLabel("Current device: \(handoff.currentTarget.label)")
-                }
-            }
-
-            Section("Links") {
-                if let websiteURL = URL(string: "https://the-fae.com") {
-                    Link("Fae Website", destination: websiteURL)
-                }
-                if let issuesURL = URL(string: "https://github.com/saorsa-labs/fae/issues") {
-                    Link("Report an Issue", destination: issuesURL)
-                }
-                if let privacyURL = URL(string: "https://the-fae.com/privacy") {
-                    Link("Privacy Policy", destination: privacyURL)
                 }
             }
         }
