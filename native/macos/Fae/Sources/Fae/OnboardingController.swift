@@ -84,110 +84,175 @@ final class OnboardingController: ObservableObject {
     private var micGranted: Bool = false
     private var contactsGranted: Bool = false
 
+    // MARK: - Current Permission Status
+
+    /// Human-readable status for the microphone permission.
+    var microphoneStatus: String {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return "Granted"
+        case .denied, .restricted: return "Denied"
+        case .notDetermined: return "Not Asked"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    /// Human-readable status for the contacts permission.
+    var contactsStatus: String {
+        switch CNContactStore.authorizationStatus(for: .contacts) {
+        case .authorized: return "Granted"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not Asked"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    /// Human-readable status for the calendar permission.
+    var calendarStatus: String {
+        switch EKEventStore.authorizationStatus(for: .event) {
+        case .authorized, .fullAccess: return "Granted"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not Asked"
+        case .writeOnly: return "Write Only"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    /// Human-readable status for the reminders permission.
+    var remindersStatus: String {
+        switch EKEventStore.authorizationStatus(for: .reminder) {
+        case .authorized, .fullAccess: return "Granted"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not Asked"
+        case .writeOnly: return "Write Only"
+        @unknown default: return "Unknown"
+        }
+    }
+
     // MARK: - Permission Requests
 
-    /// Request microphone access and report the result asynchronously.
+    /// Request microphone access. If already determined, opens System Settings.
     func requestMicrophone() {
-        Task {
-            let granted = await AVCaptureDevice.requestAccess(for: .audio)
-            micGranted = granted
-            let state = granted ? "granted" : "denied"
-            permissionStates["microphone"] = state
-            onPermissionResult?("microphone", state)
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        if status == .notDetermined {
+            Task {
+                let granted = await AVCaptureDevice.requestAccess(for: .audio)
+                micGranted = granted
+                let state = granted ? "granted" : "denied"
+                permissionStates["microphone"] = state
+                onPermissionResult?("microphone", state)
+            }
+        } else {
+            openPrivacySettings("Microphone")
         }
     }
 
-    /// Request contacts access and report the result asynchronously.
+    /// Request contacts access. If already determined, opens System Settings.
     /// On grant, also reads the user's own contact card to extract their first name.
     func requestContacts() {
-        let store = CNContactStore()
-        store.requestAccess(for: .contacts) { [weak self] granted, _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.contactsGranted = granted
-                let state = granted ? "granted" : "denied"
-                self.permissionStates["contacts"] = state
-                self.onPermissionResult?("contacts", state)
-                if granted {
-                    self.readMeCard(store: store)
+        let authStatus = CNContactStore.authorizationStatus(for: .contacts)
+        if authStatus == .notDetermined {
+            let store = CNContactStore()
+            store.requestAccess(for: .contacts) { [weak self] granted, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.contactsGranted = granted
+                    let state = granted ? "granted" : "denied"
+                    self.permissionStates["contacts"] = state
+                    self.onPermissionResult?("contacts", state)
+                    if granted {
+                        self.readMeCard(store: store)
+                    }
                 }
             }
+        } else {
+            openPrivacySettings("Contacts")
         }
     }
 
-    /// Request calendar and reminders access via EventKit and report the result.
-    ///
-    /// Uses `EKEventStore.requestFullAccessToEvents()` on macOS 14+ and the
-    /// legacy `requestAccess(to:completion:)` API on earlier systems. On grant,
-    /// updates the "calendar" permission state in the web layer.
+    /// Request calendar access. If already determined, opens System Settings.
     func requestCalendar() {
-        let store = EKEventStore()
-        if #available(macOS 14.0, *) {
-            store.requestFullAccessToEvents { [weak self] granted, _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let state = granted ? "granted" : "denied"
-                    self.permissionStates["calendar"] = state
-                    self.onPermissionResult?("calendar", state)
+        let calStatus = EKEventStore.authorizationStatus(for: .event)
+        if calStatus == .notDetermined {
+            let store = EKEventStore()
+            if #available(macOS 14.0, *) {
+                store.requestFullAccessToEvents { [weak self] granted, _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let state = granted ? "granted" : "denied"
+                        self.permissionStates["calendar"] = state
+                        self.onPermissionResult?("calendar", state)
+                    }
+                }
+            } else {
+                store.requestAccess(to: .event) { [weak self] granted, _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let state = granted ? "granted" : "denied"
+                        self.permissionStates["calendar"] = state
+                        self.onPermissionResult?("calendar", state)
+                    }
                 }
             }
         } else {
-            store.requestAccess(to: .event) { [weak self] granted, _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let state = granted ? "granted" : "denied"
-                    self.permissionStates["calendar"] = state
-                    self.onPermissionResult?("calendar", state)
-                }
-            }
+            openPrivacySettings("Calendars")
         }
     }
 
-    /// Request reminders access via EventKit and report the result.
-    ///
-    /// Uses `EKEventStore.requestFullAccessToReminders()` on macOS 14+ and the
-    /// legacy `requestAccess(to:completion:)` API on earlier systems.
+    /// Request reminders access. If already determined, opens System Settings.
     func requestReminders() {
-        let store = EKEventStore()
-        if #available(macOS 14.0, *) {
-            store.requestFullAccessToReminders { [weak self] granted, _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let state = granted ? "granted" : "denied"
-                    self.permissionStates["reminders"] = state
-                    self.onPermissionResult?("reminders", state)
+        let remStatus = EKEventStore.authorizationStatus(for: .reminder)
+        if remStatus == .notDetermined {
+            let store = EKEventStore()
+            if #available(macOS 14.0, *) {
+                store.requestFullAccessToReminders { [weak self] granted, _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let state = granted ? "granted" : "denied"
+                        self.permissionStates["reminders"] = state
+                        self.onPermissionResult?("reminders", state)
+                    }
+                }
+            } else {
+                store.requestAccess(to: .reminder) { [weak self] granted, _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let state = granted ? "granted" : "denied"
+                        self.permissionStates["reminders"] = state
+                        self.onPermissionResult?("reminders", state)
+                    }
                 }
             }
         } else {
-            store.requestAccess(to: .reminder) { [weak self] granted, _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let state = granted ? "granted" : "denied"
-                    self.permissionStates["reminders"] = state
-                    self.onPermissionResult?("reminders", state)
-                }
-            }
+            openPrivacySettings("Reminders")
         }
     }
 
-    /// Request mail and notes access.
-    ///
-    /// Mail and Notes on macOS require Full Disk Access or Automation entitlements
-    /// that cannot be requested programmatically at runtime. This method opens
-    /// System Settings to the Privacy & Security → Automation panel so the user
-    /// can grant access manually. The permission state is set to `"settings"` to
-    /// signal to the web layer that the user was redirected to System Settings and
-    /// must take action there. The button label updates to "Open Settings".
+    /// Open System Settings to the Automation pane for Mail & Notes.
     func requestMail() {
-        // Open System Settings to the Privacy & Security → Automation panel.
-        // The user must manually grant access there and re-launch if needed.
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
-            NSWorkspace.shared.open(url)
-        }
-        // Set state to "settings" — the web layer renders the button as "Open Settings"
-        // to provide clear feedback that the user was redirected to System Settings.
+        openPrivacySettings("Automation")
         permissionStates["mail"] = "settings"
         onPermissionResult?("mail", "settings")
+    }
+
+    /// Request all read-access permissions that haven't been asked yet.
+    /// Called on first launch to ensure Fae has at least read access by default.
+    func requestAllReadPermissions() {
+        requestMicrophone()
+        requestContacts()
+        requestCalendar()
+        requestReminders()
+    }
+
+    // MARK: - System Settings
+
+    /// Open System Settings to the Privacy & Security pane for the given category.
+    func openPrivacySettings(_ category: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_\(category)") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// Complete the onboarding flow and signal the backend.

@@ -248,7 +248,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 startPipelineIfReady()
                 if !faeCore.isOnboarded {
                     showIntroCanvas()
-                    requestContactsForFirstLaunch()
+                    requestPermissionsForFirstLaunch()
                 }
             }
         )
@@ -321,7 +321,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             startPipelineIfReady()
             if !faeCore.isOnboarded {
                 showIntroCanvas()
-                requestContactsForFirstLaunch()
+                requestPermissionsForFirstLaunch()
             }
         }
     }
@@ -357,15 +357,16 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         auxiliaryWindows.showCanvas()
     }
 
-    func requestContactsForFirstLaunch() {
+    func requestPermissionsForFirstLaunch() {
         Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
 
+            // Request all read-access permissions up front.
             let onboarding = self.onboarding
             let learnedName: String? = await withTaskGroup(of: String?.self) { group in
                 group.addTask { @MainActor in
-                    onboarding.requestContacts()
+                    onboarding.requestAllReadPermissions()
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     return onboarding.userName
                 }
@@ -476,17 +477,25 @@ struct FaeApp: App {
             }
             CommandGroup(after: .appInfo) {
                 Menu("Permissions") {
-                    Button("Microphone") {
+                    Button("Microphone — \(appDelegate.onboarding.microphoneStatus)") {
                         appDelegate.onboarding.requestMicrophone()
                     }
-                    Button("Contacts") {
+                    Button("Contacts — \(appDelegate.onboarding.contactsStatus)") {
                         appDelegate.onboarding.requestContacts()
                     }
-                    Button("Calendar & Reminders") {
+                    Button("Calendars — \(appDelegate.onboarding.calendarStatus)") {
                         appDelegate.onboarding.requestCalendar()
                     }
-                    Button("Mail & Notes (System Settings)") {
+                    Button("Reminders — \(appDelegate.onboarding.remindersStatus)") {
+                        appDelegate.onboarding.requestReminders()
+                    }
+                    Divider()
+                    Button("Mail & Notes (Automation)\u{2026}") {
                         appDelegate.onboarding.requestMail()
+                    }
+                    Divider()
+                    Button("Open Privacy & Security\u{2026}") {
+                        appDelegate.onboarding.openPrivacySettings("AllFiles")
                     }
                 }
             }
