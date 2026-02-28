@@ -1,0 +1,283 @@
+{
+  "hardware": {
+    "arch": "arm64",
+    "ram_gb": 96
+  },
+  "date": "2026-02-27",
+  "backend": "mlx-lm",
+  "models": [
+    {
+      "model_id": "NexVeridian/Qwen3.5-35B-A3B-4bit",
+      "model_short": "qwen3.5-35b-a3b",
+      "idle_ram_mb": 19022.0,
+      "throughput_no_think": [
+        {
+          "context_label": "Short (~20 tok)",
+          "prompt_tokens": 35,
+          "generated_tokens": 128,
+          "visible_chars": 466,
+          "thinking_chars": 0,
+          "wall_time_s": 1.77,
+          "tokens_per_second": 72.3,
+          "ram_mb": 19037.0
+        },
+        {
+          "context_label": "~200 tok ctx",
+          "prompt_tokens": 196,
+          "generated_tokens": 256,
+          "visible_chars": 1125,
+          "thinking_chars": 0,
+          "wall_time_s": 3.65,
+          "tokens_per_second": 70.2,
+          "ram_mb": 19041.0
+        },
+        {
+          "context_label": "~500 tok ctx",
+          "prompt_tokens": 413,
+          "generated_tokens": 256,
+          "visible_chars": 1179,
+          "thinking_chars": 0,
+          "wall_time_s": 4.0,
+          "tokens_per_second": 63.9,
+          "ram_mb": 19043.0
+        },
+        {
+          "context_label": "~1K tok ctx",
+          "prompt_tokens": 852,
+          "generated_tokens": 256,
+          "visible_chars": 1119,
+          "thinking_chars": 0,
+          "wall_time_s": 4.51,
+          "tokens_per_second": 56.7,
+          "ram_mb": 19046.0
+        },
+        {
+          "context_label": "~2K tok ctx",
+          "prompt_tokens": 1670,
+          "generated_tokens": 256,
+          "visible_chars": 1160,
+          "thinking_chars": 0,
+          "wall_time_s": 5.5,
+          "tokens_per_second": 46.6,
+          "ram_mb": 19046.0
+        },
+        {
+          "context_label": "~4K tok ctx",
+          "prompt_tokens": 3311,
+          "generated_tokens": 256,
+          "visible_chars": 1119,
+          "thinking_chars": 0,
+          "wall_time_s": 7.68,
+          "tokens_per_second": 33.4,
+          "ram_mb": 19048.0
+        },
+        {
+          "context_label": "~8.5K tok",
+          "prompt_tokens": 7156,
+          "generated_tokens": 256,
+          "visible_chars": 1121,
+          "thinking_chars": 0,
+          "wall_time_s": 13.55,
+          "tokens_per_second": 18.9,
+          "ram_mb": 19052.0
+        }
+      ],
+      "throughput_think_on": [
+        {
+          "context_label": "Short (~20 tok)",
+          "prompt_tokens": 31,
+          "generated_tokens": 128,
+          "visible_chars": 542,
+          "thinking_chars": 0,
+          "wall_time_s": 1.77,
+          "tokens_per_second": 72.4,
+          "ram_mb": 19053.0
+        },
+        {
+          "context_label": "~200 tok ctx",
+          "prompt_tokens": 192,
+          "generated_tokens": 256,
+          "visible_chars": 1084,
+          "thinking_chars": 0,
+          "wall_time_s": 3.65,
+          "tokens_per_second": 70.2,
+          "ram_mb": 19054.0
+        },
+        {
+          "context_label": "~500 tok ctx",
+          "prompt_tokens": 409,
+          "generated_tokens": 256,
+          "visible_chars": 1225,
+          "thinking_chars": 0,
+          "wall_time_s": 3.95,
+          "tokens_per_second": 64.9,
+          "ram_mb": 19054.0
+        },
+        {
+          "context_label": "~1K tok ctx",
+          "prompt_tokens": 848,
+          "generated_tokens": 256,
+          "visible_chars": 1125,
+          "thinking_chars": 0,
+          "wall_time_s": 4.51,
+          "tokens_per_second": 56.7,
+          "ram_mb": 19054.0
+        },
+        {
+          "context_label": "~2K tok ctx",
+          "prompt_tokens": 1666,
+          "generated_tokens": 256,
+          "visible_chars": 1210,
+          "thinking_chars": 0,
+          "wall_time_s": 5.5,
+          "tokens_per_second": 46.5,
+          "ram_mb": 19054.0
+        },
+        {
+          "context_label": "~4K tok ctx",
+          "prompt_tokens": 3307,
+          "generated_tokens": 256,
+          "visible_chars": 1112,
+          "thinking_chars": 0,
+          "wall_time_s": 7.68,
+          "tokens_per_second": 33.3,
+          "ram_mb": 19054.0
+        },
+        {
+          "context_label": "~8.5K tok",
+          "prompt_tokens": 7152,
+          "generated_tokens": 256,
+          "visible_chars": 1152,
+          "thinking_chars": 0,
+          "wall_time_s": 13.03,
+          "tokens_per_second": 19.6,
+          "ram_mb": 19054.0
+        }
+      ],
+      "no_think_compliance": [
+        {
+          "prompt": "What is the capital of France?",
+          "think_on_tokens": 183,
+          "think_on_time_s": 2.47,
+          "think_off_tokens": 143,
+          "think_off_time_s": 2.0,
+          "overhead_tokens": "1x",
+          "overhead_time": "1x",
+          "compliant": true
+        },
+        {
+          "prompt": "Explain quantum computing in one sentence.",
+          "think_on_tokens": 256,
+          "think_on_time_s": 3.24,
+          "think_off_tokens": 256,
+          "think_off_time_s": 3.28,
+          "overhead_tokens": "1x",
+          "overhead_time": "1x",
+          "compliant": true
+        },
+        {
+          "prompt": "What is 17 * 23?",
+          "think_on_tokens": 194,
+          "think_on_time_s": 2.62,
+          "think_off_tokens": 178,
+          "think_off_time_s": 2.38,
+          "overhead_tokens": "1x",
+          "overhead_time": "1x",
+          "compliant": true
+        },
+        {
+          "prompt": "Name three planets in our solar system.",
+          "think_on_tokens": 161,
+          "think_on_time_s": 2.21,
+          "think_off_tokens": 256,
+          "think_off_time_s": 3.41,
+          "overhead_tokens": "1x",
+          "overhead_time": "1x",
+          "compliant": true
+        },
+        {
+          "prompt": "What year did World War II end?",
+          "think_on_tokens": 232,
+          "think_on_time_s": 3.03,
+          "think_off_tokens": 256,
+          "think_off_time_s": 3.33,
+          "overhead_tokens": "1x",
+          "overhead_time": "1x",
+          "compliant": true
+        }
+      ],
+      "tool_calling": [
+        {
+          "prompt": "What's on my calendar tomorrow?",
+          "expected_tool": "calendar",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Remind me to buy groceries at 5pm",
+          "expected_tool": "reminders",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Search the web for the latest news about Apple",
+          "expected_tool": "web_search",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "expected_tool": "mail",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "What's David's phone number?",
+          "expected_tool": "contacts",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "expected_tool": "notes",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "expected_tool": "read",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Can you look something up for me about quantum computing?",
+          "expected_tool": "web_search",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "How are you feeling today?",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "correct": true,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Tell me a joke about programming",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "correct": true,
+          "temperature": 0.2
+        }
+      ]
+    }
+  ]
+}

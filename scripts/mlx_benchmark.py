@@ -381,9 +381,21 @@ def run_tool_calling_test(model, tokenizer, temperature: float = 0.2) -> list:
 
     system = f"""/no_think
 
-You are Fae, a personal AI companion. When the user's request matches a tool, respond with a <tool_call> block. Otherwise respond conversationally.
+You are Fae, a personal AI companion running on macOS. When the user's request requires a tool, \
+call the appropriate tool. For simple conversation, just respond directly without tools.
+
+Tool usage:
+- When a task requires a tool, output a tool call in this exact format:
+  <tool_call>{{"name":"tool_name","arguments":{{"key":"value"}}}}</tool_call>
+- Wait for the tool result before continuing
+- After receiving a tool result, respond naturally in spoken language
+- Only use tools when the user's request genuinely needs one
+- For simple conversation, just respond directly without tools
+- Keep your spoken responses concise (1-4 sentences)
+- NEVER expose raw tool call markup or JSON to the user
 
 Available tools:
+
 {tool_schemas}"""
 
     results = []

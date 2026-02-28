@@ -204,132 +204,69 @@ func countThinkingChars(_ text: String) -> (visible: Int, thinking: Int) {
 
 // MARK: - Tool Schemas (for tool calling tests)
 
-// Tool calling system prompt — tells the LLM it is Fae and can use tools.
+// Tool calling system prompt — matches Fae's production PersonalityManager format.
+// Tools are described inline in the system prompt with <tool_call> examples,
+// NOT via OpenAI function-calling chat template (which Qwen3.5 models ignore).
 let toolCallingSystemPrompt = """
 /no_think
 
 You are Fae, a personal AI companion running on macOS. When the user's request requires a tool, \
 call the appropriate tool. For simple conversation, just respond directly without tools.
-"""
 
-// OpenAI function-calling format tools for UserInput.tools — the chat template will inject these.
-let toolSpecs: [[String: any Sendable]] = [
-    [
-        "type": "function",
-        "function": [
-            "name": "calendar",
-            "description": "Access macOS Calendar events. Actions: list_today, list_week, list_date, create, search.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "action": ["type": "string", "enum": ["list_today", "list_week", "list_date", "create", "search"],
-                               "description": "Calendar action to perform"] as [String: any Sendable],
-                    "query": ["type": "string", "description": "Search query"] as [String: any Sendable],
-                    "date": ["type": "string", "description": "Date in YYYY-MM-DD format"] as [String: any Sendable],
-                ] as [String: any Sendable],
-                "required": ["action"],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ] as [String: any Sendable],
-    [
-        "type": "function",
-        "function": [
-            "name": "reminders",
-            "description": "Access macOS Reminders. Actions: list_incomplete, create, complete, search.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "action": ["type": "string", "enum": ["list_incomplete", "create", "complete", "search"],
-                               "description": "Reminders action"] as [String: any Sendable],
-                    "title": ["type": "string", "description": "Reminder title"] as [String: any Sendable],
-                    "query": ["type": "string", "description": "Search query"] as [String: any Sendable],
-                ] as [String: any Sendable],
-                "required": ["action"],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ] as [String: any Sendable],
-    [
-        "type": "function",
-        "function": [
-            "name": "contacts",
-            "description": "Search macOS Contacts. Actions: search, get_phone, get_email.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "action": ["type": "string", "enum": ["search", "get_phone", "get_email"],
-                               "description": "Contacts action"] as [String: any Sendable],
-                    "query": ["type": "string", "description": "Search query (name)"] as [String: any Sendable],
-                ] as [String: any Sendable],
-                "required": ["action", "query"],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ] as [String: any Sendable],
-    [
-        "type": "function",
-        "function": [
-            "name": "mail",
-            "description": "Interact with macOS Mail. Actions: check_inbox, read_recent, send.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "action": ["type": "string", "enum": ["check_inbox", "read_recent", "send"],
-                               "description": "Mail action"] as [String: any Sendable],
-                    "to": ["type": "string", "description": "Recipient email"] as [String: any Sendable],
-                    "body": ["type": "string", "description": "Email body"] as [String: any Sendable],
-                    "count": ["type": "integer", "description": "Number of messages"] as [String: any Sendable],
-                ] as [String: any Sendable],
-                "required": ["action"],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ] as [String: any Sendable],
-    [
-        "type": "function",
-        "function": [
-            "name": "notes",
-            "description": "Access macOS Notes. Actions: list_recent, create, search.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "action": ["type": "string", "enum": ["list_recent", "create", "search"],
-                               "description": "Notes action"] as [String: any Sendable],
-                    "title": ["type": "string", "description": "Note title"] as [String: any Sendable],
-                    "body": ["type": "string", "description": "Note body"] as [String: any Sendable],
-                    "query": ["type": "string", "description": "Search query"] as [String: any Sendable],
-                ] as [String: any Sendable],
-                "required": ["action"],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ] as [String: any Sendable],
-    [
-        "type": "function",
-        "function": [
-            "name": "web_search",
-            "description": "Search the web using DuckDuckGo. Returns up to 5 results with titles, snippets, and URLs.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "query": ["type": "string", "description": "Search query"] as [String: any Sendable],
-                    "max_results": ["type": "integer", "description": "Max results (default 5)"] as [String: any Sendable],
-                ] as [String: any Sendable],
-                "required": ["query"],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ] as [String: any Sendable],
-    [
-        "type": "function",
-        "function": [
-            "name": "read",
-            "description": "Read the contents of a file from the filesystem.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "path": ["type": "string", "description": "File path to read"] as [String: any Sendable],
-                ] as [String: any Sendable],
-                "required": ["path"],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ] as [String: any Sendable],
-]
+Tool usage:
+- When a task requires a tool, output a tool call in this exact format:
+  <tool_call>{"name":"tool_name","arguments":{"key":"value"}}</tool_call>
+- Wait for the tool result before continuing
+- After receiving a tool result, respond naturally in spoken language
+- Only use tools when the user's request genuinely needs one
+- For simple conversation, just respond directly without tools
+- Keep your spoken responses concise (1-4 sentences)
+- NEVER expose raw tool call markup or JSON to the user
+
+Available tools:
+
+## calendar
+Access macOS Calendar events. Actions: list_today, list_week, list_date, create, search.
+Risk: low
+Parameters: {"action": "string (list_today|list_week|list_date|create|search)", "query": "string", "date": "string (YYYY-MM-DD)"}
+Example: <tool_call>{"name":"calendar","arguments":{"action":"list_today"}}</tool_call>
+
+## reminders
+Access macOS Reminders. Actions: list_incomplete, create, complete, search.
+Risk: low
+Parameters: {"action": "string (list_incomplete|create|complete|search)", "title": "string", "query": "string"}
+Example: <tool_call>{"name":"reminders","arguments":{"action":"list_incomplete"}}</tool_call>
+
+## contacts
+Search macOS Contacts. Actions: search, get_phone, get_email.
+Risk: low
+Parameters: {"action": "string (search|get_phone|get_email)", "query": "string (name)"}
+Example: <tool_call>{"name":"contacts","arguments":{"action":"search","query":"Sarah"}}</tool_call>
+
+## mail
+Interact with macOS Mail. Actions: check_inbox, read_recent, send.
+Risk: medium
+Parameters: {"action": "string (check_inbox|read_recent|send)", "to": "string", "body": "string", "count": "integer"}
+Example: <tool_call>{"name":"mail","arguments":{"action":"check_inbox","count":5}}</tool_call>
+
+## notes
+Access macOS Notes. Actions: list_recent, create, search.
+Risk: low
+Parameters: {"action": "string (list_recent|create|search)", "title": "string", "body": "string", "query": "string"}
+Example: <tool_call>{"name":"notes","arguments":{"action":"search","query":"meeting notes"}}</tool_call>
+
+## web_search
+Search the web using DuckDuckGo. Returns up to 5 results with titles, snippets, and URLs.
+Risk: low
+Parameters: {"query": "string", "max_results": "integer (default 5)"}
+Example: <tool_call>{"name":"web_search","arguments":{"query":"latest Swift concurrency features"}}</tool_call>
+
+## read
+Read the contents of a file from the filesystem.
+Risk: low
+Parameters: {"path": "string (file path)"}
+Example: <tool_call>{"name":"read","arguments":{"path":"~/Documents/notes.txt"}}</tool_call>
+"""
 
 let toolCallTests: [(prompt: String, expectedTool: String)] = [
     ("What's on my calendar tomorrow?", "calendar"),
@@ -588,13 +525,13 @@ actor BenchmarkEngine {
             print("    Tool test: \(test.prompt.prefix(50))...", terminator: "")
             fflush(stdout)
 
-            // Pass tools via UserInput.tools so the chat template injects them properly.
+            // Tools are in the system prompt (Fae's production format), not via UserInput.tools.
+            // This matches how Fae actually works — inline <tool_call> markup, not chat template tools.
             let toolResult = try await generate(
                 system: system,
                 user: test.prompt,
                 maxTokens: 512,
-                temperature: temperature,
-                tools: test.expectedTool == "none" ? nil : toolSpecs
+                temperature: temperature
             )
             let output = toolResult.text
 
