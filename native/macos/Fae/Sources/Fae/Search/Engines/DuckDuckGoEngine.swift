@@ -51,8 +51,12 @@ struct DuckDuckGoEngine: SearchEngineProtocol {
             guard let range = Range(match.range(at: 1), in: html) else { continue }
             let block = String(html[range])
 
-            // Skip ads.
-            if block.contains("result--ad") { continue }
+            // Skip ads — check the full match (including the opening div tag)
+            // because result--ad is in the class attribute, not the inner content.
+            if let fullRange = Range(match.range(at: 0), in: html) {
+                let fullMatch = String(html[fullRange])
+                if fullMatch.contains("result--ad") { continue }
+            }
 
             // Extract title and URL from result__a link.
             guard let (title, href) = extractResultLink(from: block) else { continue }
