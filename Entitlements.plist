@@ -3,44 +3,33 @@
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- App Sandbox (required for App Store) -->
+  <!-- App Sandbox disabled: Fae is a Developer ID app, not App Store.
+       Sandbox is incompatible with Fae's tool system (bash, arbitrary file I/O)
+       and causes model cache to be isolated from the shared HuggingFace cache at
+       ~/.cache/huggingface/hub/, resulting in duplicate GB-scale model downloads. -->
   <key>com.apple.security.app-sandbox</key>
-  <true/>
+  <false/>
 
-  <!-- User-selected file access via file pickers -->
-  <key>com.apple.security.files.user-selected.read-write</key>
-  <true/>
+  <!-- Hardened runtime entitlements (required for notarization even without sandbox) -->
 
-  <!-- Common user folders for assistant tool operations -->
-  <key>com.apple.security.files.desktop.read-write</key>
-  <true/>
-  <key>com.apple.security.files.documents.read-write</key>
-  <true/>
-  <key>com.apple.security.files.downloads.read-write</key>
-  <true/>
-
-  <!-- Security-scoped bookmarks for persistent file access across restarts -->
-  <key>com.apple.security.files.bookmarks.app-scope</key>
-  <true/>
-
-  <!-- Network client access (LLM API calls, web search, update checks) -->
+  <!-- Network client access (web search, update checks, HuggingFace downloads) -->
   <key>com.apple.security.network.client</key>
-  <true/>
-
-  <!-- Network server access (UDS socket listener for companion app IPC) -->
-  <key>com.apple.security.network.server</key>
   <true/>
 
   <!-- Microphone access for voice input -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
 
-  <!-- Contacts access for onboarding user profile -->
+  <!-- Contacts access for Apple tool integration -->
   <key>com.apple.security.personal-information.addressbook</key>
   <true/>
 
   <!-- Calendar and reminders access for scheduling assistance -->
   <key>com.apple.security.personal-information.calendars</key>
+  <true/>
+
+  <!-- AppleScript / JXA for Apple tool integration -->
+  <key>com.apple.security.automation.apple-events</key>
   <true/>
 
 </dict>

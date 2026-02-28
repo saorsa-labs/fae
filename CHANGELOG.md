@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.4] - 2026-02-28
+
+### Fixed
+
+- **App Sandbox removed from release build** — the sandbox (`com.apple.security.app-sandbox = true`) was blocking MLX/Metal GPU allocations, causing crashes during model loading. The sandbox also isolated the HuggingFace model cache to `~/Library/Containers/com.saorsalabs.fae/Data/Library/Caches/huggingface/hub/` instead of the shared `~/.cache/huggingface/hub/`, causing models to be re-downloaded on first run even if already present. Fae is a Developer ID app (not App Store) and its tool system requires unrestricted file access — the sandbox was incorrect here.
+
 ## [v0.8.3] - 2026-02-28
 
 ### Added
