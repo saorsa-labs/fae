@@ -68,7 +68,15 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
 
     /// Trigger a user-initiated update check (e.g. Settings > About > Check for Updates).
     func checkForUpdates() {
-        controller?.checkForUpdates(nil)
+        guard let controller else {
+            let alert = NSAlert()
+            alert.messageText = "Updates Not Available"
+            alert.informativeText = "Update checking is not configured in this build."
+            alert.alertStyle = .informational
+            alert.runModal()
+            return
+        }
+        controller.checkForUpdates(nil)
     }
 
     /// Whether Sparkle performs automatic periodic checks.

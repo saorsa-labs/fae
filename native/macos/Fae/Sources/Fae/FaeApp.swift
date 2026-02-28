@@ -94,6 +94,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     var mainWindow: NSWindow?
 
     // All controllers — owned by the delegate for the app's lifetime.
+    let rescueMode = RescueMode()
+    let personalityEditor = PersonalityEditorController()
     let handoff = DeviceHandoffController()
     let orbState = OrbStateController()
     let orbAnimation = OrbAnimationState()
@@ -113,6 +115,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let sparkleUpdater = SparkleUpdaterController()
     let relayServer = FaeRelayServer()
     let helpWindow = HelpWindowController()
+    let hotkeyManager = GlobalHotkeyManager()
     let faeCore = FaeCore()
 
     var deviceTransferObserver: NSObjectProtocol?
@@ -230,6 +233,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // Wire rescue mode reference to FaeCore.
+        faeCore.rescueMode = rescueMode
+
         // Create the main window with the full ContentView.
         let rootView = FaeRootView(
             faeCore: faeCore,
@@ -253,6 +259,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         .environmentObject(windowState)
         .environmentObject(onboarding)
         .environmentObject(auxiliaryWindows)
+        .environmentObject(rescueMode)
 
         let hostingController = NSHostingController(rootView: rootView)
 
@@ -287,6 +294,25 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
 
         NSLog("FaeAppDelegate: main window created — visible=%d", window.isVisible ? 1 : 0)
 
+        // Cancel generation observer — stop button and Cmd+. post this.
+        NotificationCenter.default.addObserver(
+            forName: .faeCancelGeneration,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.faeCore.cancel()
+            }
+        }
+
+        // Global hotkey — summon Fae from anywhere (Ctrl+Shift+A).
+        hotkeyManager.start { [weak self] in
+            guard let self else { return }
+            self.windowState.transitionToCompact()
+            NSApp.activate(ignoringOtherApps: true)
+            self.mainWindow?.makeKeyAndOrderFront(nil)
+        }
+
         // Start pipeline if license already accepted.
         if faeCore.isLicenseAccepted {
             startPipelineIfReady()
@@ -302,6 +328,23 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     func startPipelineIfReady() {
         try? faeCore.start()
         orbState.mode = .thinking
+    }
+
+    // MARK: - Rescue Mode
+
+    func toggleRescueMode() {
+        if rescueMode.isActive {
+            rescueMode.deactivate()
+            orbBridge.isRescueMode = false
+            faeCore.stop()
+            try? faeCore.start()
+        } else {
+            rescueMode.activate()
+            orbBridge.isRescueMode = true
+            faeCore.stop()
+            orbState.palette = .silverMist
+            try? faeCore.start()
+        }
     }
 
     // MARK: - First Launch
@@ -411,22 +454,6 @@ struct FaeApp: App {
                 .environmentObject(appDelegate.conversation)
         }
         .commands {
-            CommandGroup(after: .appInfo) {
-                Menu("Permissions") {
-                    Button("Microphone") {
-                        appDelegate.onboarding.requestMicrophone()
-                    }
-                    Button("Contacts") {
-                        appDelegate.onboarding.requestContacts()
-                    }
-                    Button("Calendar & Reminders") {
-                        appDelegate.onboarding.requestCalendar()
-                    }
-                    Button("Mail & Notes (System Settings)") {
-                        appDelegate.onboarding.requestMail()
-                    }
-                }
-            }
             CommandGroup(replacing: .appInfo) {
                 Button("About Fae") {
                     let model = appDelegate.conversation.loadedModelLabel
@@ -449,6 +476,39 @@ struct FaeApp: App {
                     appDelegate.sparkleUpdater.checkForUpdates()
                 }
                 .disabled(!appDelegate.sparkleUpdater.canCheckForUpdates)
+            }
+            CommandGroup(after: .appInfo) {
+                Menu("Permissions") {
+                    Button("Microphone") {
+                        appDelegate.onboarding.requestMicrophone()
+                    }
+                    Button("Contacts") {
+                        appDelegate.onboarding.requestContacts()
+                    }
+                    Button("Calendar & Reminders") {
+                        appDelegate.onboarding.requestCalendar()
+                    }
+                    Button("Mail & Notes (System Settings)") {
+                        appDelegate.onboarding.requestMail()
+                    }
+                }
+            }
+            CommandMenu("Edit") {
+                Button("Edit Soul\u{2026}") {
+                    appDelegate.personalityEditor.showSoulEditor()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Edit Custom Instructions\u{2026}") {
+                    appDelegate.personalityEditor.showInstructionsEditor()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+            }
+            CommandGroup(before: .sidebar) {
+                Button("Stop") {
+                    NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
+                }
+                .keyboardShortcut(".", modifiers: .command)
             }
             CommandGroup(after: .sidebar) {
                 Divider()
@@ -483,6 +543,11 @@ struct FaeApp: App {
                 if let issuesURL = URL(string: "https://github.com/saorsa-labs/fae/issues") {
                     Link("Report an Issue", destination: issuesURL)
                 }
+                Divider()
+                Button(appDelegate.rescueMode.isActive ? "Exit Rescue Mode" : "Rescue Mode\u{2026}") {
+                    appDelegate.toggleRescueMode()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
             }
         }
     }

@@ -14,6 +14,12 @@ struct SettingsView: View {
     /// Sparkle auto-update controller for "Check for Updates" UI.
     var sparkleUpdater: SparkleUpdaterController?
 
+    /// Personality editor controller for opening soul/instructions editors.
+    var personalityEditor: PersonalityEditorController?
+
+    /// Callback to toggle rescue mode from the Personality tab.
+    var onToggleRescue: (() -> Void)?
+
     /// Hold Option while opening Settings to reveal the Developer tab.
     @State private var showDeveloper: Bool = false
 

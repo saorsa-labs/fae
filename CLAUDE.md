@@ -181,6 +181,7 @@ Tools are registered dynamically in `ToolRegistry.buildDefault()`. Full inventor
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
 | Roleplay | `roleplay` (multi-voice reading sessions) |
+| Input | `input_request` (prompt user for text/password; 120s timeout) |
 
 The LLM is told which skills are installed via `PersonalityManager.assemblePrompt(installedSkills:)`.
 Skills are discovered at prompt assembly time from `SkillManager.installedSkillNames()`.
@@ -544,7 +545,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `OrbAnimationState.swift` | Orb animation state machine |
 | `OrbTypes.swift` | OrbMode, OrbFeeling, OrbPalette enums |
 | `OrbStateBridgeController.swift` | Maps events to orb visual state |
-| `WindowStateController.swift` | Adaptive window (collapsed 120x120 / compact 340x500) |
+| `WindowStateController.swift` | Adaptive window (collapsed 120x120 / compact 340x500); dynamic height expansion |
 | `NSWindowAccessor.swift` | NSWindow property access from SwiftUI |
 | `VisualEffectBlur.swift` | NSVisualEffectView wrapper |
 
@@ -552,7 +553,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 
 | File | Role |
 |------|------|
-| `ConversationController.swift` | Conversation state (messages, listening) |
+| `ConversationController.swift` | Conversation state (messages, listening, streaming text) |
 | `ConversationBridgeController.swift` | Routes events to conversation UI |
 | `ConversationWindowView.swift` | Conversation NSPanel content view |
 | `InputBarView.swift` | Text input bar |
@@ -569,8 +570,8 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `AuxiliaryWindowManager.swift` | Independent NSPanel windows (conversation, canvas) |
 | `PipelineAuxBridgeController.swift` | Routes voice commands to auxiliary windows |
 | `ProgressOverlayView.swift` | Model download/load progress overlay |
-| `ApprovalOverlayController.swift` | Tool approval lifecycle |
-| `ApprovalOverlayView.swift` | Floating approval card (Yes/No) |
+| `ApprovalOverlayController.swift` | Tool approval + input-request lifecycle |
+| `ApprovalOverlayView.swift` | Floating approval card (Yes/No) + input card (text/password) |
 
 ### Settings
 
@@ -591,6 +592,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | File | Role |
 |------|------|
 | `AudioDevices.swift` | Audio device enumeration |
+| `Core/GlobalHotkeyManager.swift` | Global Ctrl+Shift+A hotkey via Accessibility API |
 | `DockIconAnimator.swift` | Dock icon animation |
 | `SparkleUpdaterController.swift` | Sparkle auto-update |
 | `JitPermissionController.swift` | Just-in-time permission requests |
@@ -625,6 +627,9 @@ Conversation and canvas are independent `NSPanel` windows managed by `AuxiliaryW
 | `.faeRuntimeProgress` | Model download/load progress |
 | `.faeAssistantGenerating` | LLM generation active/inactive |
 | `.faeAudioLevel` | Audio level updates for orb visualization |
+| `.faeCancelGeneration` | Cancels in-flight LLM generation (Cmd+. or stop button) |
+| `.faeInputRequired` | Pipeline needs text input from user (shown as overlay card) |
+| `.faeInputResponse` | User submitted or cancelled the input card |
 
 ## Delivery quality requirements
 
@@ -701,3 +706,11 @@ Key metrics: T/s at voice context (needs >60), `/no_think` compliance, idle RAM,
   - EmbeddingBackfillRunner: background paged backfill of all records/facts into ANN index
   - EntityBackfillRunner: one-time migration of legacy person records → entity graph
   - Scheduler: `embedding_reindex` weekly task (Sunday 03:00)
+- **v1.0.0** — UX overhaul: orb enchantment, streaming, canvas feed, stop, hotkey, input flow
+  - Orb: `tremor`, `sparkleIntensity`, `liquidFlow`, `radiusBias` Metal shader params; stronger feeling presets (delight sparkles, concern trembles, playful chaotic); burst amplitude 0.06→0.12
+  - Conversation streaming: live `StreamingBubble` with blinking cursor; token-by-token updates; auto-scroll
+  - Canvas activity feed: `ActivityCard` system with glassmorphic cards; per-tool SF Symbols; turn archiving; auto-open on tool call
+  - Stop button: red stop.fill button replaces send while generating; `PipelineCoordinator.cancel()`; Cmd+. menu shortcut
+  - Global hotkey: `GlobalHotkeyManager` (Ctrl+Shift+A) via `AXIsProcessTrustedWithOptions`; Settings shortcut display
+  - Message box expansion: window grows dynamically with text (max 700pt); top edge fixed; auto-releases on submit
+  - Input-required flow: `InputRequestBridge` actor with 120s timeout; `InputRequestTool` for LLM; floating `InputCard` overlay with SecureField support; `.faeInputRequired`/`.faeInputResponse` notifications

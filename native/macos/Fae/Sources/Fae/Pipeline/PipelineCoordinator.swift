@@ -52,6 +52,7 @@ actor PipelineCoordinator {
     private let speakerEncoder: CoreMLSpeakerEncoder?
     private let speakerProfileStore: SpeakerProfileStore?
     private let toolAnalytics: ToolAnalytics?
+    private let isRescueMode: Bool
 
     // MARK: - Pipeline State
 
@@ -123,7 +124,8 @@ actor PipelineCoordinator {
         registry: ToolRegistry,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
-        toolAnalytics: ToolAnalytics? = nil
+        toolAnalytics: ToolAnalytics? = nil,
+        rescueMode: Bool = false
     ) {
         self.eventBus = eventBus
         self.capture = capture
@@ -139,6 +141,7 @@ actor PipelineCoordinator {
         self.speakerEncoder = speakerEncoder
         self.speakerProfileStore = speakerProfileStore
         self.toolAnalytics = toolAnalytics
+        self.isRescueMode = rescueMode
 
         // Configure VAD from config.
         vad.threshold = config.vad.threshold
@@ -186,6 +189,41 @@ actor PipelineCoordinator {
         await playback.stop()
         eventBus.send(.pipelineStateChanged(.stopped))
         NSLog("PipelineCoordinator: pipeline stopped")
+    }
+
+    /// Cancel the current generation immediately.
+    ///
+    /// Sets `interrupted = true` and stops audio playback. The pipeline
+    /// loop checks `interrupted` at each step and exits cleanly.
+    func cancel() {
+        interrupted = true
+        Task { await playback.stop() }
+        NSLog("PipelineCoordinator: cancelled by user")
+    }
+
+    // MARK: - Input Request
+
+    /// Request text input from the user asynchronously.
+    ///
+    /// Delegates to `InputRequestBridge.shared` which posts `.faeInputRequired`,
+    /// shows the input card in the UI, and suspends until the user responds.
+    /// The 120s timeout is managed by the bridge.
+    ///
+    /// - Parameters:
+    ///   - prompt: Human-readable description of what input is needed.
+    ///   - placeholder: Placeholder text for the input field.
+    ///   - isSecure: Whether to obscure the input (for passwords/keys).
+    /// - Returns: The user's text, or nil if cancelled or timed out.
+    func inputRequired(
+        prompt: String,
+        placeholder: String = "",
+        isSecure: Bool = false
+    ) async -> String? {
+        await InputRequestBridge.shared.request(
+            prompt: prompt,
+            placeholder: placeholder,
+            isSecure: isSecure
+        )
     }
 
     // MARK: - Text Injection
@@ -585,11 +623,14 @@ actor PipelineCoordinator {
             // Owner gating: non-owner voices don't see tool schemas → LLM won't use tools.
             let includeTools = !(config.speaker.requireOwnerForTools && !currentSpeakerIsOwner)
             let skills = includeTools ? SkillManager.installedSkillNames() : []
+            let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
                 userName: config.userName,
                 speakerDisplayName: currentSpeakerDisplayName,
                 speakerRole: currentSpeakerRole,
+                soulContract: soul,
+                customInstructionsOverride: isRescueMode ? "" : nil,
                 toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
                 installedSkills: skills
             )

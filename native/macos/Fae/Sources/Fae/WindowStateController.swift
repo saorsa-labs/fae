@@ -49,6 +49,9 @@ final class WindowStateController: ObservableObject {
     private let collapsedSize: CGFloat = 120
     private let inactivityDelay: TimeInterval = 300.0
 
+    /// Extra height currently added beyond the base compact height.
+    private var extraHeight: CGFloat = 0
+
     /// Padding from the left edge and top of the visible frame when collapsed.
     private let collapsedEdgePadding: CGFloat = 12
 
@@ -136,6 +139,7 @@ final class WindowStateController: ObservableObject {
         guard mode != .collapsed else { return }
 
         mode = .collapsed
+        extraHeight = 0
 
         guard let window else { return }
 
@@ -173,6 +177,7 @@ final class WindowStateController: ObservableObject {
         guard mode != .collapsed else { return }
 
         mode = .collapsed
+        extraHeight = 0
 
         guard let window else { return }
 
@@ -271,7 +276,59 @@ final class WindowStateController: ObservableObject {
             }
         }
 
+        // Apply any pending extra height after the expand animation.
+        if extraHeight > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.applyCurrentHeight(animated: false)
+            }
+        }
+
         startInactivityTimer()
+    }
+
+    // MARK: - Dynamic Height
+
+    /// Expand the window by `extra` points beyond the base compact height.
+    ///
+    /// Smoothly animates the height increase. Clamped so total height <= 700pt.
+    /// Only takes effect in compact mode — ignored when collapsed.
+    func requestExtraHeight(_ extra: CGFloat) {
+        guard mode == .compact, window != nil else { return }
+        let clamped = min(extra, 700 - compactHeight)
+        guard abs(clamped - extraHeight) > 4 else { return } // avoid micro-jitter
+        extraHeight = clamped
+        applyCurrentHeight(animated: true)
+    }
+
+    /// Shrink back to the base compact height.
+    func releaseExtraHeight() {
+        guard extraHeight > 0, window != nil else { return }
+        extraHeight = 0
+        applyCurrentHeight(animated: true)
+    }
+
+    private func applyCurrentHeight(animated: Bool) {
+        guard let window else { return }
+        let targetHeight = compactHeight + extraHeight
+        var frame = window.frame
+        // Grow/shrink from bottom — keep top edge fixed.
+        let topY = frame.maxY
+        frame.size.height = targetHeight
+        frame.origin.y = topY - targetHeight
+        // Clamp to screen.
+        if let screen = window.screen ?? NSScreen.screens.first {
+            let visible = screen.visibleFrame
+            frame.origin.y = max(visible.minY, frame.origin.y)
+        }
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                window.animator().setFrame(frame, display: true)
+            }
+        } else {
+            window.setFrame(frame, display: true)
+        }
     }
 
     // MARK: - Panel Side Computation

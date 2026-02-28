@@ -38,6 +38,11 @@ final class ConversationController: ObservableObject {
     /// Whether the assistant is currently generating a response.
     @Published var isGenerating: Bool = false
 
+    /// Text currently streaming from the assistant (sentence fragments as they arrive).
+    @Published var streamingText: String = ""
+    /// Whether a streaming response is actively being built.
+    @Published var isStreaming: Bool = false
+
     /// Friendly label for the loaded LLM, e.g. "Qwen3 8B · Q4_K_M".
     /// Set when the LLM finishes loading; empty until then.
     @Published var loadedModelLabel: String = ""
@@ -110,6 +115,34 @@ final class ConversationController: ObservableObject {
         messages.removeAll()
     }
 
+    // MARK: - Streaming
+
+    func startStreaming() {
+        streamingText = ""
+        isStreaming = true
+    }
+
+    func updateStreaming(text: String) {
+        streamingText = text
+    }
+
+    func finalizeStreaming() {
+        if !streamingText.isEmpty {
+            appendMessage(role: .assistant, content: streamingText)
+        }
+        streamingText = ""
+        isStreaming = false
+    }
+
+    func cancelStreaming() {
+        // Commit any partial text as a message (barge-in)
+        if !streamingText.isEmpty {
+            appendMessage(role: .assistant, content: streamingText)
+        }
+        streamingText = ""
+        isStreaming = false
+    }
+
     // MARK: - Link Detection
 
     func handleLinkDetected(_ url: String) {
@@ -137,4 +170,6 @@ extension Notification.Name {
     /// Posted by WindowStateController when it expands from collapsed to compact.
     /// InputBarView listens for this to restore keyboard focus on the text field.
     static let faeWillFocusInputField = Notification.Name("faeWillFocusInputField")
+    /// Posted by the stop button or Cmd+. menu item to cancel the current generation.
+    static let faeCancelGeneration = Notification.Name("faeCancelGeneration")
 }

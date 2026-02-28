@@ -178,11 +178,14 @@ final class ConversationBridgeController: ObservableObject {
         // First token — dismiss the persistent "Thinking…" bubble.
         subtitleState?.clearToolMessage()
 
+        // Update live streaming bubble in conversation window
+        conversationController?.updateStreaming(text: streamingAssistantText)
+
         if isFinal {
             let fullText = streamingAssistantText
             streamingAssistantText = ""
             subtitleState?.finalizeAssistantMessage(fullText)
-            conversationController?.appendMessage(role: .assistant, content: fullText)
+            conversationController?.finalizeStreaming()
         } else {
             subtitleState?.appendStreamingSentence(text)
         }
@@ -198,20 +201,21 @@ final class ConversationBridgeController: ObservableObject {
                 conversationController?.appendMessage(role: .user, content: pending)
                 pendingUserTranscription = nil
             }
-            // Reset streaming buffer so a new response never inherits stale content
-            // from an interrupted previous response.
+            // Reset streaming buffer and start streaming state
             streamingAssistantText = ""
             isStreamingAssistant = false
+            conversationController?.startStreaming()
         } else {
             // Generation stopped — clear the thinking bubble if still showing.
             subtitleState?.clearToolMessage()
             // If there's partial streamed text that never got an isFinal sentence
             // (barge-in interruption), commit it now so it appears in the panel.
             if !streamingAssistantText.isEmpty {
-                let partial = streamingAssistantText
                 streamingAssistantText = ""
                 isStreamingAssistant = false
-                conversationController?.appendMessage(role: .assistant, content: partial)
+                conversationController?.cancelStreaming()
+            } else {
+                conversationController?.finalizeStreaming()
             }
         }
     }

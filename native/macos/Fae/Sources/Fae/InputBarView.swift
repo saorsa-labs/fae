@@ -13,6 +13,7 @@ struct InputBarView: View {
 
     @State private var messageText: String = ""
     @State private var isSendAnimating: Bool = false
+    @State private var lastLineCount: Int = 1
     @FocusState private var isTextFieldFocused: Bool
 
     /// Heather accent colour.
@@ -27,11 +28,18 @@ struct InputBarView: View {
             Spacer()
 
             VStack(spacing: 10) {
-                // Input row: mic + textfield + send
+                // Input row: mic + textfield + send/stop
                 HStack(spacing: 10) {
                     micToggleButton
                     messageField
-                    sendButton
+                    Group {
+                        if conversation.isGenerating {
+                            stopButton
+                        } else {
+                            sendButton
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: conversation.isGenerating)
                 }
 
                 // Action pills
@@ -68,6 +76,9 @@ struct InputBarView: View {
             NotificationCenter.default.publisher(for: .faeWillFocusInputField)
         ) { _ in
             isTextFieldFocused = true
+        }
+        .onChange(of: messageText) { _, newText in
+            updateWindowHeightForText(newText)
         }
     }
 
@@ -116,7 +127,7 @@ struct InputBarView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 13, weight: .regular, design: .serif))
             .foregroundColor(.white.opacity(0.92))
-            .lineLimit(1...5)
+            .lineLimit(1...8)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
@@ -173,6 +184,31 @@ struct InputBarView: View {
         .accessibilityLabel("Send message")
     }
 
+    // MARK: - Stop Button
+
+    private var stopButton: some View {
+        Button(action: {
+            NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
+            windowState.noteActivity()
+        }) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(Color.red.opacity(0.8))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle()
+                        .fill(Color.red.opacity(0.1))
+                )
+                .overlay(
+                    Circle()
+                        .stroke(Color.red.opacity(0.25), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop generation")
+        .transition(.scale(scale: 0.8).combined(with: .opacity))
+    }
+
     // MARK: - Action Pill
 
     @ViewBuilder
@@ -215,6 +251,8 @@ struct InputBarView: View {
         }
 
         messageText = ""
+        lastLineCount = 1
+        windowState.releaseExtraHeight()
     }
 
     /// Detect URLs in the message and report them to the conversation controller.
@@ -225,6 +263,25 @@ struct InputBarView: View {
             if let url = result?.url {
                 conversation.handleLinkDetected(url.absoluteString)
             }
+        }
+    }
+
+    // MARK: - Dynamic Height
+
+    private func updateWindowHeightForText(_ text: String) {
+        // Count newlines + estimate wrapped lines (rough: 1 line per ~38 chars in the field)
+        let explicitLines = text.filter { $0 == "\n" }.count + 1
+        let wrapEstimate = max(1, text.count / 38)
+        let lineCount = max(explicitLines, wrapEstimate)
+
+        guard lineCount != lastLineCount else { return }
+        lastLineCount = lineCount
+
+        if lineCount > 3 {
+            let extra = CGFloat(lineCount - 3) * 22.0
+            windowState.requestExtraHeight(extra)
+        } else {
+            windowState.releaseExtraHeight()
         }
     }
 }

@@ -29,6 +29,9 @@ final class OrbStateBridgeController: ObservableObject {
     /// The orb state controller this bridge drives.
     weak var orbState: OrbStateController?
 
+    /// When rescue mode is active, force silver-mist palette on all transitions.
+    var isRescueMode: Bool = false
+
     private var observations: [NSObjectProtocol] = []
 
     init() {
@@ -107,6 +110,12 @@ final class OrbStateBridgeController: ObservableObject {
 
     // MARK: - Orb State Handler
 
+    private func enforcePalette() {
+        if isRescueMode {
+            orbState?.palette = .silverMist
+        }
+    }
+
     private func handleOrbStateChanged(userInfo: [AnyHashable: Any]) {
         guard let orbState else { return }
         let changeType = userInfo["change_type"] as? String ?? ""
@@ -155,6 +164,7 @@ final class OrbStateBridgeController: ObservableObject {
             // these are transient effects handled by the orb animation layer.
             break
         }
+        enforcePalette()
     }
 
     // MARK: - Runtime State Handler
@@ -175,6 +185,7 @@ final class OrbStateBridgeController: ObservableObject {
         default:
             break
         }
+        enforcePalette()
     }
 
     // MARK: - Pipeline State Handler

@@ -41,13 +41,12 @@ struct SettingsAboutTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let updater = sparkleUpdater, updater.isConfigured {
+            if let updater = sparkleUpdater {
                 Section("Updates") {
                     HStack {
                         Button("Check for Updates") {
                             updater.checkForUpdates()
                         }
-                        .disabled(!updater.canCheckForUpdates)
                         .buttonStyle(.bordered)
 
                         Spacer()
@@ -59,15 +58,21 @@ struct SettingsAboutTab: View {
                         }
                     }
 
-                    Toggle("Automatic Updates", isOn: Binding(
-                        get: { updater.automaticallyChecksForUpdates },
-                        set: { updater.automaticallyChecksForUpdates = $0 }
-                    ))
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    if updater.isConfigured {
+                        Toggle("Automatic Updates", isOn: Binding(
+                            get: { updater.automaticallyChecksForUpdates },
+                            set: { updater.automaticallyChecksForUpdates = $0 }
+                        ))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    }
 
                     Text("Fae checks for updates every 6 hours and notifies you when one is available.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+
+                    if let changelogURL = URL(string: "https://github.com/saorsa-labs/fae/blob/main/CHANGELOG.md") {
+                        Link("View Changelog", destination: changelogURL)
+                    }
                 }
             }
 

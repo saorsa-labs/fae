@@ -185,7 +185,12 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
     float flashType,
     float flashProgress,
     // Anticipation scale
-    float anticipationScale
+    float anticipationScale,
+    // Enchantment
+    float tremor,
+    float sparkleIntensity,
+    float liquidFlow,
+    float radiusBias
 ) {
     float W = resolution.x;
     float H = resolution.y;
@@ -229,6 +234,12 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
     // Normalised UV for noise sampling (centered on orb).
     float2 uv = (px - center) / R;
 
+    // Tremor — shake effect for concern/distress
+    float2 tremoruv = uv + tremor * float2(
+        sin(time * 12.0 + uv.y * 8.0),
+        cos(time * 11.0 + uv.x * 7.0)
+    ) * 0.008;
+
     // Accumulate colour.
     float3 outColor = float3(0.0);
     float outAlpha = 0.0;
@@ -245,10 +256,10 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
     for (int layer = 0; layer < 4; layer++) {
         float layerDepth = float(layer) / 3.0;
         float scale = 2.0 + layerDepth * 1.5;
-        float speed = (0.06 + layerDepth * 0.04) * speedScale * morphSpeed / 0.18;
+        float speed = (0.06 + layerDepth * 0.04) * speedScale * morphSpeed / 0.18 * liquidFlow;
         float warp = warpAmount * (1.0 - layerDepth * 0.3);
 
-        float2 uv_layer = uv * scale + float2(float(layer) * 3.7, float(layer) * 2.1);
+        float2 uv_layer = tremoruv * scale + float2(float(layer) * 3.7, float(layer) * 2.1);
         float density = warpedFBM(uv_layer, time, warp, speed);
 
         // Colour mapping: density -> dark amber -> bright gold -> white.
@@ -353,6 +364,26 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
         }
     }
 
+    // ── 5.5. Sparkles ─────────────────────────────────────────────────
+    {
+        float sparkleAcc = 0.0;
+        for (int si = 0; si < 8; si++) {
+            float fi2 = float(si);
+            float2 seed2 = float2(fi2 * 137.508, fi2 * 98.324);
+            float2 spos = float2(
+                hashF2(seed2.x) * 2.0 - 1.0,
+                hashF2(seed2.y) * 2.0 - 1.0
+            ) * 0.6;
+            float sdist = length(uv - spos);
+            float blink = sin(time * (3.0 + fi2 * 1.3) + seed2.x) * 0.5 + 0.5;
+            blink = pow(blink, 8.0);
+            sparkleAcc += blink * smoothstep(0.04, 0.0, sdist);
+        }
+        float3 sparkleColor = float3(1.0, 0.95, 0.85);
+        outColor += sparkleIntensity * sparkleAcc * sparkleColor;
+        outAlpha = saturate(outAlpha + sparkleIntensity * sparkleAcc * 0.2);
+    }
+
     // ── 6. Film Grain ───────────────────────────────────────────────────
     {
         float2 grainUV = fmod(px + float2(time * 12.0, time * 7.0), 128.0) / 128.0;
@@ -386,7 +417,9 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
     // Soft sphere mask with glass-like Fresnel fall-off.
     {
         float dist = length(uv);
-        float sphereMask = smoothstep(1.05, 0.85, dist);
+        float rimInner = 0.85 - radiusBias * 0.15;
+        float rimOuter = 1.05 + radiusBias * 0.05;
+        float sphereMask = smoothstep(rimOuter, rimInner, dist);
         outAlpha *= sphereMask;
         outColor *= sphereMask;
     }

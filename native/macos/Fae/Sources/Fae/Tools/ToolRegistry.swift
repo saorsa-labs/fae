@@ -32,6 +32,8 @@ final class ToolRegistry: Sendable {
             WebSearchTool(),
             FetchURLTool(),
             RunSkillTool(),
+            // User input tool
+            InputRequestTool(),
             // Apple integration tools
             CalendarTool(),
             RemindersTool(),
@@ -100,6 +102,7 @@ final class ToolRegistry: Sendable {
         "read", "web_search", "fetch_url",
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "roleplay", "run_skill",
+        "input_request",
     ]
 
     /// Additional tools available in "read_write" mode.

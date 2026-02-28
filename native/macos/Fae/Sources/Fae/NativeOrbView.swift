@@ -115,7 +115,12 @@ struct NativeOrbView: View {
                     .float(0), // flashType: 0=none
                     .float(0), // flashProgress
                     // Anticipation
-                    .float(anticipation)
+                    .float(anticipation),
+                    // Enchantment
+                    .float(snap.tremor),
+                    .float(snap.sparkleIntensity),
+                    .float(snap.liquidFlow),
+                    .float(snap.radiusBias)
                 )
             )
     }

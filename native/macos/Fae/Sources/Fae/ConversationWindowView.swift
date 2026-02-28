@@ -54,7 +54,18 @@ struct ConversationWindowView: View {
                             .id(message.id)
                     }
 
-                    if conversationController.isGenerating {
+                    // Live streaming bubble — shows tokens as they arrive
+                    if conversationController.isStreaming
+                        && !conversationController.streamingText.isEmpty
+                    {
+                        StreamingBubble(text: conversationController.streamingText)
+                            .id("streaming")
+                    }
+
+                    // Typing indicator — only when generating but no text yet
+                    if conversationController.isGenerating
+                        && !conversationController.isStreaming
+                    {
                         TypingIndicator()
                             .id("typing")
                     }
@@ -70,11 +81,22 @@ struct ConversationWindowView: View {
                 // (new message just arrived).
                 scrollToBottom(proxy: proxy)
             }
+            .onChange(of: conversationController.streamingText) {
+                withAnimation(.easeOut(duration: 0.1)) {
+                    proxy.scrollTo("streaming", anchor: .bottom)
+                }
+            }
         }
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
-        if conversationController.isGenerating {
+        if conversationController.isStreaming
+            && !conversationController.streamingText.isEmpty
+        {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo("streaming", anchor: .bottom)
+            }
+        } else if conversationController.isGenerating {
             withAnimation(.easeOut(duration: 0.2)) {
                 proxy.scrollTo("typing", anchor: .bottom)
             }
@@ -151,6 +173,53 @@ private struct MessageBubble: View {
         case .tool:
             return Color.white.opacity(0.07)
         }
+    }
+}
+
+// MARK: - StreamingBubble
+
+private struct StreamingBubble: View {
+    let text: String
+    @State private var cursorVisible: Bool = true
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 0) {
+                Text(text)
+                    .font(.system(size: 13, weight: .regular, design: .serif))
+                    .lineSpacing(4)
+                    .foregroundStyle(Color(white: 0.92))
+                    .animation(.easeOut(duration: 0.15), value: text)
+
+                // Blinking cursor
+                Rectangle()
+                    .fill(
+                        Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
+                            .opacity(cursorVisible ? 0.8 : 0)
+                    )
+                    .frame(width: 2, height: 13)
+                    .padding(.leading, 1)
+                    .animation(
+                        .linear(duration: 0.5).repeatForever(autoreverses: true),
+                        value: cursorVisible
+                    )
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(Color(red: 0.24, green: 0.20, blue: 0.30))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(
+                        Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.25),
+                        lineWidth: 1
+                    )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+
+            Spacer(minLength: 40)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { cursorVisible = false }
     }
 }
 

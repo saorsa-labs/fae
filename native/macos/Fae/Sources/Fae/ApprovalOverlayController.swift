@@ -1,6 +1,6 @@
 import Foundation
 
-/// Manages the tool-approval overlay lifecycle.
+/// Manages the tool-approval overlay lifecycle and text-input request lifecycle.
 ///
 /// When the Rust backend emits `"approval.requested"`, `BackendEventRouter`
 /// translates it into `.faeApprovalRequested`. This controller observes that
@@ -13,11 +13,17 @@ import Foundation
 /// 3. **Timeout** — the coordinator auto-denies after 58s and emits `"approval.resolved"`.
 ///
 /// In all cases, `.faeApprovalResolved` dismisses the overlay.
+///
+/// For text-input requests, `.faeInputRequired` shows the input card and the user
+/// submitting or cancelling posts `.faeInputResponse` back to `PipelineCoordinator`.
 @MainActor
 final class ApprovalOverlayController: ObservableObject {
 
     /// The currently active approval request, if any.
     @Published var activeApproval: ApprovalRequest?
+
+    /// The currently active input request, if any.
+    @Published var activeInput: InputRequest?
 
     /// A pending tool-approval request.
     struct ApprovalRequest: Identifiable {
@@ -27,6 +33,18 @@ final class ApprovalOverlayController: ObservableObject {
         let toolName: String
         /// Human-readable description of the tool action.
         let description: String
+    }
+
+    /// A pending text-input request from the LLM.
+    struct InputRequest: Identifiable {
+        /// Unique request identifier (UUID string).
+        let id: String
+        /// Prompt text shown above the input field.
+        let prompt: String
+        /// Placeholder text for the input field.
+        let placeholder: String
+        /// Whether the field should obscure input (password mode).
+        let isSecure: Bool
     }
 
     private var observations: [NSObjectProtocol] = []
@@ -54,6 +72,37 @@ final class ApprovalOverlayController: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor in
                     self?.activeApproval = nil
+                }
+            }
+        )
+
+        observations.append(
+            center.addObserver(
+                forName: .faeInputRequired,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleInputRequired(notification.userInfo ?? [:])
+                }
+            }
+        )
+
+        // Dismiss the input card when the pipeline resolves the request (timeout or
+        // double-resolution guard). Normal submit/cancel paths dismiss via their actions.
+        observations.append(
+            center.addObserver(
+                forName: .faeInputResponse,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self else { return }
+                let requestId = notification.userInfo?["request_id"] as? String ?? ""
+                Task { @MainActor in
+                    // Only clear if this response belongs to the currently displayed request.
+                    if self.activeInput?.id == requestId {
+                        self.activeInput = nil
+                    }
                 }
             }
         )
@@ -89,7 +138,45 @@ final class ApprovalOverlayController: ObservableObject {
         activeApproval = nil
     }
 
+    // MARK: - Input Actions
+
+    /// Submit text input from the user (field return or button tap).
+    func submitInput(text: String) {
+        guard let request = activeInput else { return }
+        NotificationCenter.default.post(
+            name: .faeInputResponse,
+            object: nil,
+            userInfo: ["request_id": request.id, "text": text]
+        )
+        activeInput = nil
+    }
+
+    /// Cancel/dismiss the input request (Escape key or Cancel button).
+    func cancelInput() {
+        guard let request = activeInput else { return }
+        NotificationCenter.default.post(
+            name: .faeInputResponse,
+            object: nil,
+            userInfo: ["request_id": request.id, "text": ""]
+        )
+        activeInput = nil
+    }
+
     // MARK: - Private
+
+    private func handleInputRequired(_ info: [AnyHashable: Any]) {
+        let requestId = info["request_id"] as? String ?? UUID().uuidString
+        let prompt = info["prompt"] as? String ?? "Input required"
+        let placeholder = info["placeholder"] as? String ?? ""
+        let isSecure = info["is_secure"] as? Bool ?? false
+
+        activeInput = InputRequest(
+            id: requestId,
+            prompt: prompt,
+            placeholder: placeholder,
+            isSecure: isSecure
+        )
+    }
 
     private func handleRequested(_ info: [AnyHashable: Any]) {
         // Accept request_id as either UInt64 or Int (JSON numbers may arrive as Int).

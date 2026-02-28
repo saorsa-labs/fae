@@ -11,6 +11,7 @@ struct ContentView: View {
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
+    @EnvironmentObject private var rescueMode: RescueMode
     @State private var viewLoaded = false
 
     private static var menuHandlersKey: UInt8 = 0
@@ -155,6 +156,25 @@ struct ContentView: View {
 
             // Only show overlays in compact mode (not collapsed 80×80 orb)
             if windowState.mode == .compact {
+                // Rescue mode badge
+                if rescueMode.isActive {
+                    VStack {
+                        HStack {
+                            Text("Rescue Mode")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.9))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.gray.opacity(0.6))
+                                .clipShape(Capsule())
+                                .padding(.leading, 10)
+                                .padding(.top, 8)
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                }
+
                 // Layer 1: Progress bar (always visible for download/load feedback)
                 ProgressOverlayView()
 

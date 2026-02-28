@@ -581,3 +581,128 @@ struct FetchURLTool: Tool {
         }
     }
 }
+
+// MARK: - InputRequestTool
+
+/// Allows the LLM to request text input from the user (API keys, passwords, etc.).
+///
+/// Use this when you need information that shouldn't be stored in context or memory:
+/// - API keys and secrets
+/// - Passwords
+/// - One-time codes
+/// - Sensitive personal information
+///
+/// Routes through `InputRequestBridge.shared` which manages the NotificationCenter
+/// bridge to the UI overlay and suspends until the user responds or 120s elapses.
+struct InputRequestTool: Tool {
+    let name = "input_request"
+    let description = """
+        Request text input from the user. Use for API keys, passwords, or any sensitive \
+        information you need but shouldn't store. The user will see a secure input card \
+        near the orb. Returns the entered text, or a cancellation notice if dismissed.
+        """
+    let parametersSchema = #"{"prompt": "string (required) — what you need and why", "placeholder": "string (optional)", "secure": "boolean (optional) — true for passwords/keys"}"#
+    let requiresApproval = false
+    let riskLevel: ToolRiskLevel = .low
+    let example = #"<tool_call>{"name":"input_request","arguments":{"prompt":"Enter your OpenAI API key to continue","placeholder":"sk-...","secure":true}}</tool_call>"#
+
+    func execute(input: [String: Any]) async throws -> ToolResult {
+        let prompt = input["prompt"] as? String ?? "Please enter a value"
+        let placeholder = input["placeholder"] as? String ?? ""
+        let secure = input["secure"] as? Bool ?? false
+
+        let text = await InputRequestBridge.shared.request(
+            prompt: prompt,
+            placeholder: placeholder,
+            isSecure: secure
+        )
+
+        if let value = text, !value.isEmpty {
+            return .success(value)
+        } else {
+            return .success("[user cancelled input]")
+        }
+    }
+}
+
+// MARK: - InputRequestBridge
+
+/// NotificationCenter bridge that posts input requests to the UI and suspends
+/// the caller until the user responds.
+///
+/// Acts as a coordination point between `InputRequestTool` (called by the LLM
+/// during tool execution) and `ApprovalOverlayController` (the SwiftUI overlay
+/// that shows the input card and posts responses back).
+///
+/// `PipelineCoordinator.inputRequired()` also uses this bridge so that both
+/// entry points share the same continuation table and observer.
+actor InputRequestBridge {
+    static let shared = InputRequestBridge()
+
+    private var continuations: [String: CheckedContinuation<String?, Never>] = [:]
+    private nonisolated(unsafe) var observer: NSObjectProtocol?
+
+    private init() {
+        observer = NotificationCenter.default.addObserver(
+            forName: .faeInputResponse,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let requestId = notification.userInfo?["request_id"] as? String ?? ""
+            let text = notification.userInfo?["text"] as? String ?? ""
+            Task { await self.resolve(requestId: requestId, text: text) }
+        }
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    /// Post an input request to the UI and suspend until the user responds.
+    ///
+    /// - Returns: The user's text, or nil if cancelled or timed out.
+    func request(prompt: String, placeholder: String, isSecure: Bool) async -> String? {
+        let requestId = UUID().uuidString
+
+        return await withCheckedContinuation { continuation in
+            continuations[requestId] = continuation
+
+            NotificationCenter.default.post(
+                name: .faeInputRequired,
+                object: nil,
+                userInfo: [
+                    "request_id": requestId,
+                    "prompt": prompt,
+                    "placeholder": placeholder,
+                    "is_secure": isSecure,
+                ]
+            )
+
+            Task { [requestId] in
+                try? await Task.sleep(for: .seconds(120))
+                // Dismiss the UI card by posting an empty response, then resume nil.
+                await self.resolveWithTimeout(requestId: requestId)
+            }
+        }
+    }
+
+    private func resolve(requestId: String, text: String) {
+        if let continuation = continuations.removeValue(forKey: requestId) {
+            continuation.resume(returning: text.isEmpty ? nil : text)
+        }
+    }
+
+    private func resolveWithTimeout(requestId: String) async {
+        guard let continuation = continuations.removeValue(forKey: requestId) else { return }
+        // Post an empty response so ApprovalOverlayController dismisses the card.
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .faeInputResponse,
+                object: nil,
+                userInfo: ["request_id": requestId, "text": ""]
+            )
+        }
+        continuation.resume(returning: nil)
+    }
+}

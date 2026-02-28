@@ -117,6 +117,32 @@ final class PipelineAuxBridgeController: ObservableObject {
                 }
             }
         )
+
+        // Tool execution → canvas activity cards
+        observations.append(
+            center.addObserver(
+                forName: .faeToolExecution, object: nil, queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo else { return }
+                Task { @MainActor [weak self] in
+                    self?.handleToolExecutionForCanvas(userInfo: userInfo)
+                }
+            }
+        )
+
+        // Archive canvas turn when generation stops
+        observations.append(
+            center.addObserver(
+                forName: .faeAssistantGenerating, object: nil, queue: .main
+            ) { [weak self] notification in
+                let active = notification.userInfo?["active"] as? Bool ?? false
+                Task { @MainActor [weak self] in
+                    if !active {
+                        self?.canvasController?.archiveCurrentTurn()
+                    }
+                }
+            }
+        )
     }
 
     // MARK: - Runtime Lifecycle
@@ -260,6 +286,59 @@ final class PipelineAuxBridgeController: ObservableObject {
                 self?.auxiliaryWindows?.hideCanvas()
             }
         }
+    }
+
+    // MARK: - Canvas Activity Cards
+
+    private func handleToolExecutionForCanvas(userInfo: [AnyHashable: Any]) {
+        guard let canvas = canvasController else { return }
+        let type = userInfo["type"] as? String ?? ""
+        let name = userInfo["name"] as? String ?? "tool"
+        let cardId = userInfo["id"] as? String ?? name
+
+        switch type {
+        case "executing", "call":
+            // Auto-show canvas when a tool starts running
+            if let aux = auxiliaryWindows, !aux.isCanvasVisible {
+                aux.showCanvas()
+            }
+            let card = ActivityCard(
+                id: cardId,
+                kind: .toolCall(name: name),
+                status: .running,
+                detail: formatToolInput(userInfo)
+            )
+            canvas.addCard(card)
+
+        case "result":
+            let success = userInfo["success"] as? Bool ?? true
+            let output = userInfo["output_text"] as? String ?? ""
+            let truncated = String(output.prefix(200))
+            canvas.updateCard(
+                id: cardId,
+                status: success ? .done : .error,
+                detail: truncated
+            )
+
+        default:
+            break
+        }
+    }
+
+    private func formatToolInput(_ userInfo: [AnyHashable: Any]) -> String {
+        // Try parsing input_json for structured tool call arguments
+        if let jsonStr = userInfo["input_json"] as? String,
+            let data = jsonStr.data(using: .utf8),
+            let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            if let path = dict["path"] as? String { return path }
+            if let query = dict["query"] as? String { return query }
+            if let url = dict["url"] as? String { return url }
+            if let cmd = dict["command"] as? String { return String(cmd.prefix(100)) }
+            if let prompt = dict["prompt"] as? String { return String(prompt.prefix(100)) }
+            if let name = dict["name"] as? String { return name }
+        }
+        return ""
     }
 
     // MARK: - Pipeline State Handlers

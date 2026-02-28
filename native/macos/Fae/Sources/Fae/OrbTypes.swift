@@ -34,14 +34,14 @@ enum OrbMode: String, CaseIterable, Identifiable {
         case .idle: return 1.0
         case .listening: return 1.3
         case .thinking: return 0.7
-        case .speaking: return 1.5
+        case .speaking: return 2.0
         }
     }
 
     var morphIntensity: Float {
         switch self {
         case .idle: return 1.0
-        case .listening: return 1.2
+        case .listening: return 1.6
         case .thinking: return 0.8
         case .speaking: return 1.4
         }
@@ -60,7 +60,7 @@ enum OrbMode: String, CaseIterable, Identifiable {
         switch self {
         case .idle: return 1.0
         case .listening: return 1.2
-        case .thinking: return 2.5
+        case .thinking: return 3.5
         case .speaking: return 1.3
         }
     }
@@ -74,6 +74,15 @@ enum OrbMode: String, CaseIterable, Identifiable {
         }
     }
 
+    var liquidFlowMul: Float {
+        switch self {
+        case .idle: return 1.0
+        case .listening: return 1.8
+        case .thinking: return 1.0
+        case .speaking: return 1.2
+        }
+    }
+
     /// Default palette colours for each mode (when palette is .modeDefault).
     /// Gold is the resting-state colour; Scottish greens/purples/reds accent different modes.
     var defaultColors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
@@ -83,7 +92,7 @@ enum OrbMode: String, CaseIterable, Identifiable {
         case .listening:
             return (OrbColor.cairngormTopaz, OrbColor.glenGreen, OrbColor.silverMist)
         case .thinking:
-            return (OrbColor.highlandAmber, OrbColor.heatherMist, OrbColor.rowanBerry)
+            return (OrbColor.heatherMist, OrbColor.rowanBerry, OrbColor.peatEarth)
         case .speaking:
             return (OrbColor.faeGold, OrbColor.islaySunset, OrbColor.dawnLight)
         }
@@ -159,39 +168,44 @@ enum OrbFeeling: String, CaseIterable, Identifiable {
                 fogDensity: 0.6, morphAmplitude: 0.06, morphFreq: 2,
                 morphSpeed: 0.18, shimmer: 0.03, asymmetry: 0.04,
                 starAlpha: 0.5, outerAlpha: 0.35, wispSize: 0.25,
-                wispAlpha: 0.05, blobAlpha: 0.14, innerGlow: 0.2
+                wispAlpha: 0.05, blobAlpha: 0.14, innerGlow: 0.2,
+                tremor: 0.0, sparkleIntensity: 0.3, liquidFlow: 1.0, radiusBias: 0.0
             )
         case .calm:
             return OrbSnapshot(
                 hueShift: -15, speedScale: 0.5, breathAmplitude: 0.02,
-                fogDensity: 0.7, morphAmplitude: 0.04, morphFreq: 2,
+                fogDensity: 0.4, morphAmplitude: 0.04, morphFreq: 2,
                 morphSpeed: 0.1, shimmer: 0.02, asymmetry: 0.03,
-                starAlpha: 0.3, outerAlpha: 0.25, wispSize: 0.3,
-                wispAlpha: 0.06, blobAlpha: 0.12, innerGlow: 0.15
+                starAlpha: 0.1, outerAlpha: 0.25, wispSize: 0.3,
+                wispAlpha: 0.06, blobAlpha: 0.12, innerGlow: 0.15,
+                tremor: 0.0, sparkleIntensity: 0.1, liquidFlow: 0.5, radiusBias: 0.05
             )
         case .curiosity:
             return OrbSnapshot(
                 hueShift: 20, speedScale: 1.2, breathAmplitude: 0.014,
-                fogDensity: 0.65, morphAmplitude: 0.1, morphFreq: 3,
+                fogDensity: 0.7, morphAmplitude: 0.1, morphFreq: 3,
                 morphSpeed: 0.3, shimmer: 0.06, asymmetry: 0.1,
                 starAlpha: 0.5, outerAlpha: 0.3, wispSize: 0.38,
-                wispAlpha: 0.07, blobAlpha: 0.12, innerGlow: 0.2
+                wispAlpha: 0.07, blobAlpha: 0.12, innerGlow: 0.2,
+                tremor: 0.0, sparkleIntensity: 0.6, liquidFlow: 1.4, radiusBias: 0.0
             )
         case .warmth:
             return OrbSnapshot(
                 hueShift: 10, speedScale: 0.9, breathAmplitude: 0.016,
-                fogDensity: 0.65, morphAmplitude: 0.06, morphFreq: 2,
+                fogDensity: 0.55, morphAmplitude: 0.06, morphFreq: 2,
                 morphSpeed: 0.16, shimmer: 0.03, asymmetry: 0.04,
-                starAlpha: 0.5, outerAlpha: 0.35, wispSize: 0.25,
-                wispAlpha: 0.05, blobAlpha: 0.15, innerGlow: 0.3
+                starAlpha: 0.4, outerAlpha: 0.35, wispSize: 0.25,
+                wispAlpha: 0.05, blobAlpha: 0.15, innerGlow: 0.3,
+                tremor: 0.0, sparkleIntensity: 0.4, liquidFlow: 0.8, radiusBias: 0.08
             )
         case .concern:
             return OrbSnapshot(
                 hueShift: -25, speedScale: 0.7, breathAmplitude: 0.008,
-                fogDensity: 0.85, morphAmplitude: 0.05, morphFreq: 2,
+                fogDensity: 0.8, morphAmplitude: 0.05, morphFreq: 2,
                 morphSpeed: 0.12, shimmer: 0.06, asymmetry: 0.06,
                 starAlpha: 0.25, outerAlpha: 0.2, wispSize: 0.4,
-                wispAlpha: 0.08, blobAlpha: 0.14, innerGlow: 0.1
+                wispAlpha: 0.08, blobAlpha: 0.14, innerGlow: 0.1,
+                tremor: 0.3, sparkleIntensity: 0.1, liquidFlow: 0.6, radiusBias: -0.04
             )
         case .delight:
             return OrbSnapshot(
@@ -199,23 +213,26 @@ enum OrbFeeling: String, CaseIterable, Identifiable {
                 fogDensity: 0.5, morphAmplitude: 0.09, morphFreq: 3,
                 morphSpeed: 0.28, shimmer: 0.05, asymmetry: 0.08,
                 starAlpha: 0.7, outerAlpha: 0.35, wispSize: 0.35,
-                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.35
+                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.35,
+                tremor: 0.0, sparkleIntensity: 1.0, liquidFlow: 1.2, radiusBias: 0.1
             )
         case .focus:
             return OrbSnapshot(
                 hueShift: 5, speedScale: 0.8, breathAmplitude: 0.01,
-                fogDensity: 0.75, morphAmplitude: 0.03, morphFreq: 2,
+                fogDensity: 0.9, morphAmplitude: 0.03, morphFreq: 2,
                 morphSpeed: 0.1, shimmer: 0.02, asymmetry: 0.02,
-                starAlpha: 0.3, outerAlpha: 0.2, wispSize: 0.35,
-                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.25
+                starAlpha: 0.2, outerAlpha: 0.2, wispSize: 0.35,
+                wispAlpha: 0.07, blobAlpha: 0.13, innerGlow: 0.25,
+                tremor: 0.0, sparkleIntensity: 0.2, liquidFlow: 0.7, radiusBias: -0.06
             )
         case .playful:
             return OrbSnapshot(
                 hueShift: 30, speedScale: 1.3, breathAmplitude: 0.015,
-                fogDensity: 0.55, morphAmplitude: 0.12, morphFreq: 3,
+                fogDensity: 0.6, morphAmplitude: 0.12, morphFreq: 3,
                 morphSpeed: 0.35, shimmer: 0.08, asymmetry: 0.12,
                 starAlpha: 0.65, outerAlpha: 0.35, wispSize: 0.38,
-                wispAlpha: 0.07, blobAlpha: 0.12, innerGlow: 0.22
+                wispAlpha: 0.07, blobAlpha: 0.12, innerGlow: 0.22,
+                tremor: 0.0, sparkleIntensity: 0.8, liquidFlow: 1.6, radiusBias: 0.06
             )
         }
     }
@@ -365,6 +382,10 @@ struct OrbSnapshot: Equatable {
     var wispAlpha: Float = 0.05
     var blobAlpha: Float = 0.14
     var innerGlow: Float = 0.2
+    var tremor: Float = 0.0
+    var sparkleIntensity: Float = 0.3
+    var liquidFlow: Float = 1.0
+    var radiusBias: Float = 0.0
 
     /// Linearly interpolate all properties between two snapshots.
     static func lerp(_ a: OrbSnapshot, _ b: OrbSnapshot, t: Float) -> OrbSnapshot {
@@ -384,7 +405,11 @@ struct OrbSnapshot: Equatable {
             wispSize: a.wispSize + (b.wispSize - a.wispSize) * t,
             wispAlpha: a.wispAlpha + (b.wispAlpha - a.wispAlpha) * t,
             blobAlpha: a.blobAlpha + (b.blobAlpha - a.blobAlpha) * t,
-            innerGlow: a.innerGlow + (b.innerGlow - a.innerGlow) * t
+            innerGlow: a.innerGlow + (b.innerGlow - a.innerGlow) * t,
+            tremor: a.tremor + (b.tremor - a.tremor) * t,
+            sparkleIntensity: a.sparkleIntensity + (b.sparkleIntensity - a.sparkleIntensity) * t,
+            liquidFlow: a.liquidFlow + (b.liquidFlow - a.liquidFlow) * t,
+            radiusBias: a.radiusBias + (b.radiusBias - a.radiusBias) * t
         )
     }
 
@@ -397,6 +422,7 @@ struct OrbSnapshot: Equatable {
         result.starAlpha *= mode.starIntensity
         result.breathAmplitude *= mode.breathIntensity
         result.innerGlow *= mode.innerGlowIntensity
+        result.liquidFlow *= mode.liquidFlowMul
         return result
     }
 }

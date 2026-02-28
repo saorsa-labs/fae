@@ -60,6 +60,40 @@ struct SettingsGeneralTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Keyboard Shortcuts") {
+                HStack {
+                    Text("Summon Fae")
+                        .foregroundStyle(Color.primary)
+                    Spacer()
+                    Text("\u{2303}\u{21E7}A")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(Color.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.secondary.opacity(0.1))
+                        )
+                }
+                HStack {
+                    Text("Stop Generation")
+                        .foregroundStyle(Color.primary)
+                    Spacer()
+                    Text("\u{2318}.")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(Color.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.secondary.opacity(0.1))
+                        )
+                }
+                Text("Summon requires Accessibility permission (granted on first use).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Window Behavior") {
                 Toggle("Auto-hide conversation & canvas when orb collapses",
                        isOn: $auxiliaryWindows.autoHideOnCollapse)

@@ -437,4 +437,22 @@ extension Notification.Name {
     /// - `engine: String` — engine name (`"llm"`, `"stt"`, `"tts"`)
     /// - `model_id: String` — the loaded model identifier
     static let faeModelLoaded = Notification.Name("faeModelLoaded")
+
+    // MARK: Input Request
+
+    /// Posted when the pipeline needs text input from the user.
+    ///
+    /// userInfo keys:
+    /// - `request_id: String` — unique input request identifier
+    /// - `prompt: String` — the prompt text to display
+    /// - `placeholder: String` — placeholder for the input field
+    /// - `is_secure: Bool` — whether to use a secure field
+    static let faeInputRequired = Notification.Name("faeInputRequired")
+
+    /// Posted by the UI when the user submits a text input response.
+    ///
+    /// userInfo keys:
+    /// - `request_id: String` — the input request identifier
+    /// - `text: String` — the user's response text
+    static let faeInputResponse = Notification.Name("faeInputResponse")
 }

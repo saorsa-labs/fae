@@ -50,7 +50,7 @@ final class OrbAnimationState: ObservableObject {
             switch self {
             case .contract: return -0.04
             case .pause: return -0.02
-            case .burst: return 0.06
+            case .burst: return 0.12
             }
         }
     }

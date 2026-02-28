@@ -18,6 +18,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var userName: String?
     @Published var toolMode: String = "full"
 
+    /// Rescue mode reference — set by FaeAppDelegate before start().
+    weak var rescueMode: RescueMode?
+
     // MARK: - Subsystems
 
     private var config: FaeConfig
@@ -72,6 +75,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
         eventBus.send(.runtimeState(.starting))
         pipelineState = .starting
+
+        // Ensure user has a copy of SOUL.md on first launch.
+        SoulManager.ensureUserCopy()
 
         // Load models and start pipeline asynchronously.
         Task {
@@ -154,6 +160,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
                 NSLog("FaeCore: context=%d maxHistory=%d", contextSize, maxHistory)
 
+                let isRescue = self.rescueMode?.isActive ?? false
+
+                // In rescue mode, override tool mode to read_only.
+                var pipelineConfig = config
+                if isRescue {
+                    pipelineConfig.toolMode = "read_only"
+                    NSLog("FaeCore: rescue mode — tool mode forced to read_only")
+                }
+
                 let registry = ToolRegistry.buildDefault()
                 let coordinator = PipelineCoordinator(
                     eventBus: eventBus,
@@ -162,40 +177,45 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     sttEngine: sttEngine,
                     llmEngine: llmEngine,
                     ttsEngine: ttsEngine,
-                    config: config,
+                    config: pipelineConfig,
                     conversationState: conversationState,
-                    memoryOrchestrator: orchestrator,
+                    memoryOrchestrator: isRescue ? nil : orchestrator,
                     approvalManager: approvalManager,
                     registry: registry,
                     speakerEncoder: speakerEncoder,
-                    speakerProfileStore: speakerProfileStore
+                    speakerProfileStore: speakerProfileStore,
+                    rescueMode: isRescue
                 )
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
 
-                // Start scheduler with speak handler wired to pipeline.
-                let sched = FaeScheduler(
-                    eventBus: eventBus,
-                    memoryOrchestrator: orchestrator,
-                    memoryStore: memoryStore,
-                    entityStore: entityStore,
-                    vectorStore: vectorStore,
-                    embeddingEngine: neuralEmbedder
-                )
+                // Skip scheduler in rescue mode.
+                if !isRescue {
+                    let sched = FaeScheduler(
+                        eventBus: eventBus,
+                        memoryOrchestrator: orchestrator,
+                        memoryStore: memoryStore,
+                        entityStore: entityStore,
+                        vectorStore: vectorStore,
+                        embeddingEngine: neuralEmbedder
+                    )
 
-                // Wire persistence store for scheduler state.
-                if let schedulerStore = try? Self.createSchedulerPersistenceStore() {
-                    await sched.configurePersistence(store: schedulerStore)
+                    // Wire persistence store for scheduler state.
+                    if let schedulerStore = try? Self.createSchedulerPersistenceStore() {
+                        await sched.configurePersistence(store: schedulerStore)
+                    }
+
+                    await sched.setSpeakHandler { [weak coordinator] text in
+                        await coordinator?.speakDirect(text)
+                    }
+                    await sched.start()
+                    self.scheduler = sched
+
+                    // Observe scheduler update notifications from SchedulerUpdateTool.
+                    self.observeSchedulerUpdates()
+                } else {
+                    NSLog("FaeCore: rescue mode — scheduler skipped")
                 }
-
-                await sched.setSpeakHandler { [weak coordinator] text in
-                    await coordinator?.speakDirect(text)
-                }
-                await sched.start()
-                self.scheduler = sched
-
-                // Observe scheduler update notifications from SchedulerUpdateTool.
-                self.observeSchedulerUpdates()
 
                 pipelineState = .running
                 eventBus.send(.runtimeState(.started))
@@ -235,6 +255,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
             pipelineState = .stopped
             eventBus.send(.runtimeState(.stopped))
         }
+    }
+
+    /// Cancel the current generation immediately without stopping the pipeline.
+    func cancel() {
+        Task { await pipelineCoordinator?.cancel() }
     }
 
     // MARK: - HostCommandSender Conformance

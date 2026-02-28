@@ -233,6 +233,7 @@ enum PersonalityManager {
         speakerDisplayName: String? = nil,
         speakerRole: SpeakerRole? = nil,
         soulContract: String? = nil,
+        customInstructionsOverride: String? = nil,
         memoryContext: String? = nil,
         toolSchemas: String? = nil,
         installedSkills: [String] = []
@@ -296,7 +297,7 @@ enum PersonalityManager {
         parts.append(PermissionStatusProvider.promptFragment())
 
         // 9. Custom user instructions (persisted personality preferences).
-        let customInstructions = loadCustomInstructions()
+        let customInstructions = customInstructionsOverride ?? loadCustomInstructions()
         if !customInstructions.isEmpty {
             parts.append("""
                 User's style preferences (follow these closely):
