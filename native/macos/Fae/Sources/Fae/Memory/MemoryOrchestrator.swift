@@ -10,12 +10,25 @@ import Foundation
 actor MemoryOrchestrator {
     private let store: SQLiteMemoryStore
     private let config: FaeConfig.MemoryConfig
-    private let embeddingEngine: MLXEmbeddingEngine
+    private let embeddingEngine: NeuralEmbeddingEngine?
+    private let vectorStore: VectorStore?
+    private let entityLinker: EntityLinker?
+    private let entityStore: EntityStore?
 
-    init(store: SQLiteMemoryStore, config: FaeConfig.MemoryConfig) {
+    init(
+        store: SQLiteMemoryStore,
+        config: FaeConfig.MemoryConfig,
+        entityLinker: EntityLinker? = nil,
+        entityStore: EntityStore? = nil,
+        vectorStore: VectorStore? = nil,
+        embeddingEngine: NeuralEmbeddingEngine? = nil
+    ) {
         self.store = store
         self.config = config
-        self.embeddingEngine = MLXEmbeddingEngine()
+        self.vectorStore = vectorStore
+        self.embeddingEngine = embeddingEngine
+        self.entityLinker = entityLinker
+        self.entityStore = entityStore
     }
 
     // MARK: - Recall
@@ -25,6 +38,9 @@ actor MemoryOrchestrator {
         guard config.enabled else { return nil }
 
         do {
+            // Entity-enriched recall: detect person-centric queries first.
+            let entityContext = await buildEntityContext(for: query)
+
             let limit = max(config.maxRecallResults, 1)
             let hits = try await store.search(query: query, limit: limit)
             let rerankedHits = await rerankHitsIfPossible(query: query, hits: hits)
@@ -70,8 +86,16 @@ actor MemoryOrchestrator {
                 lines.append(line)
             }
 
-            guard !lines.isEmpty else { return nil }
-            return "<memory_context>\n" + lines.joined(separator: "\n") + "\n</memory_context>"
+            guard !lines.isEmpty || entityContext != nil else { return nil }
+
+            var contextParts: [String] = []
+            if let entitySection = entityContext {
+                contextParts.append(entitySection)
+            }
+            if !lines.isEmpty {
+                contextParts.append(lines.joined(separator: "\n"))
+            }
+            return "<memory_context>\n" + contextParts.joined(separator: "\n") + "\n</memory_context>"
         } catch {
             NSLog("MemoryOrchestrator: recall error: %@", error.localizedDescription)
             return nil
@@ -108,6 +132,17 @@ actor MemoryOrchestrator {
                 staleAfterSecs: 7_776_000  // 90 days
             )
             report.episodeId = episode.id
+
+            // Embed the new record non-blocking.
+            if let engine = embeddingEngine, let vs = vectorStore {
+                let recordId = episode.id
+                let textToEmbed = episodeText
+                Task {
+                    if let embedding = try? await engine.embed(text: textToEmbed) {
+                        try? await vs.upsertRecordEmbedding(recordId: recordId, embedding: embedding)
+                    }
+                }
+            }
 
             let lower = userText.lowercased()
 
@@ -206,7 +241,7 @@ actor MemoryOrchestrator {
 
             // 9. Parse person mentions (relationships, people).
             if let person = extractPerson(from: lower, fullText: userText) {
-                _ = try await store.insertRecord(
+                let personRecord = try await store.insertRecord(
                     kind: .person,
                     text: person,
                     confidence: MemoryConstants.factConversationalConfidence,
@@ -215,6 +250,18 @@ actor MemoryOrchestrator {
                     importanceScore: 0.75
                 )
                 report.extractedCount += 1
+
+                // Fire async entity linking (non-blocking).
+                if let linker = entityLinker {
+                    let recordId = personRecord.id
+                    Task {
+                        await linker.linkPersonRecord(
+                            text: person,
+                            recordId: recordId,
+                            turnId: turnId
+                        )
+                    }
+                }
             }
 
         } catch {
@@ -238,50 +285,43 @@ actor MemoryOrchestrator {
 
     // MARK: - Private Helpers
 
-    /// Ensure the embedding engine is loaded before use.
-    private func ensureEmbeddingEngineLoaded() async throws {
-        if !(await embeddingEngine.isLoaded) {
-            try await embeddingEngine.load(modelID: "foundation-hash-384")
-        }
-    }
-
-    /// Blend lexical and semantic ranking, with safe fallback to lexical ordering.
-    /// Uses cached embeddings when available to avoid recomputation.
+    /// Hybrid ANN + FTS5 reranking (0.60 ANN + 0.40 lexical).
+    /// Falls back to lexical ordering when vectorStore or embeddingEngine not ready.
     private func rerankHitsIfPossible(query: String, hits: [MemorySearchHit]) async -> [MemorySearchHit] {
         guard !hits.isEmpty else { return [] }
 
-        do {
-            try await ensureEmbeddingEngineLoaded()
+        // ANN hybrid path — preferred when vectorStore + loaded engine available.
+        if let vs = vectorStore, let engine = embeddingEngine, await engine.isLoaded {
+            do {
+                let queryEmbedding = try await engine.embedQuery(query)
+                let annResults = try await vs.searchRecords(
+                    queryEmbedding: queryEmbedding,
+                    limit: hits.count * 3
+                )
 
-            let queryEmbedding = try await embeddingEngine.embed(text: query)
-            let queryNorm = l2Norm(queryEmbedding)
-            guard queryNorm > 0 else { return hits }
-
-            let lexicalWeight: Float = 0.70
-            let semanticWeight: Float = 0.30
-
-            var reranked: [MemorySearchHit] = []
-            reranked.reserveCapacity(hits.count)
-
-            for hit in hits {
-                // Use cached embedding if available, otherwise compute.
-                let recordEmbedding: [Float]
-                if let cached = hit.record.cachedEmbedding, !cached.isEmpty {
-                    recordEmbedding = cached
-                } else {
-                    recordEmbedding = try await embeddingEngine.embed(text: hit.record.text)
+                // Build ANN score lookup: recordId → similarity in [0, 1].
+                // sqlite-vec returns cosine distance in [0, 2]; convert to similarity.
+                var annScores: [String: Float] = [:]
+                for (id, distance) in annResults {
+                    annScores[id] = max(0, 1.0 - (distance / 2.0))
                 }
-                let semantic = cosineSimilarity(queryEmbedding, recordEmbedding)
-                let blended = (lexicalWeight * hit.score) + (semanticWeight * semantic)
-                reranked.append(MemorySearchHit(record: hit.record, score: blended))
-            }
 
-            reranked.sort { $0.score > $1.score }
-            return reranked
-        } catch {
-            NSLog("MemoryOrchestrator: semantic rerank fallback: %@", error.localizedDescription)
-            return hits
+                var reranked: [MemorySearchHit] = []
+                reranked.reserveCapacity(hits.count)
+                for hit in hits {
+                    let ann = annScores[hit.record.id] ?? 0.0
+                    let blended = 0.60 * ann + 0.40 * hit.score
+                    reranked.append(MemorySearchHit(record: hit.record, score: blended))
+                }
+                reranked.sort { $0.score > $1.score }
+                return reranked
+            } catch {
+                NSLog("MemoryOrchestrator: ANN rerank error (falling back): %@",
+                      error.localizedDescription)
+            }
         }
+
+        return hits
     }
 
     private func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
@@ -305,25 +345,25 @@ actor MemoryOrchestrator {
         return dot / denom
     }
 
-    private func l2Norm(_ vector: [Float]) -> Float {
-        sqrt(vector.reduce(Float(0)) { $0 + ($1 * $1) })
-    }
-
     /// Supersede contradicting records for a given tag when new text diverges semantically.
     private func supersedeContradiction(tag: String, newText: String, sourceTurnId: String) async throws {
         let existing = try await store.findActiveByTag(tag)
         guard !existing.isEmpty else { return }
 
+        guard let engine = embeddingEngine, await engine.isLoaded else {
+            // No semantic engine — skip contradiction detection.
+            return
+        }
+
         do {
-            try await ensureEmbeddingEngineLoaded()
-            let newEmbedding = try await embeddingEngine.embed(text: newText)
+            let newEmbedding = try await engine.embed(text: newText)
 
             for old in existing {
                 let oldEmbedding: [Float]
                 if let cached = old.cachedEmbedding, !cached.isEmpty {
                     oldEmbedding = cached
                 } else {
-                    oldEmbedding = try await embeddingEngine.embed(text: old.text)
+                    oldEmbedding = try await engine.embed(text: old.text)
                 }
                 let similarity = cosineSimilarity(newEmbedding, oldEmbedding)
                 if similarity < 0.5 {
@@ -523,5 +563,99 @@ actor MemoryOrchestrator {
             }
         }
         return nil
+    }
+
+    // MARK: - Entity Context
+
+    /// Build entity-enriched context section for person-centric queries.
+    private func buildEntityContext(for query: String) async -> String? {
+        guard let entityStore else { return nil }
+        guard let match = PersonQueryDetector.detectPersonQuery(in: query) else { return nil }
+
+        do {
+            var profiles: [EntityProfile] = []
+
+            if let org = match.targetOrganisation {
+                // "Who works at X?" — find people connected via works_at edge.
+                let people = try await entityStore.findEntities(
+                    connectedTo: org, via: "works_at"
+                )
+                for person in people.prefix(5) {
+                    if let profile = try await entityStore.entityProfile(id: person.id) {
+                        profiles.append(profile)
+                    }
+                }
+            } else if let loc = match.targetLocation {
+                // "Who lives in X?" — find people connected via lives_in edge.
+                let people = try await entityStore.findEntities(
+                    connectedTo: loc, via: "lives_in"
+                )
+                for person in people.prefix(5) {
+                    if let profile = try await entityStore.entityProfile(id: person.id) {
+                        profiles.append(profile)
+                    }
+                }
+            } else if let name = match.targetName,
+                      let entity = try await entityStore.findEntity(byName: name),
+                      let profile = try await entityStore.entityProfile(id: entity.id)
+            {
+                profiles.append(profile)
+            } else if let label = match.targetRelationLabel {
+                // No name — find by relation label (first strong match).
+                let candidates = try await entityStore.staleEntities(
+                    olderThanDays: 0,
+                    priorityOrder: RelationType.allCases
+                )
+                for candidate in candidates where candidate.relationLabel == label {
+                    if let profile = try await entityStore.entityProfile(id: candidate.id) {
+                        profiles.append(profile)
+                        break
+                    }
+                }
+            }
+
+            guard !profiles.isEmpty else { return nil }
+
+            // Format profiles with resolved relationship edges.
+            var sections: [String] = []
+            var totalChars = 0
+            for profile in profiles {
+                let edges = try await resolvedEdges(for: profile.entity.id, entityStore: entityStore)
+                let section = EntityContextFormatter.format(
+                    profile: profile,
+                    linkedRecords: [],
+                    edges: edges
+                )
+                if totalChars + section.count > MemoryConstants.entityMaxContextChars,
+                   !sections.isEmpty { break }
+                sections.append(section)
+                totalChars += section.count
+            }
+            let formatted = sections.joined(separator: "\n")
+            return formatted.isEmpty ? nil : formatted
+        } catch {
+            NSLog("MemoryOrchestrator: buildEntityContext error: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// Resolve relationship edges for an entity into formatted edges (with target canonical names).
+    private func resolvedEdges(
+        for entityId: String,
+        entityStore: EntityStore
+    ) async throws -> [EntityContextFormatter.FormattedEdge] {
+        let rels = try await entityStore.relationships(forEntityId: entityId)
+        var result: [EntityContextFormatter.FormattedEdge] = []
+        for rel in rels.prefix(6) {
+            if let target = try? await entityStore.findEntity(byId: rel.targetId) {
+                result.append(EntityContextFormatter.FormattedEdge(
+                    relationType: rel.relationType,
+                    targetName: target.canonicalName,
+                    startedAt: rel.startedAt,
+                    endedAt: rel.endedAt
+                ))
+            }
+        }
+        return result
     }
 }

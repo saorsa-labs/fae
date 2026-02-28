@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import SQLiteVec
 
 /// SQLite-backed memory store using GRDB.
 ///
@@ -15,6 +16,9 @@ actor SQLiteMemoryStore {
             withIntermediateDirectories: true
         )
 
+        // Register sqlite-vec globally so vec0 virtual tables are available in all connections.
+        try SQLiteVec.initialize()
+
         dbQueue = try DatabaseQueue(path: path)
         try dbQueue.write { db in
             try db.execute(sql: "PRAGMA journal_mode = WAL")
@@ -27,7 +31,7 @@ actor SQLiteMemoryStore {
 
     // MARK: - Schema
 
-    private static func applySchema(_ db: Database) throws {
+    private static func applySchema(_ db: GRDB.Database) throws {
         try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS schema_meta (
                 key   TEXT PRIMARY KEY,
@@ -105,6 +109,139 @@ actor SQLiteMemoryStore {
             )
             """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_audit_at ON memory_audit(at)")
+
+        // Migration: add entity tables (v4 → v5).
+        let tableNames = try Row.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type='table'")
+            .compactMap { $0["name"] as? String }
+        if !tableNames.contains("entities") {
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS entities (
+                    id                TEXT PRIMARY KEY,
+                    canonical_name    TEXT NOT NULL,
+                    aliases           TEXT NOT NULL DEFAULT '[]',
+                    relation_type     TEXT,
+                    relation_label    TEXT,
+                    notes             TEXT,
+                    first_seen_at     INTEGER NOT NULL DEFAULT 0,
+                    last_mentioned_at INTEGER NOT NULL DEFAULT 0,
+                    mention_count     INTEGER NOT NULL DEFAULT 0,
+                    strength_score    REAL    NOT NULL DEFAULT 0.0
+                )
+                """)
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_name)"
+            )
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_entities_last_mentioned ON entities(last_mentioned_at)"
+            )
+
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS entity_mentions (
+                    id               TEXT PRIMARY KEY,
+                    entity_id        TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    memory_record_id TEXT NOT NULL,
+                    created_at       INTEGER NOT NULL DEFAULT 0
+                )
+                """)
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity ON entity_mentions(entity_id)"
+            )
+
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS entity_facts (
+                    id               TEXT PRIMARY KEY,
+                    entity_id        TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    fact_key         TEXT NOT NULL,
+                    fact_value       TEXT NOT NULL,
+                    source_record_id TEXT,
+                    created_at       INTEGER NOT NULL DEFAULT 0,
+                    updated_at       INTEGER NOT NULL DEFAULT 0
+                )
+                """)
+            try db.execute(
+                sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_facts_unique ON entity_facts(entity_id, fact_key)"
+            )
+
+            // Update schema version.
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '5')"
+            )
+        }
+
+        // Migration: v5 → v6 — entity_type, temporal entity_facts, entity_relationships.
+        let tableNamesV6 = try Row.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type='table'")
+            .compactMap { $0["name"] as? String }
+        if !tableNamesV6.contains("entity_relationships") {
+            // Add entity_type to entities (organisation | location | person | skill | project | concept).
+            let entityColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(entities)")
+                .compactMap { $0["name"] as? String }
+            if !entityColumns.contains("entity_type") {
+                try db.execute(
+                    sql: "ALTER TABLE entities ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'person'"
+                )
+            }
+
+            // Add temporal and confidence columns to entity_facts.
+            let factColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(entity_facts)")
+                .compactMap { $0["name"] as? String }
+            if !factColumns.contains("confidence") {
+                try db.execute(sql: "ALTER TABLE entity_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7")
+            }
+            if !factColumns.contains("started_at") {
+                try db.execute(sql: "ALTER TABLE entity_facts ADD COLUMN started_at INTEGER")
+            }
+            if !factColumns.contains("ended_at") {
+                try db.execute(sql: "ALTER TABLE entity_facts ADD COLUMN ended_at INTEGER")
+            }
+            if !factColumns.contains("embedding") {
+                try db.execute(sql: "ALTER TABLE entity_facts ADD COLUMN embedding BLOB")
+            }
+
+            // Remove the unique constraint on (entity_id, fact_key) so temporal history is allowed.
+            // SQLite doesn't support DROP INDEX while keeping the rest, so we rely on INSERT OR IGNORE
+            // not being used in the temporal path. The unique index remains for non-temporal upsert.
+
+            // Create entity_relationships table.
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS entity_relationships (
+                    id             TEXT PRIMARY KEY,
+                    source_id      TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    target_id      TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+                    relation_type  TEXT NOT NULL,
+                    confidence     REAL NOT NULL DEFAULT 0.7,
+                    started_at     INTEGER,
+                    ended_at       INTEGER,
+                    metadata       TEXT,
+                    created_at     INTEGER NOT NULL DEFAULT 0,
+                    updated_at     INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(source_id, target_id, relation_type)
+                )
+                """)
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_relationships_source ON entity_relationships(source_id)"
+            )
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_relationships_target ON entity_relationships(target_id)"
+            )
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_relationships_type ON entity_relationships(relation_type)"
+            )
+
+            // schema_meta entries for embedding model tracking.
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('embedding_model_id', '')"
+            )
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('embedding_model_dim', '0')"
+            )
+
+            // Update schema version.
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '6')"
+            )
+        }
+
+        // vec0 virtual tables are created lazily by VectorStore after embedding dimension is known.
     }
 
     // MARK: - Integrity
@@ -418,6 +555,75 @@ actor SQLiteMemoryStore {
         dbQueue.path
     }
 
+    // MARK: - Shared Database Queue (for EntityStore)
+
+    /// Exposes the underlying DatabaseQueue so EntityStore can share the same connection.
+    var sharedDatabaseQueue: DatabaseQueue {
+        dbQueue
+    }
+
+    // MARK: - Person Records (for backfill)
+
+    /// Fetch all active person records for entity backfill migration.
+    func findPersonRecords(limit: Int = 1000) throws -> [MemoryRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM memory_records
+                    WHERE status = 'active' AND kind = 'person'
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                arguments: [limit]
+            )
+            return rows.map { Self.recordFromRow($0) }
+        }
+    }
+
+    // MARK: - Paged Active Records (for embedding backfill)
+
+    /// Fetch a page of active records ordered by created_at ascending.
+    func allActiveRecords(pageSize: Int, offset: Int) throws -> [MemoryRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM memory_records
+                    WHERE status = 'active'
+                    ORDER BY created_at ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                arguments: [pageSize, offset]
+            )
+            return rows.map { Self.recordFromRow($0) }
+        }
+    }
+
+    // MARK: - Schema Meta
+
+    /// Read a value from the schema_meta key-value table.
+    func readSchemaMeta(_ key: String) throws -> String? {
+        try dbQueue.read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: "SELECT value FROM schema_meta WHERE key = ?",
+                arguments: [key]
+            )
+            return row?["value"] as? String
+        }
+    }
+
+    /// Write a value to the schema_meta key-value table.
+    func writeSchemaMeta(_ key: String, value: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)",
+                arguments: [key, value]
+            )
+        }
+    }
+
     // MARK: - Private Helpers
 
     private static func recordFromRow(_ row: Row) -> MemoryRecord {
@@ -467,7 +673,7 @@ actor SQLiteMemoryStore {
     }
 
     private static func insertAudit(
-        db: Database, op: MemoryAuditOp, targetId: String?, note: String
+        db: GRDB.Database, op: MemoryAuditOp, targetId: String?, note: String
     ) throws {
         let now = UInt64(Date().timeIntervalSince1970)
         try db.execute(

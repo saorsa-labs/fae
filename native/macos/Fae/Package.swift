@@ -20,6 +20,8 @@ let package = Package(
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift", branch: "main"),
         // SQLite with ORM — memory store.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
+        // sqlite-vec ANN vector extension for semantic search.
+        .package(url: "https://github.com/jkrukowski/SQLiteVec", from: "0.0.1"),
         // TOML config file parsing.
         .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
     ],
@@ -32,11 +34,13 @@ let package = Package(
                 // MLX LLM inference.
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
                 // MLX Audio — STT and TTS.
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
                 // Data layer.
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "SQLiteVec", package: "SQLiteVec"),
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ],
             path: "Sources/Fae",

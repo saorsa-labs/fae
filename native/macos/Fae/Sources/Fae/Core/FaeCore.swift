@@ -53,6 +53,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var pipelineCoordinator: PipelineCoordinator?
     private var memoryOrchestrator: MemoryOrchestrator?
     private var memoryStore: SQLiteMemoryStore?
+    private var entityStore: EntityStore?
+    private var entityLinker: EntityLinker?
+    private var neuralEmbedder: NeuralEmbeddingEngine?
+    private var vectorStore: VectorStore?
     private let speakerProfileStore: SpeakerProfileStore
     private var scheduler: FaeScheduler?
 
@@ -83,12 +87,60 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 // Initialize memory system.
                 let memoryStore = try Self.createMemoryStore()
+                let entityStore = EntityStore(dbQueue: await memoryStore.sharedDatabaseQueue)
+
+                // Neural embedding engine — load tier in background, non-blocking.
+                let neuralEmbedder = NeuralEmbeddingEngine()
+                let ramGB = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
+                let embeddingTier = EmbeddingModelTier.recommendedTier(ramGB: ramGB)
+                Task.detached(priority: .background) {
+                    await neuralEmbedder.loadTier(embeddingTier)
+                }
+                self.neuralEmbedder = neuralEmbedder
+
+                // Vector store — wraps sqlite-vec virtual tables.
+                let vectorStore = VectorStore(dbQueue: await memoryStore.sharedDatabaseQueue)
+                self.vectorStore = vectorStore
+
+                // Restore vec0 schema immediately from stored dim so ANN search works on startup.
+                if let storedDimStr = try? await memoryStore.readSchemaMeta("embedding_model_dim"),
+                   let storedDim = Int(storedDimStr), storedDim > 0
+                {
+                    try? await vectorStore.ensureSchema(embeddingDim: storedDim)
+                }
+
+                let entityLinker = EntityLinker(
+                    entityStore: entityStore,
+                    vectorStore: vectorStore,
+                    embeddingEngine: neuralEmbedder
+                )
                 let orchestrator = MemoryOrchestrator(
                     store: memoryStore,
-                    config: config.memory
+                    config: config.memory,
+                    entityLinker: entityLinker,
+                    entityStore: entityStore,
+                    vectorStore: vectorStore,
+                    embeddingEngine: neuralEmbedder
                 )
                 self.memoryStore = memoryStore
+                self.entityStore = entityStore
+                self.entityLinker = entityLinker
                 self.memoryOrchestrator = orchestrator
+
+                // One-time background backfill of existing person records → entities.
+                EntityBackfillRunner.backfillIfNeeded(
+                    memoryStore: memoryStore,
+                    entityLinker: entityLinker,
+                    entityStore: entityStore
+                )
+
+                // Embedding backfill — embeds all records into sqlite-vec (waits for engine load).
+                EmbeddingBackfillRunner.backfillIfNeeded(
+                    memoryStore: memoryStore,
+                    entityStore: entityStore,
+                    vectorStore: vectorStore,
+                    embeddingEngine: neuralEmbedder
+                )
 
                 // Wire context-aware history limits from model selection.
                 let contextSize = await modelManager.recommendedContextSize
@@ -125,7 +177,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let sched = FaeScheduler(
                     eventBus: eventBus,
                     memoryOrchestrator: orchestrator,
-                    memoryStore: memoryStore
+                    memoryStore: memoryStore,
+                    entityStore: entityStore,
+                    vectorStore: vectorStore,
+                    embeddingEngine: neuralEmbedder
                 )
 
                 // Wire persistence store for scheduler state.
@@ -173,10 +228,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
             await pipelineCoordinator?.stop()
             pipelineCoordinator = nil
             memoryStore = nil
+            entityStore = nil
+            entityLinker = nil
+            neuralEmbedder = nil
+            vectorStore = nil
+            pipelineState = .stopped
+            eventBus.send(.runtimeState(.stopped))
         }
-
-        pipelineState = .stopped
-        eventBus.send(.runtimeState(.stopped))
     }
 
     // MARK: - HostCommandSender Conformance

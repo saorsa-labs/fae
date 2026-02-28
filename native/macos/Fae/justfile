@@ -1,0 +1,254 @@
+# Fae — macOS voice AI assistant
+# Run `just --list` for all available recipes.
+
+# Default recipe — show available commands
+default:
+    @just --list
+
+# ─── Build ──────────────────────────────────────────────────────────────────
+
+# Build Fae (debug)
+build:
+    swift build
+
+# Build Fae (release)
+build-release:
+    swift build -c release
+
+# Build benchmark tool (requires xcodebuild for Metal shader compilation)
+build-benchmark:
+    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -quiet
+
+# Clean build artifacts
+clean:
+    swift package clean
+
+# ─── Test ───────────────────────────────────────────────────────────────────
+
+# Run all tests
+test:
+    swift test
+
+# Run specific test target
+test-target target:
+    swift test --filter {{target}}
+
+# ─── Benchmark ──────────────────────────────────────────────────────────────
+
+# Directory for cached benchmark results
+benchmark_dir := "../../../scripts/benchmark-results"
+
+# Build and return path to FaeBenchmark binary
+[private]
+_ensure-benchmark:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Build via xcodebuild (compiles Metal shaders that swift run cannot)
+    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -quiet 2>&1 | grep -v "^$" || true
+    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" -newer Package.swift 2>/dev/null | head -1)
+    if [ -z "${BIN}" ]; then
+        echo "ERROR: FaeBenchmark binary not found in DerivedData"
+        exit 1
+    fi
+
+# Benchmark a specific model (downloads if needed)
+# Usage: just benchmark qwen3.5-35b-a3b
+#        just benchmark qwen3-8b
+#        just benchmark qwen3-4b
+# Available models: qwen3-0.6b, qwen3-1.7b, qwen3-4b, qwen3-8b,
+#                   qwen3.5-35b-a3b, qwen3.5-27b
+benchmark model: _ensure-benchmark
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{benchmark_dir}}"
+    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    OUTPUT="{{benchmark_dir}}/{{model}}_${TIMESTAMP}.json"
+    echo "Benchmarking {{model}} → ${OUTPUT}"
+    "${BIN}" --model "{{model}}" --output "${OUTPUT}"
+    ln -sf "$(basename "${OUTPUT}")" "{{benchmark_dir}}/{{model}}_latest.json"
+    echo ""
+    echo "Results cached: ${OUTPUT}"
+    echo "Latest link:    {{benchmark_dir}}/{{model}}_latest.json"
+
+# Benchmark all models (long — downloads ~40GB on first run)
+benchmark-all: _ensure-benchmark
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{benchmark_dir}}"
+    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    OUTPUT="{{benchmark_dir}}/all_${TIMESTAMP}.json"
+    echo "Benchmarking ALL models → ${OUTPUT}"
+    "${BIN}" --all --output "${OUTPUT}"
+    ln -sf "$(basename "${OUTPUT}")" "{{benchmark_dir}}/all_latest.json"
+    echo "Results cached: ${OUTPUT}"
+
+# Benchmark only throughput (faster — skips /no_think and tool tests)
+benchmark-throughput model: _ensure-benchmark
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{benchmark_dir}}"
+    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    OUTPUT="{{benchmark_dir}}/{{model}}_throughput_${TIMESTAMP}.json"
+    "${BIN}" --model "{{model}}" --throughput --ram --output "${OUTPUT}"
+    ln -sf "$(basename "${OUTPUT}")" "{{benchmark_dir}}/{{model}}_throughput_latest.json"
+
+# Benchmark only tool calling
+benchmark-tools model: _ensure-benchmark
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{benchmark_dir}}"
+    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    OUTPUT="{{benchmark_dir}}/{{model}}_tools_${TIMESTAMP}.json"
+    "${BIN}" --model "{{model}}" --tools --output "${OUTPUT}"
+    ln -sf "$(basename "${OUTPUT}")" "{{benchmark_dir}}/{{model}}_tools_latest.json"
+
+# Benchmark with custom HuggingFace model ID (for models not in registry)
+# Usage: just benchmark-custom nightmedia/Qwen3.5-122B-A10B-Text-mxfp4-mlx custom-122b
+benchmark-custom model_id short_name: _ensure-benchmark
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{benchmark_dir}}"
+    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    OUTPUT="{{benchmark_dir}}/{{short_name}}_${TIMESTAMP}.json"
+    echo "Benchmarking {{model_id}} → ${OUTPUT}"
+    "${BIN}" --model "{{model_id}}" --output "${OUTPUT}"
+    ln -sf "$(basename "${OUTPUT}")" "{{benchmark_dir}}/{{short_name}}_latest.json"
+    echo "Results cached: ${OUTPUT}"
+
+# Show cached benchmark results for a model
+# Usage: just benchmark-show qwen3.5-35b-a3b
+benchmark-show model:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    LATEST="{{benchmark_dir}}/{{model}}_latest.json"
+    if [ ! -f "${LATEST}" ]; then
+        echo "No cached results for {{model}}"
+        echo ""
+        echo "Available results:"
+        ls -1 "{{benchmark_dir}}"/*.json 2>/dev/null | sed 's|.*/||' | grep -v '_latest' || echo "  (none)"
+        echo ""
+        echo "Run: just benchmark {{model}}"
+        exit 1
+    fi
+    echo "=== {{model}} (latest) ==="
+    REAL=$(readlink "{{benchmark_dir}}/{{model}}_latest.json" 2>/dev/null || basename "${LATEST}")
+    echo "File: ${REAL}"
+    echo ""
+    python3 - "${LATEST}" <<'PYEOF'
+    import json, sys, os
+    path = sys.argv[1]
+    if os.path.islink(path):
+        real = os.path.join(os.path.dirname(path), os.readlink(path))
+        path = real
+    with open(path) as f:
+        data = json.load(f)
+    print(f'Date:     {data.get("date", "unknown")}')
+    print(f'Backend:  {data.get("backend", "unknown")}')
+    hw = data.get('hardware', {})
+    print(f'Hardware: {hw.get("arch", "?")} / {hw.get("ram_gb", "?")} GB')
+    print()
+    for m in data.get('models', []):
+        print(f'Model:    {m["model_short"]} ({m["model_id"]})')
+        print(f'Idle RAM: {m.get("idle_ram_mb", 0):.0f} MB')
+        print()
+        no_think = m.get('throughput_no_think', [])
+        if no_think:
+            print('  /no_think throughput:')
+            print(f'  {"Context":<18} {"Prompt":>7} {"Gen":>5} {"T/s":>7} {"RAM":>8}')
+            print(f'  {"-"*18} {"-"*7} {"-"*5} {"-"*7} {"-"*8}')
+            for r in no_think:
+                print(f'  {r["context_label"]:<18} {r["prompt_tokens"]:>7} {r["generated_tokens"]:>5} {r["tokens_per_second"]:>7.1f} {r["ram_mb"]:>7.0f}M')
+            print()
+        think_on = m.get('throughput_think_on', [])
+        if think_on:
+            print('  Thinking ON throughput:')
+            print(f'  {"Context":<18} {"Prompt":>7} {"Gen":>5} {"T/s":>7} {"RAM":>8}')
+            print(f'  {"-"*18} {"-"*7} {"-"*5} {"-"*7} {"-"*8}')
+            for r in think_on:
+                print(f'  {r["context_label"]:<18} {r["prompt_tokens"]:>7} {r["generated_tokens"]:>5} {r["tokens_per_second"]:>7.1f} {r["ram_mb"]:>7.0f}M')
+            print()
+        tools = m.get('tool_calling', [])
+        if tools:
+            correct = sum(1 for t in tools if t['correct'])
+            total = len(tools)
+            pct = correct/total*100 if total else 0
+            print(f'  Tool calling: {correct}/{total} ({pct:.0f}%)')
+            for t in tools:
+                status = 'OK' if t['correct'] else 'MISS'
+                print(f'    {status}: "{t["prompt"][:50]}" -> expected={t["expected_tool"]}, got={t["actual_tool"]}')
+            print()
+        compliance = m.get('no_think_compliance', [])
+        if compliance:
+            all_ok = all(c['compliant'] for c in compliance)
+            print(f'  /no_think compliant: {"Yes" if all_ok else "No"}')
+            print()
+    PYEOF
+
+# List all cached benchmark results
+benchmark-list:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "{{benchmark_dir}}" ] || [ -z "$(ls -A "{{benchmark_dir}}" 2>/dev/null)" ]; then
+        echo "No cached benchmark results."
+        echo "Run: just benchmark <model>"
+        exit 0
+    fi
+    echo "=== Cached Benchmark Results ==="
+    echo ""
+    # Show actual result files (not symlinks)
+    for f in "{{benchmark_dir}}"/*.json; do
+        [ -f "$f" ] || continue
+        [ -L "$f" ] && continue  # Skip symlinks
+        NAME=$(basename "$f")
+        SIZE=$(wc -c < "$f" | tr -d ' ')
+        echo "  ${NAME} (${SIZE} bytes)"
+    done
+    echo ""
+    echo "Latest links:"
+    for f in "{{benchmark_dir}}"/*_latest.json; do
+        [ -L "$f" ] || continue
+        MODEL=$(basename "$f" | sed 's/_latest\.json//')
+        TARGET=$(readlink "$f" 2>/dev/null)
+        echo "  ${MODEL} → ${TARGET}"
+    done
+
+# Compare two benchmark results side by side
+benchmark-compare model1 model2:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    FILE1="{{benchmark_dir}}/{{model1}}_latest.json"
+    FILE2="{{benchmark_dir}}/{{model2}}_latest.json"
+    if [ ! -f "${FILE1}" ]; then echo "No results for {{model1}}. Run: just benchmark {{model1}}"; exit 1; fi
+    if [ ! -f "${FILE2}" ]; then echo "No results for {{model2}}. Run: just benchmark {{model2}}"; exit 1; fi
+    python3 - "${FILE1}" "${FILE2}" <<'PYEOF'
+    import json, os, sys
+    def resolve(p):
+        return os.path.join(os.path.dirname(p), os.readlink(p)) if os.path.islink(p) else p
+    with open(resolve(sys.argv[1])) as f: d1 = json.load(f)
+    with open(resolve(sys.argv[2])) as f: d2 = json.load(f)
+    m1 = d1['models'][0]
+    m2 = d2['models'][0]
+    print(f'Comparing: {m1["model_short"]} vs {m2["model_short"]}')
+    print(f'RAM:       {m1.get("idle_ram_mb",0):.0f} MB vs {m2.get("idle_ram_mb",0):.0f} MB')
+    print()
+    t1 = {r['context_label']: r for r in m1.get('throughput_no_think', [])}
+    t2 = {r['context_label']: r for r in m2.get('throughput_no_think', [])}
+    labels = list(dict.fromkeys(list(t1.keys()) + list(t2.keys())))
+    print(f'{"Context":<18} {m1["model_short"]:>14} {m2["model_short"]:>14} {"Ratio":>8}')
+    print(f'{"-"*18} {"-"*14} {"-"*14} {"-"*8}')
+    for label in labels:
+        v1 = t1.get(label, {}).get('tokens_per_second', 0)
+        v2 = t2.get(label, {}).get('tokens_per_second', 0)
+        ratio = f'{v1/v2:.1f}x' if v2 > 0 else '-'
+        print(f'{label:<18} {v1:>12.1f}T/s {v2:>12.1f}T/s {ratio:>8}')
+    PYEOF
+
+# ─── Validation ─────────────────────────────────────────────────────────────
+
+# Full validation (build + test)
+check: build test

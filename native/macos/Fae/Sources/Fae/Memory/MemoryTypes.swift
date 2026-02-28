@@ -74,7 +74,7 @@ struct MemoryCaptureReport: Sendable {
 // MARK: - Constants
 
 enum MemoryConstants {
-    static let schemaVersion: UInt32 = 4
+    static let schemaVersion: UInt32 = 6
     static let maxRecordTextLen: Int = 32_768
     static let truncationSuffix: String = " [truncated]"
 
@@ -105,6 +105,10 @@ enum MemoryConstants {
     static let episodeThresholdLexical: Float = 0.60
 
     static let secsPerDay: Float = 86_400.0
+
+    // Entity relationship system
+    static let entityStrengthDecayHalfLifeDays: Float = 60.0
+    static let entityMaxContextChars: Int = 800
 }
 
 // MARK: - Scoring

@@ -25,6 +25,9 @@ actor FaeScheduler {
     private let eventBus: FaeEventBus
     private let memoryOrchestrator: MemoryOrchestrator?
     private let memoryStore: SQLiteMemoryStore?
+    private let entityStore: EntityStore?
+    private let vectorStore: VectorStore?
+    private let embeddingEngine: NeuralEmbeddingEngine?
     private var config: FaeConfig.SchedulerConfig
     private var timers: [String: DispatchSourceTimer] = [:]
     private var isRunning = false
@@ -50,11 +53,17 @@ actor FaeScheduler {
         eventBus: FaeEventBus,
         memoryOrchestrator: MemoryOrchestrator? = nil,
         memoryStore: SQLiteMemoryStore? = nil,
+        entityStore: EntityStore? = nil,
+        vectorStore: VectorStore? = nil,
+        embeddingEngine: NeuralEmbeddingEngine? = nil,
         config: FaeConfig.SchedulerConfig = FaeConfig.SchedulerConfig()
     ) {
         self.eventBus = eventBus
         self.memoryOrchestrator = memoryOrchestrator
         self.memoryStore = memoryStore
+        self.entityStore = entityStore
+        self.vectorStore = vectorStore
+        self.embeddingEngine = embeddingEngine
         self.config = config
     }
 
@@ -424,6 +433,24 @@ actor FaeScheduler {
         }
     }
 
+    private func runEmbeddingReindex() async {
+        NSLog("FaeScheduler: embedding_reindex — running")
+        guard let store = memoryStore,
+              let entityStore,
+              let vs = vectorStore,
+              let engine = embeddingEngine
+        else {
+            NSLog("FaeScheduler: embedding_reindex — missing dependencies, skipping")
+            return
+        }
+        EmbeddingBackfillRunner.backfillIfNeeded(
+            memoryStore: store,
+            entityStore: entityStore,
+            vectorStore: vs,
+            embeddingEngine: engine
+        )
+    }
+
     private func runCheckUpdate() async {
         NSLog("FaeScheduler: check_fae_update — running")
         // Sparkle handles update checks automatically when configured.
@@ -513,6 +540,10 @@ actor FaeScheduler {
         if weekday == 1, hour == 10, minute < 2 {
             await runDailyIfNeeded("stale_relationships") { await runStaleRelationships() }
         }
+        // embedding_reindex: weekly on Sunday at 03:00.
+        if weekday == 1, hour == 3, minute < 2 {
+            await runDailyIfNeeded("embedding_reindex") { await runEmbeddingReindex() }
+        }
     }
 
     private func runDailyIfNeeded(_ name: String, _ action: () async -> Void) async {
@@ -545,6 +576,7 @@ actor FaeScheduler {
         case "skill_proposals":   await runSkillProposals()
         case "stale_relationships": await runStaleRelationships()
         case "skill_health_check": await runSkillHealthCheck()
+        case "embedding_reindex": await runEmbeddingReindex()
         default:
             NSLog("FaeScheduler: unknown task id '%@'", id)
         }
@@ -646,7 +678,7 @@ actor FaeScheduler {
             "memory_reflect", "memory_reindex", "memory_migrate",
             "memory_gc", "memory_backup", "check_fae_update",
             "morning_briefing", "noise_budget_reset", "skill_proposals",
-            "stale_relationships", "skill_health_check",
+            "stale_relationships", "skill_health_check", "embedding_reindex",
         ]
         ids.formUnion(builtinIDs)
 
