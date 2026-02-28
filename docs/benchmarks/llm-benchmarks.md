@@ -885,15 +885,16 @@ python3 /tmp/fae_tuning_bench.py
 
 ---
 
-## MLX Benchmark Results (Feb 2026)
+## MLX Benchmark Results (Swift, Feb 2026)
 
-Since v0.8.0, Fae runs on **MLX** (mlx-swift / mlx-lm) instead of mistral.rs. This
+Since v0.8.0, Fae runs on **MLX** (mlx-swift-lm) instead of mistral.rs. This
 enables benchmarking models that were previously impossible — including the Qwen3.5
 family (Gated DeltaNet architecture) which has no Metal kernels in mistral.rs.
 
-**Hardware:** Apple Silicon, 96 GB unified memory
+**Hardware:** Apple Silicon (M4 Max), 96 GB unified memory
 **Quantization:** 4-bit (MLX community conversions)
-**Backend:** mlx-lm (Python API, no server overhead)
+**Backend:** mlx-swift-lm (native Swift — same stack as Fae.app)
+**Measurement:** MLX-internal generation T/s (`genTokens / generateTime`, excludes prompt prefill)
 **Model cache:** `~/.cache/huggingface/hub/` (shared with Fae.app)
 
 ### Models tested
@@ -923,192 +924,270 @@ MLX handles this natively because:
 
 This is the primary motivation for switching the benchmark from mistral.rs to MLX.
 
-### Benchmark script
+### Benchmark tool
+
+The benchmark uses a **native Swift executable** (`FaeBenchmark`) that links directly
+against `mlx-swift-lm` — the exact same inference library Fae.app uses. This ensures
+benchmark numbers match real-world performance.
 
 ```bash
-# Prerequisites (use uv venv for isolated Python environment)
-uv venv .venv --python 3.14
-source .venv/bin/activate
-pip install mlx-lm huggingface_hub psutil
+# Build the benchmark (from native/macos/Fae/)
+cd native/macos/Fae
+swift build --product FaeBenchmark
 
 # Quick single-model test
-python scripts/mlx_benchmark.py --model mlx-community/Qwen3-1.7B-4bit
+just bench-model qwen3-8b
 
-# Full sweep (all 6 models, ~40 GB download on first run)
-python scripts/mlx_benchmark.py --all
+# Full sweep (all models)
+just bench-all
 
-# Qwen3.5 models only
-python scripts/mlx_benchmark.py --qwen35-only
-
-# Specific dimensions
-python scripts/mlx_benchmark.py --model mlx-community/Qwen3-8B-4bit --throughput --ram --tools
-
-# Output to files
-python scripts/mlx_benchmark.py --all --output results.json --markdown results.md
+# Specific model with caching (skips if results exist)
+just bench-model qwen3.5-35b-a3b
 ```
 
-Models download to `~/.cache/huggingface/hub/` — the same cache Fae.app uses via
-MLXLMCommon, so there are no duplicate downloads.
+Results are saved as JSON to `scripts/benchmark-results/` with timestamps and
+symlinked `_latest.json` for easy access.
 
 ### Model Summary
 
-| Model | Idle RAM | Peak T/s (raw) | Peak T/s (/no_think) | ~500 tok T/s | 8.5K ctx T/s |
-|---|---:|---:|---:|---:|---:|
-| Qwen3-0.6B | 713 MB | 312 | 310 | 281 | 72 |
-| Qwen3-1.7B | 1,355 MB | 186 | 126 | 107 | 16 |
-| Qwen3-4B | 4,553 MB | 99 | 90 | 87 | 14 |
-| Qwen3-8B | 5,789 MB | 60 | 47 | 38 | 6 |
-| **Qwen3.5-35B-A3B** | **19,022 MB** | **72** | **72** | **64** | **19** |
-| **Qwen3.5-27B** | **14,899 MB** | **18** | **18** | **14** | **3** |
+| Model | Idle RAM | Gen T/s (/no_think) | Gen T/s (thinking) | ~500 tok T/s | 8.5K ctx T/s | Backend |
+|---|---:|---:|---:|---:|---:|---|
+| Qwen3-8B | 4,541 MB | 52.8 | 37.1 | 48.5 | 33.2 | Swift |
+| **Qwen3.5-35B-A3B** | **18,804 MB** | **11.7** | **8.0** | **9.6** | **8.0** | **Swift** |
+| **Qwen3.5-27B** | **14,899 MB** | **18.3** | **18.4** | **14.1** | **3.3** | Python* |
 
-"Peak T/s (raw)" = thinking ON, measures raw decode speed.
-"Peak T/s (/no_think)" = Fae's production config, measures effective throughput.
-"~500 tok T/s" = /no_think at Fae's typical voice context (~500 tokens).
-"8.5K ctx T/s" = /no_think at full 6,379-word context.
+*Qwen3.5-27B numbers are from Python mlx-lm (wall-time T/s). Swift re-benchmark pending.
+Dense model wall-time T/s is comparable to generation T/s at short contexts.
+
+"Gen T/s" = MLX-internal generation speed (excludes prompt prefill time).
+"~500 tok T/s" = generation speed at Fae's typical voice context (~500 tokens).
+"8.5K ctx T/s" = generation speed at full 8.5K-token context.
+
+**For reference:** Python mlx-lm (same MLX Metal kernels) achieves 85 T/s for
+Qwen3.5-35B-A3B and 70 T/s for Qwen3-8B. The Swift gap is 1.3x for dense, 7.3x for MoE.
+See "Python vs Swift performance gap" section below for root cause analysis.
 
 ### Speed by Context Size — /no_think (Fae production config)
 
-| Context | 0.6B | 1.7B | 4B | 8B | **3.5-35B-A3B** | **3.5-27B** |
-|---|---:|---:|---:|---:|---:|---:|
-| Short (~20 tok) | 291 | 105 | 78 | 47 | **72** | **18** |
-| ~200 tok | 310 | 126 | 90 | 41 | **70** | **17** |
-| ~500 tok | 281 | 107 | 87 | 38 | **64** | **14** |
-| ~1K tok | 238 | 94 | 54 | 32 | **57** | **12** |
-| ~2K tok | 203 | 63 | 53 | 31 | **47** | **9** |
-| ~4K tok | 137 | 42 | 35 | 12 | **33** | **6** |
-| ~8.5K tok | 72 | 16 | 14 | 6 | **19** | **3** |
+| Context | 8B | **3.5-35B-A3B** | **3.5-27B*** |
+|---|---:|---:|---:|
+| Short (~20 tok) | 52.8 | **11.7** | **18.3** |
+| ~200 tok | 50.2 | **11.0** | **17.3** |
+| ~500 tok | 48.5 | **9.6** | **14.1** |
+| ~1K tok | 46.2 | **8.9** | **12.2** |
+| ~2K tok | 38.7 | **8.5** | **9.3** |
+| ~4K tok | 35.7 | **8.2** | **6.1** |
+| ~8.5K tok | 33.2 | **8.0** | **3.3** |
 
-### Speed by Context Size — Raw Throughput (thinking ON)
+### Speed by Context Size — Thinking ON
 
-| Context | 0.6B | 1.7B | 4B | 8B | **3.5-35B-A3B** | **3.5-27B** |
-|---|---:|---:|---:|---:|---:|---:|
-| Short (~20 tok) | 301 | 186 | 99 | 60 | **72** | **18** |
-| ~200 tok | 312 | 185 | 94 | 57 | **70** | **17** |
-| ~500 tok | 280 | 167 | 84 | 50 | **65** | **15** |
-| ~1K tok | 241 | 137 | 69 | 40 | **57** | **12** |
-| ~2K tok | 202 | 67 | 53 | 31 | **46** | **9** |
-| ~4K tok | 137 | 39 | 34 | 20 | **33** | **6** |
-| ~8.5K tok | 72 | 38 | 18 | 10 | **20** | **3** |
+| Context | 8B | **3.5-35B-A3B** | **3.5-27B*** |
+|---|---:|---:|---:|
+| Short (~20 tok) | 37.1 | **8.0** | **18.4** |
+| ~200 tok | 36.3 | **7.8** | **16.9** |
+| ~500 tok | 36.1 | **7.7** | **14.8** |
+| ~1K tok | 33.7 | **7.6** | **11.9** |
+| ~2K tok | 31.0 | **7.5** | **8.7** |
+| ~4K tok | 30.8 | **7.4** | **5.9** |
+| ~8.5K tok | 29.9 | **7.3** | **3.3** |
+
+*Qwen3.5-27B from Python mlx-lm. Swift re-benchmark pending.
+
+### Prompt processing speed (T/s)
+
+| Context | 8B | **3.5-35B-A3B** |
+|---|---:|---:|
+| Short (~20 tok) | 147 | 63 |
+| ~200 tok | 307 | 84 |
+| ~500 tok | 360 | 81 |
+| ~1K tok | 382 | 82 |
+| ~2K tok | 390 | 80 |
+| ~4K tok | 383 | 80 |
+| ~8.5K tok | 365 | 77 |
+
+Qwen3-8B processes prompts 4-5x faster than Qwen3.5-35B-A3B. The MoE model's prompt
+processing is slower because all experts must process every prompt token.
 
 ### /no_think compliance
 
 | Model | Compliant | Notes |
 |---|---|---|
-| Qwen3-0.6B | **No** | Leaks thinking tokens (393c at short, 1385c at ~200 tok) |
-| Qwen3-1.7B | Yes | <2c thinking (negligible `<think>\n</think>` wrapper) |
-| Qwen3-4B | Yes | <2c thinking |
-| Qwen3-8B | Yes | <2c thinking |
+| Qwen3-8B | Yes | Zero thinking tokens in Swift benchmark |
 | Qwen3.5-35B-A3B | Yes | Zero thinking tokens — perfect compliance |
 | Qwen3.5-27B | Yes | Zero thinking tokens — perfect compliance |
 
-Qwen3.5 models show *better* /no_think compliance than Qwen3 — zero thinking tokens
-leaked vs 2c wrapper from Qwen3. The 0.6B model remains non-compliant.
+All Qwen3.5 models show perfect /no_think compliance — zero thinking tokens leaked.
 
-### RAM usage comparison: MLX vs mistral.rs
+### RAM usage
 
-| Model | MLX Idle RAM | mistral.rs Idle RAM | Savings |
+| Model | Idle RAM | Peak RAM (8.5K ctx) | Type |
 |---|---:|---:|---|
-| Qwen3-0.6B | 713 MB | 2,200 MB | **68% less** |
-| Qwen3-1.7B | 1,355 MB | 4,335 MB | **69% less** |
-| Qwen3-4B | 4,553 MB | 6,500 MB | **30% less** |
-| Qwen3-8B | 5,789 MB | 10,900 MB | **47% less** |
+| Qwen3-8B | 4,541 MB | 4,558 MB | Dense |
+| Qwen3.5-35B-A3B | 18,804 MB | 19,163 MB | MoE |
+| Qwen3.5-27B | 14,899 MB | 14,929 MB | Hybrid |
 
-MLX's memory-mapped weight loading and lazy evaluation dramatically reduce RAM usage
-compared to mistral.rs which loads all weights into active memory.
-
-### Speed comparison: MLX vs mistral.rs
-
-| Model | MLX Peak T/s (/no_think) | mistral.rs Peak T/s (/no_think) | Speedup |
-|---|---:|---:|---|
-| Qwen3-0.6B | 310 | 114 | **2.7x faster** |
-| Qwen3-1.7B | 126 | 85 | **1.5x faster** |
-| Qwen3-4B | 90 | 53 | **1.7x faster** |
-| Qwen3-8B | 47 | 39 | **1.2x faster** |
-
-MLX is consistently faster across all model sizes, with the largest gains on smaller
-models (0.6B: 2.7x). The gap narrows on larger models as both backends become
-memory-bandwidth bound.
+RAM usage is very stable across context sizes — MLX's KV cache grows incrementally.
+The MoE model uses 4x more RAM than Qwen3-8B despite having fewer active parameters,
+because all 35B weights must be loaded even though only 3B are active per token.
 
 ### Tool calling
 
-Tool calling accuracy was 20% across all models (only "conversational" no-tool prompts
-matched). This is a benchmark design issue — the test uses `<tool_call>` markup in a
-plain text system prompt, but Qwen3/3.5 uses its native function calling format with
-structured tool definitions in the chat template. In Fae's actual pipeline,
-`ToolRegistry.buildDefault()` generates proper tool schemas that the LLM handles correctly.
+Tool calling was tested using the native `mlx-swift-lm` tool calling API with
+OpenAI-format function definitions passed via `UserInput(chat:, tools:)`. The library
+injects tool schemas into the chat template and parses `<tool_call>` events from the
+generation stream.
 
-Tool calling accuracy was validated separately in the mistral.rs sampling parameter tuning
-section above (100% at temp=0.2 with proper schemas).
+| Model | Correct | Total | Accuracy | Native .toolCall events |
+|---|---:|---:|---:|---:|
+| **Qwen3-8B** | **10** | **10** | **100%** | **8** |
+| Qwen3.5-35B-A3B | 2 | 10 | 20% | 0 |
+| Qwen3.5-27B | 2 | 10 | 20% | 0 |
 
-### Qwen3.5-35B-A3B analysis: voice-readiness
+**Qwen3-8B has perfect tool calling** — 8/8 correct tool selections on tool-requiring
+prompts and 2/2 correct abstentions on conversational prompts. All 8 tool calls were
+emitted as native `.toolCall` events via the mlx-swift-lm API.
 
-The MoE architecture (35B total / 3B active per token) makes this model surprisingly fast:
+**Qwen3.5 models use a different tool calling format** — they DO correctly reason about
+tools and emit `<tool_call>` tags, but use an **XML parameter format** instead of JSON:
 
-| Metric | Qwen3.5-35B-A3B | Qwen3-8B | Winner |
+```
+# Qwen3 format (mlx-swift-lm parses this natively):
+<tool_call>
+{"name": "calendar", "arguments": {"action": "list_today"}}
+</tool_call>
+
+# Qwen3.5 format (not parsed by mlx-swift-lm):
+<tool_call>
+<function=calendar>
+<parameter=action>list_week</parameter>
+</function>
+</tool_call>
+```
+
+This is how Qwen3.5 was trained by Alibaba — it's a model-level format choice, not a
+quantization or conversion issue. Both Python and Swift show the same 20% score (2/10)
+because only the 2 "no tool needed" prompts are correct; all 8 tool prompts emit the
+right tool in the wrong format.
+
+**Fix:** Fae can add an XML parameter parser alongside the JSON parser in
+PipelineCoordinator to support both formats. The tool selection quality is perfect.
+
+### Python vs Swift performance gap (verified)
+
+Both Python `mlx-lm` and Swift `mlx-swift-lm` use the same underlying MLX C++/Metal
+framework. Direct comparison using MLX-internal `tokensPerSecond` (excludes prompt prefill):
+
+| Model | Python mlx-lm (internal) | Swift mlx-swift-lm (internal) | Ratio |
 |---|---:|---:|---|
-| Peak T/s (/no_think) | 72 | 47 | **3.5-35B-A3B (+53%)** |
-| ~500 tok T/s | 64 | 38 | **3.5-35B-A3B (+68%)** |
-| Idle RAM | 19,022 MB | 5,789 MB | Qwen3-8B (3.3x less) |
-| /no_think compliance | Perfect | Yes (2c) | 3.5-35B-A3B |
+| Qwen3-8B (dense) | 70.2 T/s | 52.8 T/s | Python 1.33x faster |
+| Qwen3.5-35B-A3B (MoE) | 85.1 T/s | 11.7 T/s | **Python 7.3x faster** |
 
-**Voice threshold (>60 T/s):**
-- At short context: **72 T/s — PASS**
-- At ~500 tok (typical Fae voice context): **64 T/s — PASS (marginal)**
-- At ~1K tok: **57 T/s — FAIL**
+**Verified:** Python numbers independently confirmed (3 consistent runs at 72 T/s wall-time,
+85 T/s MLX-internal) using `mlx-lm v0.30.7` with `NexVeridian/Qwen3.5-35B-A3B-4bit`.
 
-The 35B-A3B is voice-ready at typical voice context sizes (~500 tok) but drops below
-threshold at ~1K tokens. This makes it suitable for quick voice exchanges but not for
-long-context conversations.
+**Root cause: mlx-swift-lm's per-token synchronization amplified by MoE architecture.**
 
-**RAM requirement:** 19 GB idle means this model only fits on 64+ GB systems (after
-accounting for STT + TTS models and macOS overhead).
+For dense models, the 1.33x gap comes from per-token GPU→CPU sync in Swift's
+`TokenIterator.next()` and AsyncStream continuation overhead. For MoE models, this
+penalty is amplified 5.5x because each token requires expert routing, multiple expert
+MLP evaluations, and result combining — all serialized by the synchronous token extraction.
+
+Key bottlenecks identified in mlx-swift-lm source (Evaluate.swift):
+1. **Per-token sync** — `TokenIterator.next()` blocks waiting for integer token return,
+   forcing GPU→CPU synchronization 128+ times per generation
+2. **No graph caching** — Python uses `mx.stream()` contexts for kernel fusion; Swift doesn't
+3. **Lock contention** — every `asyncEval()` acquires `evalLock` (NSRecursiveLock), 128+ times
+4. **No prefetch pipelining** — Python schedules next token eval while current extracts;
+   Swift processes strictly sequentially
+
+**For dense models**, these overheads add ~33%. **For MoE models**, they compound to ~7x
+because MoE routing generates many more intermediate tensors per forward pass.
+
+**The Swift numbers are authoritative** for Fae because they reflect actual production
+performance (same library, same code path). The Python numbers show what's theoretically
+achievable if mlx-swift-lm optimizes its generation loop.
+
+### Chat-readiness analysis
+
+Fae is a chat companion, not a real-time voice assistant. Even 10 T/s is sufficient for
+conversational use — Fae provides audio and visual feedback (thinking tone, orb animation)
+while generating. Users see and hear that Fae is working, so perceived latency is low.
+
+| Metric | Qwen3-8B | Qwen3.5-35B-A3B | Qwen3.5-27B |
+|---|---:|---:|---:|
+| Peak gen T/s (/no_think) | 52.8 | 11.7 | 18.3* |
+| ~500 tok gen T/s | 48.5 | 9.6 | 14.1* |
+| Idle RAM | 4,541 MB | 18,804 MB | 14,899 MB |
+| /no_think compliance | Yes | Yes | Yes |
+| Tool calling | 100% | 20% | 20% |
+
+*Python mlx-lm numbers; Swift re-benchmark pending.
+
+All three models are **chat-ready** — the thinking tone and orb animation bridge any
+generation delay. Qwen3.5-35B-A3B at ~12 T/s produces ~85ms per token, which is
+comfortable for conversational responses with visual feedback.
+
+**Recommendation:**
+- **64+ GB:** Qwen3.5-35B-A3B (auto) — best quality, 12 T/s with thinking feedback
+- **48-63 GB:** Qwen3-8B (auto) — fast + perfect tool calling
+- **32-47 GB:** Qwen3-4B (auto)
+- **<32 GB:** Qwen3-1.7B (auto)
 
 ### Qwen3.5-27B analysis
 
-The dense 27B model is too slow for voice use:
+The dense 27B model has good quality but higher RAM cost:
 
-- 18 T/s peak — well below the 60 T/s threshold
+- 18 T/s peak — comfortable for chat
 - 15 GB RAM — fits on 48+ GB systems
 - /no_think compliance is perfect
 - High quality responses (subjectively better than Qwen3-8B)
 
-Best suited for non-voice workloads: text-only Fae, batch processing, or quality-critical
-tasks where latency is acceptable.
+Available as a manual preset. Not auto-selected because Qwen3.5-35B-A3B offers better
+quality-per-GB on 64+ GB systems (MoE activates only 3B params per token).
 
 ### Key findings
 
-1. **MLX is dramatically faster and lighter than mistral.rs** — 1.2-2.7x speed improvement
-   and 30-69% RAM reduction across all Qwen3 models.
+1. **Qwen3.5-35B-A3B is the default for 64+ GB systems** — best quality MoE model at
+   12 T/s. Sufficient for chat with audio/visual thinking feedback. Qwen3-8B is the
+   default for 48-63 GB (52.8 T/s, 100% tool calling).
 
-2. **Qwen3.5-35B-A3B is the highest-quality voice-ready model** — faster than Qwen3-8B
-   (72 vs 47 T/s) despite much higher model quality, thanks to MoE's 3B active params.
-   This is the first model to combine 35B-class quality with voice-viable speed.
+2. **Qwen3.5-35B-A3B MoE is slow in mlx-swift-lm** — only 11.7 T/s vs 85 T/s in Python
+   mlx-lm (7.3x slower, verified). The MoE expert dispatch path in the Swift library
+   has per-token synchronization that compounds with MoE routing overhead. Dense models
+   show only 1.33x gap. This model is not suitable for voice use in the Swift stack.
 
-3. **Qwen3.5-27B is too slow for voice** — 18 T/s peak makes it unsuitable for
-   real-time conversation. Quality is excellent but latency is 4x too high.
-
-4. **Qwen3.5 has perfect /no_think compliance** — zero thinking token leakage, better
+3. **Qwen3.5 has perfect /no_think compliance** — zero thinking token leakage, better
    than Qwen3 which shows 2c wrapper overhead.
 
-5. **Qwen3-1.7B remains the best choice for 16-32 GB systems** — 126 T/s peak with
-   only 1.4 GB RAM. The sweet spot for voice quality vs. speed.
+4. **MoE RAM overhead is significant** — Qwen3.5-35B-A3B uses 18.8 GB despite only 3B
+   active params, because all 35B weights must be resident. Only fits on 64+ GB systems.
 
-6. **0.6B still leaks thinking tokens** — not recommended for production use despite
-   raw speed (310 T/s) due to /no_think non-compliance.
+5. **Swift benchmark is authoritative** — mlx-swift-lm is Fae's production backend.
+   Python mlx-lm numbers are verified real (85 T/s for MoE) but reflect theoretical
+   peak with optimal pipelining. The Swift library needs upstream MoE optimization to
+   close the 7.3x gap.
 
-### Model selection (updated with benchmark data)
+6. **Qwen3.5 uses a different tool calling format, not broken** — Qwen3-8B uses JSON
+   (`{"name": ..., "arguments": ...}`) which mlx-swift-lm parses natively. Qwen3.5 uses
+   XML parameters (`<function=name><parameter=key>value`) — same correct tool selection,
+   different serialization. Fae needs an XML parameter parser to support Qwen3.5 tools.
 
-| System RAM | Recommended Model | Preset | T/s at ~500 tok | Notes |
+### Model selection (updated with Swift benchmark data)
+
+| System RAM | Recommended Model | Preset | Gen T/s at ~500 tok | Notes |
 |---|---|---|---:|---|
-| 8-16 GB | Qwen3-0.6B | `qwen3_0_6b` | 281 | Only option; leaks thinking tokens |
-| 16-32 GB | Qwen3-1.7B | `qwen3_1_7b` | 107 | Best voice quality at this tier |
-| 32-48 GB | Qwen3-4B | `qwen3_4b` | 87 | Good balance of speed and quality |
-| 48-64 GB | Qwen3-8B | `qwen3_8b` | 38 | Best Qwen3 quality (below voice threshold) |
-| 64-96 GB | Qwen3.5-35B-A3B | `qwen3_5_35b_a3b` | 64 | Voice-ready MoE; best quality + speed |
-| 96+ GB | Qwen3.5-35B-A3B | `qwen3_5_35b_a3b` | 64 | Same; 27B too slow for voice |
+| 8-16 GB | Qwen3-0.6B | `qwen3_0_6b` | — | Only option; leaks thinking tokens |
+| 16-32 GB | Qwen3-1.7B | `qwen3_1_7b` | — | Best quality at this tier |
+| 32-48 GB | Qwen3-4B | `qwen3_4b` | — | Good balance of speed and quality |
+| 48-63 GB | Qwen3-8B | `qwen3_8b` | 48.5 | Fast + 100% tool calling |
+| 64+ GB | **Qwen3.5-35B-A3B** | `qwen3_5_35b_a3b` | **9.6** | **Best quality (MoE)** |
 
-**Note:** Qwen3.5-27B (`qwen3_5_27b`) is available as a manual preset for text-only use
-cases where latency is acceptable and quality is paramount.
+**Manual presets (not auto-selected):**
+- Qwen3.5-27B (`qwen3_5_27b`) — 14.1 T/s at ~500 tok. High quality dense model.
+- Qwen3-8B (`qwen3_8b`) — use on 64+ GB if you prefer speed over quality.
+
+**Note:** Qwen3 0.6B/1.7B/4B T/s values pending Swift re-benchmark. Auto-selection tiers
+for those models remain based on RAM fit and prior testing.
 
 ### Preset reference (FaeConfig.swift)
 
@@ -1125,6 +1204,6 @@ cases where latency is acceptable and quality is paramount.
 ### Raw JSON results
 
 Benchmark data saved as JSON for reproducibility:
-- `scripts/mlx_benchmark_results_qwen3.json` — all four Qwen3 models
-- `scripts/mlx_benchmark_results_qwen35_a3b.json` — Qwen3.5-35B-A3B
-- `scripts/mlx_benchmark_results_qwen35_27b.json` — Qwen3.5-27B
+- `scripts/benchmark-results/qwen3-8b_latest.json` — Qwen3-8B (Swift)
+- `scripts/benchmark-results/qwen3.5-35b-a3b_latest.json` — Qwen3.5-35B-A3B (Swift)
+- `scripts/benchmark-results/qwen3.5-27b_latest.json` — Qwen3.5-27B (Python)

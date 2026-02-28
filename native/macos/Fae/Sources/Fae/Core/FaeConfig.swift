@@ -172,7 +172,8 @@ struct FaeConfig: Codable {
             return ("NexVeridian/Qwen3.5-27B-4bit", 65_536)
         case "qwen3_5_35b_a3b":
             // NexVeridian text-only conversion. MoE: 35B total / 3B active per token.
-            // 72 T/s peak, 64 T/s at ~500 tok — voice-ready on 96GB systems.
+            // 11.7 T/s in mlx-swift-lm — sufficient for chat with thinking feedback.
+            // Auto-selected on 64+ GB systems.
             return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
         case "qwen3_8b":
             return ("mlx-community/Qwen3-8B-4bit", 32_768)
@@ -183,8 +184,9 @@ struct FaeConfig: Codable {
         case "qwen3_0_6b":
             return ("mlx-community/Qwen3-0.6B-4bit", 4_096)
         default: // "auto"
-            // Qwen3.5-35B-A3B (MoE, 3B active): 72 T/s peak, 64 T/s at ~500 tok.
-            // Voice-ready on 64GB+ systems (~19 GB RAM idle).
+            // 64+ GB: Qwen3.5-35B-A3B — best quality MoE (3B active), 11.7 T/s is
+            // fine for chat with audio/visual feedback while thinking. 18.8 GB RAM.
+            // 48-63 GB: Qwen3-8B — 52.8 T/s, 100% tool calling, 4.5 GB RAM.
             if totalGB >= 64 {
                 return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
             } else if totalGB >= 48 {

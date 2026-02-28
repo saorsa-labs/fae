@@ -880,7 +880,10 @@ actor PipelineCoordinator {
         let arguments: [String: Any]
     }
 
-    /// Parse `<tool_call>{"name":"...","arguments":{...}}</tool_call>` tags from response text.
+    /// Parse tool calls from response text.
+    /// Supports two formats:
+    /// - JSON (Qwen3): `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
+    /// - XML (Qwen3.5): `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
     private static func parseToolCalls(from text: String) -> [ToolCall] {
         var calls: [ToolCall] = []
         var searchRange = text.startIndex..<text.endIndex
@@ -888,21 +891,63 @@ actor PipelineCoordinator {
         while let openRange = text.range(of: "<tool_call>", range: searchRange),
               let closeRange = text.range(of: "</tool_call>", range: openRange.upperBound..<text.endIndex)
         {
-            let jsonStr = text[openRange.upperBound..<closeRange.lowerBound]
+            let content = text[openRange.upperBound..<closeRange.lowerBound]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if let data = jsonStr.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let name = json["name"] as? String
-            {
-                let args = json["arguments"] as? [String: Any] ?? [:]
-                calls.append(ToolCall(name: name, arguments: args))
+            // Try JSON format first (Qwen3): {"name":"...","arguments":{...}}
+            if let call = parseJSONToolCall(content) {
+                calls.append(call)
+            }
+            // Fall back to XML parameter format (Qwen3.5): <function=name><parameter=key>value</parameter></function>
+            else if let call = parseXMLToolCall(content) {
+                calls.append(call)
             }
 
             searchRange = closeRange.upperBound..<text.endIndex
         }
 
         return calls
+    }
+
+    private static func parseJSONToolCall(_ content: String) -> ToolCall? {
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = json["name"] as? String
+        else { return nil }
+        let args = json["arguments"] as? [String: Any] ?? [:]
+        return ToolCall(name: name, arguments: args)
+    }
+
+    /// Parse Qwen3.5 XML parameter format: `<function=name><parameter=key>value</parameter></function>`
+    private static func parseXMLToolCall(_ content: String) -> ToolCall? {
+        guard let funcMatch = content.range(of: "<function="),
+              let funcEnd = content.range(of: ">", range: funcMatch.upperBound..<content.endIndex)
+        else { return nil }
+        let name = String(content[funcMatch.upperBound..<funcEnd.lowerBound])
+        guard !name.isEmpty else { return nil }
+
+        var args: [String: Any] = [:]
+        var paramSearch = content.startIndex..<content.endIndex
+        while let paramOpen = content.range(of: "<parameter=", range: paramSearch),
+              let paramNameEnd = content.range(of: ">", range: paramOpen.upperBound..<content.endIndex),
+              let paramClose = content.range(of: "</parameter>", range: paramNameEnd.upperBound..<content.endIndex)
+        {
+            let key = String(content[paramOpen.upperBound..<paramNameEnd.lowerBound])
+            let value = String(content[paramNameEnd.upperBound..<paramClose.lowerBound])
+
+            // Try to parse value as JSON for nested objects/arrays/numbers/booleans
+            if let data = value.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: data)
+            {
+                args[key] = parsed
+            } else {
+                args[key] = value
+            }
+
+            paramSearch = paramClose.upperBound..<content.endIndex
+        }
+
+        return ToolCall(name: name, arguments: args)
     }
 
     /// Strip tool call markup from response text, leaving only human-readable content.

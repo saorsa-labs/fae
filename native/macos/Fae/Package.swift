@@ -8,6 +8,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "Fae", targets: ["Fae"]),
+        .executable(name: "FaeBenchmark", targets: ["FaeBenchmark"]),
     ],
     dependencies: [
         // Shared Handoff contract types: FaeHandoffContract, ConversationSnapshot, etc.
@@ -58,6 +59,17 @@ let package = Package(
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("CoreML"),
             ]
+        ),
+
+        // LLM benchmark executable — measures throughput, /no_think compliance, tool calling.
+        // Run: swift run FaeBenchmark --model qwen3.5-35b-a3b
+        .executableTarget(
+            name: "FaeBenchmark",
+            dependencies: [
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            ],
+            path: "Sources/FaeBenchmark"
         ),
 
         // Handoff unit tests — depends only on FaeHandoffKit (no libfae.a required).
