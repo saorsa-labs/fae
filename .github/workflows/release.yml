@@ -339,6 +339,16 @@ jobs:
           # Note: spctl check skipped here — the app bundle is not yet notarized.
           # The DMG (which contains this bundle) gets notarized and stapled below.
 
+      - name: Free disk space before DMG creation
+        run: |
+          # Remove notarization zip and build intermediates to reclaim space
+          rm -f "$RUNNER_TEMP"/fae-*-notarize.zip
+          rm -rf native/macos/Fae/.build/xcode/Build/Intermediates.noindex
+          rm -rf native/macos/Fae/.build/xcode/Build/Products/Debug 2>/dev/null || true
+          rm -rf native/macos/Fae/.build/xcode/SDKStatCaches.noindex 2>/dev/null || true
+          echo "Disk usage after cleanup:"
+          df -h "$RUNNER_TEMP" | tail -1
+
       - name: Build macOS installer (.dmg)
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
