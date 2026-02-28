@@ -14,28 +14,44 @@ private struct SchedulerTask: Codable {
     var nextRun: String?
 }
 
+private struct SchedulerFileEnvelope: Codable {
+    var tasks: [SchedulerTask]
+}
+
 /// Shared path for the scheduler task file.
 private let schedulerFilePath: String = {
-    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    let appSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+    ).first ?? FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support")
     return appSupport.appendingPathComponent("fae/scheduler.json").path
 }()
 
 /// Read scheduler tasks from disk.
 private func readSchedulerTasks() -> [SchedulerTask] {
     guard FileManager.default.fileExists(atPath: schedulerFilePath),
-          let data = FileManager.default.contents(atPath: schedulerFilePath),
-          let tasks = try? JSONDecoder().decode([SchedulerTask].self, from: data)
+          let data = FileManager.default.contents(atPath: schedulerFilePath)
     else {
         return defaultBuiltinTasks()
     }
-    return tasks
+
+    let decoder = JSONDecoder()
+    if let envelope = try? decoder.decode(SchedulerFileEnvelope.self, from: data) {
+        return envelope.tasks
+    }
+    if let tasks = try? decoder.decode([SchedulerTask].self, from: data) {
+        return tasks
+    }
+
+    return defaultBuiltinTasks()
 }
 
 /// Write scheduler tasks to disk.
 private func writeSchedulerTasks(_ tasks: [SchedulerTask]) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    let data = try encoder.encode(tasks)
+    let data = try encoder.encode(SchedulerFileEnvelope(tasks: tasks))
     let dir = (schedulerFilePath as NSString).deletingLastPathComponent
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     try data.write(to: URL(fileURLWithPath: schedulerFilePath))
@@ -56,18 +72,32 @@ private func defaultBuiltinTasks() -> [SchedulerTask] {
                        scheduleType: "daily", scheduleParams: ["hour": "2", "minute": "0"], action: "memory_backup"),
         SchedulerTask(id: "check_fae_update", name: "Check for Updates", kind: "builtin", enabled: true,
                        scheduleType: "interval", scheduleParams: ["hours": "6"], action: "check_fae_update"),
+        SchedulerTask(id: "noise_budget_reset", name: "Noise Budget Reset", kind: "builtin", enabled: true,
+                       scheduleType: "daily", scheduleParams: ["hour": "0", "minute": "0"], action: "noise_budget_reset"),
         SchedulerTask(id: "morning_briefing", name: "Morning Briefing", kind: "builtin", enabled: true,
                        scheduleType: "daily", scheduleParams: ["hour": "8", "minute": "0"], action: "morning_briefing"),
+        SchedulerTask(id: "skill_proposals", name: "Skill Proposals", kind: "builtin", enabled: true,
+                       scheduleType: "daily", scheduleParams: ["hour": "11", "minute": "0"], action: "skill_proposals"),
+        SchedulerTask(id: "stale_relationships", name: "Stale Relationships", kind: "builtin", enabled: true,
+                       scheduleType: "weekly", scheduleParams: ["day": "sunday", "hour": "10", "minute": "0"], action: "stale_relationships"),
+        SchedulerTask(id: "skill_health_check", name: "Skill Health Check", kind: "builtin", enabled: true,
+                       scheduleType: "interval", scheduleParams: ["minutes": "5"], action: "skill_health_check"),
     ]
 }
 
 // MARK: - Scheduler List Tool
 
+/// Fae tool that returns all registered scheduler tasks with their schedule and enabled state.
+///
+/// Reads from the persisted `scheduler.json` file (or built-in defaults if no file exists).
+/// Reports each task's name, kind (builtin/user), schedule, and enabled/disabled status.
 struct SchedulerListTool: Tool {
     let name = "scheduler_list"
     let description = "List all scheduled tasks with their schedule and status."
     let parametersSchema = #"{}"#
     let requiresApproval = false
+    let riskLevel: ToolRiskLevel = .low
+    let example = #"<tool_call>{"name":"scheduler_list","arguments":{}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         let tasks = readSchedulerTasks()
@@ -80,8 +110,12 @@ struct SchedulerListTool: Tool {
             let schedule: String
             switch task.scheduleType {
             case "interval":
-                let hours = task.scheduleParams["hours"] ?? "?"
-                schedule = "every \(hours)h"
+                if let minutes = task.scheduleParams["minutes"] {
+                    schedule = "every \(minutes)m"
+                } else {
+                    let hours = task.scheduleParams["hours"] ?? "?"
+                    schedule = "every \(hours)h"
+                }
             case "daily":
                 let hour = task.scheduleParams["hour"] ?? "0"
                 let minute = task.scheduleParams["minute"] ?? "0"
@@ -101,6 +135,10 @@ struct SchedulerListTool: Tool {
 
 // MARK: - Scheduler Create Tool
 
+/// Fae tool that creates a new user-defined scheduled task and persists it to `scheduler.json`.
+///
+/// Supports interval (every N hours/minutes), daily (at HH:MM), and weekly (day + time) schedules.
+/// User tasks are assigned a unique `user_XXXXXXXX` ID and start enabled. Requires approval.
 struct SchedulerCreateTool: Tool {
     let name = "scheduler_create"
     let description = "Create a new user-defined scheduled task."
@@ -111,6 +149,8 @@ struct SchedulerCreateTool: Tool {
         "action": "string (required: description of what to do)"}
         """
     let requiresApproval = true
+    let riskLevel: ToolRiskLevel = .high
+    let example = #"<tool_call>{"name":"scheduler_create","arguments":{"name":"Weather Check","schedule_type":"daily","schedule_params":{"hour":"7","minute":"0"},"action":"Check weather forecast"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let taskName = input["name"] as? String, !taskName.isEmpty else {
@@ -150,6 +190,10 @@ struct SchedulerCreateTool: Tool {
 
 // MARK: - Scheduler Update Tool
 
+/// Fae tool that updates an existing scheduler task's enabled state or schedule.
+///
+/// Enable/disable changes are routed through `NotificationCenter` (`.faeSchedulerUpdate`)
+/// so `FaeScheduler` stays in sync without requiring a restart. Requires approval.
 struct SchedulerUpdateTool: Tool {
     let name = "scheduler_update"
     let description = "Update a scheduled task (enable/disable, change schedule)."
@@ -160,6 +204,8 @@ struct SchedulerUpdateTool: Tool {
         "schedule_params": "object (optional)"}
         """
     let requiresApproval = true
+    let riskLevel: ToolRiskLevel = .high
+    let example = #"<tool_call>{"name":"scheduler_update","arguments":{"id":"morning_briefing","enabled":false}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let taskId = input["id"] as? String else {
@@ -173,6 +219,15 @@ struct SchedulerUpdateTool: Tool {
 
         if let enabled = input["enabled"] as? Bool {
             tasks[index].enabled = enabled
+
+            // Route enabled/disabled state change through FaeScheduler (single source of truth).
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: .faeSchedulerUpdate,
+                    object: nil,
+                    userInfo: ["id": taskId, "enabled": enabled]
+                )
+            }
         }
         if let scheduleType = input["schedule_type"] as? String {
             tasks[index].scheduleType = scheduleType
@@ -192,11 +247,17 @@ struct SchedulerUpdateTool: Tool {
 
 // MARK: - Scheduler Delete Tool
 
+/// Fae tool that permanently removes a user-created scheduled task from `scheduler.json`.
+///
+/// Only `kind == "user"` tasks can be deleted. Builtin tasks (memory, briefing, etc.)
+/// must be disabled via `scheduler_update` instead. Requires approval.
 struct SchedulerDeleteTool: Tool {
     let name = "scheduler_delete"
     let description = "Delete a user-created scheduled task. Cannot delete builtin tasks."
     let parametersSchema = #"{"id": "string (required)"}"#
     let requiresApproval = true
+    let riskLevel: ToolRiskLevel = .high
+    let example = #"<tool_call>{"name":"scheduler_delete","arguments":{"id":"user_abc12345"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let taskId = input["id"] as? String else {
@@ -226,11 +287,18 @@ struct SchedulerDeleteTool: Tool {
 
 // MARK: - Scheduler Trigger Tool
 
+/// Fae tool that fires a scheduled task immediately, bypassing its normal schedule.
+///
+/// Posts `.faeSchedulerTrigger` on `NotificationCenter` with the task ID.
+/// `FaeCore` observes this notification and forwards it to `FaeScheduler.trigger(id:)`.
+/// Useful for testing or manually running tasks like `morning_briefing`.
 struct SchedulerTriggerTool: Tool {
     let name = "scheduler_trigger"
     let description = "Trigger a scheduled task to run immediately."
     let parametersSchema = #"{"id": "string (required)"}"#
     let requiresApproval = false
+    let riskLevel: ToolRiskLevel = .low
+    let example = #"<tool_call>{"name":"scheduler_trigger","arguments":{"id":"morning_briefing"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let taskId = input["id"] as? String else {
@@ -255,6 +323,11 @@ struct SchedulerTriggerTool: Tool {
     }
 }
 
+/// `NotificationCenter` names used by the scheduler tool layer to communicate
+/// with `FaeScheduler` without creating a direct dependency.
 extension Notification.Name {
+    /// Posted by `SchedulerTriggerTool` to run a task immediately. `userInfo["id"]` is the task ID.
     static let faeSchedulerTrigger = Notification.Name("faeSchedulerTrigger")
+    /// Posted by `SchedulerUpdateTool` when a task's enabled state changes. `userInfo["id"]` and `userInfo["enabled"]`.
+    static let faeSchedulerUpdate = Notification.Name("faeSchedulerUpdate")
 }

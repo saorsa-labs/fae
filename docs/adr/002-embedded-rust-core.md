@@ -1,8 +1,11 @@
 # ADR-002: Embedded Rust Core Architecture
 
-**Status:** Accepted
+**Status:** Superseded (historical)
 **Date:** 2026-02-11
-**Scope:** Host architecture (`src/ffi.rs`, `src/host/`, `native/macos/`)
+**Scope:** Rust-era host architecture (`src/ffi.rs`, `src/host/`, `native/macos/`)
+
+> Historical note: this ADR describes the previous embedded-Rust model.
+> Current production runtime is Swift-native under `native/macos/Fae`.
 
 ## Context
 

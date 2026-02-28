@@ -1,8 +1,11 @@
 # ADR-006: Voice Privilege Escalation (Tool Approval System)
 
-**Status:** Accepted
+**Status:** Superseded (historical)
 **Date:** 2026-02-23
-**Scope:** Tool safety across pipeline, agent, host, and native UI layers
+**Scope:** Rust-era tool safety architecture across pipeline, agent, host, and UI layers
+
+> Historical note: this ADR captures the pre-Swift-rebuild implementation details.
+> Current approval and tool-risk flow is implemented in Swift under `native/macos/Fae/Sources/Fae/`.
 
 ## Context
 

@@ -16,6 +16,11 @@ private func isEventKitAuthorized(for entityType: EKEntityType) -> Bool {
 
 // MARK: - Calendar Tool
 
+/// Fae tool for reading macOS Calendar events via EventKit.
+///
+/// Supports listing today's events, the next 7 days, a specific date, or searching
+/// by keyword across a ±1–3 month window. Event creation is gated behind approval.
+/// Requires Full Access calendar permission (System Settings > Privacy > Calendars).
 struct CalendarTool: Tool {
     let name = "calendar"
     let description = "Access macOS Calendar events. Actions: list_today, list_week, list_date, create, search."
@@ -28,6 +33,8 @@ struct CalendarTool: Tool {
         "end_date": "string ISO8601 (for create)"}
         """
     var requiresApproval: Bool { false }
+    var riskLevel: ToolRiskLevel { .low }
+    let example = #"<tool_call>{"name":"calendar","arguments":{"action":"list_today"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         let store = EKEventStore()
@@ -42,12 +49,17 @@ struct CalendarTool: Tool {
 
         switch action {
         case "list_today":
-            return listEvents(store: store, start: Calendar.current.startOfDay(for: Date()),
-                              end: Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))!)
+            let start = Calendar.current.startOfDay(for: Date())
+            guard let end = Calendar.current.date(byAdding: .day, value: 1, to: start) else {
+                return .error("Failed to compute date range.")
+            }
+            return listEvents(store: store, start: start, end: end)
 
         case "list_week":
             let start = Calendar.current.startOfDay(for: Date())
-            let end = Calendar.current.date(byAdding: .day, value: 7, to: start)!
+            guard let end = Calendar.current.date(byAdding: .day, value: 7, to: start) else {
+                return .error("Failed to compute date range.")
+            }
             return listEvents(store: store, start: start, end: end)
 
         case "list_date":
@@ -60,15 +72,20 @@ struct CalendarTool: Tool {
                 return .error("Invalid date format. Use YYYY-MM-DD.")
             }
             let start = Calendar.current.startOfDay(for: date)
-            let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
+            guard let end = Calendar.current.date(byAdding: .day, value: 1, to: start) else {
+                return .error("Failed to compute date range.")
+            }
             return listEvents(store: store, start: start, end: end)
 
         case "search":
             guard let query = input["query"] as? String, !query.isEmpty else {
                 return .error("Missing required parameter: query")
             }
-            let start = Calendar.current.date(byAdding: .month, value: -1, to: Date())!
-            let end = Calendar.current.date(byAdding: .month, value: 3, to: Date())!
+            guard let start = Calendar.current.date(byAdding: .month, value: -1, to: Date()),
+                  let end = Calendar.current.date(byAdding: .month, value: 3, to: Date())
+            else {
+                return .error("Failed to compute date range.")
+            }
             return searchEvents(store: store, query: query, start: start, end: end)
 
         case "create":
@@ -130,6 +147,11 @@ struct CalendarTool: Tool {
 
 // MARK: - Reminders Tool
 
+/// Fae tool for reading macOS Reminders via EventKit.
+///
+/// Supports listing incomplete reminders and searching by keyword. Creating and
+/// completing reminders is gated behind approval to prevent accidental modifications.
+/// Requires Reminders permission (System Settings > Privacy > Reminders).
 struct RemindersTool: Tool {
     let name = "reminders"
     let description = "Access macOS Reminders. Actions: list_incomplete, create, complete, search."
@@ -140,6 +162,8 @@ struct RemindersTool: Tool {
         "reminder_id": "string (for complete)"}
         """
     var requiresApproval: Bool { false }
+    var riskLevel: ToolRiskLevel { .low }
+    let example = #"<tool_call>{"name":"reminders","arguments":{"action":"list_incomplete"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         let store = EKEventStore()
@@ -230,6 +254,11 @@ struct RemindersTool: Tool {
 
 // MARK: - Contacts Tool
 
+/// Fae tool for searching macOS Contacts via CNContactStore.
+///
+/// Supports full-name search, phone number lookup, and email lookup.
+/// Returns up to 10 matching contacts per query.
+/// Requires Contacts permission (System Settings > Privacy > Contacts).
 struct ContactsTool: Tool {
     let name = "contacts"
     let description = "Search macOS Contacts. Actions: search, get_phone, get_email."
@@ -238,6 +267,8 @@ struct ContactsTool: Tool {
         "query": "string (required)"}
         """
     let requiresApproval = false
+    let riskLevel: ToolRiskLevel = .low
+    let example = #"<tool_call>{"name":"contacts","arguments":{"action":"search","query":"Sarah"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else {
@@ -314,6 +345,11 @@ struct ContactsTool: Tool {
 
 // MARK: - Mail Tool
 
+/// Fae tool for reading macOS Mail via AppleScript.
+///
+/// Returns the most recent messages from the inbox (subject, sender, date).
+/// Capped at 20 messages. Read-only — sending mail is not supported.
+/// Requires Automation permission for Mail (System Settings > Privacy > Automation).
 struct MailTool: Tool {
     let name = "mail"
     let description = "Interact with macOS Mail. Actions: check_inbox, read_recent."
@@ -322,6 +358,8 @@ struct MailTool: Tool {
         "count": "int (optional, default 5)"}
         """
     let requiresApproval = false
+    let riskLevel: ToolRiskLevel = .low
+    let example = #"<tool_call>{"name":"mail","arguments":{"action":"check_inbox","count":5}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let action = input["action"] as? String else {
@@ -375,6 +413,12 @@ struct MailTool: Tool {
 
 // MARK: - Notes Tool
 
+/// Fae tool for reading macOS Notes via AppleScript.
+///
+/// Supports listing recent note titles and searching by keyword within note names.
+/// Returns up to 20 recent notes or 10 search matches. Read-only — creating or
+/// editing notes is not supported.
+/// Requires Automation permission for Notes (System Settings > Privacy > Automation).
 struct NotesTool: Tool {
     let name = "notes"
     let description = "Interact with macOS Notes. Actions: search, list_recent."
@@ -384,6 +428,8 @@ struct NotesTool: Tool {
         "count": "int (optional, default 5)"}
         """
     let requiresApproval = false
+    let riskLevel: ToolRiskLevel = .low
+    let example = #"<tool_call>{"name":"notes","arguments":{"action":"search","query":"meeting notes"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let action = input["action"] as? String else {

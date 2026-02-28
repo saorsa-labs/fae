@@ -365,8 +365,12 @@ struct SettingsSkillsTab: View {
     // MARK: - Python Skills Management
 
     private var pythonRegistryURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("fae/skills/.state/python_registry.json")
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
+        return appSupport.appendingPathComponent("fae/skills/.state/python_registry.json")
     }
 
     private func refreshPythonSkills() {

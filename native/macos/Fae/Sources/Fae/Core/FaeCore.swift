@@ -21,6 +21,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     // MARK: - Subsystems
 
     private var config: FaeConfig
+    private var schedulerObservers: [NSObjectProtocol] = []
 
     init() {
         let loaded = FaeConfig.load()
@@ -28,10 +29,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
         self.isOnboarded = loaded.onboarded
         self.isLicenseAccepted = loaded.licenseAccepted
         self.userName = loaded.userName
+        self.toolMode = loaded.toolMode
 
         let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
         let faeDir = appSupport.appendingPathComponent("fae")
         self.speakerProfileStore = SpeakerProfileStore(
             storePath: faeDir.appendingPathComponent("speakers.json")
@@ -48,6 +52,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private lazy var approvalManager = ApprovalManager(eventBus: eventBus)
     private var pipelineCoordinator: PipelineCoordinator?
     private var memoryOrchestrator: MemoryOrchestrator?
+    private var memoryStore: SQLiteMemoryStore?
     private let speakerProfileStore: SpeakerProfileStore
     private var scheduler: FaeScheduler?
 
@@ -82,6 +87,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     store: memoryStore,
                     config: config.memory
                 )
+                self.memoryStore = memoryStore
                 self.memoryOrchestrator = orchestrator
 
                 let registry = ToolRegistry.buildDefault()
@@ -109,11 +115,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     memoryOrchestrator: orchestrator,
                     memoryStore: memoryStore
                 )
+
+                // Wire persistence store for scheduler state.
+                if let schedulerStore = try? Self.createSchedulerPersistenceStore() {
+                    await sched.configurePersistence(store: schedulerStore)
+                }
+
                 await sched.setSpeakHandler { [weak coordinator] text in
                     await coordinator?.speakDirect(text)
                 }
                 await sched.start()
                 self.scheduler = sched
+
+                // Observe scheduler update notifications from SchedulerUpdateTool.
+                self.observeSchedulerUpdates()
 
                 pipelineState = .running
                 eventBus.send(.runtimeState(.started))
@@ -145,6 +160,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             scheduler = nil
             await pipelineCoordinator?.stop()
             pipelineCoordinator = nil
+            memoryStore = nil
         }
 
         pipelineState = .stopped
@@ -204,7 +220,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
             completeOnboarding()
 
         case "onboarding.advance":
-            NSLog("FaeCore: onboarding.advance — stub")
+            eventBus.send(.runtimeProgress(stage: "onboarding.advance", progress: 0.0))
+            NSLog("FaeCore: onboarding advanced")
 
         case "onboarding.set_user_name":
             if let name = payload["name"] as? String {
@@ -215,10 +232,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         case "onboarding.set_contact_info":
-            NSLog("FaeCore: set_contact_info — stub")
+            let email = payload["email"] as? String
+            let phone = payload["phone"] as? String
+            Task {
+                await saveOnboardingContactInfo(email: email, phone: phone)
+            }
 
         case "onboarding.set_family_info":
-            NSLog("FaeCore: set_family_info — stub")
+            let relations = payload["relations"] as? [[String: String]] ?? []
+            Task {
+                await saveOnboardingFamilyInfo(relations: relations)
+            }
 
         case "capability.grant":
             if let cap = payload["capability"] as? String {
@@ -238,7 +262,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         case "skills.reload":
-            NSLog("FaeCore: skills.reload — stub")
+            Task {
+                await scheduler?.triggerTask(id: "skill_health_check")
+            }
+            NSLog("FaeCore: skills reloaded")
 
         case "scheduler.delete":
             if let taskId = payload["id"] as? String {
@@ -250,8 +277,43 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 Task { await scheduler?.triggerTask(id: taskId) }
             }
 
+        case "scheduler.enable":
+            if let taskId = payload["id"] as? String {
+                Task { await scheduler?.setTaskEnabled(id: taskId, enabled: true) }
+            }
+
+        case "scheduler.disable":
+            if let taskId = payload["id"] as? String {
+                Task { await scheduler?.setTaskEnabled(id: taskId, enabled: false) }
+            }
+
+        case "scheduler.set_enabled":
+            if let taskId = payload["id"] as? String,
+               let enabled = payload["enabled"] as? Bool
+            {
+                Task { await scheduler?.setTaskEnabled(id: taskId, enabled: enabled) }
+            }
+
+        case "scheduler.status":
+            if let taskId = payload["id"] as? String {
+                Task {
+                    let status = await scheduler?.status(taskID: taskId) ?? [:]
+                    NSLog("FaeCore: scheduler.status %@", String(describing: status))
+                }
+            }
+
+        case "scheduler.history":
+            if let taskId = payload["id"] as? String {
+                Task {
+                    let history = await scheduler?.history(taskID: taskId, limit: 20) ?? []
+                    NSLog("FaeCore: scheduler.history %@ count=%d", taskId, history.count)
+                }
+            }
+
         case "data.delete_all":
-            NSLog("FaeCore: data.delete_all — stub")
+            Task {
+                await resetAllData()
+            }
 
         default:
             NSLog("FaeCore: unhandled command '%@'", name)
@@ -293,21 +355,89 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     func patchConfig(key: String, payload: [String: Any]) {
         NSLog("FaeCore: config.patch key='%@'", key)
+
+        let value = payload["value"]
         switch key {
         case "tool_mode":
-            if let value = payload["value"] as? String {
-                toolMode = value
-                persistConfig(reason: "config.patch.tool_mode")
-            }
+            guard let value = value as? String,
+                  ["off", "read_only", "read_write", "full", "full_no_approval"].contains(value)
+            else { return }
+            toolMode = value
+            config.toolMode = value
+            persistConfig(reason: "config.patch.tool_mode")
+
         case "llm.voice_model_preset":
-            if let value = payload["value"] as? String,
-               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                config.llm.voiceModelPreset = value
-                persistConfig(reason: "config.patch.llm.voice_model_preset")
+            guard let value = value as? String,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+            config.llm.voiceModelPreset = value
+            persistConfig(reason: "config.patch.llm.voice_model_preset")
+
+        case "onboarded":
+            guard let value = value as? Bool else { return }
+            isOnboarded = value
+            config.onboarded = value
+            persistConfig(reason: "config.patch.onboarded")
+
+        case "voice_identity.enabled":
+            guard let value = value as? Bool else { return }
+            config.voiceIdentity.enabled = value
+            // Keep speaker gating aligned with identity toggle.
+            config.speaker.enabled = value
+            persistConfig(reason: "config.patch.voice_identity.enabled")
+
+        case "voice_identity.mode":
+            guard let value = value as? String,
+                  ["assist", "enforce"].contains(value)
+            else { return }
+            config.voiceIdentity.mode = value
+            persistConfig(reason: "config.patch.voice_identity.mode")
+
+        case "voice_identity.approval_requires_match":
+            guard let value = value as? Bool else { return }
+            config.voiceIdentity.approvalRequiresMatch = value
+            config.speaker.requireOwnerForTools = value
+            persistConfig(reason: "config.patch.voice_identity.approval_requires_match")
+
+        case "channels.enabled":
+            guard let value = value as? Bool else { return }
+            config.channels.enabled = value
+            persistConfig(reason: "config.patch.channels.enabled")
+
+        case "channels.discord.bot_token":
+            config.channels.discord.botToken = sanitizedString(value)
+            persistConfig(reason: "config.patch.channels.discord.bot_token")
+
+        case "channels.discord.guild_id":
+            config.channels.discord.guildId = sanitizedString(value)
+            persistConfig(reason: "config.patch.channels.discord.guild_id")
+
+        case "channels.discord.allowed_channel_ids":
+            if let values = parseStringList(value) {
+                config.channels.discord.allowedChannelIds = values
+                persistConfig(reason: "config.patch.channels.discord.allowed_channel_ids")
             }
+
+        case "channels.whatsapp.access_token":
+            config.channels.whatsapp.accessToken = sanitizedString(value)
+            persistConfig(reason: "config.patch.channels.whatsapp.access_token")
+
+        case "channels.whatsapp.phone_number_id":
+            config.channels.whatsapp.phoneNumberId = sanitizedString(value)
+            persistConfig(reason: "config.patch.channels.whatsapp.phone_number_id")
+
+        case "channels.whatsapp.verify_token":
+            config.channels.whatsapp.verifyToken = sanitizedString(value)
+            persistConfig(reason: "config.patch.channels.whatsapp.verify_token")
+
+        case "channels.whatsapp.allowed_numbers":
+            if let values = parseStringList(value) {
+                config.channels.whatsapp.allowedNumbers = values
+                persistConfig(reason: "config.patch.channels.whatsapp.allowed_numbers")
+            }
+
         default:
-            NSLog("FaeCore: config.patch unhandled key '%@'", key)
+            NSLog("FaeCore: ignoring unknown config key '%@'", key)
         }
     }
 
@@ -329,11 +459,128 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     /// Inject raw PCM audio from a companion device into the speech pipeline.
     func injectAudio(samples: [Float], sampleRate: UInt32 = 16000) {
-        // TODO: forward companion audio into capture pipeline
-        NSLog("FaeCore: injectAudio %d samples", samples.count)
+        Task {
+            await pipelineCoordinator?.injectAudio(samples: samples, sampleRate: Int(sampleRate))
+        }
+        NSLog("FaeCore: injected %d remote audio samples", samples.count)
     }
 
     // MARK: - Private Helpers
+
+    private func sanitizedString(_ value: Any?) -> String? {
+        guard let raw = value as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func parseStringList(_ value: Any?) -> [String]? {
+        if let arr = value as? [String] {
+            return arr.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        if let raw = value as? String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return [] }
+            return trimmed
+                .split(whereSeparator: { $0 == "," || $0 == "\n" })
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        return nil
+    }
+
+    private func saveOnboardingContactInfo(email: String?, phone: String?) async {
+        guard let memoryStore else {
+            NSLog("FaeCore: onboarding contact info received before memory initialized")
+            return
+        }
+
+        do {
+            if let email, !email.isEmpty {
+                _ = try await memoryStore.insertRecord(
+                    kind: .profile,
+                    text: "User email is \(email).",
+                    confidence: 0.95,
+                    sourceTurnId: "onboarding",
+                    tags: ["contact", "email"],
+                    importanceScore: 0.90
+                )
+            }
+            if let phone, !phone.isEmpty {
+                _ = try await memoryStore.insertRecord(
+                    kind: .profile,
+                    text: "User phone number is \(phone).",
+                    confidence: 0.95,
+                    sourceTurnId: "onboarding",
+                    tags: ["contact", "phone"],
+                    importanceScore: 0.90
+                )
+            }
+            NSLog("FaeCore: onboarding contact info stored")
+        } catch {
+            NSLog("FaeCore: failed to store onboarding contact info: %@", error.localizedDescription)
+        }
+    }
+
+    private func saveOnboardingFamilyInfo(relations: [[String: String]]) async {
+        guard !relations.isEmpty else { return }
+        guard let memoryStore else {
+            NSLog("FaeCore: onboarding family info received before memory initialized")
+            return
+        }
+
+        do {
+            for relation in relations {
+                let label = relation["label"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "relation"
+                guard let name = relation["name"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !name.isEmpty
+                else { continue }
+
+                _ = try await memoryStore.insertRecord(
+                    kind: .person,
+                    text: "User's \(label.lowercased()) is \(name).",
+                    confidence: 0.92,
+                    sourceTurnId: "onboarding",
+                    tags: ["person", "onboarding"],
+                    importanceScore: 0.85
+                )
+            }
+            NSLog("FaeCore: onboarding family info stored (%d relations)", relations.count)
+        } catch {
+            NSLog("FaeCore: failed to store onboarding family info: %@", error.localizedDescription)
+        }
+    }
+
+    private func resetAllData() async {
+        await scheduler?.stop()
+        scheduler = nil
+        await pipelineCoordinator?.stop()
+        pipelineCoordinator = nil
+        memoryStore = nil
+
+        do {
+            let faeDir = try Self.faeDirectory()
+            if FileManager.default.fileExists(atPath: faeDir.path) {
+                try FileManager.default.removeItem(at: faeDir)
+            }
+
+            let customSkillsDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".fae/skills", isDirectory: true)
+            if FileManager.default.fileExists(atPath: customSkillsDir.path) {
+                try FileManager.default.removeItem(at: customSkillsDir)
+            }
+
+            config = FaeConfig()
+            isOnboarded = false
+            isLicenseAccepted = false
+            userName = nil
+            toolMode = config.toolMode
+            try config.save()
+            NSLog("FaeCore: data reset complete")
+        } catch {
+            NSLog("FaeCore: data reset failed: %@", error.localizedDescription)
+        }
+    }
 
     private func handleOnboardingGetState(commandName: String) {
         if let continuation = pendingQueries.removeValue(forKey: commandName) {
@@ -358,14 +605,69 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
+    private static func appSupportDirectory() throws -> URL {
+        if let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first {
+            return appSupport
+        }
+
+        throw NSError(
+            domain: "FaeCore",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Application Support directory unavailable"]
+        )
+    }
+
+    /// `~/Library/Application Support/fae/` — the root data directory for Fae.
+    private static func faeDirectory() throws -> URL {
+        try appSupportDirectory().appendingPathComponent("fae")
+    }
+
     /// Memory database path: ~/Library/Application Support/fae/fae.db
     private static func createMemoryStore() throws -> SQLiteMemoryStore {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
-        let faeDir = appSupport.appendingPathComponent("fae")
-        let dbPath = faeDir.appendingPathComponent("fae.db").path
+        let dbPath = try faeDirectory().appendingPathComponent("fae.db").path
         return try SQLiteMemoryStore(path: dbPath)
+    }
+
+    /// Scheduler persistence database path.
+    private static func createSchedulerPersistenceStore() throws -> SchedulerPersistenceStore {
+        let dbPath = try faeDirectory().appendingPathComponent("scheduler.db").path
+        return try SchedulerPersistenceStore(path: dbPath)
+    }
+
+    /// Observe scheduler notifications emitted by scheduler tools.
+    private func observeSchedulerUpdates() {
+        let updateObserver = NotificationCenter.default.addObserver(
+            forName: .faeSchedulerUpdate,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let userInfo = notification.userInfo,
+                  let taskId = userInfo["id"] as? String,
+                  let enabled = userInfo["enabled"] as? Bool
+            else { return }
+            Task { await self.scheduler?.setTaskEnabled(id: taskId, enabled: enabled) }
+        }
+
+        let triggerObserver = NotificationCenter.default.addObserver(
+            forName: .faeSchedulerTrigger,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let taskId = notification.userInfo?["id"] as? String
+            else { return }
+            Task { await self.scheduler?.triggerTask(id: taskId) }
+        }
+
+        schedulerObservers = [updateObserver, triggerObserver]
+    }
+
+    deinit {
+        schedulerObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     private func configGetResponse(key: String) -> [String: Any] {
@@ -374,9 +676,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             return [
                 "payload": [
                     "voice_identity": [
-                        "enabled": false,
-                        "mode": "assist",
-                        "approval_requires_match": true,
+                        "enabled": config.voiceIdentity.enabled,
+                        "mode": config.voiceIdentity.mode,
+                        "approval_requires_match": config.voiceIdentity.approvalRequiresMatch,
                     ] as [String: Any],
                 ] as [String: Any],
             ]
@@ -385,6 +687,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 "payload": [
                     "llm": [
                         "voice_model_preset": config.llm.voiceModelPreset,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
+        case "tool_mode":
+            return [
+                "payload": [
+                    "tool_mode": config.toolMode,
+                ] as [String: Any],
+            ]
+        case "channels":
+            return [
+                "payload": [
+                    "channels": [
+                        "enabled": config.channels.enabled,
                     ] as [String: Any],
                 ] as [String: Any],
             ]

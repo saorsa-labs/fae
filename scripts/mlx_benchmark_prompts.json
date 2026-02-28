@@ -1,0 +1,69 @@
+{
+  "no_think_test": [
+    "What is the capital of France?",
+    "Explain quantum computing in one sentence.",
+    "What is 17 * 23?",
+    "Name three planets in our solar system.",
+    "What year did World War II end?"
+  ],
+  "tool_schemas": "calendar(action: str, title?: str, date?: str, time?: str) — Create, list, or search calendar events.\nreminders(action: str, title?: str, due?: str) — Create or list reminders.\nweb_search(query: str) — Search the web via DuckDuckGo.\nfetch_url(url: str) — Fetch and extract content from a URL.\nmail(action: str, to?: str, subject?: str, body?: str) — Read or send email.\ncontacts(action: str, name?: str) — Search or list contacts.\nnotes(action: str, title?: str, body?: str) — Create or search notes.\nread(path: str) — Read a file from disk.\nwrite(path: str, content: str) — Write content to a file.\nedit(path: str, search: str, replace: str) — Find and replace in a file.\nbash(command: str) — Run a shell command.\nself_config(action: str, text?: str) — Read or modify custom instructions.",
+  "tool_calling": [
+    {
+      "prompt": "What's on my calendar tomorrow?",
+      "expected_tool": "calendar"
+    },
+    {
+      "prompt": "Remind me to buy groceries at 5pm",
+      "expected_tool": "reminders"
+    },
+    {
+      "prompt": "Search the web for the latest news about Apple",
+      "expected_tool": "web_search"
+    },
+    {
+      "prompt": "Send an email to john@example.com saying I'll be late",
+      "expected_tool": "mail"
+    },
+    {
+      "prompt": "What's David's phone number?",
+      "expected_tool": "contacts"
+    },
+    {
+      "prompt": "Create a note called Shopping List with milk, eggs, bread",
+      "expected_tool": "notes"
+    },
+    {
+      "prompt": "Read the file at ~/Documents/todo.txt",
+      "expected_tool": "read"
+    },
+    {
+      "prompt": "Can you look something up for me about quantum computing?",
+      "expected_tool": "web_search"
+    },
+    {
+      "prompt": "How are you feeling today?",
+      "expected_tool": "none"
+    },
+    {
+      "prompt": "Tell me a joke about programming",
+      "expected_tool": "none"
+    }
+  ],
+  "sampling_quality": [
+    "What's the weather like today?",
+    "What is the capital of France?",
+    "What year was the Eiffel Tower built?",
+    "How many continents are there?",
+    "Name three primary colors.",
+    "Tell me about Scotland — what makes it special?",
+    "What are some good camping tips for beginners?",
+    "Explain how a rainbow forms in simple terms.",
+    "What should I cook for dinner tonight? I like Italian food.",
+    "Recommend a good book for someone who likes science fiction.",
+    "Set a reminder for my dentist appointment next Tuesday at 2pm.",
+    "What events do I have this week?",
+    "Search for the best coffee shops near me.",
+    "Send a message to Sarah saying I'm running 10 minutes late.",
+    "Write a haiku about the ocean."
+  ]
+}

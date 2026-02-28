@@ -48,6 +48,7 @@ struct MemoryRecord: Sendable {
     var importanceScore: Float?
     var staleAfterSecs: UInt64?
     var metadata: String?
+    var cachedEmbedding: [Float]?
 }
 
 struct MemoryAuditEntry: Sendable {
@@ -73,7 +74,7 @@ struct MemoryCaptureReport: Sendable {
 // MARK: - Constants
 
 enum MemoryConstants {
-    static let schemaVersion: UInt32 = 3
+    static let schemaVersion: UInt32 = 4
     static let maxRecordTextLen: Int = 32_768
     static let truncationSuffix: String = " [truncated]"
 
@@ -87,6 +88,7 @@ enum MemoryConstants {
     // Lexical scoring
     static let scoreEmptyQueryBaseline: Float = 0.20
     static let scoreConfidenceWeight: Float = 0.20
+    static let scoreImportanceWeight: Float = 0.15
     static let scoreFreshnessWeight: Float = 0.10
     static let scoreKindBonusProfile: Float = 0.05
     static let scoreKindBonusFact: Float = 0.03
@@ -140,10 +142,22 @@ func scoreRecord(_ record: MemoryRecord, queryTokens: [String]) -> Float {
 
     score += MemoryConstants.scoreConfidenceWeight * min(max(record.confidence, 0), 1)
 
+    // Importance scoring — use stored importanceScore when available.
+    if let importance = record.importanceScore {
+        score += MemoryConstants.scoreImportanceWeight * min(max(importance, 0), 1)
+    }
+
+    // Exponential temporal decay with kind-gated half-lives.
     let now = UInt64(Date().timeIntervalSince1970)
     if record.updatedAt > 0, record.updatedAt <= now {
         let ageDays = Float(now - record.updatedAt) / MemoryConstants.secsPerDay
-        let freshness = 1.0 / (1.0 + ageDays)
+        let halfLife: Float = switch record.kind {
+        case .episode: 30
+        case .fact, .interest, .commitment, .event, .person: 180
+        case .profile: 365
+        }
+        let decay = exp(-0.693 * ageDays / halfLife)
+        let freshness = 0.7 + 0.3 * decay  // floors at 0.7 so old memories still surface
         score += MemoryConstants.scoreFreshnessWeight * freshness
     }
 

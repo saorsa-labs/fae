@@ -1,8 +1,11 @@
 # ADR-003: Local-Only LLM Inference
 
-**Status:** Accepted
+**Status:** Superseded (historical)
 **Date:** 2026-02-13
-**Scope:** LLM backend (`src/llm/`, `src/config.rs`, `src/personality.rs`, `src/fae_llm/`)
+**Scope:** Rust-era LLM backend (`src/llm/`, `src/config.rs`, `src/personality.rs`, `src/fae_llm/`)
+
+> Historical note: this ADR documents the earlier Rust stack.
+> Current production model orchestration is Swift-native in `native/macos/Fae`.
 
 ## Context
 

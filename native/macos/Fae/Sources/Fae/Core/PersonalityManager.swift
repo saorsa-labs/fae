@@ -156,35 +156,17 @@ enum PersonalityManager {
 
     private static var ackCounter: Int = 0
 
-    static func nextThinkingAcknowledgment() -> String {
-        let phrase = thinkingAcknowledgments[ackCounter % thinkingAcknowledgments.count]
+    private static func nextPhrase(from array: [String]) -> String {
+        let phrase = array[ackCounter % array.count]
         ackCounter += 1
         return phrase
     }
 
-    static func nextApprovalGranted() -> String {
-        let phrase = approvalGranted[ackCounter % approvalGranted.count]
-        ackCounter += 1
-        return phrase
-    }
-
-    static func nextApprovalDenied() -> String {
-        let phrase = approvalDenied[ackCounter % approvalDenied.count]
-        ackCounter += 1
-        return phrase
-    }
-
-    static func nextApprovalTimeout() -> String {
-        let phrase = approvalTimeout[ackCounter % approvalTimeout.count]
-        ackCounter += 1
-        return phrase
-    }
-
-    static func nextApprovalAmbiguous() -> String {
-        let phrase = approvalAmbiguous[ackCounter % approvalAmbiguous.count]
-        ackCounter += 1
-        return phrase
-    }
+    static func nextThinkingAcknowledgment() -> String { nextPhrase(from: thinkingAcknowledgments) }
+    static func nextApprovalGranted() -> String { nextPhrase(from: approvalGranted) }
+    static func nextApprovalDenied() -> String { nextPhrase(from: approvalDenied) }
+    static func nextApprovalTimeout() -> String { nextPhrase(from: approvalTimeout) }
+    static func nextApprovalAmbiguous() -> String { nextPhrase(from: approvalAmbiguous) }
 
     // MARK: - Approval Prompt Formatting
 
@@ -239,13 +221,7 @@ enum PersonalityManager {
         var parts: [String] = []
 
         // 1. Core prompt.
-        if voiceOptimized {
-            parts.append(voiceCorePrompt)
-        } else {
-            // Full prompt would be loaded from Prompts/system_prompt.md bundle resource.
-            // For now, use the voice prompt as fallback.
-            parts.append(voiceCorePrompt)
-        }
+        parts.append(voiceCorePrompt)
 
         // 2. Vision.
         if visionCapable {
@@ -273,10 +249,16 @@ enum PersonalityManager {
                 """)
         }
 
-        // 6. Permission context.
+        // 6. Current date/time.
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        parts.append("Current date and time: \(dateFormatter.string(from: Date()))")
+
+        // 7. Permission context.
         parts.append(PermissionStatusProvider.promptFragment())
 
-        // 7. Custom user instructions (persisted personality preferences).
+        // 8. Custom user instructions (persisted personality preferences).
         let customInstructions = loadCustomInstructions()
         if !customInstructions.isEmpty {
             parts.append("""
@@ -285,7 +267,7 @@ enum PersonalityManager {
                 """)
         }
 
-        // 8. Python / uv capability + self-modification + proactive behavior + roleplay (only when tools are available).
+        // 9. Python / uv capability + self-modification + proactive behavior + roleplay (only when tools are available).
         if toolSchemas != nil {
             parts.append(pythonCapabilityPrompt)
             parts.append(selfModificationPrompt)
@@ -293,7 +275,7 @@ enum PersonalityManager {
             parts.append(roleplayPrompt)
         }
 
-        // 9. Tool schemas (enables inline tool use via <tool_call> markup).
+        // 10. Tool schemas (enables inline tool use via <tool_call> markup).
         if let schemas = toolSchemas, !schemas.isEmpty {
             parts.append("""
                 Tool usage:

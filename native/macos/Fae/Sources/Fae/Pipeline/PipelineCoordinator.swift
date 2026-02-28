@@ -50,6 +50,7 @@ actor PipelineCoordinator {
     private let registry: ToolRegistry
     private let speakerEncoder: CoreMLSpeakerEncoder?
     private let speakerProfileStore: SpeakerProfileStore?
+    private let toolAnalytics: ToolAnalytics?
 
     // MARK: - Pipeline State
 
@@ -88,6 +89,7 @@ actor PipelineCoordinator {
 
     private var pipelineStartedAt: Date?
     private var firstAudioLatencyEmitted: Bool = false
+    private let instrumentation = PipelineInstrumentation()
 
     struct PendingBargeIn {
         var capturedAt: Date
@@ -115,7 +117,8 @@ actor PipelineCoordinator {
         approvalManager: ApprovalManager? = nil,
         registry: ToolRegistry,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
-        speakerProfileStore: SpeakerProfileStore? = nil
+        speakerProfileStore: SpeakerProfileStore? = nil,
+        toolAnalytics: ToolAnalytics? = nil
     ) {
         self.eventBus = eventBus
         self.capture = capture
@@ -130,6 +133,7 @@ actor PipelineCoordinator {
         self.registry = registry
         self.speakerEncoder = speakerEncoder
         self.speakerProfileStore = speakerProfileStore
+        self.toolAnalytics = toolAnalytics
 
         // Configure VAD from config.
         vad.threshold = config.vad.threshold
@@ -200,6 +204,18 @@ actor PipelineCoordinator {
     /// Used for system messages like the first-launch greeting.
     func speakDirect(_ text: String) async {
         await speakText(text, isFinal: true)
+    }
+
+    /// Inject remote PCM audio into the speech pipeline (e.g. companion handoff).
+    func injectAudio(samples: [Float], sampleRate: Int = 16_000) async {
+        guard !samples.isEmpty else { return }
+        let sr = max(sampleRate, 1)
+        let segment = SpeechSegment(
+            samples: samples,
+            sampleRate: sr,
+            durationSeconds: Double(samples.count) / Double(sr)
+        )
+        await handleSpeechSegment(segment)
     }
 
     // MARK: - Gate Control
@@ -566,8 +582,15 @@ actor PipelineCoordinator {
                 if roleplayActive {
                     let segments = voiceTagStripper.process(visible)
                     for segment in segments {
-                        let voice = await segment.character.asyncFlatMap {
-                            await RoleplaySessionStore.shared.voiceForCharacter($0)
+                        let voice: String?
+                        if let character = segment.character {
+                            let matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
+                            if matched == nil {
+                                NSLog("PipelineCoordinator: unassigned character '%@' — using narrator voice", character)
+                            }
+                            voice = matched
+                        } else {
+                            voice = nil
                         }
                         let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                         if !cleaned.isEmpty {
@@ -624,8 +647,15 @@ actor PipelineCoordinator {
                 let voiceRemaining = voiceTagStripper.process(remaining) + voiceTagStripper.flush()
                 var spokeSomething = false
                 for segment in voiceRemaining {
-                    let voice = await segment.character.asyncFlatMap {
-                        await RoleplaySessionStore.shared.voiceForCharacter($0)
+                    let voice: String?
+                    if let character = segment.character {
+                        let matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
+                        if matched == nil {
+                            NSLog("PipelineCoordinator: unassigned character '%@' — using narrator voice", character)
+                        }
+                        voice = matched
+                    } else {
+                        voice = nil
                     }
                     let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                     if !cleaned.isEmpty {
@@ -920,22 +950,53 @@ actor PipelineCoordinator {
             return .error("Unknown tool: \(call.name)")
         }
 
-        // Check approval if required.
-        if tool.requiresApproval {
+        let voiceDecision = VoiceIdentityPolicy.evaluateSensitiveAction(
+            config: config.speaker,
+            isOwner: currentSpeakerIsOwner,
+            risk: tool.riskLevel,
+            toolName: call.name
+        )
+
+        switch voiceDecision {
+        case .allow:
+            break
+        case .requireStepUp(let message):
             if let manager = approvalManager {
                 let approved = await manager.requestApproval(
                     toolName: call.name,
-                    description: "Execute \(call.name)"
+                    description: "Step-up: \(message)"
                 )
                 if !approved {
                     return .error("Tool execution denied by user.")
                 }
+            } else {
+                return .error(message)
+            }
+        case .deny(let message):
+            return .error(message)
+        }
+
+        // Risk policy + approval routing.
+        let decision = ToolRiskPolicy.decision(for: tool)
+        if case .requireApproval(let reason) = decision {
+            if let manager = approvalManager {
+                let approved = await manager.requestApproval(
+                    toolName: call.name,
+                    description: "Execute \(call.name) — \(reason)"
+                )
+                if !approved {
+                    return .error("Tool execution denied by user.")
+                }
+            } else {
+                return .error("Tool requires approval, but no approval manager is available.")
             }
         }
 
-        // Execute with timeout.
+        // Execute with timeout and analytics.
+        let startTime = Date()
+        let result: ToolResult
         do {
-            return try await withThrowingTaskGroup(of: ToolResult.self) { group in
+            result = try await withThrowingTaskGroup(of: ToolResult.self) { group in
                 group.addTask {
                     try await tool.execute(input: call.arguments)
                 }
@@ -943,13 +1004,36 @@ actor PipelineCoordinator {
                     try await Task.sleep(nanoseconds: UInt64(Self.toolTimeoutSeconds * 1_000_000_000))
                     return .error("Tool timed out after \(Int(Self.toolTimeoutSeconds))s")
                 }
-                let result = try await group.next()!
+                guard let r = try await group.next() else {
+                    group.cancelAll()
+                    return .error("Tool execution did not return a result")
+                }
                 group.cancelAll()
-                return result
+                return r
             }
         } catch {
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            if let analytics = toolAnalytics {
+                await analytics.record(
+                    toolName: call.name, success: false, latencyMs: latencyMs,
+                    approved: true, error: error.localizedDescription
+                )
+            }
             return .error("Tool error: \(error.localizedDescription)")
         }
+
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        if let analytics = toolAnalytics {
+            await analytics.record(
+                toolName: call.name,
+                success: !result.isError,
+                latencyMs: latencyMs,
+                approved: true,
+                error: result.isError ? result.output : nil
+            )
+        }
+
+        return result
     }
 
     // MARK: - Helpers

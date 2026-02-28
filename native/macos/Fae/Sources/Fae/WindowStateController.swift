@@ -75,7 +75,7 @@ final class WindowStateController: ObservableObject {
             window.isOpaque = false
 
             // ── Frame on primary screen ──────────────────────────────
-            let screen = NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
+            guard let screen = NSScreen.screens.first ?? NSScreen.main else { return }
             let visible = screen.visibleFrame
             let size = NSSize(width: compactWidth, height: compactHeight)
             let x = visible.midX - size.width / 2
@@ -139,7 +139,7 @@ final class WindowStateController: ObservableObject {
 
         guard let window else { return }
 
-        let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.screens[0]
+        guard let screen = window.screen ?? NSScreen.screens.first else { return }
         let visibleFrame = screen.visibleFrame
         let targetSize = NSSize(width: collapsedSize, height: collapsedSize)
 
@@ -185,7 +185,7 @@ final class WindowStateController: ObservableObject {
         let currentFrame = window.frame
         let originX = currentFrame.midX - targetSize.width / 2
         let originY = currentFrame.midY - targetSize.height / 2
-        let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.screens[0]
+        guard let screen = window.screen ?? NSScreen.screens.first else { return }
         let visible = screen.visibleFrame
         let clampedX = max(visible.minX + collapsedEdgePadding,
                            min(originX, visible.maxX - targetSize.width - collapsedEdgePadding))
@@ -216,7 +216,7 @@ final class WindowStateController: ObservableObject {
         window.level = .normal
         window.minSize = NSSize(width: 280, height: 400)
 
-        let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.screens[0]
+        guard let screen = window.screen ?? NSScreen.screens.first else { return }
         let targetSize = NSSize(width: compactWidth, height: compactHeight)
         let visibleFrame = screen.visibleFrame
 
@@ -278,7 +278,7 @@ final class WindowStateController: ObservableObject {
 
     func computePanelSide() {
         guard let window else { return }
-        let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.screens[0]
+        guard let screen = window.screen ?? NSScreen.screens.first else { return }
         let screenCenterX = screen.visibleFrame.midX
         let windowCenterX = window.frame.midX
 

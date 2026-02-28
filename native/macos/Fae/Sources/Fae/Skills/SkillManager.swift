@@ -12,8 +12,10 @@ actor SkillManager {
     /// Skill directory: ~/Library/Application Support/fae/skills/
     static var skillsDirectory: URL {
         let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
         return appSupport.appendingPathComponent("fae/skills")
     }
 
@@ -74,22 +76,55 @@ actor SkillManager {
         runningProcesses[skillName] = process
 
         // Send request via stdin.
-        stdin.fileHandleForWriting.write(requestStr.data(using: .utf8)!)
+        guard let requestBytes = requestStr.data(using: .utf8) else {
+            runningProcesses.removeValue(forKey: skillName)
+            process.terminate()
+            throw SkillError.serializationFailed
+        }
+        stdin.fileHandleForWriting.write(requestBytes)
         stdin.fileHandleForWriting.closeFile()
 
-        process.waitUntilExit()
-        runningProcesses.removeValue(forKey: skillName)
-
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: outData, encoding: .utf8) ?? ""
-
-        guard process.terminationStatus == 0 else {
+        let timeoutSeconds = 30
+        let outputTask = Task<(Data, Data), Never> {
+            let outData = stdout.fileHandleForReading.readDataToEndOfFile()
             let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            let errStr = String(data: errData, encoding: .utf8) ?? ""
-            throw SkillError.executionFailed(skillName, errStr)
+            return (outData, errData)
         }
 
-        return output
+        do {
+            let status = try await waitForExit(process: process, timeoutSeconds: timeoutSeconds)
+            runningProcesses.removeValue(forKey: skillName)
+
+            let (outData, errData) = await outputTask.value
+            let output = String(data: outData, encoding: .utf8) ?? ""
+
+            guard status == 0 else {
+                let errStr = String(data: errData, encoding: .utf8) ?? ""
+                throw SkillError.executionFailed(skillName, errStr)
+            }
+
+            return output
+        } catch {
+            if process.isRunning {
+                process.terminate()
+            }
+            runningProcesses.removeValue(forKey: skillName)
+            _ = await outputTask.value
+            throw error
+        }
+    }
+
+    private func waitForExit(process: Process, timeoutSeconds: Int) async throws -> Int32 {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        while process.isRunning {
+            try Task.checkCancellation()
+            if Date() >= deadline {
+                process.terminate()
+                throw SkillError.timedOut(timeoutSeconds)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return process.terminationStatus
     }
 
     /// Check health of all running skill processes.
@@ -105,12 +140,14 @@ actor SkillManager {
         case notFound(String)
         case serializationFailed
         case executionFailed(String, String)
+        case timedOut(Int)
 
         var errorDescription: String? {
             switch self {
             case .notFound(let name): return "Skill not found: \(name)"
             case .serializationFailed: return "Failed to serialize skill request"
             case .executionFailed(let name, let err): return "Skill '\(name)' failed: \(err)"
+            case .timedOut(let seconds): return "Skill timed out after \(seconds)s"
             }
         }
     }

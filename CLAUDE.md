@@ -25,7 +25,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker│
 │                         │              │                     │
 │                         │              ├── Memory (SQLite)    │
-│                         │              ├── Tools (16 built-in)│
+│                         │              ├── Tools (18 built-in)│
 │                         │              ├── Scheduler          │
 │                         │              └── Self-Config        │
 │                         │                                    │
@@ -137,7 +137,7 @@ Implementation: `Scheduler/FaeScheduler.swift`
 
 ## Tool system
 
-Tools are registered dynamically in `ToolRegistry.buildDefault()`. Full inventory (17 tools):
+Tools are registered dynamically in `ToolRegistry.buildDefault()`. Full inventory (18 tools):
 
 | Category | Tools |
 |----------|-------|

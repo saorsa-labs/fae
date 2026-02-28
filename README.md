@@ -127,6 +127,7 @@ Built-in scheduled tasks:
 | `stale_relationships` | Weekly | Detect relationships needing check-in |
 | `morning_briefing` | Daily at 08:00 | Compile and deliver morning briefing |
 | `skill_proposals` | Daily at 11:00 | Detect skill opportunities from interests |
+| `skill_health_check` | Every 5 minutes | Validate Python skill runtime health |
 
 ## Architecture
 
@@ -139,7 +140,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker │
 │                         │              │                      │
 │                         │              ├── Memory (SQLite)     │
-│                         │              ├── Tools (16 built-in) │
+│                         │              ├── Tools (18 built-in) │
 │                         │              ├── Scheduler           │
 │                         │              └── Self-Config         │
 │                         │                                     │
@@ -182,14 +183,14 @@ The unified pipeline handles everything in a single pass — the LLM decides whe
 7. **TTS** — Qwen3-TTS with voice cloning, sentence-level streaming
 8. **Playback** — with barge-in interruption support
 
-### Tools (16 Built-in)
+### Tools (18 Built-in)
 
 | Category | Tools |
 |---|---|
-| Core | `read`, `write`, `edit`, `bash`, `self_config` |
-| Web | `web_search` (DuckDuckGo), `fetch_url` (with content extraction) |
+| Core + Web | `read`, `write`, `edit`, `bash`, `self_config`, `web_search`, `fetch_url` |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
+| Roleplay | `roleplay` |
 
 The LLM decides when to use tools — no separate routing or intent classification needed.
 

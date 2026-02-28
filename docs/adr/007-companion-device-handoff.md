@@ -1,8 +1,11 @@
 # ADR-007: Companion Device Handoff (iPhone, iPad, Apple Watch)
 
-**Status:** Proposed
+**Status:** Historical proposal (pre-Swift-rebuild)
 **Date:** 2026-02-23
-**Scope:** Cross-device architecture — Mac (brain), iOS/watchOS (thin companions), relay protocol, shared UI components
+**Scope:** Rust-era cross-device architecture proposal
+
+> Historical note: this proposal references embedded-Rust/Mode-B assumptions from the prior stack.
+> Current companion integration should be designed against the Swift runtime in `native/macos/Fae`.
 
 ## Context
 

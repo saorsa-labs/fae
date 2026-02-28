@@ -1,125 +1,95 @@
-# AGENTS.md — Fae Engineering Guardrails
+# AGENTS.md — Fae Swift Engineering Guardrails
 
 This file defines implementation guardrails for agents modifying Fae.
 
-## Memory is a core subsystem
+## Current architecture (authoritative)
 
-Treat memory as production-critical.
+Fae is a **pure Swift** macOS app in `native/macos/Fae`.
+
+- No embedded Rust core in production
+- No C ABI / `libfae` dependency in active runtime path
+- Build/test with SwiftPM:
+
+```bash
+cd native/macos/Fae
+swift build
+swift test
+```
+
+Historical Rust-era docs under `docs/adr/*` and `legacy/rust-core/` are archival context only.
+
+---
+
+## Memory is production-critical
+
+Treat memory as a core subsystem.
 
 Non-negotiables:
 
-- Preserve backward compatibility of on-disk memory unless a migration is added.
-- Never silently overwrite conflicting durable facts; supersede with lineage.
-- Keep recall and capture fully automatic in normal conversation flow.
+- Preserve on-disk compatibility unless a migration is added.
+- Never silently overwrite conflicting durable facts; use supersession lineage.
+- Keep recall + capture automatic in normal conversation flow.
 - Keep memory edits auditable.
-- Keep mutation paths panic-free and unwrap/expect-free in non-test code.
+- Keep non-test mutation paths panic-free and force-unwrap-free where feasible.
 
 Behavioral truth sources:
 
 - `Prompts/system_prompt.md`
 - `SOUL.md`
-- `~/.fae/memory/`
 - `docs/guides/Memory.md`
 
-Implementation touchpoints (not behavioral truth):
+Implementation touchpoints:
 
-- `src/memory.rs`
-- `src/pipeline/coordinator.rs`
-- `src/scheduler/tasks.rs`
-- `src/runtime.rs`
+- `native/macos/Fae/Sources/Fae/Memory/MemoryOrchestrator.swift`
+- `native/macos/Fae/Sources/Fae/Memory/SQLiteMemoryStore.swift`
+- `native/macos/Fae/Sources/Fae/Memory/MemoryTypes.swift`
+- `native/macos/Fae/Sources/Fae/Scheduler/FaeScheduler.swift`
 
-## Memory data contracts
+### Memory storage contract
 
 Storage root:
 
-- `~/.fae/memory/`
+- `~/Library/Application Support/fae/`
 
-Required files:
+Primary files:
 
-- `manifest.toml`
-- `records.jsonl`
-- `audit.jsonl`
-
-Compatibility files:
-
-- `~/.fae/memory/primary_user.md`
-- `~/.fae/memory/people.md`
+- `fae.db` (SQLite)
+- `backups/` (rotating DB backups)
 
 Record semantics:
 
-- kinds: `profile`, `fact`, `episode`
+- kinds: `profile`, `fact`, `episode`, `event`, `person`, `interest`, `commitment`
 - status: `active`, `superseded`, `invalidated`, `forgotten`
 - lineage: `supersedes`
 
-## Runtime memory lifecycle
+---
 
-Per completed turn:
+## Scheduler cadence (current Swift runtime)
 
-1. Recall durable relevant memory before generation.
-2. Inject bounded `<memory_context>`.
-3. Capture turn episode and durable candidates after generation.
-4. Resolve conflicts via supersession.
-5. Apply retention policy to episodic memories.
+- Tick: every 60s (`FaeScheduler.runDailyChecks()` + repeating timers)
+- Built-ins:
+  - `check_fae_update` every 6h
+  - `memory_migrate` every 1h
+  - `memory_reindex` every 3h
+  - `memory_reflect` every 6h
+  - `memory_gc` daily 03:30
+  - `memory_backup` daily 02:00
+  - `noise_budget_reset` daily 00:00
+  - `morning_briefing` daily (configurable hour)
+  - `skill_proposals` daily (configurable hour)
+  - `stale_relationships` weekly
+  - `skill_health_check` every 5m
 
-Main-screen UX policy:
-
-- memory telemetry is suppressed from the main conversation surface
-- memory telemetry can appear in canvas/event surfaces
-
-## Scheduler cadence (current implementation)
-
-Scheduler tick:
-
-- every 60 seconds (`src/scheduler/runner.rs`)
-
-Built-in update task:
-
-- `check_fae_update`: every 6 hours
-
-Built-in memory tasks:
-
-- `memory_migrate`: every 1 hour
-- `memory_reindex`: every 3 hours
-- `memory_reflect`: every 6 hours
-- `memory_gc`: daily at 03:30 UTC
-
-## Proactive automation behavior policy
-
-Proactive automation must be useful and quiet.
-
-Rules:
-
-- Prefer batched summaries over frequent interruptions.
-- Surface only actionable or high-signal updates.
-- Collapse repetitive non-urgent events into digest-style output.
-- Reserve immediate interruption for urgent/severe items.
-- Keep verbose maintenance details off primary conversation surface.
-
-## Personalization + interview roadmap contract
-
-When implementing personalization/interview flows:
-
-- Use explicit consent for profile collection.
-- Persist interview-derived facts as tagged durable memory records.
-- Track confidence and source turn for each derived fact.
-- Re-interview only when confidence drops, information is stale, or user requests updates.
-- Support explicit correction and forget flows.
-
-Design plan lives in:
-
-- `docs/personalization-interviews-and-proactive-plan.md`
+---
 
 ## Tooling reality
 
-In-repo registered core tools:
+Registered built-ins (ToolRegistry):
 
-- `read`
-- `write`
-- `edit`
-- `bash`
-- `web_search` (when `web-search` feature is enabled)
-- `fetch_url` (when `web-search` feature is enabled)
-- canvas tools when canvas is active (`canvas_render`, `canvas_interact`, `canvas_export`)
+- Core/web: `read`, `write`, `edit`, `bash`, `self_config`, `web_search`, `fetch_url`
+- Apple: `calendar`, `reminders`, `contacts`, `mail`, `notes`
+- Scheduler: `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger`
+- Roleplay: `roleplay`
 
 Tool modes:
 
@@ -129,93 +99,31 @@ Tool modes:
 - `full`
 - `full_no_approval`
 
-## Native app architecture (embedded Rust core)
+---
 
-Fae's macOS app embeds the Rust core directly via C ABI. The app is the brain.
+## Proactive behavior policy
 
-### Integration modes
+Proactive automation must stay useful and quiet:
 
-- **Mode A (Embedded)**: Swift links `libfae` as a static library. Rust runs in-process.
-  Zero IPC overhead. This is the production model for Fae.app.
-- **Mode B (IPC)**: External frontends connect via Unix socket (`~/.fae/fae.sock`).
-  Same JSON command/event protocol. For third-party UIs, CLI tools, companion apps.
+- Prefer batched summaries over frequent interruptions.
+- Surface only actionable/high-signal updates.
+- Collapse repetitive, non-urgent events.
+- Reserve immediate interruption for urgent events.
+- Keep low-value maintenance details off the main conversation surface.
 
-### Non-negotiables for native app work
-
-- Never introduce a subprocess/sidecar dependency for the primary Swift→Rust path.
-- The FFI surface (`src/ffi.rs`) must remain thin — only control-plane operations.
-- Data-plane operations (mic capture, STT, LLM, TTS, playback) stay in-process.
-- No PCM audio or high-frequency token deltas across process boundaries.
-- Scheduler authority always lives in the Rust core, never in Swift.
-- Memory writes and audit logs always go through the Rust core, never Swift-side.
-- The embedded core inherits macOS sandbox/entitlements naturally.
-
-### Current state
-
-`EmbeddedCoreSender.swift` calls `extern "C"` functions in `src/ffi.rs` directly
-via C ABI. The Rust core runs in-process — no subprocess, no IPC for the primary path.
-`ProcessCommandSender.swift` is retained only as a fallback reference and is not used
-in production.
-
-### File map
-
-Swift-side:
-
-| File | Role |
-|------|------|
-| `native/macos/.../FaeApp.swift` | App entry, environment wiring, embedded core init |
-| `native/macos/.../EmbeddedCoreSender.swift` | C ABI bridge to `libfae` (production sender) |
-| `native/macos/.../HostCommandBridge.swift` | NotificationCenter → command sender |
-| `native/macos/.../WindowStateController.swift` | Adaptive window modes (collapsed/compact) |
-| `native/macos/.../AuxiliaryWindowManager.swift` | Independent conversation & canvas NSPanels |
-| `native/macos/.../ConversationWebView.swift` | WKWebView bridge for orb animation + input bar |
-
-Rust-side:
-
-| File | Role |
-|------|------|
-| `src/ffi.rs` | C ABI entry points (`extern "C"` functions) |
-| `src/host/contract.rs` | Command/event envelope schemas (shared by both modes) |
-| `src/host/channel.rs` | Command router and `DeviceTransferHandler` trait |
-| `src/host/handler.rs` | Runtime lifecycle, pipeline management |
-| `src/host/stdio.rs` | Stdin/stdout bridge (Mode B / IPC only) |
-| `src/bin/host_bridge.rs` | Headless bridge binary (Mode B / `faed` daemon) |
-
-Architecture docs:
-
-- `docs/adr/002-embedded-rust-core.md` — architecture spec, FFI surface, latency SLOs
+---
 
 ## Testing guardrails
 
-### Single-binary integration tests
-
-All integration tests live in `tests/integration/` as modules of a single binary (`tests/integration/main.rs`). This prevents OOM from linking 29+ separate binaries against the ML stack.
-
-Rules:
-
-- New integration tests go in `tests/integration/<name>.rs`, NOT as new top-level `tests/*.rs` files.
-- Add the corresponding `mod <name>;` to `tests/integration/main.rs`.
-- Shared test helpers go in `tests/integration/helpers.rs`.
-- Never use `cargo test --all-features` — it enables feature combinations that cause 300GB+ RAM usage.
-- Use `just test-ci` (or `CARGO_BUILD_JOBS=2 cargo test`) on memory-constrained machines.
-- To run a single integration module: `just test-integration <module_name>` or `cargo test --test integration <module_name>::`.
-
-## Quality gates
-
-Before shipping memory/proactive/personalization changes:
+- Run before shipping Swift changes:
 
 ```bash
-cargo fmt --all
-cargo clippy -- -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
-cargo test
+cd native/macos/Fae
+swift build
+swift test
 ```
 
-For targeted iteration:
+- Integration tests live under:
+  - `native/macos/Fae/Tests/IntegrationTests/`
 
-```bash
-cargo test memory::tests:: -- --nocapture
-cargo test contradiction_resolution_ -- --nocapture
-cargo test llm_stage_ -- --nocapture
-```
-
-On macOS, set SDK sysroot env for bindgen if required (see `justfile`).
+- Keep tests deterministic and avoid network dependencies unless explicitly marked live.

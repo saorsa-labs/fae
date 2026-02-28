@@ -1,51 +1,33 @@
-# Scheduler tooling, channels, and permission behavior
+# Scheduler tooling + permission behavior (Swift runtime)
 
-This note summarizes the current runtime behavior for scheduler + tool integration.
+This note documents current scheduler and tool integration in the Swift app.
 
-## Scheduler startup channels
+## Scheduler ownership
 
-At runtime start, the host initializes scheduler channels via:
+Scheduler authority lives in:
 
-- `crate::startup::start_scheduler_with_llm(...)`
+- `native/macos/Fae/Sources/Fae/Scheduler/FaeScheduler.swift`
 
-The host now wires both returned values:
+`FaeCore` wires scheduler lifecycle on runtime start/stop and connects:
 
-- scheduler join handle (`sched_jh`) is stored for lifecycle ownership
-- scheduler result receiver (`sched_rx`) is consumed on a background Tokio task
+- persistence store (`SchedulerPersistenceStore`)
+- optional speak handler (`PipelineCoordinator.speakDirect`)
 
-File:
+## Scheduler tool integration
 
-- `src/host/handler.rs`
+Scheduler tools write/read `~/Library/Application Support/fae/scheduler.json` and coordinate with runtime via notifications:
 
-## Scheduler error surfacing
+- `.faeSchedulerUpdate` → enable/disable task state
+- `.faeSchedulerTrigger` → run task immediately
 
-Scheduler task failures are surfaced as host runtime errors.
+`FaeCore.observeSchedulerUpdates()` consumes both notifications and forwards to `FaeScheduler`.
 
-When the scheduler result channel emits `TaskResult::Error(msg)`, the host sends:
+## Permission layering
 
-- event name: `runtime.error`
-- payload: `{ "source": "scheduler", "error": msg }`
+Tool execution in pipeline uses layered checks:
 
-This keeps scheduler failures visible to GUI/TUI consumers without crashing runtime control flow.
+1. Voice-identity policy (`VoiceIdentityPolicy`)
+2. Tool risk policy (`ToolRiskPolicy`)
+3. Approval workflow (`ApprovalManager`) when required
 
-## Tool + permissions behavior (summary)
-
-Scheduler mutation tooling and approval/permissions paths remain layered:
-
-1. tool registry mode gates which scheduler tools are exposed
-2. mutation-capable tools are wrapped by approval flow when approvals are enabled
-3. shared permission state is threaded through runtime channels so permission updates are observed immediately by gated tools
-
-Related files:
-
-- `src/agent/mod.rs`
-- `src/host/handler.rs`
-- `src/permissions.rs`
-
-## TODO (tool-activity UX polish)
-
-Tool activity feedback in macOS UI is functional but still needs tuning:
-
-- [ ] refine cue loudness/timbre for execute/success/failure sounds
-- [ ] tune status-bubble phrasing/persistence to reduce chatter in rapid tool chains
-- [ ] consider debouncing repeated tool events into a concise summary bubble
+This applies consistently across direct conversation and tool-follow-up turns.

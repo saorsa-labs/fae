@@ -33,12 +33,18 @@ actor AudioCaptureManager {
         // Use native format for the tap to avoid format mismatch crashes,
         // then downsample to 16kHz mono in the tap callback.
         let converter: AVAudioConverter?
-        let targetFormat = AVAudioFormat(
+        guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: Double(Self.targetSampleRate),
             channels: 1,
             interleaved: false
-        )!
+        ) else {
+            throw NSError(
+                domain: "AudioCaptureManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to construct target audio format"]
+            )
+        }
 
         if nativeFormat.sampleRate != Double(Self.targetSampleRate)
             || nativeFormat.channelCount != 1

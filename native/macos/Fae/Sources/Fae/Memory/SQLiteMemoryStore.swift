@@ -53,8 +53,41 @@ actor SQLiteMemoryStore {
                 updated_at       INTEGER NOT NULL DEFAULT 0,
                 importance_score REAL,
                 stale_after_secs INTEGER,
-                metadata         TEXT
+                metadata         TEXT,
+                embedding        BLOB
             )
+            """)
+
+        // Migration: add embedding column if missing (v3 → v4).
+        let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(memory_records)")
+        let columnNames = Set(columns.compactMap { $0["name"] as? String })
+        if !columnNames.contains("embedding") {
+            try db.execute(sql: "ALTER TABLE memory_records ADD COLUMN embedding BLOB")
+        }
+
+        // FTS5 full-text index for fast candidate selection.
+        try db.execute(sql: """
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+                text, content='memory_records', content_rowid='rowid'
+            )
+            """)
+
+        // Triggers to keep FTS in sync.
+        try db.execute(sql: """
+            CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory_records BEGIN
+                INSERT INTO memory_fts(rowid, text) VALUES (new.rowid, new.text);
+            END
+            """)
+        try db.execute(sql: """
+            CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memory_records BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+            END
+            """)
+        try db.execute(sql: """
+            CREATE TRIGGER IF NOT EXISTS memory_fts_update AFTER UPDATE OF text ON memory_records BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+                INSERT INTO memory_fts(rowid, text) VALUES (new.rowid, new.text);
+            END
             """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_records_status ON memory_records(status)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_records_kind ON memory_records(kind)")
@@ -95,7 +128,10 @@ actor SQLiteMemoryStore {
         text: String,
         confidence: Float,
         sourceTurnId: String?,
-        tags: [String]
+        tags: [String],
+        importanceScore: Float? = nil,
+        staleAfterSecs: UInt64? = nil,
+        embedding: [Float]? = nil
     ) throws -> MemoryRecord {
         let now = UInt64(Date().timeIntervalSince1970)
         let record = MemoryRecord(
@@ -107,8 +143,14 @@ actor SQLiteMemoryStore {
             sourceTurnId: sourceTurnId,
             tags: tags,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            importanceScore: importanceScore,
+            staleAfterSecs: staleAfterSecs
         )
+
+        let embeddingData: Data? = embedding.map { floats in
+            floats.withUnsafeBufferPointer { Data(buffer: $0) }
+        }
 
         try dbQueue.write { db in
             let tagsJSON = Self.encodeTags(tags)
@@ -116,8 +158,8 @@ actor SQLiteMemoryStore {
                 sql: """
                     INSERT INTO memory_records
                         (id, kind, status, text, confidence, source_turn_id, tags, supersedes,
-                         created_at, updated_at, importance_score, stale_after_secs, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         created_at, updated_at, importance_score, stale_after_secs, metadata, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     record.id, record.kind.rawValue, record.status.rawValue,
@@ -126,6 +168,7 @@ actor SQLiteMemoryStore {
                     record.createdAt, record.updatedAt,
                     record.importanceScore.map { Double($0) },
                     record.staleAfterSecs, record.metadata,
+                    embeddingData,
                 ]
             )
 
@@ -225,17 +268,53 @@ actor SQLiteMemoryStore {
         }
     }
 
-    // MARK: - Search (Lexical)
+    // MARK: - Search (FTS5 + Lexical Scoring)
 
     func search(query: String, limit: Int, includeInactive: Bool = false) throws -> [MemorySearchHit] {
-        let records = try listRecords(includeInactive: includeInactive)
         let queryTokens = tokenizeForSearch(query)
+
+        // Try FTS5 candidate selection first for efficiency.
+        let candidates: [MemoryRecord]
+        if !queryTokens.isEmpty {
+            candidates = try ftsSearch(query: query, limit: max(limit * 5, 50), includeInactive: includeInactive)
+        } else {
+            candidates = []
+        }
+
+        // Fall back to full scan if FTS returned too few results or query is empty.
+        let records: [MemoryRecord]
+        if candidates.count < limit {
+            records = try listRecords(includeInactive: includeInactive)
+        } else {
+            records = candidates
+        }
 
         var hits = records.map { record in
             MemorySearchHit(record: record, score: scoreRecord(record, queryTokens: queryTokens))
         }
         hits.sort { $0.score > $1.score }
         return Array(hits.prefix(limit))
+    }
+
+    /// FTS5-based candidate selection — returns records matching the query text.
+    private func ftsSearch(query: String, limit: Int, includeInactive: Bool) throws -> [MemoryRecord] {
+        try dbQueue.read { db in
+            // Escape FTS5 special characters and form a simple query.
+            let ftsQuery = tokenizeForSearch(query).joined(separator: " OR ")
+            guard !ftsQuery.isEmpty else { return [] }
+
+            let statusFilter = includeInactive ? "" : "AND r.status = 'active'"
+            let sql = """
+                SELECT r.* FROM memory_records r
+                INNER JOIN memory_fts f ON f.rowid = r.rowid
+                WHERE memory_fts MATCH ?
+                \(statusFilter)
+                ORDER BY rank
+                LIMIT ?
+                """
+            let rows = try Row.fetchAll(db, sql: sql, arguments: [ftsQuery, limit])
+            return rows.map { Self.recordFromRow($0) }
+        }
     }
 
     // MARK: - List
@@ -264,6 +343,23 @@ actor SQLiteMemoryStore {
                     ORDER BY updated_at DESC
                     """,
                 arguments: ["%\"\(tag)\"%"]
+            )
+            return rows.map { Self.recordFromRow($0) }
+        }
+    }
+
+    /// Find active records of a specific kind.
+    func findActiveByKind(_ kind: MemoryKind, limit: Int = 20) throws -> [MemoryRecord] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM memory_records
+                    WHERE status = 'active' AND kind = ?
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                arguments: [kind.rawValue, limit]
             )
             return rows.map { Self.recordFromRow($0) }
         }
@@ -328,6 +424,16 @@ actor SQLiteMemoryStore {
         let tagsStr: String = row["tags"]
         let tags = decodeTags(tagsStr)
 
+        var cachedEmbedding: [Float]?
+        if let data = row["embedding"] as? Data, !data.isEmpty {
+            cachedEmbedding = data.withUnsafeBytes { buffer in
+                guard let baseAddress = buffer.baseAddress else { return nil }
+                let count = data.count / MemoryLayout<Float>.size
+                let floatBuffer = baseAddress.assumingMemoryBound(to: Float.self)
+                return Array(UnsafeBufferPointer(start: floatBuffer, count: count))
+            }
+        }
+
         return MemoryRecord(
             id: row["id"],
             kind: MemoryKind(rawValue: row["kind"] as String) ?? .fact,
@@ -341,7 +447,8 @@ actor SQLiteMemoryStore {
             updatedAt: UInt64(row["updated_at"] as Int64),
             importanceScore: (row["importance_score"] as Double?).map { Float($0) },
             staleAfterSecs: (row["stale_after_secs"] as Int64?).map { UInt64($0) },
-            metadata: row["metadata"]
+            metadata: row["metadata"],
+            cachedEmbedding: cachedEmbedding
         )
     }
 

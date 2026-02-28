@@ -27,9 +27,14 @@ protocol Tool: Sendable {
     var description: String { get }
     var parametersSchema: String { get }
     var requiresApproval: Bool { get }
+    var riskLevel: ToolRiskLevel { get }
+    /// A concrete `<tool_call>` example for the LLM to follow.
+    var example: String { get }
     func execute(input: [String: Any]) async throws -> ToolResult
 }
 
 extension Tool {
     var requiresApproval: Bool { false }
+    var riskLevel: ToolRiskLevel { .medium }
+    var example: String { "" }
 }

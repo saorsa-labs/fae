@@ -107,6 +107,13 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
             throw MLEngineError.notLoaded("SpeakerEncoder: audio too short for mel spectrogram")
         }
 
+        // Liveness check (non-blocking — log only).
+        let liveness = Self.checkLiveness(mel: mel, numFrames: numFrames)
+        if liveness.isSuspicious {
+            NSLog("CoreMLSpeakerEncoder: liveness warning — low spectral variance (%.4f) and low high-freq ratio (%.4f), possible replay",
+                  liveness.spectralVariance, liveness.highFreqRatio)
+        }
+
         // Mel-spectral fallback: mean + std of each mel band → 256-dim vector.
         if usingMelFallback {
             return Self.melSpectralEmbed(mel: mel, numFrames: numFrames)
@@ -400,6 +407,80 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         }
 
         throw MLEngineError.notLoaded("SpeakerEncoder: no valid output tensor found")
+    }
+
+    // MARK: - Liveness Heuristics
+
+    /// Result of basic replay/liveness checks on audio.
+    struct LivenessCheck: Sendable {
+        /// Variance of mel-band energy across frames (low = potential replay).
+        let spectralVariance: Float
+        /// Ratio of high-frequency energy to total (low = codec compression artifacts).
+        let highFreqRatio: Float
+        /// Whether the audio looks suspicious (not blocking — informational only).
+        let isSuspicious: Bool
+    }
+
+    /// Run lightweight liveness heuristics on a log-mel spectrogram.
+    ///
+    /// Checks for two replay indicators:
+    /// 1. **Spectral variance**: Real speech has dynamic formant variation across frames.
+    ///    Recordings played through speakers tend to be spectrally flatter.
+    /// 2. **High-frequency energy**: Codec compression (MP3, AAC, Opus) attenuates
+    ///    energy above ~16 kHz. Raw microphone input preserves full bandwidth.
+    ///
+    /// Returns a `LivenessCheck` with findings. Does NOT block embedding —
+    /// suspicion is logged for diagnostics only.
+    static func checkLiveness(mel: [Float], numFrames: Int) -> LivenessCheck {
+        guard numFrames > 1 else {
+            return LivenessCheck(spectralVariance: 0, highFreqRatio: 0, isSuspicious: false)
+        }
+
+        // 1. Spectral variance: compute per-frame energy, then variance across frames.
+        var frameEnergies = [Float](repeating: 0, count: numFrames)
+        for f in 0..<numFrames {
+            var energy: Float = 0
+            for m in 0..<numMels {
+                energy += mel[m * numFrames + f]
+            }
+            frameEnergies[f] = energy / Float(numMels)
+        }
+
+        var meanEnergy: Float = 0
+        vDSP_meanv(frameEnergies, 1, &meanEnergy, vDSP_Length(numFrames))
+
+        var sumSqDiff: Float = 0
+        for e in frameEnergies {
+            let diff = e - meanEnergy
+            sumSqDiff += diff * diff
+        }
+        let spectralVariance = sumSqDiff / Float(numFrames)
+
+        // 2. High-frequency energy ratio: compare top 1/4 mel bands vs total.
+        let highBandStart = numMels * 3 / 4  // top 32 of 128 bands
+        var totalEnergy: Float = 0
+        var highEnergy: Float = 0
+        for m in 0..<numMels {
+            var bandSum: Float = 0
+            let base = m * numFrames
+            vDSP_sve(Array(mel[base..<(base + numFrames)]), 1, &bandSum, vDSP_Length(numFrames))
+            totalEnergy += abs(bandSum)
+            if m >= highBandStart {
+                highEnergy += abs(bandSum)
+            }
+        }
+        let highFreqRatio = totalEnergy > 1e-10 ? highEnergy / totalEnergy : 0
+
+        // Thresholds (empirically tuned — conservative to minimize false positives).
+        let lowVariance = spectralVariance < 0.05
+        let lowHighFreq = highFreqRatio < 0.02
+        let isSuspicious = lowVariance && lowHighFreq
+
+        return LivenessCheck(
+            spectralVariance: spectralVariance,
+            highFreqRatio: highFreqRatio,
+            isSuspicious: isSuspicious
+        )
     }
 
     // MARK: - L2 Normalization

@@ -60,11 +60,17 @@ final class ToolRegistry: Sendable {
         Array(tools.keys).sorted()
     }
 
-    /// JSON schema descriptions for all registered tools.
+    /// JSON schema descriptions for all registered tools, with examples when available.
     var toolSchemas: String {
         tools.values
             .sorted { $0.name < $1.name }
-            .map { "## \($0.name)\n\($0.description)\nParameters: \($0.parametersSchema)" }
+            .map { tool in
+                var schema = "## \(tool.name)\n\(tool.description)\nRisk: \(tool.riskLevel.rawValue)\nParameters: \(tool.parametersSchema)"
+                if !tool.example.isEmpty {
+                    schema += "\nExample: \(tool.example)"
+                }
+                return schema
+            }
             .joined(separator: "\n\n")
     }
 }

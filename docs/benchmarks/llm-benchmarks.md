@@ -882,3 +882,249 @@ python3 /tmp/fae_tuning_bench.py
 
 # Results saved to /tmp/fae_tuning_results.json
 ```
+
+---
+
+## MLX Benchmark Results (Feb 2026)
+
+Since v0.8.0, Fae runs on **MLX** (mlx-swift / mlx-lm) instead of mistral.rs. This
+enables benchmarking models that were previously impossible — including the Qwen3.5
+family (Gated DeltaNet architecture) which has no Metal kernels in mistral.rs.
+
+**Hardware:** Apple Silicon, 96 GB unified memory
+**Quantization:** 4-bit (MLX community conversions)
+**Backend:** mlx-lm (Python API, no server overhead)
+**Model cache:** `~/.cache/huggingface/hub/` (shared with Fae.app)
+
+### Models tested
+
+| Model | Hub ID | Type | Active Params | Disk (4-bit) |
+|-------|--------|------|---------------|-------------|
+| Qwen3-0.6B | `mlx-community/Qwen3-0.6B-4bit` | Dense | 0.6B | ~0.4 GB |
+| Qwen3-1.7B | `mlx-community/Qwen3-1.7B-4bit` | Dense | 1.7B | ~1.1 GB |
+| Qwen3-4B | `mlx-community/Qwen3-4B-4bit` | Dense | 4B | ~2.5 GB |
+| Qwen3-8B | `mlx-community/Qwen3-8B-4bit` | Dense | 8B | ~5.0 GB |
+| **Qwen3.5-35B-A3B** | `NexVeridian/Qwen3.5-35B-A3B-4bit` | MoE | **3B active** | ~19.5 GB |
+| **Qwen3.5-27B** | `NexVeridian/Qwen3.5-27B-4bit` | Hybrid dense | ~27B | ~15.1 GB |
+
+**Important: Qwen3.5 text-only model IDs.** The `mlx-community` Qwen3.5 conversions include
+the vision tower (VL) and fail to load in `mlx-lm`. The `NexVeridian` conversions strip
+the vision tower and load correctly as text-only models. Use NexVeridian IDs for text inference.
+
+### Why MLX can run Qwen3.5
+
+The mistral.rs section above documented that Qwen3.5 uses Gated Delta Networks —
+a fundamentally different attention mechanism that mistral.rs has no Metal kernels for.
+MLX handles this natively because:
+
+1. **mlx-lm reads model architecture from `config.json`** — no hardcoded GGUF arch enum
+2. **MLX compiles operations lazily** — GDN ops (1D conv, delta rule, gating) compose from MLX primitives
+3. **Text-only MLX conversions** exist (NexVeridian, converted with mlx-lm 0.30.8)
+
+This is the primary motivation for switching the benchmark from mistral.rs to MLX.
+
+### Benchmark script
+
+```bash
+# Prerequisites (use uv venv for isolated Python environment)
+uv venv .venv --python 3.14
+source .venv/bin/activate
+pip install mlx-lm huggingface_hub psutil
+
+# Quick single-model test
+python scripts/mlx_benchmark.py --model mlx-community/Qwen3-1.7B-4bit
+
+# Full sweep (all 6 models, ~40 GB download on first run)
+python scripts/mlx_benchmark.py --all
+
+# Qwen3.5 models only
+python scripts/mlx_benchmark.py --qwen35-only
+
+# Specific dimensions
+python scripts/mlx_benchmark.py --model mlx-community/Qwen3-8B-4bit --throughput --ram --tools
+
+# Output to files
+python scripts/mlx_benchmark.py --all --output results.json --markdown results.md
+```
+
+Models download to `~/.cache/huggingface/hub/` — the same cache Fae.app uses via
+MLXLMCommon, so there are no duplicate downloads.
+
+### Model Summary
+
+| Model | Idle RAM | Peak T/s (raw) | Peak T/s (/no_think) | ~500 tok T/s | 8.5K ctx T/s |
+|---|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | 713 MB | 312 | 310 | 281 | 72 |
+| Qwen3-1.7B | 1,355 MB | 186 | 126 | 107 | 16 |
+| Qwen3-4B | 4,553 MB | 99 | 90 | 87 | 14 |
+| Qwen3-8B | 5,789 MB | 60 | 47 | 38 | 6 |
+| **Qwen3.5-35B-A3B** | **19,022 MB** | **72** | **72** | **64** | **19** |
+| **Qwen3.5-27B** | **14,899 MB** | **18** | **18** | **14** | **3** |
+
+"Peak T/s (raw)" = thinking ON, measures raw decode speed.
+"Peak T/s (/no_think)" = Fae's production config, measures effective throughput.
+"~500 tok T/s" = /no_think at Fae's typical voice context (~500 tokens).
+"8.5K ctx T/s" = /no_think at full 6,379-word context.
+
+### Speed by Context Size — /no_think (Fae production config)
+
+| Context | 0.6B | 1.7B | 4B | 8B | **3.5-35B-A3B** | **3.5-27B** |
+|---|---:|---:|---:|---:|---:|---:|
+| Short (~20 tok) | 291 | 105 | 78 | 47 | **72** | **18** |
+| ~200 tok | 310 | 126 | 90 | 41 | **70** | **17** |
+| ~500 tok | 281 | 107 | 87 | 38 | **64** | **14** |
+| ~1K tok | 238 | 94 | 54 | 32 | **57** | **12** |
+| ~2K tok | 203 | 63 | 53 | 31 | **47** | **9** |
+| ~4K tok | 137 | 42 | 35 | 12 | **33** | **6** |
+| ~8.5K tok | 72 | 16 | 14 | 6 | **19** | **3** |
+
+### Speed by Context Size — Raw Throughput (thinking ON)
+
+| Context | 0.6B | 1.7B | 4B | 8B | **3.5-35B-A3B** | **3.5-27B** |
+|---|---:|---:|---:|---:|---:|---:|
+| Short (~20 tok) | 301 | 186 | 99 | 60 | **72** | **18** |
+| ~200 tok | 312 | 185 | 94 | 57 | **70** | **17** |
+| ~500 tok | 280 | 167 | 84 | 50 | **65** | **15** |
+| ~1K tok | 241 | 137 | 69 | 40 | **57** | **12** |
+| ~2K tok | 202 | 67 | 53 | 31 | **46** | **9** |
+| ~4K tok | 137 | 39 | 34 | 20 | **33** | **6** |
+| ~8.5K tok | 72 | 38 | 18 | 10 | **20** | **3** |
+
+### /no_think compliance
+
+| Model | Compliant | Notes |
+|---|---|---|
+| Qwen3-0.6B | **No** | Leaks thinking tokens (393c at short, 1385c at ~200 tok) |
+| Qwen3-1.7B | Yes | <2c thinking (negligible `<think>\n</think>` wrapper) |
+| Qwen3-4B | Yes | <2c thinking |
+| Qwen3-8B | Yes | <2c thinking |
+| Qwen3.5-35B-A3B | Yes | Zero thinking tokens — perfect compliance |
+| Qwen3.5-27B | Yes | Zero thinking tokens — perfect compliance |
+
+Qwen3.5 models show *better* /no_think compliance than Qwen3 — zero thinking tokens
+leaked vs 2c wrapper from Qwen3. The 0.6B model remains non-compliant.
+
+### RAM usage comparison: MLX vs mistral.rs
+
+| Model | MLX Idle RAM | mistral.rs Idle RAM | Savings |
+|---|---:|---:|---|
+| Qwen3-0.6B | 713 MB | 2,200 MB | **68% less** |
+| Qwen3-1.7B | 1,355 MB | 4,335 MB | **69% less** |
+| Qwen3-4B | 4,553 MB | 6,500 MB | **30% less** |
+| Qwen3-8B | 5,789 MB | 10,900 MB | **47% less** |
+
+MLX's memory-mapped weight loading and lazy evaluation dramatically reduce RAM usage
+compared to mistral.rs which loads all weights into active memory.
+
+### Speed comparison: MLX vs mistral.rs
+
+| Model | MLX Peak T/s (/no_think) | mistral.rs Peak T/s (/no_think) | Speedup |
+|---|---:|---:|---|
+| Qwen3-0.6B | 310 | 114 | **2.7x faster** |
+| Qwen3-1.7B | 126 | 85 | **1.5x faster** |
+| Qwen3-4B | 90 | 53 | **1.7x faster** |
+| Qwen3-8B | 47 | 39 | **1.2x faster** |
+
+MLX is consistently faster across all model sizes, with the largest gains on smaller
+models (0.6B: 2.7x). The gap narrows on larger models as both backends become
+memory-bandwidth bound.
+
+### Tool calling
+
+Tool calling accuracy was 20% across all models (only "conversational" no-tool prompts
+matched). This is a benchmark design issue — the test uses `<tool_call>` markup in a
+plain text system prompt, but Qwen3/3.5 uses its native function calling format with
+structured tool definitions in the chat template. In Fae's actual pipeline,
+`ToolRegistry.buildDefault()` generates proper tool schemas that the LLM handles correctly.
+
+Tool calling accuracy was validated separately in the mistral.rs sampling parameter tuning
+section above (100% at temp=0.2 with proper schemas).
+
+### Qwen3.5-35B-A3B analysis: voice-readiness
+
+The MoE architecture (35B total / 3B active per token) makes this model surprisingly fast:
+
+| Metric | Qwen3.5-35B-A3B | Qwen3-8B | Winner |
+|---|---:|---:|---|
+| Peak T/s (/no_think) | 72 | 47 | **3.5-35B-A3B (+53%)** |
+| ~500 tok T/s | 64 | 38 | **3.5-35B-A3B (+68%)** |
+| Idle RAM | 19,022 MB | 5,789 MB | Qwen3-8B (3.3x less) |
+| /no_think compliance | Perfect | Yes (2c) | 3.5-35B-A3B |
+
+**Voice threshold (>60 T/s):**
+- At short context: **72 T/s — PASS**
+- At ~500 tok (typical Fae voice context): **64 T/s — PASS (marginal)**
+- At ~1K tok: **57 T/s — FAIL**
+
+The 35B-A3B is voice-ready at typical voice context sizes (~500 tok) but drops below
+threshold at ~1K tokens. This makes it suitable for quick voice exchanges but not for
+long-context conversations.
+
+**RAM requirement:** 19 GB idle means this model only fits on 64+ GB systems (after
+accounting for STT + TTS models and macOS overhead).
+
+### Qwen3.5-27B analysis
+
+The dense 27B model is too slow for voice use:
+
+- 18 T/s peak — well below the 60 T/s threshold
+- 15 GB RAM — fits on 48+ GB systems
+- /no_think compliance is perfect
+- High quality responses (subjectively better than Qwen3-8B)
+
+Best suited for non-voice workloads: text-only Fae, batch processing, or quality-critical
+tasks where latency is acceptable.
+
+### Key findings
+
+1. **MLX is dramatically faster and lighter than mistral.rs** — 1.2-2.7x speed improvement
+   and 30-69% RAM reduction across all Qwen3 models.
+
+2. **Qwen3.5-35B-A3B is the highest-quality voice-ready model** — faster than Qwen3-8B
+   (72 vs 47 T/s) despite much higher model quality, thanks to MoE's 3B active params.
+   This is the first model to combine 35B-class quality with voice-viable speed.
+
+3. **Qwen3.5-27B is too slow for voice** — 18 T/s peak makes it unsuitable for
+   real-time conversation. Quality is excellent but latency is 4x too high.
+
+4. **Qwen3.5 has perfect /no_think compliance** — zero thinking token leakage, better
+   than Qwen3 which shows 2c wrapper overhead.
+
+5. **Qwen3-1.7B remains the best choice for 16-32 GB systems** — 126 T/s peak with
+   only 1.4 GB RAM. The sweet spot for voice quality vs. speed.
+
+6. **0.6B still leaks thinking tokens** — not recommended for production use despite
+   raw speed (310 T/s) due to /no_think non-compliance.
+
+### Model selection (updated with benchmark data)
+
+| System RAM | Recommended Model | Preset | T/s at ~500 tok | Notes |
+|---|---|---|---:|---|
+| 8-16 GB | Qwen3-0.6B | `qwen3_0_6b` | 281 | Only option; leaks thinking tokens |
+| 16-32 GB | Qwen3-1.7B | `qwen3_1_7b` | 107 | Best voice quality at this tier |
+| 32-48 GB | Qwen3-4B | `qwen3_4b` | 87 | Good balance of speed and quality |
+| 48-64 GB | Qwen3-8B | `qwen3_8b` | 38 | Best Qwen3 quality (below voice threshold) |
+| 64-96 GB | Qwen3.5-35B-A3B | `qwen3_5_35b_a3b` | 64 | Voice-ready MoE; best quality + speed |
+| 96+ GB | Qwen3.5-35B-A3B | `qwen3_5_35b_a3b` | 64 | Same; 27B too slow for voice |
+
+**Note:** Qwen3.5-27B (`qwen3_5_27b`) is available as a manual preset for text-only use
+cases where latency is acceptable and quality is paramount.
+
+### Preset reference (FaeConfig.swift)
+
+| Preset | Model ID | Context Size |
+|---|---|---:|
+| `auto` | RAM-based selection | varies |
+| `qwen3_0_6b` | `mlx-community/Qwen3-0.6B-4bit` | 4,096 |
+| `qwen3_1_7b` | `mlx-community/Qwen3-1.7B-4bit` | 8,192 |
+| `qwen3_4b` | `mlx-community/Qwen3-4B-4bit` | 16,384 |
+| `qwen3_8b` | `mlx-community/Qwen3-8B-4bit` | 32,768 |
+| `qwen3_5_27b` | `NexVeridian/Qwen3.5-27B-4bit` | 65,536 |
+| `qwen3_5_35b_a3b` | `NexVeridian/Qwen3.5-35B-A3B-4bit` | 65,536 |
+
+### Raw JSON results
+
+Benchmark data saved as JSON for reproducibility:
+- `scripts/mlx_benchmark_results_qwen3.json` — all four Qwen3 models
+- `scripts/mlx_benchmark_results_qwen35_a3b.json` — Qwen3.5-35B-A3B
+- `scripts/mlx_benchmark_results_qwen35_27b.json` — Qwen3.5-27B

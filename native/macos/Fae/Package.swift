@@ -68,7 +68,13 @@ let package = Package(
                 "Fae",
                 .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
             ],
-            path: "Tests/HandoffTests"
+            path: "Tests/HandoffTests",
+            exclude: [
+                "Fixtures/Memory/README.md",
+                "Fixtures/Memory/manifest.toml",
+                "Fixtures/Memory/records.jsonl",
+                "Fixtures/Memory/audit.jsonl",
+            ]
         ),
 
         // Search module tests — URL normalization, content extraction, engines, orchestrator.
@@ -79,6 +85,16 @@ let package = Package(
                 "Fae",
             ],
             path: "Tests/SearchTests"
+        ),
+
+        // End-to-end integration tests with mock ML engines.
+        .testTarget(
+            name: "IntegrationTests",
+            dependencies: [
+                "Fae",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            path: "Tests/IntegrationTests"
         ),
     ]
 )

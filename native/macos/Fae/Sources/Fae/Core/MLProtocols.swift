@@ -63,6 +63,11 @@ extension TTSEngine {
     /// Default no-op for engines that don't support voice cloning.
     func loadVoice(referenceAudioURL: URL, referenceText: String?) async throws {}
     var isVoiceLoaded: Bool { false }
+
+    /// Default implementation delegates to `synthesize(text:)` ignoring voiceInstruct.
+    func synthesize(text: String, voiceInstruct: String?) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
+        synthesize(text: text)
+    }
 }
 
 /// Text embedding engine protocol for semantic memory search.

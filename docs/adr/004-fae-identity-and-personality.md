@@ -1,8 +1,11 @@
 # ADR-004: Fae Identity and Personality System
 
-**Status:** Accepted
+**Status:** Superseded (historical)
 **Date:** 2026-02-10
-**Scope:** Identity (`SOUL.md`, `Prompts/system_prompt.md`), personality (`src/personality.rs`), personalization (`src/intelligence/`)
+**Scope:** Rust-era identity/personality architecture (`SOUL.md`, `Prompts/system_prompt.md`, `src/personality.rs`, `src/intelligence/`)
+
+> Historical note: this ADR is archival context from pre-Swift-rebuild implementation.
+> Active personality assembly is implemented in `native/macos/Fae/Sources/Fae/Core/PersonalityManager.swift`.
 
 ## Context
 

@@ -1,8 +1,11 @@
 # ADR-005: Self-Modification Safety Model
 
-**Status:** Accepted
+**Status:** Superseded (historical)
 **Date:** 2026-02-21
-**Scope:** Safety architecture across entire codebase (`src/**`, `~/.fae/skills/`, `SOUL.md`)
+**Scope:** Rust-era safety architecture (`src/**`, `~/.fae/skills/`, `SOUL.md`)
+
+> Historical note: this ADR references Rust paths from the prior architecture.
+> Current production safety/approval/runtime logic is in `native/macos/Fae/Sources/Fae/`.
 
 ## Context
 

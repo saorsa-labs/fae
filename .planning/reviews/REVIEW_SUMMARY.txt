@@ -1,0 +1,130 @@
+FAESWIFT CODEBASE REVIEW SUMMARY
+================================
+
+Project: Fae Native macOS App (v0.8.0)
+Scope: 18 Swift source files modified
+Diff Size: 2051 lines
+Review Method: MiniMax Manual Analysis
+Date: 2026-02-27
+
+CRITICAL FINDINGS
+=================
+None. Code is production-ready.
+
+HIGH PRIORITY (Fix Soon)
+========================
+1. NotificationCenter Observer Cleanup in FaeCore.deinit()
+   - Issue: observeSchedulerUpdates() registers observer with no cleanup
+   - Impact: Memory leak in long-running sessions
+   - Fix: Add removeObserver in deinit
+
+MEDIUM PRIORITY (Next Sprint)
+=============================
+1. Liveness Check Threshold Documentation
+   - Document why 0.05 (variance) and 0.02 (high-freq) thresholds were chosen
+   - Add admin override capability
+   
+2. Contradiction Supersession Validation
+   - Verify supersedeContradiction() handles negation (e.g., "I don't like X")
+   - Test partial matches (e.g., "I prefer tea" vs "I prefer coffee")
+   
+3. Embedding Pruning Invocation
+   - Ensure pruneStaleEmbeddings() is called once per day (not on every enrollment)
+   - Scheduler task recommendation: daily at 03:30
+
+LOW PRIORITY (Enhancements)
+===========================
+1. Use Locale.current instead of hardcoded en_US_POSIX
+2. Add unit tests for:
+   - checkLiveness() with known good/replay samples
+   - pruneStaleEmbeddings() edge cases
+   - Scheduler persistence cycle
+3. Log liveness warnings to diagnostic console
+
+STRENGTHS
+=========
+✓ Excellent actor-based concurrency patterns (no race conditions)
+✓ Solid error handling with graceful degradation
+✓ Clean configuration management with validation
+✓ No unsafe code blocks detected
+✓ Proper use of Accelerate framework (vDSP)
+✓ Good inline documentation
+✓ Backward-compatible schema changes
+
+REVIEWED FILES (Average Grade: B+)
+==================================
+- FaeConfig.swift (A) - Configuration management
+- FaeCore.swift (B+) - Runtime orchestration
+- CoreMLSpeakerEncoder.swift (A-) - Speaker identity + liveness
+- MemoryOrchestrator.swift (A) - Memory recall + staleness filtering
+- SQLiteMemoryStore.swift (A) - Database operations
+- SpeakerProfileStore.swift (A-) - Profile enrollment
+- PipelineCoordinator.swift (B) - Audio pipeline
+- FaeScheduler.swift (B+) - Task scheduling
+- PersonalityManager.swift (B) - Prompt assembly
+- BuiltinTools.swift (B) - Tool implementations
+- RoleplayTool.swift (B+) - Multi-voice support
+- SchedulerTools.swift (B) - Tool definitions
+- AppleTools.swift (B) - Apple integration
+- Tool.swift (A) - Protocol definition
+- ToolRegistry.swift (B) - Tool registration
+- MLProtocols.swift (A) - ML engine protocols
+- MemoryTypes.swift (B+) - Memory structures
+- DuckDuckGoEngine.swift (B) - Web search
+
+KEY IMPROVEMENTS IN v0.8.0
+===========================
+1. Scheduler Persistence: Dedicated SQLite database for task state
+2. Memory Staleness: Time-based expiry for episodes (90d), commitments (30d), events (7d)
+3. Importance Scoring: Semantic ranking (0.30-0.90) for future re-ranking
+4. Speaker Liveness: Replay detection via spectral variance + codec compression heuristics
+5. Embedding Pruning: Automated cleanup of stale voice embeddings (180d rolling window)
+6. Preference Supersession: Contradiction detection for conflicting preferences
+
+SECURITY ASSESSMENT
+===================
+✓ No unsafe code blocks
+✓ Proper error handling (no unwrap/expect in production paths)
+✓ Sandbox-compliant file paths (FileManager)
+✓ Keychain integration for credentials
+⚠ Time-based staleness vulnerable to system clock manipulation (low risk for local app)
+
+PERFORMANCE ASSESSMENT
+======================
+✓ Vectorized spectral analysis (vDSP) - no degradation
+✓ Actor isolation prevents contention - good scaling
+✓ Memory: Pruning frequency unknown - recommend once daily
+⚠ Date formatting called on every prompt assembly - acceptable but could cache
+
+TESTING RECOMMENDATIONS
+=======================
+Priority 1: Add tests for liveness check with known audio samples
+Priority 2: Test embedding pruning boundary conditions
+Priority 3: Scheduler persistence round-trip tests
+Priority 4: Contradiction supersession edge cases
+
+CONCLUSION
+==========
+The v0.8.0 Swift migration demonstrates professional-grade engineering with:
+- Mature async/await patterns
+- Thoughtful architectural decisions (actor isolation, persistence layers)
+- Well-documented code improvements
+- Zero critical issues
+
+One observer cleanup fix needed. Otherwise production-ready.
+
+Grade: B+ (Good - minor documentation and validation improvements recommended)
+
+NEXT STEPS
+==========
+1. Fix NotificationCenter observer cleanup (30 mins)
+2. Add deinit to FaeCore with removeObserver call
+3. Document liveness threshold selection
+4. Add scheduler pruning task invocation
+5. Plan unit tests for new features
+
+FILES LOCATION
+==============
+Review: /Users/davidirvine/Desktop/Devel/projects/fae/.planning/reviews/minimax.md
+Source: /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Sources/Fae/
+

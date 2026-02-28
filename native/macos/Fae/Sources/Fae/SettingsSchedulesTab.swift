@@ -16,9 +16,20 @@ private struct ScheduledTaskItem: Identifiable {
 
     static func load(from url: URL) -> [ScheduledTaskItem] {
         guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tasks = json["tasks"] as? [[String: Any]]
+              let json = try? JSONSerialization.jsonObject(with: data)
         else { return [] }
+
+        let tasks: [[String: Any]]
+        if let dict = json as? [String: Any],
+           let wrapped = dict["tasks"] as? [[String: Any]]
+        {
+            tasks = wrapped
+        } else if let array = json as? [[String: Any]] {
+            tasks = array
+        } else {
+            return []
+        }
+
         return tasks.compactMap { Self.from(dict: $0) }
     }
 
@@ -28,29 +39,66 @@ private struct ScheduledTaskItem: Identifiable {
         else { return nil }
 
         let enabled = dict["enabled"] as? Bool ?? true
-        let kind = dict["kind"] as? String ?? "Builtin"
+        let kind = (dict["kind"] as? String ?? "builtin").lowercased()
         let failureStreak = dict["failure_streak"] as? Int ?? 0
         let lastError = dict["last_error"] as? String
 
         let nextRun = (dict["next_run"] as? Double).map { Date(timeIntervalSince1970: $0) }
+            ?? (dict["nextRun"] as? String).flatMap(iso8601Date(from:))
         let lastRun = (dict["last_run"] as? Double).map { Date(timeIntervalSince1970: $0) }
 
-        let scheduleDesc = scheduleDescription(from: dict["schedule"])
+        let scheduleDesc = scheduleDescription(
+            legacySchedule: dict["schedule"],
+            scheduleType: dict["scheduleType"] as? String,
+            scheduleParams: dict["scheduleParams"] as? [String: Any]
+        )
 
         return ScheduledTaskItem(
             id: id, name: name,
             scheduleDescription: scheduleDesc,
             nextRun: nextRun, lastRun: lastRun,
             enabled: enabled,
-            isBuiltin: kind == "Builtin",
+            isBuiltin: kind == "builtin",
             failureStreak: failureStreak,
             lastError: lastError,
             rawDict: dict
         )
     }
 
-    private static func scheduleDescription(from schedule: Any?) -> String {
-        guard let dict = schedule as? [String: Any] else { return "custom" }
+    private static func scheduleDescription(
+        legacySchedule: Any?,
+        scheduleType: String?,
+        scheduleParams: [String: Any]?
+    ) -> String {
+        if let type = scheduleType {
+            switch type {
+            case "interval":
+                if let minutes = scheduleParams?["minutes"] as? String {
+                    return "every \(minutes) minutes"
+                }
+                if let hours = scheduleParams?["hours"] as? String {
+                    return "every \(hours) hours"
+                }
+                return "interval"
+            case "daily":
+                let hour = scheduleParams?["hour"] as? String ?? "0"
+                let minute = scheduleParams?["minute"] as? String ?? "0"
+                return "daily at \(hour):\(minute.count == 1 ? "0\(minute)" : minute)"
+            case "weekly":
+                let day = scheduleParams?["day"] as? String ?? "weekly"
+                if let hour = scheduleParams?["hour"] as? String,
+                   let minute = scheduleParams?["minute"] as? String
+                {
+                    return "weekly on \(day) at \(hour):\(minute.count == 1 ? "0\(minute)" : minute)"
+                }
+                return "weekly on \(day)"
+            default:
+                return type
+            }
+        }
+
+        // Legacy Rust-era scheduler payload shape fallback.
+        guard let dict = legacySchedule as? [String: Any] else { return "custom" }
         if let iv = dict["Interval"] as? [String: Any], let secs = iv["secs"] as? Int {
             if secs >= 86400 { return "daily" }
             if secs >= 3600 {
@@ -71,6 +119,10 @@ private struct ScheduledTaskItem: Identifiable {
         }
         return "custom"
     }
+
+    private static func iso8601Date(from raw: String) -> Date? {
+        ISO8601DateFormatter().date(from: raw)
+    }
 }
 
 /// Settings tab: view and manage Fae's scheduled tasks.
@@ -81,8 +133,12 @@ struct SettingsSchedulesTab: View {
     @State private var triggeredIds: Set<String> = []
 
     private var schedulerURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("fae/scheduler.json")
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
+        return appSupport.appendingPathComponent("fae/scheduler.json")
     }
 
     var body: some View {

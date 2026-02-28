@@ -16,6 +16,8 @@ actor SpeakerProfileStore {
         let id: String
         var label: String
         var embeddings: [[Float]]
+        /// Per-embedding timestamps (parallel to `embeddings`). Nil for legacy profiles.
+        var embeddingDates: [Date]?
         var centroid: [Float]
         let enrolledAt: Date
         var lastSeen: Date
@@ -75,20 +77,19 @@ actor SpeakerProfileStore {
 
     /// Enroll a new speaker or add an embedding to an existing profile.
     func enroll(label: String, embedding: [Float]) {
+        let now = Date()
         if let idx = profiles.firstIndex(where: { $0.label == label }) {
-            profiles[idx].embeddings.append(embedding)
-            profiles[idx].centroid = Self.averageEmbeddings(profiles[idx].embeddings)
-            profiles[idx].lastSeen = Date()
+            appendEmbedding(embedding, to: idx, date: now)
         } else {
-            let profile = SpeakerProfile(
+            profiles.append(SpeakerProfile(
                 id: UUID().uuidString,
                 label: label,
                 embeddings: [embedding],
+                embeddingDates: [now],
                 centroid: embedding,
-                enrolledAt: Date(),
-                lastSeen: Date()
-            )
-            profiles.append(profile)
+                enrolledAt: now,
+                lastSeen: now
+            ))
         }
         persist()
     }
@@ -99,17 +100,62 @@ actor SpeakerProfileStore {
     func enrollIfBelowMax(label: String, embedding: [Float], max: Int) {
         guard let idx = profiles.firstIndex(where: { $0.label == label }) else { return }
         guard profiles[idx].embeddings.count < max else { return }
-
-        profiles[idx].embeddings.append(embedding)
-        profiles[idx].centroid = Self.averageEmbeddings(profiles[idx].embeddings)
-        profiles[idx].lastSeen = Date()
+        appendEmbedding(embedding, to: idx, date: Date())
         persist()
+    }
+
+    /// Append an embedding (and its date) to the profile at `idx` and recompute its centroid.
+    private func appendEmbedding(_ embedding: [Float], to idx: Int, date: Date) {
+        profiles[idx].embeddings.append(embedding)
+        var dates = profiles[idx].embeddingDates ?? []
+        dates.append(date)
+        profiles[idx].embeddingDates = dates
+        profiles[idx].centroid = Self.averageEmbeddings(profiles[idx].embeddings)
+        profiles[idx].lastSeen = date
     }
 
     /// Remove a speaker profile by label.
     func remove(label: String) {
         profiles.removeAll { $0.label == label }
         persist()
+    }
+
+    /// Prune embeddings older than `maxAgeDays` from all profiles.
+    ///
+    /// Prevents centroid drift as a speaker's voice changes over time.
+    /// Profiles with no timestamps (legacy) are left untouched. Profiles
+    /// are never deleted — only their oldest embeddings are removed.
+    func pruneStaleEmbeddings(maxAgeDays: Int = 180) {
+        let cutoff = Date().addingTimeInterval(-Double(maxAgeDays) * 86_400)
+        var changed = false
+
+        for idx in profiles.indices {
+            guard let dates = profiles[idx].embeddingDates,
+                  dates.count == profiles[idx].embeddings.count
+            else { continue }
+
+            // Keep embeddings newer than cutoff, but always retain at least 1.
+            var keepIndices = [Int]()
+            for (i, date) in dates.enumerated() where date >= cutoff {
+                keepIndices.append(i)
+            }
+            // Always keep the most recent embedding even if all are stale.
+            if keepIndices.isEmpty, let lastIdx = dates.indices.last {
+                keepIndices = [lastIdx]
+            }
+
+            if keepIndices.count < profiles[idx].embeddings.count {
+                let prunedCount = profiles[idx].embeddings.count - keepIndices.count
+                profiles[idx].embeddings = keepIndices.map { profiles[idx].embeddings[$0] }
+                profiles[idx].embeddingDates = keepIndices.map { dates[$0] }
+                profiles[idx].centroid = Self.averageEmbeddings(profiles[idx].embeddings)
+                changed = true
+                NSLog("SpeakerProfileStore: pruned %d stale embeddings from '%@'",
+                      prunedCount, profiles[idx].label)
+            }
+        }
+
+        if changed { persist() }
     }
 
     /// All enrolled profile labels.

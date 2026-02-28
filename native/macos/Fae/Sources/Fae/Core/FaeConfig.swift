@@ -14,9 +14,13 @@ struct FaeConfig: Codable {
     var bargeIn: BargeInConfig = BargeInConfig()
     var memory: MemoryConfig = MemoryConfig()
     var speaker: SpeakerConfig = SpeakerConfig()
+    var voiceIdentity: VoiceIdentityConfig = VoiceIdentityConfig()
+    var channels: ChannelsConfig = ChannelsConfig()
+    var scheduler: SchedulerConfig = SchedulerConfig()
     var userName: String?
     var onboarded: Bool = false
     var licenseAccepted: Bool = false
+    var toolMode: String = "full"
 
     // MARK: - Audio
 
@@ -113,6 +117,43 @@ struct FaeConfig: Codable {
         var maxEnrollments: Int = 50
     }
 
+    // MARK: - Voice Identity
+
+    struct VoiceIdentityConfig: Codable {
+        var enabled: Bool = false
+        /// assist|enforce
+        var mode: String = "assist"
+        var approvalRequiresMatch: Bool = true
+    }
+
+    // MARK: - Channels
+
+    struct ChannelsConfig: Codable {
+        var enabled: Bool = true
+        var discord: DiscordConfig = DiscordConfig()
+        var whatsapp: WhatsAppConfig = WhatsAppConfig()
+
+        struct DiscordConfig: Codable {
+            var botToken: String?
+            var guildId: String?
+            var allowedChannelIds: [String] = []
+        }
+
+        struct WhatsAppConfig: Codable {
+            var accessToken: String?
+            var phoneNumberId: String?
+            var verifyToken: String?
+            var allowedNumbers: [String] = []
+        }
+    }
+
+    // MARK: - Scheduler
+
+    struct SchedulerConfig: Codable {
+        var morningBriefingHour: Int = 8
+        var skillProposalsHour: Int = 11
+    }
+
     // MARK: - Model Selection
 
     /// Select the appropriate LLM model based on system RAM and preset.
@@ -125,8 +166,14 @@ struct FaeConfig: Codable {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
         switch preset.lowercased() {
+        case "qwen3_5_27b":
+            // NexVeridian text-only conversion (vision tower stripped).
+            // mlx-community versions are VL — incompatible with mlx-lm text-only loading.
+            return ("NexVeridian/Qwen3.5-27B-4bit", 65_536)
         case "qwen3_5_35b_a3b":
-            return ("mlx-community/Qwen3.5-35B-A3B-4bit", 65_536)
+            // NexVeridian text-only conversion. MoE: 35B total / 3B active per token.
+            // 72 T/s peak, 64 T/s at ~500 tok — voice-ready on 96GB systems.
+            return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
         case "qwen3_8b":
             return ("mlx-community/Qwen3-8B-4bit", 32_768)
         case "qwen3_4b":
@@ -136,8 +183,11 @@ struct FaeConfig: Codable {
         case "qwen3_0_6b":
             return ("mlx-community/Qwen3-0.6B-4bit", 4_096)
         default: // "auto"
-            // Qwen3.5 MoE not yet supported by mlx-swift — use Qwen3-8B for large RAM.
-            if totalGB >= 48 {
+            // Qwen3.5-35B-A3B (MoE, 3B active): 72 T/s peak, 64 T/s at ~500 tok.
+            // Voice-ready on 64GB+ systems (~19 GB RAM idle).
+            if totalGB >= 64 {
+                return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
+            } else if totalGB >= 48 {
                 return ("mlx-community/Qwen3-8B-4bit", 32_768)
             } else if totalGB >= 32 {
                 return ("mlx-community/Qwen3-4B-4bit", 16_384)
@@ -182,7 +232,11 @@ struct FaeConfig: Codable {
 
     /// Config file path: ~/Library/Application Support/fae/config.toml
     static var configFileURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
         return appSupport.appendingPathComponent("fae/config.toml")
     }
 
@@ -290,6 +344,11 @@ struct FaeConfig: Codable {
                         throw ParseError.malformedValue(key: key, value: rawValue)
                     }
                     config.licenseAccepted = v
+                case "toolMode":
+                    guard let v = parseString(rawValue) else {
+                        throw ParseError.malformedValue(key: key, value: rawValue)
+                    }
+                    config.toolMode = v
                 default: break
                 }
             case "audio":
@@ -441,6 +500,58 @@ struct FaeConfig: Codable {
                     config.memory.maxRecallResults = v
                 default: break
                 }
+            case "voiceIdentity":
+                switch key {
+                case "enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.voiceIdentity.enabled = v
+                case "mode":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.voiceIdentity.mode = v
+                case "approvalRequiresMatch":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.voiceIdentity.approvalRequiresMatch = v
+                default: break
+                }
+            case "channels":
+                if key == "enabled" {
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.channels.enabled = v
+                }
+            case "channels.discord":
+                switch key {
+                case "botToken":
+                    config.channels.discord.botToken = rawValue == "nil" ? nil : parseString(rawValue)
+                case "guildId":
+                    config.channels.discord.guildId = rawValue == "nil" ? nil : parseString(rawValue)
+                case "allowedChannelIds":
+                    guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.channels.discord.allowedChannelIds = v
+                default: break
+                }
+            case "channels.whatsapp":
+                switch key {
+                case "accessToken":
+                    config.channels.whatsapp.accessToken = rawValue == "nil" ? nil : parseString(rawValue)
+                case "phoneNumberId":
+                    config.channels.whatsapp.phoneNumberId = rawValue == "nil" ? nil : parseString(rawValue)
+                case "verifyToken":
+                    config.channels.whatsapp.verifyToken = rawValue == "nil" ? nil : parseString(rawValue)
+                case "allowedNumbers":
+                    guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.channels.whatsapp.allowedNumbers = v
+                default: break
+                }
+            case "scheduler":
+                switch key {
+                case "morningBriefingHour":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.morningBriefingHour = v
+                case "skillProposalsHour":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.skillProposalsHour = v
+                default: break
+                }
             case "speaker":
                 switch key {
                 case "enabled":
@@ -477,6 +588,7 @@ struct FaeConfig: Codable {
         lines.append("userName = \(encodeStringOrNil(userName))")
         lines.append("onboarded = \(onboarded ? "true" : "false")")
         lines.append("licenseAccepted = \(licenseAccepted ? "true" : "false")")
+        lines.append("toolMode = \(encodeString(toolMode))")
         lines.append("")
 
         lines.append("[audio]")
@@ -541,6 +653,11 @@ struct FaeConfig: Codable {
         lines.append("maxRecallResults = \(memory.maxRecallResults)")
         lines.append("")
 
+        lines.append("[scheduler]")
+        lines.append("morningBriefingHour = \(scheduler.morningBriefingHour)")
+        lines.append("skillProposalsHour = \(scheduler.skillProposalsHour)")
+        lines.append("")
+
         lines.append("[speaker]")
         lines.append("enabled = \(speaker.enabled ? "true" : "false")")
         lines.append("threshold = \(formatFloat(speaker.threshold))")
@@ -548,6 +665,29 @@ struct FaeConfig: Codable {
         lines.append("requireOwnerForTools = \(speaker.requireOwnerForTools ? "true" : "false")")
         lines.append("progressiveEnrollment = \(speaker.progressiveEnrollment ? "true" : "false")")
         lines.append("maxEnrollments = \(speaker.maxEnrollments)")
+        lines.append("")
+
+        lines.append("[voiceIdentity]")
+        lines.append("enabled = \(voiceIdentity.enabled ? "true" : "false")")
+        lines.append("mode = \(encodeString(voiceIdentity.mode))")
+        lines.append("approvalRequiresMatch = \(voiceIdentity.approvalRequiresMatch ? "true" : "false")")
+        lines.append("")
+
+        lines.append("[channels]")
+        lines.append("enabled = \(channels.enabled ? "true" : "false")")
+        lines.append("")
+
+        lines.append("[channels.discord]")
+        lines.append("botToken = \(encodeStringOrNil(channels.discord.botToken))")
+        lines.append("guildId = \(encodeStringOrNil(channels.discord.guildId))")
+        lines.append("allowedChannelIds = \(encodeStringArray(channels.discord.allowedChannelIds))")
+        lines.append("")
+
+        lines.append("[channels.whatsapp]")
+        lines.append("accessToken = \(encodeStringOrNil(channels.whatsapp.accessToken))")
+        lines.append("phoneNumberId = \(encodeStringOrNil(channels.whatsapp.phoneNumberId))")
+        lines.append("verifyToken = \(encodeStringOrNil(channels.whatsapp.verifyToken))")
+        lines.append("allowedNumbers = \(encodeStringArray(channels.whatsapp.allowedNumbers))")
 
         return lines.joined(separator: "\n") + "\n"
     }
