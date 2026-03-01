@@ -59,19 +59,20 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |--------|-------|-----------|-----------|---------|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3-8B | MLX | 4-bit | Conversation, reasoning, tool use |
+| LLM | Qwen3.5-27B / 35B-A3B | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
-Auto mode selects the LLM based on system RAM:
+Auto mode selects the LLM based on system RAM (Qwen3.5 across all tiers ≥16 GB):
 - 96+ GiB → Qwen3.5-35B-A3B (65K context)
 - 80-95 GiB → Qwen3.5-35B-A3B (49K context)
 - 64-79 GiB → Qwen3.5-35B-A3B (32K context)
-- 48-63 GiB → Qwen3-8B (32K context)
-- 32-47 GiB → Qwen3-4B (16K context)
-- 16-31 GiB → Qwen3-1.7B (8K context)
-- <16 GiB → Qwen3-1.7B (4K context)
+- 48-63 GiB → Qwen3.5-27B (32K context)
+- 32-47 GiB → Qwen3.5-27B (16K context)
+- 24-31 GiB → Qwen3.5-27B (8K context)
+- 16-23 GiB → Qwen3.5-27B (4K context) — tight, may use memory pressure
+- <16 GiB → Qwen3-1.7B (4K context) — only Qwen3 model that fits
 
 Context window is now properly wired from model selection through to the pipeline.
 `FaeConfig.recommendedMaxHistory()` scales conversation history with context size
@@ -708,16 +709,20 @@ curl -s -X POST http://127.0.0.1:8000/speak \
 
 Benchmarks: `docs/benchmarks/llm-benchmarks.md`.
 
-Auto mode selects based on system RAM:
+Auto mode selects based on system RAM (Qwen3.5 for all tiers ≥16 GB):
 
-| System RAM | Model | Notes |
-|------------|-------|-------|
-| 8-16 GB | Qwen3-0.6B | Only option that fits |
-| 16-32 GB | Qwen3-1.7B | Best voice quality at ~85 T/s |
-| 32-48 GB | Qwen3-4B | Good balance |
-| 48+ GB | Qwen3-8B | Best quality |
+| System RAM | Model | Context | Notes |
+|------------|-------|---------|-------|
+| 96+ GB | Qwen3.5-35B-A3B | 65K | MoE, best quality + headroom |
+| 64-95 GB | Qwen3.5-35B-A3B | 32-49K | MoE, scales context with RAM |
+| 48-63 GB | Qwen3.5-27B | 32K | Dense 27B, comfortable fit |
+| 32-47 GB | Qwen3.5-27B | 16K | Good headroom for STT+TTS |
+| 24-31 GB | Qwen3.5-27B | 8K | Tight but workable |
+| 16-23 GB | Qwen3.5-27B | 4K | May use memory pressure |
+| <16 GB | Qwen3-1.7B | 4K | Only option that fits |
 
-Key metrics: T/s at voice context (needs >60), `/no_think` compliance, idle RAM, answer quality.
+Key metrics: T/s at voice context, `/no_think` compliance, idle RAM, answer quality.
+Smaller Qwen3.5 models expected soon — update tiers when released.
 
 ## Completed milestones
 

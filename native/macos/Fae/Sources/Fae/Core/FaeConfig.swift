@@ -199,13 +199,18 @@ struct FaeConfig: Codable {
         case "qwen3_0_6b":
             return ("mlx-community/Qwen3-0.6B-4bit", 4_096)
         default: // "auto"
+            // Qwen3.5 models across the board — Qwen3 quality is insufficient.
+            // Qwen3.5-27B (dense, 4-bit ~14 GB weights) is the smallest 3.5 model available.
+            // Smaller 3.5 variants expected from Qwen soon — update tiers when released.
+            //
             // 96+ GB: Qwen3.5-35B-A3B with full 65K context — plenty of headroom.
             // 80-95 GB: Qwen3.5-35B-A3B with 49K context — comfortable headroom.
             // 64-79 GB: Qwen3.5-35B-A3B with 32K context — MoE ~18.8 GB + 4.5 GB KV.
-            // 48-63 GB: Qwen3-8B — 52.8 T/s, 100% tool calling, 4.5 GB RAM.
-            // 32-47 GB: Qwen3-4B — good balance at 16K context.
-            // 16-31 GB: Qwen3-1.7B — 8K context, tight but workable.
-            // <16 GB: Qwen3-1.7B — 4K context, very tight with 3 models loaded.
+            // 48-63 GB: Qwen3.5-27B with 32K context — dense 27B fits comfortably.
+            // 32-47 GB: Qwen3.5-27B with 16K context — good headroom for STT+TTS.
+            // 24-31 GB: Qwen3.5-27B with 8K context — tight but workable with all models.
+            // 16-23 GB: Qwen3.5-27B with 4K context — very tight, may use memory pressure.
+            // <16 GB: Qwen3-1.7B — only option that fits alongside STT+TTS.
             if totalGB >= 96 {
                 return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
             } else if totalGB >= 80 {
@@ -213,11 +218,13 @@ struct FaeConfig: Codable {
             } else if totalGB >= 64 {
                 return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 32_768)
             } else if totalGB >= 48 {
-                return ("mlx-community/Qwen3-8B-4bit", 32_768)
+                return ("NexVeridian/Qwen3.5-27B-4bit", 32_768)
             } else if totalGB >= 32 {
-                return ("mlx-community/Qwen3-4B-4bit", 16_384)
+                return ("NexVeridian/Qwen3.5-27B-4bit", 16_384)
+            } else if totalGB >= 24 {
+                return ("NexVeridian/Qwen3.5-27B-4bit", 8_192)
             } else if totalGB >= 16 {
-                return ("mlx-community/Qwen3-1.7B-4bit", 8_192)
+                return ("NexVeridian/Qwen3.5-27B-4bit", 4_096)
             } else {
                 return ("mlx-community/Qwen3-1.7B-4bit", 4_096)
             }
