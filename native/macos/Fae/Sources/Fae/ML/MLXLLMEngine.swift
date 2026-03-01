@@ -38,7 +38,8 @@ actor MLXLLMEngine: LLMEngine {
         NSLog("MLXLLMEngine: starting warmup inference...")
         do {
             let chatMessages: [Chat.Message] = [.system(""), .user("Hi")]
-            let userInput = UserInput(chat: chatMessages)
+            var userInput = UserInput(chat: chatMessages)
+            userInput.additionalContext = ["enable_thinking": false]
             let lmInput = try await container.prepare(input: userInput)
             let params = GenerateParameters(
                 maxTokens: 1,

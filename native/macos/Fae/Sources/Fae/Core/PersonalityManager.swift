@@ -239,8 +239,7 @@ enum PersonalityManager {
         customInstructionsOverride: String? = nil,
         memoryContext: String? = nil,
         toolSchemas: String? = nil,
-        installedSkills: [String] = [],
-        suppressThinking: Bool = true
+        installedSkills: [String] = []
     ) -> String {
         var parts: [String] = []
 
@@ -325,12 +324,9 @@ enum PersonalityManager {
         }
 
         // 10c. Thinking-mode directive.
-        if suppressThinking {
-            parts.append("""
-                Thinking mode: OFF. Respond directly without inner monologue or step-by-step \
-                reasoning. Output your answer immediately.
-                """)
-        }
+        // Note: For Qwen3.5-35B-A3B, thinking suppression is handled at the
+        // chat template level (enable_thinking=false in additionalContext).
+        // No text-based directive needed — the template kwarg is authoritative.
 
         // 11. Tool schemas (enables inline tool use via <tool_call> markup).
         if let schemas = toolSchemas, !schemas.isEmpty {

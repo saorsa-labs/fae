@@ -681,8 +681,7 @@ actor PipelineCoordinator {
                 soulContract: soul,
                 customInstructionsOverride: isRescueMode ? "" : nil,
                 toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
-                installedSkills: skills,
-                suppressThinking: !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
+                installedSkills: skills
             )
             if let context = memoryContext {
                 systemPrompt += "\n\n" + context
