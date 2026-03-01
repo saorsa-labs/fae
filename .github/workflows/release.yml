@@ -161,11 +161,53 @@ jobs:
           NOTARIZE_ZIP="$RUNNER_TEMP/fae-native-swift-notarize.zip"
           ditto -c -k --keepParent "$SWIFT_APP_BINARY" "$NOTARIZE_ZIP"
 
-          xcrun notarytool submit "$NOTARIZE_ZIP" \
+          # Submit without --wait: Xcode 26 beta notarytool crashes with SIGBUS
+          # during the long-running polling loop. Submit first, then poll separately
+          # with short-lived notarytool info calls which don't trigger the crash.
+          SUBMIT_JSON=$(xcrun notarytool submit "$NOTARIZE_ZIP" \
             --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
             --password "$MACOS_NOTARIZATION_PASSWORD" \
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
-            --wait
+            --output-format json 2>&1)
+          echo "$SUBMIT_JSON"
+
+          SUBMISSION_ID=$(echo "$SUBMIT_JSON" | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
+
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "::error::No submission ID returned from notarytool submit"
+            exit 1
+          fi
+          echo "Submission ID: $SUBMISSION_ID"
+
+          # Poll up to 15 minutes (30 x 30s) using short-lived notarytool info calls
+          NOTARIZE_STATUS="In Progress"
+          for attempt in $(seq 1 30); do
+            sleep 30
+            INFO_JSON=$(xcrun notarytool info "$SUBMISSION_ID" \
+              --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+              --password "$MACOS_NOTARIZATION_PASSWORD" \
+              --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
+              --output-format json 2>&1 || echo '{"status":"unknown"}')
+            NOTARIZE_STATUS=$(echo "$INFO_JSON" | python3 -c \
+              "import sys,json; d=json.load(sys.stdin); print(d.get('status','In Progress'))" 2>/dev/null || echo "In Progress")
+            echo "[$attempt/30] status: $NOTARIZE_STATUS"
+            case "$NOTARIZE_STATUS" in
+              Accepted) echo "Notarization accepted"; break ;;
+              Invalid|Rejected)
+                echo "::error::Notarization rejected"
+                xcrun notarytool log "$SUBMISSION_ID" \
+                  --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+                  --password "$MACOS_NOTARIZATION_PASSWORD" \
+                  --team-id "$MACOS_NOTARIZATION_TEAM_ID" 2>&1 || true
+                exit 1 ;;
+            esac
+          done
+
+          if [ "$NOTARIZE_STATUS" != "Accepted" ]; then
+            echo "::error::Notarization timed out (status: $NOTARIZE_STATUS)"
+            exit 1
+          fi
 
       - name: Prepare release payloads
         run: |
@@ -382,43 +424,54 @@ jobs:
           MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
           MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
         run: |
-          # Submit and capture output to extract submission ID for log retrieval
-          set +e
-          SUBMIT_OUTPUT=$(xcrun notarytool submit "$INSTALLER_DMG" \
+          # Submit without --wait: Xcode 26 beta notarytool crashes with SIGBUS
+          # during the long-running polling loop. Poll separately instead.
+          SUBMIT_JSON=$(xcrun notarytool submit "$INSTALLER_DMG" \
             --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
             --password "$MACOS_NOTARIZATION_PASSWORD" \
             --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
-            --wait 2>&1)
-          SUBMIT_EXIT=$?
-          set -e
+            --output-format json 2>&1)
+          echo "$SUBMIT_JSON"
 
-          echo "$SUBMIT_OUTPUT"
+          SUBMISSION_ID=$(echo "$SUBMIT_JSON" | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
 
-          # Extract submission ID (first 'id:' line)
-          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep -m1 'id:' | awk '{print $2}')
-          echo "Submission ID: $SUBMISSION_ID"
-
-          # Check result
-          if echo "$SUBMIT_OUTPUT" | grep -q "status: Accepted"; then
-            echo "Notarization accepted!"
-            xcrun stapler staple "$INSTALLER_DMG"
-          else
-            echo "::error::Notarization failed (status: Invalid or error)"
-
-            # Fetch detailed log from Apple showing exactly what's wrong
-            if [ -n "$SUBMISSION_ID" ]; then
-              echo "=== Apple Notarization Log ==="
-              xcrun notarytool log "$SUBMISSION_ID" \
-                --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
-                --password "$MACOS_NOTARIZATION_PASSWORD" \
-                --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
-                developer_log.json 2>&1 || true
-              cat developer_log.json 2>/dev/null || true
-              echo "=== End Notarization Log ==="
-            fi
-
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "::error::No submission ID returned from notarytool submit"
             exit 1
           fi
+          echo "Submission ID: $SUBMISSION_ID"
+
+          # Poll up to 15 minutes using short-lived notarytool info calls
+          NOTARIZE_STATUS="In Progress"
+          for attempt in $(seq 1 30); do
+            sleep 30
+            INFO_JSON=$(xcrun notarytool info "$SUBMISSION_ID" \
+              --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+              --password "$MACOS_NOTARIZATION_PASSWORD" \
+              --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
+              --output-format json 2>&1 || echo '{"status":"unknown"}')
+            NOTARIZE_STATUS=$(echo "$INFO_JSON" | python3 -c \
+              "import sys,json; d=json.load(sys.stdin); print(d.get('status','In Progress'))" 2>/dev/null || echo "In Progress")
+            echo "[$attempt/30] status: $NOTARIZE_STATUS"
+            case "$NOTARIZE_STATUS" in
+              Accepted) echo "Notarization accepted!"; break ;;
+              Invalid|Rejected)
+                echo "::error::Notarization failed"
+                xcrun notarytool log "$SUBMISSION_ID" \
+                  --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+                  --password "$MACOS_NOTARIZATION_PASSWORD" \
+                  --team-id "$MACOS_NOTARIZATION_TEAM_ID" 2>&1 || true
+                exit 1 ;;
+            esac
+          done
+
+          if [ "$NOTARIZE_STATUS" != "Accepted" ]; then
+            echo "::error::Notarization timed out (status: $NOTARIZE_STATUS)"
+            exit 1
+          fi
+
+          xcrun stapler staple "$INSTALLER_DMG"
 
       - name: Generate Sparkle EdDSA signature for DMG
         env:
