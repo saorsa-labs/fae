@@ -85,6 +85,9 @@ enum TextProcessing {
             let range = NSRange(result.startIndex..., in: result)
             result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
         }
+        // Strip any leaked think tags (should not reach TTS, but belt-and-suspenders).
+        result = result.replacingOccurrences(of: "</think>", with: "")
+        result = result.replacingOccurrences(of: "<think>", with: "")
         // Remove markdown-style formatting.
         result = result.replacingOccurrences(of: "**", with: "")
         result = result.replacingOccurrences(of: "__", with: "")

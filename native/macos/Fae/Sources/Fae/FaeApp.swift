@@ -269,6 +269,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         .environmentObject(onboarding)
         .environmentObject(auxiliaryWindows)
         .environmentObject(rescueMode)
+        .environmentObject(faeCore)
 
         let hostingController = NSHostingController(rootView: rootView)
 

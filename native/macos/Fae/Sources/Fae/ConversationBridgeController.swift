@@ -182,9 +182,10 @@ final class ConversationBridgeController: ObservableObject {
         conversationController?.updateStreaming(text: streamingAssistantText)
 
         if isFinal {
-            let fullText = streamingAssistantText
             streamingAssistantText = ""
-            subtitleState?.finalizeAssistantMessage(fullText)
+            // Pass only the last sentence to the subtitle so it shows
+            // the final fragment at full opacity rather than the entire accumulated text.
+            subtitleState?.finalizeAssistantMessage(text)
             conversationController?.finalizeStreaming()
         } else {
             subtitleState?.appendStreamingSentence(text)

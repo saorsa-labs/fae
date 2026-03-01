@@ -321,6 +321,14 @@ enum PersonalityManager {
             }
         }
 
+        // 10c. Thinking-mode directive.
+        if suppressThinking {
+            parts.append("""
+                Thinking mode: OFF. Respond directly without inner monologue or step-by-step \
+                reasoning. Output your answer immediately.
+                """)
+        }
+
         // 11. Tool schemas (enables inline tool use via <tool_call> markup).
         if let schemas = toolSchemas, !schemas.isEmpty {
             parts.append("""

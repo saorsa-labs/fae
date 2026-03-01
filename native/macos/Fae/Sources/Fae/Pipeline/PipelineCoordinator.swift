@@ -65,6 +65,17 @@ actor PipelineCoordinator {
         debugConsole = console
     }
 
+    // MARK: - Live Config Overrides
+
+    /// Live override for thinking mode — set by FaeCore when the user toggles the button.
+    /// `nil` means fall back to `config.llm.thinkingEnabled`.
+    private var thinkingEnabledLive: Bool?
+
+    /// Update the thinking-mode flag without restarting the pipeline.
+    func setThinkingEnabled(_ enabled: Bool) {
+        thinkingEnabledLive = enabled
+    }
+
     // MARK: - Pipeline State
 
     private var mode: PipelineMode = .conversation
@@ -671,7 +682,7 @@ actor PipelineCoordinator {
                 customInstructionsOverride: isRescueMode ? "" : nil,
                 toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
                 installedSkills: skills,
-                suppressThinking: !config.llm.thinkingEnabled
+                suppressThinking: !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
             )
             if let context = memoryContext {
                 systemPrompt += "\n\n" + context
@@ -703,7 +714,10 @@ actor PipelineCoordinator {
         var detectedToolCall = false
         // Qwen3 emits <think> as a special token (decoded to empty string by mlx-swift-lm)
         // but </think> as regular literal text. Suppress all TTS until </think> is seen.
-        var thinkEndSeen = false
+        // When thinking is disabled OR this is a tool follow-up (no think block expected),
+        // mark think as already seen so tokens route directly to TTS.
+        let suppressThink = !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
+        var thinkEndSeen = suppressThink || isToolFollowUp
         var thinkAccum = ""
         let llmStartedAt = Date()
         var llmTokenCount = 0
@@ -752,6 +766,7 @@ actor PipelineCoordinator {
                 // so ThinkTagStripper never sees it. </think> IS emitted as literal text.
                 // Buffer everything until </think>, then discard the think block.
                 if !thinkEndSeen {
+                    debugLog(debugConsole, .llmThink, visible)
                     thinkAccum += visible
                     if let endRange = thinkAccum.range(of: "</think>") {
                         let afterThink = String(thinkAccum[endRange.upperBound...])
@@ -764,9 +779,9 @@ actor PipelineCoordinator {
                         }
                         continue
                     }
-                    // Safety timeout: if fullResponse is very long with no </think>,
-                    // the model likely skipped the think block; start speaking.
-                    if fullResponse.count > 5_000 {
+                    // Safety timeout: if the think block is very long and </think> never
+                    // arrives, the model likely went off-rails — flush and start speaking.
+                    if thinkAccum.count > 80_000 {
                         thinkAccum = ""
                         thinkEndSeen = true
                         // Fall through to normal routing.
@@ -774,6 +789,7 @@ actor PipelineCoordinator {
                         continue
                     }
                 }
+                debugLog(debugConsole, .llmToken, visible)
 
                 // Roleplay mode: route through voice tag parser for per-character TTS.
                 if roleplayActive {

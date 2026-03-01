@@ -67,14 +67,13 @@ final class SubtitleStateController: ObservableObject {
         }
     }
 
-    /// Append a streaming assistant sentence fragment (reduced opacity, no timer).
+    /// Show the most recent streaming assistant sentence fragment (reduced opacity, no timer).
+    ///
+    /// Replaces the previous fragment so the subtitle shows only the current sentence,
+    /// preventing the bubble from growing to cover the orb.
     func appendStreamingSentence(_ sentence: String) {
         assistantHideTask?.cancel()
-        if assistantText.isEmpty {
-            assistantText = sentence
-        } else {
-            assistantText += " " + sentence
-        }
+        assistantText = sentence
         isAssistantStreaming = true
     }
 

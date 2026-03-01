@@ -17,6 +17,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var isLicenseAccepted: Bool
     @Published var userName: String?
     @Published var toolMode: String = "full"
+    @Published var thinkingEnabled: Bool = false
 
     /// Rescue mode reference — set by FaeAppDelegate before start().
     weak var rescueMode: RescueMode?
@@ -33,6 +34,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         self.isLicenseAccepted = loaded.licenseAccepted
         self.userName = loaded.userName
         self.toolMode = loaded.toolMode
+        self.thinkingEnabled = loaded.llm.thinkingEnabled
 
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -271,6 +273,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Cancel the current generation immediately without stopping the pipeline.
     func cancel() {
         Task { await pipelineCoordinator?.cancel() }
+    }
+
+    /// Toggle thinking mode on/off, persist to config, and update the live pipeline.
+    func setThinkingEnabled(_ enabled: Bool) {
+        thinkingEnabled = enabled
+        config.llm.thinkingEnabled = enabled
+        persistConfig(reason: "config.patch.thinking_enabled")
+        if let coordinator = pipelineCoordinator {
+            Task { await coordinator.setThinkingEnabled(enabled) }
+        }
     }
 
     /// Wire the debug console to the pipeline coordinator.

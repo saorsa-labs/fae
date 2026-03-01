@@ -10,6 +10,7 @@ struct InputBarView: View {
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
+    @EnvironmentObject private var faeCore: FaeCore
 
     @State private var messageText: String = ""
     @State private var isSendAnimating: Bool = false
@@ -43,7 +44,7 @@ struct InputBarView: View {
                 }
 
                 // Action pills
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     actionPill(
                         label: auxiliaryWindows.isConversationVisible
                             ? "Hide Discussions" : "Show Discussions",
@@ -54,6 +55,7 @@ struct InputBarView: View {
                             ? "Hide Canvas" : "Show Canvas",
                         action: { auxiliaryWindows.toggleCanvas() }
                     )
+                    thinkingTogglePill
                 }
             }
             .padding(.horizontal, 16)
@@ -236,6 +238,47 @@ struct InputBarView: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Thinking Toggle Pill
+
+    private var thinkingTogglePill: some View {
+        Button(action: {
+            faeCore.setThinkingEnabled(!faeCore.thinkingEnabled)
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: faeCore.thinkingEnabled ? "brain.fill" : "brain")
+                    .font(.system(size: 10, weight: .medium))
+                Text(faeCore.thinkingEnabled ? "Thinking On" : "Thinking Off")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(
+                faeCore.thinkingEnabled
+                    ? Self.heather
+                    : Color.white.opacity(0.45)
+            )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(
+                        faeCore.thinkingEnabled
+                            ? Self.heather.opacity(0.12)
+                            : Color.white.opacity(0.05)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(
+                        faeCore.thinkingEnabled
+                            ? Self.heather.opacity(0.25)
+                            : Color.white.opacity(0.08),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.2), value: faeCore.thinkingEnabled)
     }
 
     // MARK: - Submit
