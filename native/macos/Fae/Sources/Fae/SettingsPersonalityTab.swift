@@ -32,14 +32,14 @@ struct SettingsPersonalityTab: View {
                 Text("Soul")
             }
 
-            // MARK: - Custom Instructions
+            // MARK: - Directive
 
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Custom Instructions")
+                        Text("Directive")
                             .font(.headline)
-                        Text(instructionsStatusLine)
+                        Text(directiveStatusLine)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -48,12 +48,16 @@ struct SettingsPersonalityTab: View {
                         personalityEditor?.showInstructionsEditor()
                     }
                     Button("Clear") {
-                        clearInstructions()
+                        clearDirective()
                     }
                     .disabled(SelfConfigTool.readInstructions().isEmpty)
                 }
             } header: {
-                Text("Instructions")
+                Text("Directive")
+            } footer: {
+                Text("Critical instructions Fae follows in every conversation. Usually empty — only add something here if it's important enough to override normal behavior.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
 
             // MARK: - Rescue Mode
@@ -94,18 +98,21 @@ struct SettingsPersonalityTab: View {
         return "\(lines) lines, \(status)"
     }
 
-    private var instructionsStatusLine: String {
+    private var directiveStatusLine: String {
         let text = SelfConfigTool.readInstructions()
         if text.isEmpty {
-            return "None set — using default personality"
+            return "Empty (no active directives)"
         }
-        return "\(text.count) / 2000 characters"
+        return "\(text.count) / 4000 characters"
     }
 
-    private func clearInstructions() {
-        let url = SoulManager.userSoulURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("custom_instructions.txt")
+    private func clearDirective() {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
+        let url = appSupport.appendingPathComponent("fae/directive.md")
         try? "".write(to: url, atomically: true, encoding: .utf8)
     }
 }

@@ -236,10 +236,11 @@ enum PersonalityManager {
         speakerDisplayName: String? = nil,
         speakerRole: SpeakerRole? = nil,
         soulContract: String? = nil,
-        customInstructionsOverride: String? = nil,
+        directiveOverride: String? = nil,
         memoryContext: String? = nil,
         toolSchemas: String? = nil,
-        installedSkills: [String] = []
+        installedSkills: [String] = [],
+        skillDescriptions: [(name: String, description: String, type: SkillType)] = []
     ) -> String {
         var parts: [String] = []
 
@@ -299,12 +300,12 @@ enum PersonalityManager {
         // 8. Permission context.
         parts.append(PermissionStatusProvider.promptFragment())
 
-        // 9. Custom user instructions (persisted personality preferences).
-        let customInstructions = customInstructionsOverride ?? loadCustomInstructions()
-        if !customInstructions.isEmpty {
+        // 9. Directive (critical overriding instructions, usually empty).
+        let directive = directiveOverride ?? loadDirective()
+        if !directive.isEmpty {
             parts.append("""
-                User's style preferences (follow these closely):
-                \(customInstructions)
+                User directive (critical instructions — follow these in EVERY conversation):
+                \(directive)
                 """)
         }
 
@@ -315,8 +316,16 @@ enum PersonalityManager {
             parts.append(proactiveBehaviorPrompt)
             parts.append(roleplayPrompt)
 
-            // 10b. Installed skill inventory — lets the LLM know what it can already do.
-            if !installedSkills.isEmpty {
+            // 10b. Skill inventory with progressive disclosure.
+            if !skillDescriptions.isEmpty {
+                var lines = ["Available skills (activate with activate_skill tool before using):"]
+                for skill in skillDescriptions {
+                    let tag = skill.type == .executable ? " [executable]" : ""
+                    lines.append("- \(skill.name): \(skill.description)\(tag)")
+                }
+                parts.append(lines.joined(separator: "\n"))
+            } else if !installedSkills.isEmpty {
+                // Fallback for legacy flat Python skills.
                 parts.append(
                     "Your installed Python skills (run via run_skill tool): \(installedSkills.joined(separator: ", "))"
                 )
@@ -349,12 +358,12 @@ enum PersonalityManager {
         return parts.joined(separator: "\n\n")
     }
 
-    // MARK: - Custom Instructions
+    // MARK: - Directive
 
-    /// Load user's custom personality instructions from disk.
+    /// Load user's directive from disk.
     ///
     /// Read on each prompt assembly so changes from `SelfConfigTool` take effect immediately.
-    private static func loadCustomInstructions() -> String {
+    private static func loadDirective() -> String {
         SelfConfigTool.readInstructions()
     }
 

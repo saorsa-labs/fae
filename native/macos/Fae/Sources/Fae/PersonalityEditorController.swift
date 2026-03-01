@@ -3,9 +3,9 @@ import Foundation
 
 /// Provides Edit-menu actions for editing Fae's personality files.
 ///
-/// Opens the user's editable soul.md and custom_instructions.txt in
-/// the system default text editor. Files are read fresh every turn,
-/// so edits take effect on the next query.
+/// Opens the user's editable soul.md and directive.md in the system
+/// default text editor. Files are read fresh every turn, so edits
+/// take effect on the next query.
 @MainActor
 final class PersonalityEditorController {
 
@@ -17,31 +17,32 @@ final class PersonalityEditorController {
         NSWorkspace.shared.open(SoulManager.userSoulURL)
     }
 
-    /// Open the user's custom_instructions.txt in the default text editor.
+    /// Open the user's directive.md in the default text editor.
     func showInstructionsEditor() {
-        let url = customInstructionsURL
-        ensureCustomInstructionsFile(at: url)
+        let url = directiveURL
+        ensureDirectiveFile(at: url)
         NSWorkspace.shared.open(url)
     }
 
     // MARK: - Private
 
-    private var customInstructionsURL: URL {
+    private var directiveURL: URL {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/custom_instructions.txt")
+        return appSupport.appendingPathComponent("fae/directive.md")
     }
 
-    private func ensureCustomInstructionsFile(at url: URL) {
+    private func ensureDirectiveFile(at url: URL) {
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let placeholder = """
-            # Fae Custom Instructions
-            # Add your personal style preferences here.
+            # Fae Directive
+            # Critical instructions Fae follows in every conversation.
+            # Usually empty — only add rules important enough to always apply.
             # Changes take effect on the next conversation turn.
             """
         try? placeholder.write(to: url, atomically: true, encoding: .utf8)

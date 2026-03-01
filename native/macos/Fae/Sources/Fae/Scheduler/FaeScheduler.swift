@@ -43,6 +43,9 @@ actor FaeScheduler {
     /// Closure to make Fae speak — set by FaeCore after pipeline is ready.
     var speakHandler: (@Sendable (String) async -> Void)?
 
+    /// Vault manager for backup tasks — set by FaeCore.
+    private var vaultManager: GitVaultManager?
+
     /// Daily proactive interjection counter, reset at midnight.
     private var proactiveInterjectionCount: Int = 0
 
@@ -70,6 +73,11 @@ actor FaeScheduler {
     /// Set the speak handler (must be called before start for morning briefings to work).
     func setSpeakHandler(_ handler: @escaping @Sendable (String) async -> Void) {
         speakHandler = handler
+    }
+
+    /// Set the vault manager for backup tasks.
+    func setVaultManager(_ manager: GitVaultManager) {
+        vaultManager = manager
     }
 
     /// Configure persistence — creates a persistence-backed ledger and loads saved state.
@@ -451,6 +459,23 @@ actor FaeScheduler {
         )
     }
 
+    private func runVaultBackup() async {
+        NSLog("FaeScheduler: vault_backup — running")
+        guard let vault = vaultManager else {
+            NSLog("FaeScheduler: vault_backup — no vault manager configured")
+            return
+        }
+        let result = await vault.backup(reason: "scheduled daily backup")
+        switch result {
+        case .success(let hash):
+            NSLog("FaeScheduler: vault_backup — complete (%@)", hash)
+        case .noChanges:
+            NSLog("FaeScheduler: vault_backup — skipped (no changes)")
+        case .failure(let error):
+            NSLog("FaeScheduler: vault_backup — failed: %@", error)
+        }
+    }
+
     private func runCheckUpdate() async {
         NSLog("FaeScheduler: check_fae_update — running")
         // Sparkle handles update checks automatically when configured.
@@ -524,6 +549,8 @@ actor FaeScheduler {
 
         // memory_backup: daily 02:00
         if hour == 2, minute < 2 { await runDailyIfNeeded("memory_backup") { await runMemoryBackup() } }
+        // vault_backup: daily 02:30
+        if hour == 2, minute >= 30, minute < 32 { await runDailyIfNeeded("vault_backup") { await runVaultBackup() } }
         // memory_gc: daily 03:30
         if hour == 3, minute >= 30, minute < 32 { await runDailyIfNeeded("memory_gc") { await runMemoryGC() } }
         // noise_budget_reset: daily 00:00
@@ -577,6 +604,7 @@ actor FaeScheduler {
         case "stale_relationships": await runStaleRelationships()
         case "skill_health_check": await runSkillHealthCheck()
         case "embedding_reindex": await runEmbeddingReindex()
+        case "vault_backup":     await runVaultBackup()
         default:
             NSLog("FaeScheduler: unknown task id '%@'", id)
         }
@@ -679,6 +707,7 @@ actor FaeScheduler {
             "memory_gc", "memory_backup", "check_fae_update",
             "morning_briefing", "noise_budget_reset", "skill_proposals",
             "stale_relationships", "skill_health_check", "embedding_reindex",
+            "vault_backup",
         ]
         ids.formUnion(builtinIDs)
 

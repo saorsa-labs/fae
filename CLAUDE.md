@@ -225,23 +225,53 @@ only detectable from AppleScript error responses, not via a pre-flight API.
 Settings > Tools shows an **"Apple Tool Permissions"** section with per-tool Granted/Not Granted
 status badges and Grant buttons. See `docs/guides/scheduler-tooling-and-permissions.md`.
 
-### Tool security (v0.8.1)
+### Tool security (v0.8.1 + v0.8.63 TrustedActionBroker)
 
-4-layer safety model for the tool system:
+**6-layer safety model** for the tool system (v0.8.63 adds layers 5-6):
 
 | Layer | Implementation | Purpose |
 |-------|---------------|---------|
 | **Tool mode filtering** | `ToolRegistry.toolSchemas(for:)` | LLM never sees tools outside current mode |
 | **Execution guard** | `PipelineCoordinator.executeTool()` | Rejects tool calls even if LLM hallucinates them |
 | **Path validation** | `PathPolicy.validateWritePath()` | Blocks writes to dotfiles, system paths, Fae config |
-| **Rate limiting** | `ToolRateLimiter` | Per-tool sliding-window limits (bash: 5/min, write: 10/min) |
+| **Rate limiting** | `ToolRateLimiter` | Per-tool sliding-window limits with risk-aware adjustments |
+| **TrustedActionBroker** | `TrustedActionBroker.evaluate()` | Default-deny policy chokepoint; all tool calls route through |
+| **Outbound guard** | `OutboundExfiltrationGuard` | Novel recipient confirmation + sensitive payload detection |
 
-Additional hardening:
+**TrustedActionBroker** (v0.8.63): Central policy chokepoint implementing default-deny. Every tool call is modeled as an `ActionIntent` and evaluated to a `BrokerDecision`:
+- `allow` — proceed immediately
+- `allowWithTransform(.checkpointBeforeMutation)` — create reversibility checkpoint then proceed
+- `confirm(reason:)` — require user approval with plain-language explanation
+- `deny(reason:)` — block with explanation
+
+Three `PolicyProfile` modes (configurable via Settings > Tools):
+- **balanced** (default) — production safety defaults
+- **moreAutonomous** — relaxes low-risk confirmations
+- **moreCautious** — halves rate limits, confirms medium-risk actions
+
+**CapabilityTicket**: task-scoped temporary grants with TTL. Tools must hold a valid ticket to pass the broker. Tickets are issued per conversation turn and expire automatically.
+
+**ReversibilityEngine**: pre-mutation file checkpoints in `~/Library/.../fae/recovery/`. Stores file content before writes; supports restore and automatic 24h pruning.
+
+**SafeBashExecutor**: denylist of 8 dangerous patterns (rm -rf /, chmod 777, etc.); minimal constrained env; process-group SIGTERM/SIGKILL on timeout.
+
+**SafeSkillExecutor**: ulimit constraints (CPU, memory 1GB, 64 FDs); restricted cwd to skill's `scripts/` directory.
+
+**NetworkTargetPolicy**: shared policy blocking localhost, cloud metadata endpoints (169.254.169.254, metadata.google.internal), all RFC1918/loopback/link-local IPv4+IPv6. Replaces per-tool inline checks.
+
+**OutboundExfiltrationGuard**: novel recipient confirmation (SHA256 hash set, persisted JSON). Sensitive payload detection via keyword matching + high-entropy heuristic.
+
+**SecurityEventLogger**: append-only JSONL at `.../fae/security-events.jsonl`. SHA256 argument hashing. 5MB rotation with 3 archives. Forensic mode toggle. Redaction via SensitiveDataRedactor.
+
+**SensitiveDataRedactor**: regex patterns for API keys, tokens, passwords (OpenAI sk-, Slack xox, GitHub ghp_, Google AIza). Length/entropy heuristic for opaque tokens.
+
+**SkillManifest**: `MANIFEST.json` schema with capabilities, allowedTools, allowedDomains, riskTier, and SHA-256 per-file integrity checksums for tamper detection.
+
+Additional hardening (v0.8.1):
 
 - **SelfConfigTool**: requires approval, jailbreak pattern detection, 2000-char limit
-- **BashTool**: process group kill on timeout, stderr filtered from LLM, command classification (known-safe vs unknown warning)
+- **BashTool**: execution via SafeBashExecutor, stderr filtered from LLM
 - **EditTool**: first-occurrence-only replacement, occurrence count reporting
-- **FetchURLTool**: blocks cloud metadata endpoints (169.254.169.254, metadata.google.internal)
 - **WriteTool**: content null-byte sanitization via `InputSanitizer`
 - **ApprovalManager**: 20s timeout (was 58s)
 
@@ -252,13 +282,24 @@ Implementation files:
 | `Tools/BuiltinTools.swift` | All core + web tool implementations |
 | `Tools/AppleTools.swift` | Apple integration tools (calendar, contacts, etc.) |
 | `Tools/SchedulerTools.swift` | Scheduler management tools |
+| `Tools/SkillTools.swift` | Skill tools (activate_skill, run_skill, manage_skill) |
 | `Tools/Tool.swift` | Tool protocol definition |
 | `Tools/RoleplayTool.swift` | Multi-voice roleplay session management |
 | `Tools/ToolRegistry.swift` | Dynamic tool registration, schema generation, mode filtering |
+| `Tools/TrustedActionBroker.swift` | Central default-deny policy chokepoint |
+| `Tools/CapabilityTicket.swift` | Task-scoped temporary grants with TTL |
+| `Tools/ReversibilityEngine.swift` | Pre-mutation file checkpoints and rollback |
+| `Tools/SafeBashExecutor.swift` | Sandboxed bash execution with denylist |
+| `Tools/SafeSkillExecutor.swift` | Constrained Python skill execution (ulimits) |
+| `Tools/NetworkTargetPolicy.swift` | Shared network target validation (blocks localhost, metadata, RFC1918) |
+| `Tools/OutboundExfiltrationGuard.swift` | Novel recipient confirmation + sensitive payload detection |
+| `Tools/SecurityEventLogger.swift` | Append-only JSONL security event log |
+| `Tools/SensitiveDataRedactor.swift` | API key/token/password redaction |
 | `Tools/PathPolicy.swift` | Write-path validation (blocklist for dotfiles, system paths) |
 | `Tools/InputSanitizer.swift` | Shell metacharacter detection, bash command classification |
-| `Tools/ToolRateLimiter.swift` | Per-tool sliding-window rate limiter |
+| `Tools/ToolRateLimiter.swift` | Per-tool sliding-window rate limiter with risk-aware adjustments |
 | `Tools/ToolRiskPolicy.swift` | Risk-level → approval routing |
+| `Tools/ToolAnalytics.swift` | Tool usage analytics |
 
 ### Web search (DuckDuckGo)
 
@@ -664,6 +705,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `Skills/SkillTypes.swift` | `SkillMetadata`, `SkillRecord`, `SkillType`, `SkillTier`, `SkillHealthStatus` |
 | `Skills/SkillParser.swift` | YAML frontmatter parser for SKILL.md files |
 | `Skills/SkillMigrator.swift` | One-time migration of legacy flat `.py` files to directory format |
+| `Skills/SkillManifest.swift` | `MANIFEST.json` schema: capabilities, allowedTools, riskTier, SHA-256 integrity |
 | `Backup/GitVaultManager.swift` | Git-based rolling backup vault at `~/.fae-vault/` |
 
 ### Orb & Window
@@ -710,13 +752,13 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `SettingsGeneralTab.swift` | General settings (audio, barge-in toggle, window behavior) |
 | `SettingsModelsTab.swift` | Model selection and download |
 | `SettingsSpeakerTab.swift` | Voice identity configuration |
-| `SettingsToolsTab.swift` | Tool mode picker |
+| `SettingsToolsTab.swift` | Tool mode picker + PolicyProfile selector |
 | `SettingsPersonalityTab.swift` | Personality: soul contract, custom instructions, rescue mode |
 | `SettingsSchedulesTab.swift` | Scheduler task configuration |
 | `SettingsChannelsTab.swift` | Channel configuration |
 | `SettingsSkillsTab.swift` | Unified skill display with type/tier badges, Apple apps, system capabilities |
 | `SettingsAboutTab.swift` | About, version info |
-| `SettingsDeveloperTab.swift` | Developer diagnostics (Option-held) |
+| `SettingsDeveloperTab.swift` | Developer diagnostics (Option-held) + security dashboard |
 | `PersonalityEditorController.swift` | Opens soul.md / directive.md in system text editor |
 
 ### System & Misc
@@ -884,6 +926,15 @@ Smaller Qwen3.5 models expected soon — update tiers when released.
   - SelfConfigTool actions: `get_directive`, `set_directive`, `append_directive`, `clear_directive`
   - Prompt label: "User directive (critical instructions — follow these in EVERY conversation)"
   - Scheduler: 13th task `vault_backup` at 02:30 daily
+  - TrustedActionBroker: default-deny policy chokepoint with 3 PolicyProfile modes
+  - CapabilityTicket: per-turn scoped grants with TTL
+  - ReversibilityEngine: pre-mutation file checkpoints with 24h prune
+  - SafeBashExecutor + SafeSkillExecutor: sandboxed execution
+  - NetworkTargetPolicy: shared localhost/metadata/RFC1918 blocklist
+  - OutboundExfiltrationGuard: novel recipient confirmation + sensitive payload detection
+  - SecurityEventLogger: append-only JSONL with rotation + SensitiveDataRedactor
+  - SkillManifest: SHA-256 integrity verification for skill files
+  - Settings: PolicyProfile picker in Tools tab, security dashboard in Developer tab
 - **v0.8.62** — Echo/barge-in fix: prevent garbled speech from self-interruption
   - Fixed `lastAssistantStart` never assigned — 500ms holdoff was dead code
   - Echo-aware barge-in gating via `EchoSuppressor.isInSuppression`

@@ -129,17 +129,6 @@ struct BashTool: Tool {
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"bash","arguments":{"command":"ls -la ~/Documents"}}</tool_call>"#
 
-    private enum BashToolError: LocalizedError {
-        case timedOut(Int)
-
-        var errorDescription: String? {
-            switch self {
-            case .timedOut(let seconds):
-                return "Command timed out after \(seconds)s"
-            }
-        }
-    }
-
     /// Approval description including command classification.
     ///
     /// Called by `PipelineCoordinator` to build a richer approval card.
@@ -156,7 +145,10 @@ struct BashTool: Tool {
         }
 
         do {
-            let (status, outData, errData) = try await runProcess(command: command, timeoutSeconds: 30)
+            let (status, outData, errData) = try await SafeBashExecutor.execute(
+                command: command,
+                timeoutSeconds: 30
+            )
             let outStr = String(data: outData, encoding: .utf8) ?? ""
             let errStr = String(data: errData, encoding: .utf8) ?? ""
 
@@ -178,64 +170,6 @@ struct BashTool: Tool {
         }
     }
 
-    private func runProcess(command: String, timeoutSeconds: Int) async throws -> (Int32, Data, Data) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", command]
-
-        // Ensure user-installed tools (uv, homebrew, etc.) are in PATH.
-        // macOS GUI apps inherit a minimal PATH that excludes ~/.local/bin.
-        var env = ProcessInfo.processInfo.environment
-        let home = NSHomeDirectory()
-        let existing = env["PATH"] ?? "/usr/bin:/bin"
-        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:\(existing)"
-        process.environment = env
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        try process.run()
-
-        let outputTask = Task<(Data, Data), Never> {
-            let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            return (outData, errData)
-        }
-
-        do {
-            let status = try await waitForExit(process: process, timeoutSeconds: timeoutSeconds)
-            let (outData, errData) = await outputTask.value
-            return (status, outData, errData)
-        } catch {
-            if process.isRunning {
-                process.terminate()
-            }
-            _ = await outputTask.value
-            throw error
-        }
-    }
-
-    private func waitForExit(process: Process, timeoutSeconds: Int) async throws -> Int32 {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
-        while process.isRunning {
-            try Task.checkCancellation()
-            if Date() >= deadline {
-                // Kill entire process group, not just the parent.
-                let pid = process.processIdentifier
-                kill(-pid, SIGTERM)
-                // Give processes a moment to clean up, then force kill.
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if process.isRunning {
-                    kill(-pid, SIGKILL)
-                }
-                throw BashToolError.timedOut(timeoutSeconds)
-            }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-        return process.terminationStatus
-    }
 }
 
 // MARK: - Self Config Tool
@@ -243,20 +177,21 @@ struct BashTool: Tool {
 struct SelfConfigTool: Tool {
     let name = "self_config"
     let description = """
-        Modify Fae's own behavior, personality style, or preferences. \
-        Use this when the user asks you to change how you communicate \
-        (e.g., "be more cheerful", "less chatty", "speak more formally"). \
-        Actions: get_instructions, set_instructions, append_instructions, clear_instructions.
+        Modify Fae's directive — critical overriding instructions that apply to every conversation. \
+        Use this when the user wants to set a standing order or rule \
+        (e.g., "always check my calendar before suggesting times", "never discuss topic X"). \
+        Actions: get_directive, set_directive, append_directive, clear_directive. \
+        Legacy aliases: get_instructions, set_instructions, append_instructions, clear_instructions.
         """
     let parametersSchema = #"""
-        {"action": "string (required: get_instructions|set_instructions|append_instructions|clear_instructions)", "value": "string (required for set/append)"}
+        {"action": "string (required: get_directive|set_directive|append_directive|clear_directive)", "value": "string (required for set/append)"}
         """#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
-    let example = #"<tool_call>{"name":"self_config","arguments":{"action":"append_instructions","value":"Be more concise"}}</tool_call>"#
+    let example = #"<tool_call>{"name":"self_config","arguments":{"action":"append_directive","value":"Always check calendar before suggesting meeting times"}}</tool_call>"#
 
-    /// Maximum character length for custom instructions.
-    private static let maxInstructionLength = 2000
+    /// Maximum character length for directive.
+    private static let maxInstructionLength = 4000
 
     /// Patterns that indicate an attempt to bypass safety.
     private static let jailbreakPatterns: [String] = [
@@ -282,7 +217,7 @@ struct SelfConfigTool: Tool {
             in: .userDomainMask
         ).first ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/custom_instructions.txt")
+        return appSupport.appendingPathComponent("fae/directive.md")
     }
 
     /// Check if content contains jailbreak patterns.
@@ -313,14 +248,14 @@ struct SelfConfigTool: Tool {
         }
 
         switch action {
-        case "get_instructions":
+        case "get_directive", "get_instructions":
             let current = Self.readInstructions()
             if current.isEmpty {
-                return .success("No custom instructions set. Using default personality.")
+                return .success("No directive set. Using default personality.")
             }
             return .success(current)
 
-        case "set_instructions":
+        case "set_directive", "set_instructions":
             guard let value = input["value"] as? String else {
                 return .error("Missing required parameter: value")
             }
@@ -328,9 +263,9 @@ struct SelfConfigTool: Tool {
                 return rejection
             }
             Self.writeInstructions(value)
-            return .success("Custom instructions updated. Changes take effect on next response.")
+            return .success("Directive updated. Changes take effect on next response.")
 
-        case "append_instructions":
+        case "append_directive", "append_instructions":
             guard let value = input["value"] as? String else {
                 return .error("Missing required parameter: value")
             }
@@ -340,14 +275,14 @@ struct SelfConfigTool: Tool {
                 return rejection
             }
             Self.writeInstructions(updated)
-            return .success("Appended to custom instructions. Changes take effect on next response.")
+            return .success("Appended to directive. Changes take effect on next response.")
 
-        case "clear_instructions":
+        case "clear_directive", "clear_instructions":
             Self.writeInstructions("")
-            return .success("Custom instructions cleared. Reverting to default personality.")
+            return .success("Directive cleared. Reverting to default personality.")
 
         default:
-            return .error("Unknown action: \(action). Use: get_instructions, set_instructions, append_instructions, clear_instructions")
+            return .error("Unknown action: \(action). Use: get_directive, set_directive, append_directive, clear_directive")
         }
     }
 
@@ -483,43 +418,6 @@ struct WebSearchTool: Tool {
     }
 }
 
-// MARK: - Run Skill Tool
-
-/// Run an installed Python skill by name.
-struct RunSkillTool: Tool {
-    let name = "run_skill"
-    let description = "Run an installed Python skill by name. Use this instead of composing bash commands with skill paths."
-    let parametersSchema = #"{"name": "string (required — skill name without .py)", "input": "string (optional — input text for the skill)"}"#
-    let requiresApproval = true
-    let riskLevel: ToolRiskLevel = .medium
-    let example = #"<tool_call>{"name":"run_skill","arguments":{"name":"weather_check","input":"London"}}</tool_call>"#
-
-    private let skillManager = SkillManager()
-
-    func execute(input: [String: Any]) async throws -> ToolResult {
-        guard let skillName = input["name"] as? String,
-              !skillName.trimmingCharacters(in: .whitespaces).isEmpty
-        else {
-            return .error("Missing required parameter: name")
-        }
-
-        var skillInput: [String: Any] = SkillManager.audioContextForSkill()
-        if let text = input["input"] as? String {
-            skillInput["input"] = text
-        }
-
-        do {
-            let output = try await skillManager.execute(skillName: skillName, input: skillInput)
-            let truncated = output.count > 20_000
-                ? String(output.prefix(20_000)) + "\n[truncated]"
-                : output
-            return .success(truncated)
-        } catch {
-            return .error("Skill execution failed: \(error.localizedDescription)")
-        }
-    }
-}
-
 // MARK: - Fetch URL Tool
 
 /// Fetches a web page and extracts readable text content.
@@ -535,18 +433,17 @@ struct FetchURLTool: Tool {
 
     private static let orchestrator = SearchOrchestrator()
 
-    /// Cloud metadata endpoints that could leak credentials on cloud VMs.
-    private static let blockedHosts: Set<String> = [
-        "169.254.169.254",
-        "metadata.google.internal",
-    ]
+    /// Check whether a URL is blocked by network target policy.
+    static func blockedReason(for urlString: String) -> String? {
+        NetworkTargetPolicy.blockedReason(urlString: urlString)
+    }
 
-    /// Check if a URL targets a cloud metadata endpoint.
+    /// Backward-compatible metadata-only checker retained for older tests.
     static func isCloudMetadataBlocked(_ urlString: String) -> Bool {
         guard let url = URL(string: urlString),
               let host = url.host?.lowercased()
         else { return false }
-        return blockedHosts.contains(host)
+        return host == "169.254.169.254" || host == "metadata.google.internal"
     }
 
     func execute(input: [String: Any]) async throws -> ToolResult {
@@ -560,8 +457,8 @@ struct FetchURLTool: Tool {
             return .error("URL must start with http:// or https://")
         }
 
-        if Self.isCloudMetadataBlocked(urlString) {
-            return .error("Access to cloud metadata endpoints is blocked for security.")
+        if let blockedReason = Self.blockedReason(for: urlString) {
+            return .error(blockedReason)
         }
 
         do {

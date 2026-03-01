@@ -270,8 +270,8 @@ final class ToolRateLimiterTests: XCTestCase {
 
     func testDefaultLimitForUnknownTool() async {
         let limiter = ToolRateLimiter()
-        // Unknown tools get default limit of 20.
-        for _ in 0..<20 {
+        // Unknown tools: base limit 20, capped to 10 by medium risk + balanced profile.
+        for _ in 0..<10 {
             let result = await limiter.checkLimit(tool: "custom_tool")
             XCTAssertNil(result)
         }

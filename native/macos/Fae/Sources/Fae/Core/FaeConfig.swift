@@ -17,6 +17,7 @@ struct FaeConfig: Codable {
     var voiceIdentity: VoiceIdentityConfig = VoiceIdentityConfig()
     var channels: ChannelsConfig = ChannelsConfig()
     var scheduler: SchedulerConfig = SchedulerConfig()
+    var skills: SkillsConfig = SkillsConfig()
     var userName: String?
     var onboarded: Bool = false
     var licenseAccepted: Bool = false
@@ -167,6 +168,15 @@ struct FaeConfig: Codable {
     struct SchedulerConfig: Codable {
         var morningBriefingHour: Int = 8
         var skillProposalsHour: Int = 11
+    }
+
+    // MARK: - Skills
+
+    struct SkillsConfig: Codable {
+        /// Maximum tokens budgeted for skill descriptions in system prompt.
+        var promptBudgetTokens: Int = 2000
+        /// Built-in skill names that should not be shown or activated.
+        var disabledBuiltins: [String] = []
     }
 
     // MARK: - Model Selection

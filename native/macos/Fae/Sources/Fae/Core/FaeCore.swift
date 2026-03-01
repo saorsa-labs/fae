@@ -65,6 +65,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private let speakerProfileStore: SpeakerProfileStore
     private var scheduler: FaeScheduler?
     private var debugConsoleRef: DebugConsoleController?
+    private var vaultManager: GitVaultManager?
 
     /// Pending query continuations keyed by command name.
     private var pendingQueries: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
@@ -79,8 +80,23 @@ final class FaeCore: ObservableObject, HostCommandSender {
         eventBus.send(.runtimeState(.starting))
         pipelineState = .starting
 
+        // One-time migrations.
+        Self.migrateCustomInstructionsToDirective()
+        SkillMigrator.migrateIfNeeded()
+
         // Ensure user has a copy of SOUL.md on first launch.
         SoulManager.ensureUserCopy()
+
+        // Initialize vault (non-blocking — backup failures are logged but not fatal).
+        let vault = GitVaultManager()
+        self.vaultManager = vault
+        Task.detached(priority: .utility) {
+            do {
+                try await vault.ensureVault()
+            } catch {
+                NSLog("FaeCore: vault initialization failed: %@", error.localizedDescription)
+            }
+        }
 
         // Load models and start pipeline asynchronously.
         Task {
@@ -172,7 +188,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     NSLog("FaeCore: rescue mode — tool mode forced to read_only")
                 }
 
-                let registry = ToolRegistry.buildDefault()
+                let skillManager = SkillManager()
+                let registry = ToolRegistry.buildDefault(skillManager: skillManager)
+                let toolAnalytics = try? Self.createToolAnalyticsStore()
                 let coordinator = PipelineCoordinator(
                     eventBus: eventBus,
                     capture: captureManager,
@@ -187,6 +205,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     registry: registry,
                     speakerEncoder: speakerEncoder,
                     speakerProfileStore: speakerProfileStore,
+                    skillManager: skillManager,
+                    toolAnalytics: toolAnalytics,
                     rescueMode: isRescue
                 )
                 try await coordinator.start()
@@ -213,6 +233,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         await sched.configurePersistence(store: schedulerStore)
                     }
 
+                    await sched.setVaultManager(vault)
                     await sched.setSpeakHandler { [weak coordinator] text in
                         await coordinator?.speakDirect(text)
                     }
@@ -265,6 +286,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
         pipelineState = .stopping
 
         Task {
+            // Pre-shutdown vault backup.
+            if let vault = vaultManager {
+                _ = await vault.backup(reason: "pre-shutdown")
+            }
             await scheduler?.stop()
             scheduler = nil
             await pipelineCoordinator?.stop()
@@ -920,8 +945,35 @@ final class FaeCore: ObservableObject, HostCommandSender {
         do {
             try config.save()
             NSLog("FaeCore: config persisted (%@)", reason)
+            // Fast config-only vault backup.
+            if let vault = vaultManager {
+                Task.detached(priority: .utility) {
+                    _ = await vault.backupConfigOnly(changeKey: reason)
+                }
+            }
         } catch {
             NSLog("FaeCore: failed to persist config (%@): %@", reason, error.localizedDescription)
+        }
+    }
+
+    /// One-time migration: rename custom_instructions.txt → directive.md.
+    private static func migrateCustomInstructionsToDirective() {
+        let fm = FileManager.default
+        guard let appSupport = fm.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return }
+
+        let oldPath = appSupport.appendingPathComponent("fae/custom_instructions.txt")
+        let newPath = appSupport.appendingPathComponent("fae/directive.md")
+
+        if fm.fileExists(atPath: oldPath.path) && !fm.fileExists(atPath: newPath.path) {
+            do {
+                try fm.moveItem(at: oldPath, to: newPath)
+                NSLog("FaeCore: migrated custom_instructions.txt → directive.md")
+            } catch {
+                NSLog("FaeCore: failed to migrate instructions file: %@", error.localizedDescription)
+            }
         }
     }
 
@@ -961,6 +1013,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private static func createSchedulerPersistenceStore() throws -> SchedulerPersistenceStore {
         let dbPath = try faeDirectory().appendingPathComponent("scheduler.db").path
         return try SchedulerPersistenceStore(path: dbPath)
+    }
+
+    /// Tool analytics database path.
+    private static func createToolAnalyticsStore() throws -> ToolAnalytics {
+        let dbPath = try faeDirectory().appendingPathComponent("tool_analytics.db").path
+        return try ToolAnalytics(path: dbPath)
     }
 
     /// Observe scheduler notifications emitted by scheduler tools.

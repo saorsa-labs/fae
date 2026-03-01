@@ -7,6 +7,8 @@ struct SettingsToolsTab: View {
     var commandSender: HostCommandSender?
 
     @AppStorage("toolMode") private var toolMode: String = "full"
+    @State private var autonomyProfile: String = "balanced"
+    @State private var showAdvanced = false
     @State private var permissionSnapshot = PermissionStatusProvider.current()
 
     private let toolModes: [(label: String, value: String, description: String)] = [
@@ -17,27 +19,61 @@ struct SettingsToolsTab: View {
         ("Full (No Approval)", "full_no_approval", "All tools without confirmation prompts."),
     ]
 
+    private let autonomyProfiles: [(label: String, value: String, description: String)] = [
+        ("Balanced", "balanced", "Recommended: autonomous for routine work, confirms risky actions."),
+        ("More autonomous", "autonomous", "Fewer interruptions; still keeps hard safety boundaries."),
+        ("More cautious", "cautious", "More confirmations before impactful actions."),
+    ]
+
     var body: some View {
         Form {
-            Section("Tool Mode") {
-                Picker("Mode", selection: $toolMode) {
-                    ForEach(toolModes, id: \.value) { mode in
-                        Text(mode.label).tag(mode.value)
+            Section("Autonomy Style") {
+                Picker("Style", selection: $autonomyProfile) {
+                    ForEach(autonomyProfiles, id: \.value) { profile in
+                        Text(profile.label).tag(profile.value)
                     }
                 }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .onChange(of: toolMode) {
-                    commandSender?.sendCommand(
-                        name: "config.patch",
-                        payload: ["key": "tool_mode", "value": toolMode]
-                    )
+                .pickerStyle(.segmented)
+                .onChange(of: autonomyProfile) {
+                    let mapped = toolMode(forAutonomyProfile: autonomyProfile)
+                    if mapped != toolMode {
+                        toolMode = mapped
+                    }
                 }
 
-                if let current = toolModes.first(where: { $0.value == toolMode }) {
+                if let current = autonomyProfiles.first(where: { $0.value == autonomyProfile }) {
                     Text(current.description)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Advanced") {
+                DisclosureGroup("Raw Tool Mode", isExpanded: $showAdvanced) {
+                    Picker("Mode", selection: $toolMode) {
+                        ForEach(toolModes, id: \.value) { mode in
+                            Text(mode.label).tag(mode.value)
+                        }
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .onChange(of: toolMode) {
+                        autonomyProfile = autonomyProfile(forToolMode: toolMode)
+                        commandSender?.sendCommand(
+                            name: "config.patch",
+                            payload: ["key": "tool_mode", "value": toolMode]
+                        )
+                    }
+
+                    if let current = toolModes.first(where: { $0.value == toolMode }) {
+                        Text(current.description)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text("Most people should use Autonomy Style above. Raw tool mode is for expert troubleshooting.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Apple Tool Permissions") {
@@ -95,6 +131,7 @@ struct SettingsToolsTab: View {
         .formStyle(.grouped)
         .onAppear {
             permissionSnapshot = PermissionStatusProvider.current()
+            autonomyProfile = autonomyProfile(forToolMode: toolMode)
         }
     }
 
@@ -125,6 +162,28 @@ struct SettingsToolsTab: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
+        }
+    }
+
+    private func autonomyProfile(forToolMode mode: String) -> String {
+        switch mode {
+        case "full_no_approval":
+            return "autonomous"
+        case "off", "read_only", "read_write":
+            return "cautious"
+        default:
+            return "balanced"
+        }
+    }
+
+    private func toolMode(forAutonomyProfile profile: String) -> String {
+        switch profile {
+        case "autonomous":
+            return "full_no_approval"
+        case "cautious":
+            return "read_write"
+        default:
+            return "full"
         }
     }
 

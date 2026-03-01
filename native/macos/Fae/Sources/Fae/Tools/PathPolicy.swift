@@ -96,5 +96,6 @@ enum PathPolicy {
         "/.docker",
         "/.npmrc",
         "/.netrc",
+        "/.fae-vault",
     ]
 }

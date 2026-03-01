@@ -48,9 +48,13 @@ actor PipelineCoordinator {
     private let memoryOrchestrator: MemoryOrchestrator?
     private let approvalManager: ApprovalManager?
     private let registry: ToolRegistry
+    private let actionBroker: any TrustedActionBroker
     private let rateLimiter = ToolRateLimiter()
+    private let securityLogger = SecurityEventLogger.shared
+    private let outboundGuard = OutboundExfiltrationGuard.shared
     private let speakerEncoder: CoreMLSpeakerEncoder?
     private let speakerProfileStore: SpeakerProfileStore?
+    private let skillManager: SkillManager?
     private let toolAnalytics: ToolAnalytics?
     private let isRescueMode: Bool
 
@@ -145,6 +149,11 @@ actor PipelineCoordinator {
     private var pipelineTask: Task<Void, Never>?
     private var captureStream: AsyncStream<AudioChunk>?
 
+    // MARK: - Capability Tickets
+
+    /// Task-scoped capability grant consumed by the broker.
+    private var activeCapabilityTicket: CapabilityTicket?
+
     // MARK: - Init
 
     init(
@@ -161,6 +170,7 @@ actor PipelineCoordinator {
         registry: ToolRegistry,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
+        skillManager: SkillManager? = nil,
         toolAnalytics: ToolAnalytics? = nil,
         rescueMode: Bool = false
     ) {
@@ -175,8 +185,13 @@ actor PipelineCoordinator {
         self.memoryOrchestrator = memoryOrchestrator
         self.approvalManager = approvalManager
         self.registry = registry
+        self.actionBroker = DefaultTrustedActionBroker(
+            knownTools: Set(registry.toolNames),
+            speakerConfig: config.speaker
+        )
         self.speakerEncoder = speakerEncoder
         self.speakerProfileStore = speakerProfileStore
+        self.skillManager = skillManager
         self.toolAnalytics = toolAnalytics
         self.isRescueMode = rescueMode
 
@@ -677,6 +692,12 @@ actor PipelineCoordinator {
             // Add user message to history.
             await conversationState.addUserMessage(userText, speakerDisplayName: currentSpeakerDisplayName)
 
+            // Issue a short-lived capability ticket for this turn.
+            activeCapabilityTicket = CapabilityTicketIssuer.issue(
+                mode: config.toolMode,
+                registry: registry
+            )
+
             // Memory recall — inject context before generation.
             let memoryContext = await memoryOrchestrator?.recall(query: userText)
             if let ctx = memoryContext, !ctx.isEmpty {
@@ -687,7 +708,18 @@ actor PipelineCoordinator {
             // Build system prompt with tool schemas.
             // Owner gating: non-owner voices don't see tool schemas → LLM won't use tools.
             let includeTools = !(config.speaker.requireOwnerForTools && !currentSpeakerIsOwner)
-            let skills = includeTools ? SkillManager.installedSkillNames() : []
+            let skillDescs: [(name: String, description: String, type: SkillType)]
+            let legacySkills: [String]
+            if includeTools, let sm = skillManager {
+                skillDescs = await sm.promptMetadata()
+                legacySkills = []
+            } else if includeTools {
+                skillDescs = []
+                legacySkills = SkillManager.installedSkillNames()
+            } else {
+                skillDescs = []
+                legacySkills = []
+            }
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
@@ -695,10 +727,15 @@ actor PipelineCoordinator {
                 speakerDisplayName: currentSpeakerDisplayName,
                 speakerRole: currentSpeakerRole,
                 soulContract: soul,
-                customInstructionsOverride: isRescueMode ? "" : nil,
+                directiveOverride: isRescueMode ? "" : nil,
                 toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
-                installedSkills: skills
+                installedSkills: legacySkills,
+                skillDescriptions: skillDescs
             )
+            // Inject activated skill instructions into context.
+            if let activatedCtx = await skillManager?.activatedContext() {
+                systemPrompt += "\n\n" + activatedCtx
+            }
             if let context = memoryContext {
                 systemPrompt += "\n\n" + context
             }
@@ -961,6 +998,7 @@ actor PipelineCoordinator {
             engagedUntil = Date().addingTimeInterval(
                 Double(config.conversation.directAddressFollowupS)
             )
+            activeCapabilityTicket = nil
             return
         }
 
@@ -971,6 +1009,7 @@ actor PipelineCoordinator {
             await speakText(msg, isFinal: true)
             assistantGenerating = false
             eventBus.send(.assistantGenerating(false))
+            activeCapabilityTicket = nil
             return
         }
 
@@ -1303,65 +1342,211 @@ actor PipelineCoordinator {
             return .error("Unknown tool: \(call.name)")
         }
 
+        let policyProfile = currentPolicyProfile()
+
         // Rate limiting.
-        if let limitError = await rateLimiter.checkLimit(tool: call.name) {
+        if let limitError = await rateLimiter.checkLimit(
+            tool: call.name,
+            riskLevel: tool.riskLevel,
+            profile: policyProfile
+        ) {
             return .error(limitError)
         }
 
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
-        let voiceDecision = VoiceIdentityPolicy.evaluateSensitiveAction(
-            config: config.speaker,
-            isOwner: currentSpeakerIsOwner,
-            risk: tool.riskLevel,
+        let hasCapabilityTicket = activeCapabilityTicket?.allows(toolName: call.name) ?? false
+        let intent = ActionIntent(
+            source: .voice,
             toolName: call.name,
-            livenessScore: livenessScore
+            riskLevel: tool.riskLevel,
+            requiresApproval: tool.requiresApproval,
+            isOwner: currentSpeakerIsOwner,
+            livenessScore: livenessScore,
+            explicitUserAuthorization: false,
+            hasCapabilityTicket: hasCapabilityTicket,
+            policyProfile: policyProfile,
+            argumentSummary: Self.buildApprovalDescription(
+                toolName: call.name,
+                reason: "confirmation required",
+                arguments: call.arguments
+            )
         )
 
-        switch voiceDecision {
-        case .allow:
-            break
-        case .requireStepUp(let message):
-            if let manager = approvalManager {
-                let approved = await manager.requestApproval(
-                    toolName: call.name,
-                    description: "Step-up: \(message)"
+        let brokerDecisionStartedAt = Date()
+        let brokerDecision: BrokerDecision
+        if let outboundDecision = await outboundGuard.evaluate(
+            toolName: call.name,
+            arguments: call.arguments
+        ) {
+            switch outboundDecision {
+            case .confirm(let message):
+                brokerDecision = .confirm(
+                    prompt: ConfirmationPrompt(message: message),
+                    reason: DecisionReason(
+                        code: .outboundRecipientNovelty,
+                        message: message
+                    )
                 )
-                if !approved {
-                    return .error("Tool execution denied by user.")
-                }
-            } else {
-                return .error(message)
+            case .deny(let message):
+                brokerDecision = .deny(
+                    reason: DecisionReason(
+                        code: .outboundPayloadRisk,
+                        message: message
+                    )
+                )
             }
-        case .deny(let message):
-            return .error(message)
+        } else {
+            brokerDecision = await actionBroker.evaluate(intent)
+        }
+        let brokerDecisionString: String
+        let brokerReasonCode: String?
+        switch brokerDecision {
+        case .allow(let reason):
+            brokerDecisionString = "allow"
+            brokerReasonCode = reason.code.rawValue
+        case .allowWithTransform(_, let reason):
+            brokerDecisionString = "allow_with_transform"
+            brokerReasonCode = reason.code.rawValue
+        case .confirm(_, let reason):
+            brokerDecisionString = "confirm"
+            brokerReasonCode = reason.code.rawValue
+        case .deny(let reason):
+            brokerDecisionString = "deny"
+            brokerReasonCode = reason.code.rawValue
         }
 
-        // Risk policy + approval routing with enhanced descriptions.
-        let decision = ToolRiskPolicy.decision(for: tool)
-        if case .requireApproval(let reason) = decision {
-            if let manager = approvalManager {
-                let approvalDesc = Self.buildApprovalDescription(
-                    toolName: call.name, reason: reason, arguments: call.arguments
+        await securityLogger.log(
+            event: "broker_decision",
+            toolName: call.name,
+            decision: brokerDecisionString,
+            reasonCode: brokerReasonCode,
+            arguments: call.arguments
+        )
+
+        var effectiveDecision = brokerDecision
+        if UserDefaults.standard.bool(forKey: "fae.security.shadowMode") {
+            switch brokerDecision {
+            case .confirm(_, let reason), .deny(let reason):
+                await securityLogger.log(
+                    event: "shadow_decision",
+                    toolName: call.name,
+                    decision: brokerDecisionString,
+                    reasonCode: reason.code.rawValue,
+                    approved: nil,
+                    success: true,
+                    error: "Shadow mode bypassed enforcement",
+                    arguments: call.arguments
                 )
+                effectiveDecision = .allow(reason: reason)
+            default:
+                break
+            }
+        }
+
+        var approvedByUser = false
+        switch effectiveDecision {
+        case .allow:
+            break
+
+        case .allowWithTransform(let transform, _):
+            if let transformError = await applySafetyTransform(
+                transform,
+                toolName: call.name,
+                arguments: call.arguments
+            ) {
+                return .error(transformError)
+            }
+
+        case .confirm(let prompt, _):
+            if let manager = approvalManager {
                 let approved = await manager.requestApproval(
                     toolName: call.name,
-                    description: approvalDesc
+                    description: prompt.message
                 )
+                approvedByUser = approved
                 if !approved {
+                    if let analytics = toolAnalytics {
+                        let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
+                        await analytics.record(
+                            toolName: call.name,
+                            success: false,
+                            latencyMs: latencyMs,
+                            approved: false,
+                            error: "Tool execution denied by user"
+                        )
+                    }
+                    await securityLogger.log(
+                        event: "tool_denied",
+                        toolName: call.name,
+                        decision: "confirm",
+                        reasonCode: brokerReasonCode,
+                        approved: false,
+                        success: false,
+                        error: "Tool execution denied by user",
+                        arguments: call.arguments
+                    )
                     return .error("Tool execution denied by user.")
                 }
             } else {
+                if let analytics = toolAnalytics {
+                    let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
+                    await analytics.record(
+                        toolName: call.name,
+                        success: false,
+                        latencyMs: latencyMs,
+                        approved: nil,
+                        error: "Tool requires approval, but no approval manager is available"
+                    )
+                }
+                await securityLogger.log(
+                    event: "tool_denied",
+                    toolName: call.name,
+                    decision: "confirm",
+                    reasonCode: brokerReasonCode,
+                    approved: nil,
+                    success: false,
+                    error: "No approval manager available",
+                    arguments: call.arguments
+                )
                 return .error("Tool requires approval, but no approval manager is available.")
             }
+
+        case .deny(let reason):
+            if let analytics = toolAnalytics {
+                let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
+                await analytics.record(
+                    toolName: call.name,
+                    success: false,
+                    latencyMs: latencyMs,
+                    approved: nil,
+                    error: "Denied by broker: \(reason.code.rawValue)"
+                )
+            }
+            await securityLogger.log(
+                event: "tool_denied",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: reason.code.rawValue,
+                approved: nil,
+                success: false,
+                error: reason.message,
+                arguments: call.arguments
+            )
+            return .error(reason.message)
         }
 
         // Execute with timeout and analytics.
+        var executionArguments = call.arguments
+        if call.name == "run_skill", let ticketId = activeCapabilityTicket?.id {
+            executionArguments["capability_ticket"] = ticketId
+        }
+
         let startTime = Date()
         let result: ToolResult
         do {
             result = try await withThrowingTaskGroup(of: ToolResult.self) { group in
                 group.addTask {
-                    try await tool.execute(input: call.arguments)
+                    try await tool.execute(input: executionArguments)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: UInt64(Self.toolTimeoutSeconds * 1_000_000_000))
@@ -1378,10 +1563,23 @@ actor PipelineCoordinator {
             let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
             if let analytics = toolAnalytics {
                 await analytics.record(
-                    toolName: call.name, success: false, latencyMs: latencyMs,
-                    approved: true, error: error.localizedDescription
+                    toolName: call.name,
+                    success: false,
+                    latencyMs: latencyMs,
+                    approved: approvedByUser ? true : nil,
+                    error: error.localizedDescription
                 )
             }
+            await securityLogger.log(
+                event: "tool_result",
+                toolName: call.name,
+                decision: brokerDecisionString,
+                reasonCode: brokerReasonCode,
+                approved: approvedByUser ? true : nil,
+                success: false,
+                error: error.localizedDescription,
+                arguments: call.arguments
+            )
             return .error("Tool error: \(error.localizedDescription)")
         }
 
@@ -1391,43 +1589,180 @@ actor PipelineCoordinator {
                 toolName: call.name,
                 success: !result.isError,
                 latencyMs: latencyMs,
-                approved: true,
+                approved: approvedByUser ? true : nil,
                 error: result.isError ? result.output : nil
             )
+        }
+
+        await securityLogger.log(
+            event: "tool_result",
+            toolName: call.name,
+            decision: brokerDecisionString,
+            reasonCode: brokerReasonCode,
+            approved: approvedByUser ? true : nil,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            arguments: call.arguments
+        )
+
+        if !result.isError {
+            await outboundGuard.recordSuccessfulSend(toolName: call.name, arguments: call.arguments)
         }
 
         return result
     }
 
-    /// Build a descriptive approval message showing what the tool will do.
+    /// Map current tool mode to an autonomy policy profile.
+    ///
+    /// - off/read_only => cautious profile
+    /// - read_write/full => balanced profile
+    /// - full_no_approval => autonomous profile
+    private func currentPolicyProfile() -> PolicyProfile {
+        switch config.toolMode {
+        case "off", "read_only":
+            return .moreCautious
+        case "full_no_approval":
+            return .moreAutonomous
+        case "read_write", "full":
+            return .balanced
+        default:
+            return .balanced
+        }
+    }
+
+    /// Apply deterministic safety wrappers before executing a tool.
+    private func applySafetyTransform(
+        _ transform: SafetyTransform,
+        toolName: String,
+        arguments: [String: Any]
+    ) async -> String? {
+        switch transform {
+        case .none:
+            return nil
+
+        case .checkpointBeforeMutation:
+            if ["write", "edit"].contains(toolName) {
+                guard let path = arguments["path"] as? String else {
+                    return "Safety checkpoint failed: missing path argument"
+                }
+
+                switch PathPolicy.validateWritePath(path) {
+                case .blocked(let reason):
+                    return reason
+                case .allowed(let canonical):
+                    let checkpointId = ReversibilityEngine.createCheckpoint(
+                        for: canonical,
+                        reason: "\(toolName) transform"
+                    )
+                    if checkpointId == nil {
+                        return "Safety checkpoint failed: could not create reversible snapshot"
+                    }
+
+                    await securityLogger.log(
+                        event: "safety_transform",
+                        toolName: toolName,
+                        decision: "checkpointBeforeMutation",
+                        reasonCode: nil,
+                        approved: nil,
+                        success: true,
+                        error: nil,
+                        arguments: ["path": canonical, "checkpoint_id": checkpointId ?? ""]
+                    )
+                    return nil
+                }
+            }
+
+            if toolName == "manage_skill",
+               let action = arguments["action"] as? String,
+               action == "delete",
+               let name = arguments["name"] as? String,
+               Self.isSafeSkillName(name)
+            {
+                let path = SkillManager.skillsDirectory.appendingPathComponent(name).path
+                let checkpointId = ReversibilityEngine.createCheckpoint(
+                    for: path,
+                    reason: "manage_skill delete transform"
+                )
+                if checkpointId == nil {
+                    return "Safety checkpoint failed: could not snapshot skill before delete"
+                }
+                await securityLogger.log(
+                    event: "safety_transform",
+                    toolName: toolName,
+                    decision: "checkpointBeforeMutation",
+                    reasonCode: nil,
+                    approved: nil,
+                    success: true,
+                    error: nil,
+                    arguments: ["path": path, "checkpoint_id": checkpointId ?? ""]
+                )
+            }
+
+            return nil
+        }
+    }
+
+    /// Build a plain-language confirmation prompt with concrete action context.
     private static func buildApprovalDescription(
         toolName: String, reason: String, arguments: [String: Any]
     ) -> String {
         switch toolName {
         case "bash":
             if let command = arguments["command"] as? String {
-                return BashTool.approvalDescription(for: command)
+                let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+                let preview = trimmed.count > 140 ? String(trimmed.prefix(140)) + "…" : trimmed
+                return "I can run this command: \(preview). Run it now?"
             }
+            return "I can run a shell command for this step. Run it now?"
+
         case "write":
             if let path = arguments["path"] as? String {
-                return "Write to file: \(path)"
+                return "I can write to \(path). Proceed?"
             }
+            return "I can write file content for this step. Proceed?"
+
         case "edit":
             if let path = arguments["path"] as? String {
-                return "Edit file: \(path)"
+                return "I can edit \(path). Proceed?"
             }
+            return "I can edit a file for this step. Proceed?"
+
         case "self_config":
-            if let value = arguments["value"] as? String {
-                let truncated = value.count > 100 ? String(value.prefix(100)) + "..." : value
-                return "Modify custom instructions: \(truncated)"
-            }
+            return "I can update your persistent Fae directive. Apply this change?"
+
+        case "run_skill":
+            let skillName = arguments["name"] as? String ?? "a skill"
+            return "I can run \(skillName) now. Continue?"
+
+        case "manage_skill":
+            let action = arguments["action"] as? String ?? "modify"
+            return "I can \(action) a skill in your local skills library. Continue?"
+
+        case "scheduler_create":
+            return "I can create a scheduled task that runs automatically later. Create it?"
+
+        case "scheduler_update":
+            return "I can update a scheduled task. Apply the change?"
+
+        case "scheduler_delete":
+            return "I can delete this scheduled task. Delete it now?"
+
         default:
-            break
+            return "I can use \(toolName) for this step. Continue?"
         }
-        return "Execute \(toolName) — \(reason)"
     }
 
     // MARK: - Helpers
+
+    private static func isSafeSkillName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.contains("/") || trimmed.contains("\\") || trimmed.contains("..") { return false }
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+        )
+        return trimmed.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
 
     private static func extractSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
         let frameCount = Int(buffer.frameLength)

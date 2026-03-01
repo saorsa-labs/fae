@@ -1,13 +1,18 @@
 import Foundation
 
-/// Manages Python skill packages via subprocess JSON-RPC.
+/// Manages directory-based skills following the Agent Skills specification.
 ///
-/// Skills are Python scripts invoked via `uv run` with PEP 723 metadata.
-/// Communication is JSON-RPC over stdin/stdout.
+/// Skills are directories containing a `SKILL.md` entry point with YAML frontmatter.
+/// Executable skills have a `scripts/` subdirectory with Python scripts.
 ///
-/// Replaces: `src/skills/` (10,593 lines)
+/// Three tiers:
+/// - **Built-in**: Bundled in `Resources/Skills/` — immutable (can only be disabled).
+/// - **Personal**: User-created in `~/Library/Application Support/fae/skills/`.
+/// - **Community**: Imported from URL (stored alongside personal skills).
 actor SkillManager {
     private var runningProcesses: [String: Process] = [:]
+    private var skillCache: [String: SkillMetadata] = [:]
+    private var activatedBodies: [String: String] = [:]
 
     /// Skill directory: ~/Library/Application Support/fae/skills/
     static var skillsDirectory: URL {
@@ -43,38 +48,181 @@ actor SkillManager {
         ]
     }
 
-    /// List installed skills by scanning the skills directory.
-    func listSkills() -> [String] {
-        Self.installedSkillNames()
+    // MARK: - Discovery
+
+    /// Discover all skills from built-in and personal directories.
+    func discoverSkills() -> [SkillMetadata] {
+        var all: [SkillMetadata] = []
+        skillCache.removeAll()
+
+        // Built-in skills from app bundle.
+        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+            all.append(contentsOf: scanDirectory(builtinDir, tier: .builtin))
+        }
+
+        // Personal skills from user data directory.
+        let personalDir = Self.skillsDirectory
+        all.append(contentsOf: scanDirectory(personalDir, tier: .personal))
+
+        // Trust-level defaulting: executable skills are disabled unless manifest is valid.
+        all = all.map { skill in
+            var adjusted = skill
+            if skill.type == .executable {
+                do {
+                    _ = try loadManifest(for: skill)
+                } catch {
+                    adjusted.isEnabled = false
+                    NSLog("SkillManager: disabling executable skill '%@' — invalid/missing manifest", skill.name)
+                }
+            }
+            return adjusted
+        }
+
+        for skill in all {
+            skillCache[skill.name] = skill
+        }
+        return all
+    }
+
+    /// Return skill descriptions for progressive disclosure in the system prompt.
+    ///
+    /// Each entry is ~50-100 tokens. Full SKILL.md body loaded only on activation.
+    func promptMetadata() -> [(name: String, description: String, type: SkillType)] {
+        let skills = discoverSkills()
+        return skills.filter(\.isEnabled).map { ($0.name, $0.description, $0.type) }
     }
 
     /// List installed skill names (static — no actor instance needed).
+    ///
+    /// Scans for both legacy flat `.py` files and v2 directory-based skills.
     static func installedSkillNames() -> [String] {
         let dir = skillsDirectory
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey]
         ) else { return [] }
 
-        return contents
-            .filter { $0.pathExtension == "py" }
-            .map { $0.deletingPathExtension().lastPathComponent }
-            .sorted()
+        var names: [String] = []
+
+        for url in contents {
+            // Legacy flat .py files.
+            if url.pathExtension == "py" {
+                names.append(url.deletingPathExtension().lastPathComponent)
+                continue
+            }
+
+            // Directory-based skills with SKILL.md.
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                let skillMd = url.appendingPathComponent("SKILL.md")
+                if fm.fileExists(atPath: skillMd.path) {
+                    names.append(url.lastPathComponent)
+                }
+            }
+        }
+
+        return names.sorted()
     }
 
-    /// Execute a skill by name with the given input.
-    func execute(skillName: String, input: [String: Any]) async throws -> String {
-        let scriptPath = Self.skillsDirectory
-            .appendingPathComponent("\(skillName).py").path
+    // MARK: - Activation
 
-        guard FileManager.default.fileExists(atPath: scriptPath) else {
+    /// Activate a skill by name — loads the full SKILL.md body.
+    ///
+    /// Returns the body text for injection into the LLM context.
+    func activate(skillName: String) -> String? {
+        if let cached = activatedBodies[skillName] {
+            return cached
+        }
+
+        guard let metadata = skillCache[skillName] ?? lookupSkill(named: skillName) else {
+            return nil
+        }
+
+        let skillMd = metadata.directoryURL.appendingPathComponent("SKILL.md")
+        guard let record = SkillParser.parseRecord(
+            skillURL: skillMd, tier: metadata.tier, isEnabled: metadata.isEnabled
+        ) else {
+            return nil
+        }
+
+        if let body = record.fullBody {
+            activatedBodies[skillName] = body
+            NSLog("SkillManager: activated skill '%@' (%d chars)", skillName, body.count)
+            return body
+        }
+        return nil
+    }
+
+    /// Deactivate a skill — remove its body from the active context.
+    func deactivate(skillName: String) {
+        activatedBodies.removeValue(forKey: skillName)
+    }
+
+    /// All currently activated skill bodies for injection into context.
+    func activatedContext() -> String? {
+        guard !activatedBodies.isEmpty else { return nil }
+        return activatedBodies.map { "[\($0.key) skill instructions]\n\($0.value)" }
+            .joined(separator: "\n\n")
+    }
+
+    // MARK: - Execution
+
+    /// Execute a skill's Python script by name with the given input.
+    ///
+    /// - Parameters:
+    ///   - skillName: The skill directory name.
+    ///   - scriptName: Optional specific script name (without .py) for multi-script skills.
+    ///   - input: JSON-serializable input dictionary.
+    ///   - capabilityTicketId: Non-empty broker-issued ticket proving turn-scoped authorization.
+    func execute(
+        skillName: String,
+        scriptName: String? = nil,
+        input: [String: Any],
+        capabilityTicketId: String
+    ) async throws -> String {
+        try Self.validateSkillName(skillName)
+
+        guard !capabilityTicketId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SkillError.policyViolation("Missing capability ticket for run_skill execution")
+        }
+
+        if let (url, reason) = Self.firstBlockedURL(in: input) {
+            throw SkillError.blockedNetworkTarget(url, reason)
+        }
+
+        guard let metadata = skillCache[skillName] ?? lookupSkill(named: skillName) else {
             throw SkillError.notFound(skillName)
         }
 
-        // Build JSON-RPC request.
+        // Executable skills must provide a valid capability manifest.
+        let manifest: SkillCapabilityManifest
+        if metadata.type == .executable {
+            manifest = try loadManifest(for: metadata)
+        } else {
+            manifest = SkillCapabilityManifest.conservativeDefault(for: metadata.type)
+        }
+
+        if !manifest.allowedDomains.isEmpty,
+           let url = Self.firstDisallowedURL(in: input, allowedDomains: manifest.allowedDomains)
+        {
+            throw SkillError.invalidManifest(
+                "Input URL '\(url)' is outside skill allowedDomains"
+            )
+        }
+
+        // Execute only scripts from directory-based executable skills.
+        guard let scriptPath = findExecutableScript(skillName: skillName, scriptName: scriptName),
+              FileManager.default.fileExists(atPath: scriptPath)
+        else {
+            throw SkillError.notFound(skillName)
+        }
+
+        // Build JSON-RPC request with secret-sanitized params.
+        let sanitizedInput = Self.sanitizeSkillInput(input)
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "method": "execute",
-            "params": input,
+            "params": sanitizedInput,
             "id": 1,
         ]
 
@@ -84,23 +232,17 @@ actor SkillManager {
             throw SkillError.serializationFailed
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["uv", "run", "--script", scriptPath]
+        let timeoutSeconds = min(max(manifest.timeoutSeconds, 5), 120)
+        let handles = try SafeSkillExecutor.createProcess(
+            skillName: skillName,
+            scriptPath: scriptPath,
+            timeoutSeconds: timeoutSeconds
+        )
 
-        // Ensure uv and user-installed tools are in PATH (GUI apps have minimal PATH).
-        var env = ProcessInfo.processInfo.environment
-        let home = NSHomeDirectory()
-        let existing = env["PATH"] ?? "/usr/bin:/bin"
-        env["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:\(existing)"
-        process.environment = env
-
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
+        let process = handles.process
+        let stdin = handles.stdin
+        let stdout = handles.stdout
+        let stderr = handles.stderr
 
         try process.run()
         runningProcesses[skillName] = process
@@ -114,7 +256,6 @@ actor SkillManager {
         stdin.fileHandleForWriting.write(requestBytes)
         stdin.fileHandleForWriting.closeFile()
 
-        let timeoutSeconds = 30
         let outputTask = Task<(Data, Data), Never> {
             let outData = stdout.fileHandleForReading.readDataToEndOfFile()
             let errData = stderr.fileHandleForReading.readDataToEndOfFile()
@@ -122,7 +263,10 @@ actor SkillManager {
         }
 
         do {
-            let status = try await waitForExit(process: process, timeoutSeconds: timeoutSeconds)
+            let status = try await SafeSkillExecutor.waitForExit(
+                process: process,
+                timeoutSeconds: timeoutSeconds
+            )
             runningProcesses.removeValue(forKey: skillName)
 
             let (outData, errData) = await outputTask.value
@@ -144,18 +288,89 @@ actor SkillManager {
         }
     }
 
-    private func waitForExit(process: Process, timeoutSeconds: Int) async throws -> Int32 {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
-        while process.isRunning {
-            try Task.checkCancellation()
-            if Date() >= deadline {
-                process.terminate()
-                throw SkillError.timedOut(timeoutSeconds)
-            }
-            try await Task.sleep(nanoseconds: 50_000_000)
+    // MARK: - Skill Management (create, delete)
+
+    /// Create a new personal skill directory with SKILL.md.
+    func createSkill(
+        name: String,
+        description: String,
+        body: String,
+        scriptContent: String? = nil
+    ) throws -> SkillMetadata {
+        try Self.validateSkillName(name)
+        try Self.validateSkillMetadata(name: name, description: description, body: body)
+        if let script = scriptContent {
+            try Self.validateScriptContent(script)
         }
-        return process.terminationStatus
+
+        let skillDir = try Self.canonicalSkillDirectory(for: name)
+        let fm = FileManager.default
+
+        guard !fm.fileExists(atPath: skillDir.path) else {
+            throw SkillError.alreadyExists(name)
+        }
+
+        try fm.createDirectory(at: skillDir, withIntermediateDirectories: true)
+
+        // Write SKILL.md.
+        let frontmatter = """
+            ---
+            name: \(name)
+            description: \(description)
+            metadata:
+              author: user
+              version: "1.0"
+            ---
+            """
+        let fullContent = frontmatter + "\n" + body
+        try fullContent.write(
+            to: skillDir.appendingPathComponent("SKILL.md"),
+            atomically: true, encoding: .utf8
+        )
+
+        // If script content provided, create scripts/ directory and MANIFEST.json.
+        if let script = scriptContent {
+            let scriptsDir = skillDir.appendingPathComponent("scripts")
+            try fm.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+            try script.write(
+                to: scriptsDir.appendingPathComponent("\(name).py"),
+                atomically: true, encoding: .utf8
+            )
+
+            let integrity = SkillManifestPolicy.buildIntegrity(for: skillDir)
+            let manifest = SkillCapabilityManifest
+                .conservativeDefault(for: .executable)
+                .withIntegrity(integrity)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let manifestData = try encoder.encode(manifest)
+            try manifestData.write(to: SkillManifestPolicy.manifestURL(for: skillDir))
+        }
+
+        // Parse and cache the new skill.
+        let skillMd = skillDir.appendingPathComponent("SKILL.md")
+        guard let metadata = SkillParser.parse(skillURL: skillMd, tier: .personal) else {
+            throw SkillError.invalidSkillMd(name)
+        }
+        skillCache[name] = metadata
+        NSLog("SkillManager: created skill '%@'", name)
+        return metadata
     }
+
+    /// Delete a personal skill directory.
+    func deleteSkill(name: String) throws {
+        try Self.validateSkillName(name)
+        let skillDir = try Self.canonicalSkillDirectory(for: name)
+        guard FileManager.default.fileExists(atPath: skillDir.path) else {
+            throw SkillError.notFound(name)
+        }
+        try FileManager.default.removeItem(at: skillDir)
+        skillCache.removeValue(forKey: name)
+        activatedBodies.removeValue(forKey: name)
+        NSLog("SkillManager: deleted skill '%@'", name)
+    }
+
+    // MARK: - Health Check
 
     /// Check health of all running skill processes.
     func healthCheck() -> [String: Bool] {
@@ -166,11 +381,358 @@ actor SkillManager {
         return status
     }
 
+    /// Validate all discovered skills.
+    func healthCheckAll() -> [String: SkillHealthStatus] {
+        let skills = discoverSkills()
+        var results: [String: SkillHealthStatus] = [:]
+        let fm = FileManager.default
+
+        for skill in skills {
+            let skillMd = skill.directoryURL.appendingPathComponent("SKILL.md")
+            if !fm.fileExists(atPath: skillMd.path) {
+                results[skill.name] = .broken("Missing SKILL.md")
+                continue
+            }
+
+            if skill.type == .executable {
+                let scriptsDir = skill.directoryURL.appendingPathComponent("scripts")
+                if !fm.fileExists(atPath: scriptsDir.path) {
+                    results[skill.name] = .degraded("Missing scripts/ directory")
+                    continue
+                }
+            }
+
+            results[skill.name] = .healthy
+        }
+        return results
+    }
+
+    // MARK: - Private Helpers
+
+    private func scanDirectory(_ dir: URL, tier: SkillTier) -> [SkillMetadata] {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return [] }
+
+        var results: [SkillMetadata] = []
+        for url in contents {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+                continue
+            }
+            let skillMd = url.appendingPathComponent("SKILL.md")
+            if let metadata = SkillParser.parse(skillURL: skillMd, tier: tier) {
+                results.append(metadata)
+            }
+        }
+        return results
+    }
+
+    private func lookupSkill(named name: String) -> SkillMetadata? {
+        guard Self.isSafeSkillName(name) else { return nil }
+
+        // Check personal directory.
+        let personalDir = Self.skillsDirectory.appendingPathComponent(name)
+        let skillMd = personalDir.appendingPathComponent("SKILL.md")
+        if let metadata = SkillParser.parse(skillURL: skillMd, tier: .personal) {
+            return metadata
+        }
+
+        // Check built-in directory.
+        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+            let builtinSkillDir = builtinDir.appendingPathComponent(name)
+            let builtinMd = builtinSkillDir.appendingPathComponent("SKILL.md")
+            if let metadata = SkillParser.parse(skillURL: builtinMd, tier: .builtin) {
+                return metadata
+            }
+        }
+
+        return nil
+    }
+
+    private func loadManifest(for metadata: SkillMetadata) throws -> SkillCapabilityManifest {
+        let manifestURL = SkillManifestPolicy.manifestURL(for: metadata.directoryURL)
+
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            if metadata.type == .executable {
+                throw SkillError.missingManifest(metadata.name)
+            }
+            return SkillCapabilityManifest.conservativeDefault(for: metadata.type)
+        }
+
+        let data = try Data(contentsOf: manifestURL)
+        let manifest = try JSONDecoder().decode(SkillCapabilityManifest.self, from: data)
+        try Self.validateManifest(manifest, for: metadata.type)
+
+        if let integrity = manifest.integrity,
+           let error = SkillManifestPolicy.verifyIntegrity(
+               integrity,
+               skillDirectory: metadata.directoryURL
+           )
+        {
+            throw SkillError.policyViolation(error)
+        }
+
+        return manifest
+    }
+
+    private static func validateManifest(_ manifest: SkillCapabilityManifest, for type: SkillType) throws {
+        guard manifest.schemaVersion == SkillCapabilityManifest.currentSchemaVersion else {
+            throw SkillError.invalidManifest(
+                "schemaVersion=\(manifest.schemaVersion), expected \(SkillCapabilityManifest.currentSchemaVersion)"
+            )
+        }
+
+        guard (5...600).contains(manifest.timeoutSeconds) else {
+            throw SkillError.invalidManifest("timeoutSeconds must be within 5...600")
+        }
+
+        guard !manifest.capabilities.isEmpty else {
+            throw SkillError.invalidManifest("capabilities must not be empty")
+        }
+
+        if type == .executable {
+            guard manifest.capabilities.contains("execute") else {
+                throw SkillError.invalidManifest("executable skills must declare capability 'execute'")
+            }
+            guard manifest.allowedTools.contains("run_skill") else {
+                throw SkillError.invalidManifest("executable skills must include allowedTools: run_skill")
+            }
+            guard let integrity = manifest.integrity,
+                  !integrity.checksums.isEmpty
+            else {
+                throw SkillError.invalidManifest(
+                    "executable skills must include integrity checksums"
+                )
+            }
+        }
+    }
+
+    /// Find a Python script in a skill's scripts/ directory.
+    ///
+    /// If `scriptName` is provided, looks for `scripts/{scriptName}.py`.
+    /// Otherwise returns the first `.py` file found.
+    private func findExecutableScript(skillName: String, scriptName: String? = nil) -> String? {
+        guard Self.isSafeSkillName(skillName) else { return nil }
+        let fm = FileManager.default
+
+        func findIn(scriptsDir: URL) -> String? {
+            if let specific = scriptName {
+                let target = scriptsDir.appendingPathComponent("\(specific).py")
+                return fm.fileExists(atPath: target.path) ? target.path : nil
+            }
+            guard let scripts = try? fm.contentsOfDirectory(
+                at: scriptsDir, includingPropertiesForKeys: nil
+            ) else { return nil }
+            return scripts.first(where: { $0.pathExtension == "py" })?.path
+        }
+
+        // Check personal skills.
+        let personalScripts = Self.skillsDirectory
+            .appendingPathComponent(skillName)
+            .appendingPathComponent("scripts")
+        if let path = findIn(scriptsDir: personalScripts) {
+            return path
+        }
+
+        // Check built-in skills.
+        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+            let builtinScripts = builtinDir
+                .appendingPathComponent(skillName)
+                .appendingPathComponent("scripts")
+            if let path = findIn(scriptsDir: builtinScripts) {
+                return path
+            }
+        }
+
+        return nil
+    }
+
+    private static func validateSkillName(_ name: String) throws {
+        guard isSafeSkillName(name) else {
+            throw SkillError.invalidName(name)
+        }
+    }
+
+    private static func validateSkillMetadata(name: String, description: String, body: String) throws {
+        if description.trimmingCharacters(in: .whitespacesAndNewlines).count < 10 {
+            throw SkillError.policyViolation("description is too short; include concrete behavior")
+        }
+
+        if body.trimmingCharacters(in: .whitespacesAndNewlines).count < 20 {
+            throw SkillError.policyViolation("SKILL.md body is too short")
+        }
+
+        let lowered = body.lowercased()
+        if lowered.contains("api key") || lowered.contains("token:") || lowered.contains("password:") {
+            throw SkillError.policyViolation("skill body appears to contain credential-like content")
+        }
+
+        if name.lowercased().contains("../") || name.contains("/") {
+            throw SkillError.policyViolation("skill name contains invalid path characters")
+        }
+    }
+
+    private static func validateScriptContent(_ script: String) throws {
+        let forbiddenPatterns: [String] = [
+            "os.system(",
+            "subprocess.popen(",
+            "pty.spawn(",
+            "eval(",
+            "exec(",
+        ]
+
+        let lowered = script.lowercased()
+        for pattern in forbiddenPatterns where lowered.contains(pattern) {
+            throw SkillError.policyViolation(
+                "script content failed safety lint: forbidden pattern '\(pattern)'"
+            )
+        }
+    }
+
+    /// Conservative skill-name validation to prevent path traversal and
+    /// ambiguous filesystem behavior.
+    private static func isSafeSkillName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.contains("/") || trimmed.contains("\\") { return false }
+        if trimmed.contains("..") || trimmed.contains("~") { return false }
+
+        // Allow: letters, numbers, underscore, hyphen.
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        return trimmed.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    /// Resolve skill directory and verify it remains within skills root even
+    /// after symlink/canonical path resolution.
+    private static func canonicalSkillDirectory(for name: String) throws -> URL {
+        let root = skillsDirectory.standardized.resolvingSymlinksInPath()
+        let candidate = root.appendingPathComponent(name).standardized.resolvingSymlinksInPath()
+
+        let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard candidate.path.hasPrefix(rootPath) else {
+            throw SkillError.invalidName(name)
+        }
+        return candidate
+    }
+
+    /// Remove obvious secret material from skill input payloads.
+    private static func sanitizeSkillInput(_ input: [String: Any]) -> [String: Any] {
+        sanitizeAny(input) as? [String: Any] ?? [:]
+    }
+
+    private static func sanitizeAny(_ value: Any) -> Any {
+        if let dict = value as? [String: Any] {
+            var out: [String: Any] = [:]
+            for (key, val) in dict {
+                if isSensitiveKey(key) {
+                    out[key] = "[REDACTED_SECRET]"
+                } else {
+                    out[key] = sanitizeAny(val)
+                }
+            }
+            return out
+        }
+
+        if let array = value as? [Any] {
+            return array.map { sanitizeAny($0) }
+        }
+
+        if let string = value as? String,
+           SensitiveDataRedactor.redact(string) != string
+        {
+            return "[REDACTED_SECRET]"
+        }
+
+        return value
+    }
+
+    private static func isSensitiveKey(_ key: String) -> Bool {
+        let lowered = key.lowercased()
+        return lowered.contains("token")
+            || lowered.contains("secret")
+            || lowered.contains("password")
+            || lowered.contains("api_key")
+            || lowered.contains("apikey")
+            || lowered == "key"
+    }
+
+    /// Scan skill input for URL strings and detect domain-allowlist violations.
+    private static func firstDisallowedURL(in value: Any, allowedDomains: [String]) -> String? {
+        if let string = value as? String,
+           (string.hasPrefix("http://") || string.hasPrefix("https://")),
+           let host = URL(string: string)?.host?.lowercased()
+        {
+            let allowed = allowedDomains.map { $0.lowercased() }
+            let isAllowed = allowed.contains { host == $0 || host.hasSuffix("." + $0) }
+            if !isAllowed {
+                return string
+            }
+            return nil
+        }
+
+        if let dict = value as? [String: Any] {
+            for item in dict.values {
+                if let disallowed = firstDisallowedURL(in: item, allowedDomains: allowedDomains) {
+                    return disallowed
+                }
+            }
+        }
+
+        if let array = value as? [Any] {
+            for item in array {
+                if let disallowed = firstDisallowedURL(in: item, allowedDomains: allowedDomains) {
+                    return disallowed
+                }
+            }
+        }
+
+        return nil
+    }
+
+    /// Scan skill input for URL strings and block local/private targets.
+    private static func firstBlockedURL(in value: Any) -> (url: String, reason: String)? {
+        if let string = value as? String,
+           (string.hasPrefix("http://") || string.hasPrefix("https://"))
+        {
+            if let reason = NetworkTargetPolicy.blockedReason(urlString: string) {
+                return (string, reason)
+            }
+            return nil
+        }
+
+        if let dict = value as? [String: Any] {
+            for item in dict.values {
+                if let blocked = firstBlockedURL(in: item) {
+                    return blocked
+                }
+            }
+        }
+
+        if let array = value as? [Any] {
+            for item in array {
+                if let blocked = firstBlockedURL(in: item) {
+                    return blocked
+                }
+            }
+        }
+
+        return nil
+    }
+
     enum SkillError: LocalizedError {
         case notFound(String)
         case serializationFailed
         case executionFailed(String, String)
         case timedOut(Int)
+        case alreadyExists(String)
+        case invalidSkillMd(String)
+        case invalidName(String)
+        case blockedNetworkTarget(String, String)
+        case missingManifest(String)
+        case invalidManifest(String)
+        case policyViolation(String)
 
         var errorDescription: String? {
             switch self {
@@ -178,6 +740,17 @@ actor SkillManager {
             case .serializationFailed: return "Failed to serialize skill request"
             case .executionFailed(let name, let err): return "Skill '\(name)' failed: \(err)"
             case .timedOut(let seconds): return "Skill timed out after \(seconds)s"
+            case .alreadyExists(let name): return "Skill '\(name)' already exists"
+            case .invalidSkillMd(let name): return "Invalid SKILL.md for skill '\(name)'"
+            case .invalidName(let name): return "Invalid skill name '\(name)'"
+            case .blockedNetworkTarget(let url, let reason):
+                return "Blocked network target in skill input (\(url)): \(reason)"
+            case .missingManifest(let name):
+                return "Executable skill '\(name)' is missing MANIFEST.json"
+            case .invalidManifest(let details):
+                return "Invalid skill manifest: \(details)"
+            case .policyViolation(let details):
+                return "Skill failed install policy checks: \(details)"
             }
         }
     }

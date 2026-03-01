@@ -15,14 +15,15 @@ final class ToolRegistry: Sendable {
     }
 
     /// Build a registry with all built-in tools.
-    static func buildDefault() -> ToolRegistry {
-        let allTools: [any Tool] = Self.allBuiltinTools()
+    static func buildDefault(skillManager: SkillManager? = nil) -> ToolRegistry {
+        let allTools: [any Tool] = Self.allBuiltinTools(skillManager: skillManager)
         return ToolRegistry(tools: allTools)
     }
 
-    /// All built-in tools (core + Apple + scheduler).
-    private static func allBuiltinTools() -> [any Tool] {
-        [
+    /// All built-in tools (core + Apple + scheduler + skills).
+    private static func allBuiltinTools(skillManager: SkillManager?) -> [any Tool] {
+        let sm = skillManager ?? SkillManager()
+        let tools: [any Tool] = [
             // Core tools
             ReadTool(),
             WriteTool(),
@@ -31,7 +32,10 @@ final class ToolRegistry: Sendable {
             SelfConfigTool(),
             WebSearchTool(),
             FetchURLTool(),
-            RunSkillTool(),
+            // Skill tools
+            ActivateSkillTool(skillManager: sm),
+            RunSkillTool(skillManager: sm),
+            ManageSkillTool(skillManager: sm),
             // User input tool
             InputRequestTool(),
             // Apple integration tools
@@ -49,6 +53,7 @@ final class ToolRegistry: Sendable {
             // Roleplay
             RoleplayTool(),
         ]
+        return tools
     }
 
     func tool(named name: String) -> (any Tool)? {
@@ -102,6 +107,7 @@ final class ToolRegistry: Sendable {
         "read", "web_search", "fetch_url",
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "roleplay", "run_skill",
+        "activate_skill",
         "input_request",
     ]
 
@@ -109,6 +115,7 @@ final class ToolRegistry: Sendable {
     private static let writeTools: Set<String> = [
         "write", "edit", "self_config",
         "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
+        "manage_skill",
     ]
 
     // MARK: - Private

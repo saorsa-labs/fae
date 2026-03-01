@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MultipeerConnectivity
 import Combine
@@ -27,6 +28,7 @@ final class FaeRelayServer: NSObject, ObservableObject {
 
     private static let serviceType = "fae-relay"
     private static let protocolVersion: UInt32 = 1
+    private static let trustedPeersDefaultsKey = "fae.relay.trustedPeers"
 
     // MARK: - Multipeer Connectivity
 
@@ -50,6 +52,7 @@ final class FaeRelayServer: NSObject, ObservableObject {
     private var lastBroadcastMode: OrbMode?
     private var lastBroadcastFeeling: OrbFeeling?
     private var lastBroadcastPalette: OrbPalette?
+    private var trustedCompanionIDs: Set<String> = []
 
     // MARK: - Notification Observers
 
@@ -59,6 +62,9 @@ final class FaeRelayServer: NSObject, ObservableObject {
 
     override init() {
         self.peerID = MCPeerID(displayName: Host.current().localizedName ?? "Fae Mac")
+        if let saved = UserDefaults.standard.array(forKey: Self.trustedPeersDefaultsKey) as? [String] {
+            self.trustedCompanionIDs = Set(saved)
+        }
         super.init()
     }
 
@@ -102,6 +108,37 @@ final class FaeRelayServer: NSObject, ObservableObject {
         connectedCompanions = []
         isAdvertising = false
         cancellables.removeAll()
+    }
+
+    // MARK: - Trusted Companions
+
+    func trustedCompanions() -> [String] {
+        trustedCompanionIDs.sorted()
+    }
+
+    func revokeTrustedCompanion(displayName: String) {
+        trustedCompanionIDs.remove(displayName)
+        persistTrustedCompanions()
+    }
+
+    private func trustCompanion(displayName: String) {
+        trustedCompanionIDs.insert(displayName)
+        persistTrustedCompanions()
+    }
+
+    private func persistTrustedCompanions() {
+        UserDefaults.standard.set(Array(trustedCompanionIDs).sorted(), forKey: Self.trustedPeersDefaultsKey)
+    }
+
+    private func confirmPairing(for peerID: MCPeerID) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Allow companion pairing?"
+        alert.informativeText = "\(peerID.displayName) is requesting access to Fae relay on your local network."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Deny")
+        let result = alert.runModal()
+        return result == .alertFirstButtonReturn
     }
 
     // MARK: - Orb State Binding
@@ -272,14 +309,20 @@ final class FaeRelayServer: NSObject, ObservableObject {
         else { return }
 
         let requestId = json["request_id"] as? String ?? ""
+        let payload = json["payload"] as? [String: Any] ?? [:]
 
         Task { @MainActor in
-            self.routeCommand(command, requestId: requestId, from: peer)
+            self.routeCommand(command, payload: payload, requestId: requestId, from: peer)
         }
     }
 
     /// Route a command from a companion to the appropriate handler.
-    private func routeCommand(_ command: String, requestId: String, from peer: MCPeerID) {
+    private func routeCommand(
+        _ command: String,
+        payload: [String: Any],
+        requestId: String,
+        from peer: MCPeerID
+    ) {
         switch command {
         case "device.go_home":
             // Companion is sending the session back to Mac.
@@ -305,14 +348,19 @@ final class FaeRelayServer: NSObject, ObservableObject {
             sendResponse(requestId: requestId, ok: true, to: peer)
 
         case "conversation.inject_text":
-            // Forward text injection to the Rust backend.
-            commandSender?.sendCommand(name: command, payload: [:])
+            // Route through the same text path as local input so broker/capability
+            // policy remains centralized in PipelineCoordinator.
+            commandSender?.sendCommand(name: command, payload: payload)
             sendResponse(requestId: requestId, ok: true, to: peer)
 
         default:
-            // Forward unknown commands to the Rust backend.
-            commandSender?.sendCommand(name: command, payload: [:])
-            sendResponse(requestId: requestId, ok: true, to: peer)
+            // Deny unknown relay commands by default.
+            sendResponse(
+                requestId: requestId,
+                ok: false,
+                to: peer,
+                error: "Relay command denied by policy: \(command)"
+            )
         }
     }
 
@@ -373,10 +421,23 @@ extension FaeRelayServer: MCSessionDelegate {
 
 extension FaeRelayServer: MCNearbyServiceAdvertiserDelegate {
     nonisolated func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-        // Auto-accept invitations from companion devices.
         Task { @MainActor in
-            NSLog("FaeRelayServer: accepting invitation from %@", peerID.displayName)
-            invitationHandler(true, self.session)
+            let displayName = peerID.displayName
+            if self.trustedCompanionIDs.contains(displayName) {
+                NSLog("FaeRelayServer: accepting trusted companion invitation from %@", displayName)
+                invitationHandler(true, self.session)
+                return
+            }
+
+            NSLog("FaeRelayServer: untrusted companion invitation from %@", displayName)
+            let approved = self.confirmPairing(for: peerID)
+            if approved {
+                self.trustCompanion(displayName: displayName)
+                NSLog("FaeRelayServer: pairing approved and trusted for %@", displayName)
+            } else {
+                NSLog("FaeRelayServer: pairing denied for %@", displayName)
+            }
+            invitationHandler(approved, approved ? self.session : nil)
         }
     }
 

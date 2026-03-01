@@ -80,9 +80,9 @@ Configure via `[speaker]` in config.toml. See [Voice Identity Guide](docs/guides
 Fae can change her own personality and learn new skills:
 
 - **Personality tuning** — say "be more cheerful", "less chatty", "speak formally" and Fae persists the preference via `self_config` tool.
-- **Custom instructions** — stored at `~/Library/Application Support/fae/custom_instructions.txt`, loaded on every prompt.
-- **Python skills** — Fae can write, install, and manage Python scripts using `uv run --script` with PEP 723 inline metadata.
-- **Skill management** — read, edit, or delete her own skills at `~/Library/Application Support/fae/skills/`.
+- **Directive** — critical overriding instructions stored at `~/Library/Application Support/fae/directive.md`, loaded on every prompt.
+- **Skills (v2)** — directory-based skills following the [Agent Skills](https://agentskills.io/specification) open standard. Built-in skills in the app bundle, personal skills at `~/Library/Application Support/fae/skills/`. Instruction skills inject context; executable skills run Python via `uv run --script`.
+- **Skill management** — create, activate, run, and delete skills via dedicated tools (`activate_skill`, `run_skill`, `manage_skill`).
 
 See [Self-Modification Guide](docs/guides/self-modification.md).
 
@@ -137,7 +137,9 @@ Built-in scheduled tasks:
 | `stale_relationships` | Weekly | Detect relationships needing check-in |
 | `morning_briefing` | Daily at 08:00 | Compile and deliver morning briefing |
 | `skill_proposals` | Daily at 11:00 | Detect skill opportunities from interests |
-| `skill_health_check` | Every 5 minutes | Validate Python skill runtime health |
+| `skill_health_check` | Every 5 minutes | Validate skill runtime health |
+| `embedding_reindex` | Weekly (Sun 03:00) | Re-embed records missing ANN vectors |
+| `vault_backup` | Daily at 02:30 | Rolling git-based backup to `~/.fae-vault/` |
 
 ## Architecture
 
@@ -150,7 +152,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker │
 │                         │              │                      │
 │                         │              ├── Memory (SQLite)     │
-│                         │              ├── Tools (18 built-in) │
+│                         │              ├── Tools (21 built-in) │
 │                         │              ├── Scheduler           │
 │                         │              └── Self-Config         │
 │                         │                                     │
@@ -159,7 +161,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  ML Engines (all MLX, on-device):                             │
 │  ┌───────────┐ ┌────────────┐ ┌───────────┐ ┌─────────────┐  │
 │  │ STT       │ │ LLM        │ │ TTS       │ │ Speaker     │  │
-│  │ Qwen3-ASR │ │ Qwen3-8B   │ │ Qwen3-TTS │ │ ECAPA-TDNN  │  │
+│  │ Qwen3-ASR │ │ Qwen3.5    │ │ Qwen3-TTS │ │ ECAPA-TDNN  │  │
 │  │ 1.7B 4bit │ │ MLX 4bit   │ │ 1.7B bf16 │ │ Core ML     │  │
 │  └───────────┘ └────────────┘ └───────────┘ └─────────────┘  │
 └──────────────────────────────────────────────────────────────┘
@@ -170,15 +172,19 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |---|---|---|---|---|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3-8B | MLX | 4-bit | Conversation, reasoning, tool use |
+| LLM | Qwen3.5-27B / 35B-A3B | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
-Auto mode selects the LLM based on system RAM:
-- 48+ GiB → Qwen3-8B
-- 32-48 GiB → Qwen3-4B
-- <32 GiB → Qwen3-1.7B
+Auto mode selects the LLM based on system RAM (Qwen3.5 for all tiers ≥16 GB):
+- 96+ GiB → Qwen3.5-35B-A3B (65K context)
+- 64-95 GiB → Qwen3.5-35B-A3B (32-49K context)
+- 48-63 GiB → Qwen3.5-27B (32K context)
+- 32-47 GiB → Qwen3.5-27B (16K context)
+- 24-31 GiB → Qwen3.5-27B (8K context)
+- 16-23 GiB → Qwen3.5-27B (4K context)
+- <16 GiB → Qwen3-1.7B (4K context)
 
 ### Pipeline
 
@@ -195,11 +201,12 @@ The unified pipeline handles everything in a single pass — the LLM decides whe
 
 **Latency profile:** End-to-end response time depends on request complexity. Simple greetings take a few seconds; tool-heavy tasks (web search + memory recall + file operations) can take 10-30 seconds. The orb and thinking tone provide continuous feedback throughout. Fae favours correctness over speed — she will search, verify, and cross-reference rather than guess.
 
-### Tools (18 Built-in)
+### Tools (21 Built-in)
 
 | Category | Tools |
 |---|---|
 | Core + Web | `read`, `write`, `edit`, `bash`, `self_config`, `web_search`, `fetch_url` |
+| Skills | `activate_skill`, `run_skill`, `manage_skill` |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
 | Roleplay | `roleplay` |
@@ -224,15 +231,35 @@ Conversation and canvas are independent `NSPanel` windows positioned adjacent to
 - Memories stored locally in SQLite — no sync, no backup to cloud.
 - Voice biometrics stored locally — speaker profiles never leave the device.
 - Web search uses DuckDuckGo HTML endpoint — the most privacy-friendly option.
-- No telemetry, no analytics, no tracking.
+- No external telemetry or tracking. Security analytics remain local-only on your device.
 
 ## Security
 
-- Tool execution sandboxed with approval gates on dangerous operations.
-- Path traversal blocking prevents access outside approved directories.
-- Voice identity gating prevents unauthorized tool use.
-- Security-scoped bookmarks for persistent file access under App Sandbox.
-- Skills reviewed and approved by user before installation.
+Fae now uses a **core-enforced security spine** (not prompt-only safety):
+
+- **Single chokepoint broker** for all tool actions (`allow / allow_with_transform / confirm / deny`) with default-deny for uncovered actions.
+- **Capability tickets** required for executable actions (including `run_skill`) to prevent bypass paths.
+- **Reversible mutation wrappers** via checkpoints/rollback metadata for high-impact file and skill operations.
+- **Safe executors** for high-risk runtimes:
+  - constrained `bash` execution (restricted environment, cwd scope, denylist, timeout)
+  - constrained executable skill runtime (timeout + CPU/memory ceilings)
+- **Path and network invariants** in core code:
+  - canonical path + anti-symlink escape checks
+  - localhost/private/link-local/metadata target blocking
+- **Outbound exfiltration guardrails** for send-like actions:
+  - novel recipient confirmation
+  - sensitive payload deny
+- **Skills trust hardening**:
+  - required executable `MANIFEST.json`
+  - manifest validation + integrity checksum/tamper verification
+- **Relay trust hardening**:
+  - trust-on-first-use with local confirmation challenge
+  - allowlist/revocation controls
+  - relay actions routed through same broker/capability policy
+- **Append-only security logging** with reason codes, redaction, rotation/retention, and forensic mode.
+- **Local security dashboard** (Developer tab) to inspect allow/confirm/deny distribution, reason codes, and action categories.
+
+See: [Security Index](docs/guides/security-index.md), [Security Autonomy Boundary + Execution Plan](docs/guides/security-autonomy-boundary-and-execution-plan.md), [Security Launch SLOs](docs/guides/security-autonomy-launch-slos.md), and [Security PR Review Checklist](docs/checklists/security-pr-review-checklist.md).
 
 ## Configuration
 
@@ -274,10 +301,23 @@ directAddressFollowupS = 20
 
 ### Guides
 
+- [Security Index](docs/guides/security-index.md)
 - [Memory Guide](docs/guides/Memory.md)
 - [Voice Identity Guide](docs/guides/voice-identity.md)
 - [Self-Modification Guide](docs/guides/self-modification.md)
 - [Channel Setup Guide](docs/guides/channels-setup.md)
+- [Security Autonomy Boundary + Execution Plan](docs/guides/security-autonomy-boundary-and-execution-plan.md)
+- [Security Launch SLOs](docs/guides/security-autonomy-launch-slos.md)
+- [Security Contributor Guidelines](docs/guides/security-contributor-guidelines.md)
+- [User Security Behavior Contract](docs/guides/user-security-behavior-contract.md)
+- [Skills Manifest Migration Plan](docs/guides/skills-manifest-migration-plan.md)
+- [Security Confirmation Copy](docs/guides/security-confirmation-copy.md)
+- [Shadow Mode Dogfood Runbook](docs/guides/shadow-mode-dogfood-runbook.md)
+- [Shadow Mode Threshold Tuning](docs/guides/shadow-mode-threshold-tuning.md)
+- [Security Rollout Plan](docs/guides/security-rollout-plan.md)
+- [Security Post-Release Iteration Loop](docs/guides/security-postrelease-iteration-loop.md)
+- [Security PR Review Checklist](docs/checklists/security-pr-review-checklist.md)
+- [Adversarial Security Suite Plan](docs/tests/adversarial-security-suite-plan.md)
 
 ### Benchmarks
 

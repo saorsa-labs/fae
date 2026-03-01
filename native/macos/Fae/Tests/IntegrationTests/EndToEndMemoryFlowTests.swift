@@ -35,7 +35,7 @@ final class EndToEndMemoryFlowTests: XCTestCase {
 
     func testMemoryRecallReturnsNilWhenEmpty() async throws {
         // No memories stored yet — recall should return nil.
-        let context = await harness.memoryOrchestrator.recall(query: "anything")
+        let _ = await harness.memoryOrchestrator.recall(query: "anything")
         // Could be nil or contain no meaningful results depending on scoring
         // The key is that it doesn't crash.
     }

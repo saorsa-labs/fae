@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Skills management tab: custom skill import, installed custom skills,
-/// all 18 Apple apps Fae can interact with, plus system capabilities.
+/// Skills management tab: directory-based skills with type/tier badges,
+/// Apple app integrations, and system capabilities.
 ///
 /// Apple apps are split into two tiers:
 /// - **Core Apps** (5): have dedicated LLM tools with structured data access
@@ -10,21 +10,11 @@ import SwiftUI
 ///
 /// System capabilities (Microphone, Files, Notifications, Location, Desktop Automation)
 /// are shown in a separate section. Each row links to the relevant macOS Privacy pane.
-/// Decoded Python skill record from `python_registry.json`.
-private struct PythonSkillRecord: Codable, Identifiable {
-    let id: String
-    let name: String
-    let version: String
-    let status: String
-    let last_error: String?
-}
-
 struct SettingsSkillsTab: View {
     let commandSender: HostCommandSender?
 
     @State private var showingImport: Bool = false
-    @State private var installedSkills: [String] = []
-    @State private var pythonSkills: [PythonSkillRecord] = []
+    @State private var discoveredSkills: [SkillMetadata] = []
 
     var body: some View {
         Form {
@@ -36,10 +26,10 @@ struct SettingsSkillsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            // MARK: - Custom Skills
+            // MARK: - Installed Skills
 
-            Section("Custom Skills") {
-                Text("Import skills from a URL or manage your installed custom skills. Changes take effect on next app restart.")
+            Section("Skills") {
+                Text("Directory-based skills following the Agent Skills standard. Each skill has a SKILL.md with instructions and optional Python scripts.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
 
@@ -50,71 +40,14 @@ struct SettingsSkillsTab: View {
                 }
                 .buttonStyle(.bordered)
 
-                if !installedSkills.isEmpty {
-                    ForEach(installedSkills, id: \.self) { skill in
-                        HStack(spacing: 10) {
-                            Image(systemName: "doc.text")
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20, alignment: .center)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(skill)
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                Text("Custom skill")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            Button(role: .destructive) {
-                                removeSkill(named: skill)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-            }
-
-            // MARK: - Python Skills
-
-            if !pythonSkills.isEmpty {
-                Section("Python Skills") {
-                    Text("Installed Python skill packages (managed via skill lifecycle).")
-                        .font(.caption2)
+                if discoveredSkills.isEmpty {
+                    Text("No skills installed")
+                        .font(.footnote)
                         .foregroundStyle(.tertiary)
-
-                    ForEach(pythonSkills) { skill in
-                        HStack(spacing: 10) {
-                            Image(systemName: "chevron.left.forwardslash.chevron.right")
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20, alignment: .center)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(skill.name)
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                Text("v\(skill.version)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                if let error = skill.last_error {
-                                    Text(error)
-                                        .font(.caption2)
-                                        .foregroundStyle(.red)
-                                        .lineLimit(1)
-                                }
-                            }
-
-                            Spacer()
-
-                            pythonStatusBadge(skill.status)
-                        }
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 4)
+                } else {
+                    ForEach(discoveredSkills, id: \.name) { skill in
+                        skillMetadataRow(skill)
                     }
                 }
             }
@@ -287,15 +220,54 @@ struct SettingsSkillsTab: View {
         .formStyle(.grouped)
         .sheet(isPresented: $showingImport) {
             SkillImportView(commandSender: commandSender)
-                .onDisappear { refreshInstalledSkills() }
+                .onDisappear { refreshSkills() }
         }
         .onAppear {
-            refreshInstalledSkills()
-            refreshPythonSkills()
+            refreshSkills()
         }
     }
 
-    // MARK: - Skill Row
+    // MARK: - Skill Metadata Row (v2 directory-based)
+
+    private func skillMetadataRow(_ skill: SkillMetadata) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: skill.type == .executable
+                  ? "chevron.left.forwardslash.chevron.right"
+                  : "doc.text")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 20, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(skill.name)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(skill.description)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            HStack(spacing: 4) {
+                tierBadge(skill.tier)
+                typeBadge(skill.type)
+            }
+
+            if skill.tier == .personal {
+                Button(role: .destructive) {
+                    removeSkill(named: skill.name)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Apple App Row
 
     private func skillRow(
         name: String,
@@ -333,76 +305,77 @@ struct SettingsSkillsTab: View {
         NSWorkspace.shared.open(url)
     }
 
-    // MARK: - Custom Skills Management
-
-    private var skillsDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".fae/skills")
-    }
-
-    private func refreshInstalledSkills() {
-        let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(
-            at: skillsDirectory,
-            includingPropertiesForKeys: nil
-        ) else {
-            installedSkills = []
-            return
-        }
-        installedSkills = contents
-            .filter { $0.pathExtension == "md" }
-            .map { $0.deletingPathExtension().lastPathComponent }
-            .sorted()
-    }
-
-    private func removeSkill(named name: String) {
-        let filePath = skillsDirectory.appendingPathComponent("\(name).md")
-        try? FileManager.default.removeItem(at: filePath)
-        refreshInstalledSkills()
-        commandSender?.sendCommand(name: "skills.reload", payload: [:])
-    }
-
-    // MARK: - Python Skills Management
-
-    private var pythonRegistryURL: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/skills/.state/python_registry.json")
-    }
-
-    private func refreshPythonSkills() {
-        guard let data = try? Data(contentsOf: pythonRegistryURL),
-              let records = try? JSONDecoder().decode([PythonSkillRecord].self, from: data)
-        else {
-            pythonSkills = []
-            return
-        }
-        pythonSkills = records.sorted { $0.name < $1.name }
-    }
+    // MARK: - Badges
 
     @ViewBuilder
-    private func pythonStatusBadge(_ status: String) -> some View {
-        let (label, color): (String, Color) = switch status.lowercased() {
-        case "active":
-            ("Active", .green)
-        case "pending":
-            ("Pending", .orange)
-        case "disabled":
-            ("Disabled", .secondary)
-        case "quarantined":
-            ("Quarantined", .red)
-        default:
-            (status, .secondary)
+    private func tierBadge(_ tier: SkillTier) -> some View {
+        let (label, color): (String, Color) = switch tier {
+        case .builtin: ("Built-in", .blue)
+        case .personal: ("Personal", .green)
+        case .community: ("Community", .orange)
         }
-
         Text(label)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(color)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    @ViewBuilder
+    private func typeBadge(_ type: SkillType) -> some View {
+        let (label, color): (String, Color) = switch type {
+        case .instruction: ("Instruction", .purple)
+        case .executable: ("Executable", .teal)
+        }
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    // MARK: - Skills Management
+
+    private func refreshSkills() {
+        let fm = FileManager.default
+        var all: [SkillMetadata] = []
+
+        // Built-in skills from app bundle.
+        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+            all.append(contentsOf: scanSkillDirectory(builtinDir, tier: .builtin, fm: fm))
+        }
+
+        // Personal skills.
+        all.append(contentsOf: scanSkillDirectory(SkillManager.skillsDirectory, tier: .personal, fm: fm))
+
+        discoveredSkills = all.sorted { $0.name < $1.name }
+    }
+
+    private func scanSkillDirectory(_ dir: URL, tier: SkillTier, fm: FileManager) -> [SkillMetadata] {
+        guard let contents = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return [] }
+
+        var results: [SkillMetadata] = []
+        for url in contents {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+                continue
+            }
+            let skillMd = url.appendingPathComponent("SKILL.md")
+            if let metadata = SkillParser.parse(skillURL: skillMd, tier: tier) {
+                results.append(metadata)
+            }
+        }
+        return results
+    }
+
+    private func removeSkill(named name: String) {
+        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: skillDir)
+        refreshSkills()
+        commandSender?.sendCommand(name: "skills.reload", payload: [:])
     }
 }

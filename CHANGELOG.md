@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.63] - 2026-03-01
+
+### Added
+
+- **Skills v2 — Agent Skills standard** — directory-based skill system following the [Agent Skills](https://agentskills.io/specification) open standard. Skills are directories with `SKILL.md` (YAML frontmatter + markdown body) and optional `scripts/` for Python executables. Three tiers: built-in (app bundle), personal (user directory), community (imported). Progressive disclosure: system prompt shows only names + descriptions (~50-100 tokens each); full body loaded on activation.
+  - `SkillTypes.swift` — `SkillMetadata`, `SkillRecord`, `SkillType` (.instruction/.executable), `SkillTier`, `SkillHealthStatus`
+  - `SkillParser.swift` — YAML frontmatter parser with validation
+  - `SkillMigrator.swift` — one-time migration of legacy flat `.py` files to directory format
+  - `SkillTools.swift` — `ActivateSkillTool` (low risk), `RunSkillTool` (medium, multi-script support), `ManageSkillTool` (high, create/delete/list)
+- **Built-in voice-tools skill** — migrated 4 Python scripts from `SkillTemplates/` to `Resources/Skills/voice-tools/` with proper `SKILL.md` frontmatter: `audio_normalize`, `prepare_voice_sample`, `voice_compare`, `voice_quality_check`.
+- **Git Vault — rolling backup** — `GitVaultManager` actor backs up all Fae data (SQLite databases, config, directive, soul, speakers, skills) to `~/.fae-vault/` using system git. Survives app deletion. Daily 02:30 scheduled backup, config-change triggers, pre-shutdown snapshot. `PathPolicy` blocks LLM writes to vault directory.
+- **SkillsConfig** — new `[skills]` config section with `promptBudgetTokens` and `disabledBuiltins` settings.
+- **TrustedActionBroker — default-deny policy chokepoint** — every tool call routes through a central broker that evaluates `ActionIntent` → `BrokerDecision` (allow/allowWithTransform/confirm/deny). 22 explicitly modeled tools. Three `PolicyProfile` modes: balanced (default), moreAutonomous, moreCautious. Configurable via Settings > Tools.
+- **CapabilityTicket** — task-scoped temporary grants with TTL. Tools must hold a valid ticket to pass the broker. Issued per conversation turn, expires automatically.
+- **ReversibilityEngine** — pre-mutation file checkpoints in `~/Library/.../fae/recovery/`. `allowWithTransform(.checkpointBeforeMutation)` creates a snapshot before writes; supports rollback and automatic 24h pruning.
+- **SafeBashExecutor** — denylist of 8 dangerous patterns (`rm -rf /`, `chmod 777`, etc.); minimal constrained environment; process-group SIGTERM/SIGKILL on timeout.
+- **SafeSkillExecutor** — ulimit constraints (CPU, memory 1GB, 64 file descriptors); restricted working directory to skill's `scripts/` directory.
+- **NetworkTargetPolicy** — shared policy blocking localhost, cloud metadata endpoints, all RFC1918/loopback/link-local IPv4+IPv6. Replaces per-tool inline checks.
+- **OutboundExfiltrationGuard** — novel recipient confirmation using SHA256 hash set (persisted JSON). Sensitive payload detection via keyword matching + high-entropy heuristic.
+- **SecurityEventLogger** — append-only JSONL at `.../fae/security-events.jsonl`. SHA256 argument hashing. 5MB rotation with 3 archives. Forensic mode toggle. Redaction via `SensitiveDataRedactor`.
+- **SensitiveDataRedactor** — regex-based redaction for API keys, tokens, passwords (OpenAI sk-, Slack xox, GitHub ghp_, Google AIza). Length/entropy heuristic for opaque tokens.
+- **SkillManifest** — `MANIFEST.json` schema with capabilities, allowedTools, allowedDomains, riskTier, and SHA-256 per-file integrity checksums for tamper detection.
+- **Security dashboard** — Developer tab (Option-held) shows live allow/confirm/deny stats from `SecurityEventLogger`.
+- **PolicyProfile picker** — Settings > Tools includes profile selector (balanced/moreAutonomous/moreCautious).
+
+### Changed
+
+- **Directive rename** — `custom_instructions.txt` renamed to `directive.md` across the codebase. Auto-migration on startup. `SelfConfigTool` actions renamed to `get_directive`/`set_directive`/`append_directive`/`clear_directive` with legacy aliases preserved. Prompt label updated to "User directive (critical instructions)". Settings UI updated with clearer helper text.
+- **SkillManager rewrite** — now supports directory-based discovery, progressive disclosure metadata, multi-script execution routing, and activation/deactivation lifecycle.
+- **ToolRegistry** — registers 3 new skill tools (`activate_skill`, `run_skill`, `manage_skill`), accepts `SkillManager` dependency.
+- **PersonalityManager** — progressive disclosure prompt replaces flat skill name list; directive label updated.
+- **FaeScheduler** — 13th built-in task `vault_backup` at 02:30 daily; expanded skill health check for directory-based skills.
+- **PipelineCoordinator** — wired to `SkillManager` for progressive disclosure in system prompt.
+- **PathPolicy** — blocks writes to `/.fae-vault` (vault protection).
+
 ## [v0.8.59] - 2026-03-01
 
 ### Fixed
@@ -92,7 +127,7 @@ All notable changes to this project will be documented in this file.
 - **`input_request` tool** — LLM can request user input (text or password) without failing silently on missing credentials.
 - **JIT Apple tool permissions** — when an Apple tool call lacks a macOS permission, the permission request fires automatically and the tool retries on grant.
 - **Python skills** — `SkillManager`, `run_skill` tool, `SkillImportView`; skills run via `uv run --script` with PEP 723 inline metadata.
-- **`self_config` tool** — Fae can persist personality preferences (`custom_instructions.txt`) across sessions.
+- **`self_config` tool** — Fae can persist personality preferences (`directive.md`, formerly `custom_instructions.txt`) across sessions.
 
 ### Changed
 

@@ -50,6 +50,7 @@ actor ToolAnalytics {
     ) {
         let now = UInt64(Date().timeIntervalSince1970)
         let id = "tool-\(now)-\(Int.random(in: 1000 ... 9999))"
+        let redactedError = SensitiveDataRedactor.redact(error)
 
         do {
             try dbQueue.write { db in
@@ -61,7 +62,7 @@ actor ToolAnalytics {
                     arguments: [
                         id, toolName, success ? 1 : 0,
                         latencyMs, approved.map { $0 ? 1 : 0 },
-                        error, now,
+                        redactedError, now,
                     ]
                 )
             }
