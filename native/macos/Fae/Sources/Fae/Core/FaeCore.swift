@@ -347,7 +347,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
 
         // Speak the intro — brief so it doesn't confuse the echo suppressor.
-        let intro = "Hi, I'm Fae. Please read the phrase on the canvas aloud to register your voice."
+        let intro = "Hi, I'm Fae. For best results, please move somewhere quiet and turn off any music or background noise. When you're ready, read the phrase on the canvas aloud to register your voice."
         await coordinator.speakDirect(intro)
 
         // Prime the LLM: the next time the user speaks, Fae should greet them warmly,

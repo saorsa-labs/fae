@@ -143,6 +143,13 @@ enum TextProcessing {
         private var insideThink: Bool = false
         private var tagBuffer: String = ""
 
+        /// Set to `true` on the call to `process(_:)` that transitions out of a think block.
+        ///
+        /// Use this in `PipelineCoordinator` to detect when Qwen3.5-35B-A3B (which emits
+        /// `<think>` as literal text) has finished its reasoning block.  The coordinator
+        /// sets `thinkEndSeen = true` so that subsequent response tokens flow to TTS.
+        private(set) var hasExitedThinkBlock: Bool = false
+
         /// Process a new token and return any visible (non-think) text.
         ///
         /// Only characters starting with `<` are buffered (as potential `<think>` tags).
@@ -150,6 +157,7 @@ enum TextProcessing {
         /// text like `"world<think>"` would flush the buffer before the tag was matched.
         mutating func process(_ token: String) -> String {
             var visible = ""
+            hasExitedThinkBlock = false
 
             for ch in token {
                 if insideThink {
@@ -157,6 +165,7 @@ enum TextProcessing {
                     if tagBuffer.hasSuffix("</think>") {
                         insideThink = false
                         tagBuffer = ""
+                        hasExitedThinkBlock = true
                     }
                 } else if tagBuffer.isEmpty {
                     if ch == "<" {

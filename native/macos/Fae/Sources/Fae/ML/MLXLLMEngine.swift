@@ -97,7 +97,12 @@ actor MLXLLMEngine: LLMEngine {
                         }
                     }
 
-                    let userInput = UserInput(chat: chatMessages)
+                    // Pass enable_thinking to the model's Jinja2 chat template.
+                    // Qwen3.5-35B-A3B does NOT support the /no_think per-turn suffix
+                    // (removed from Qwen3.5). The correct way to suppress thinking is
+                    // via chat_template_kwargs — Swift equivalent is additionalContext.
+                    var userInput = UserInput(chat: chatMessages)
+                    userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
                     let lmInput = try await container.prepare(input: userInput)
 
                     let params = GenerateParameters(

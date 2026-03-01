@@ -702,7 +702,8 @@ actor PipelineCoordinator {
             temperature: config.llm.temperature,
             topP: config.llm.topP,
             maxTokens: config.llm.maxTokens,
-            repetitionPenalty: config.llm.repeatPenalty
+            repetitionPenalty: config.llm.repeatPenalty,
+            suppressThinking: !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
         )
 
         // Stream tokens.
@@ -738,6 +739,13 @@ actor PipelineCoordinator {
                 }
 
                 let visible = thinkTagStripper.process(token)
+                // For Qwen3.5-35B-A3B: <think> is literal text, so ThinkTagStripper
+                // consumes it natively. When it exits the think block, signal thinkEndSeen
+                // so the pipeline doesn't wait for </think> in thinkAccum (which never arrives
+                // because ThinkTagStripper already consumed it).
+                if thinkTagStripper.hasExitedThinkBlock {
+                    thinkEndSeen = true
+                }
                 guard !visible.isEmpty else { continue }
 
                 fullResponse += visible

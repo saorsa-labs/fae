@@ -58,4 +58,7 @@ struct GenerationOptions: Sendable {
     var topP: Float = 0.9
     var maxTokens: Int = 2048
     var repetitionPenalty: Float? = 1.1
+    /// When true, pass `enable_thinking: false` to the model's chat template.
+    /// Required for Qwen3.5-35B-A3B which does not support `/no_think` per-turn.
+    var suppressThinking: Bool = true
 }

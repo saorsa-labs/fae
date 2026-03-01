@@ -721,8 +721,23 @@ Auto mode selects based on system RAM (Qwen3.5 for all tiers ≥16 GB):
 | 16-23 GB | Qwen3.5-27B | 4K | May use memory pressure |
 | <16 GB | Qwen3-1.7B | 4K | Only option that fits |
 
-Key metrics: T/s at voice context, `/no_think` compliance, idle RAM, answer quality.
+Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, answer quality.
 Smaller Qwen3.5 models expected soon — update tiers when released.
+
+## Thinking Mode Implementation
+
+**Qwen3.5-35B-A3B** (primary — NEVER use `/no_think`):
+- `/no_think` per-turn suffix was removed from Qwen3.5 — has no effect
+- Correct suppression: `enable_thinking: false` in `UserInput.additionalContext` (→ chat template kwargs)
+- With thinking enabled: model emits `<think>...</think>` as literal text; ThinkTagStripper handles it
+- `ThinkTagStripper.hasExitedThinkBlock` signals when think block exits; pipeline sets `thinkEndSeen = true`
+
+**Qwen3 small models** (1.7B/4B/8B):
+- `<think>` = special empty token (decoded to `""` — not visible text)
+- `</think>` = literal text
+- Handled by `thinkAccum` buffer in `PipelineCoordinator` (waits for literal `</think>`)
+
+**Key files**: `ML/MLXLLMEngine.swift` (additionalContext), `Pipeline/TextProcessing.swift` (ThinkTagStripper), `Pipeline/PipelineCoordinator.swift` (thinkAccum + hasExitedThinkBlock), `Core/FaeTypes.swift` (GenerationOptions.suppressThinking)
 
 ## Completed milestones
 
