@@ -27,6 +27,33 @@ actor MLXLLMEngine: LLMEngine {
         }
     }
 
+    /// Run a minimal warmup inference to pre-compile Metal shaders.
+    ///
+    /// The first MLX inference on Apple Silicon compiles Metal shader kernels,
+    /// which can take 30–60 seconds on a cold GPU cache. Calling this after
+    /// model load but before the first user interaction ensures Fae is actually
+    /// responsive when she announces ready.
+    func warmup() async {
+        guard let container else { return }
+        NSLog("MLXLLMEngine: starting warmup inference...")
+        do {
+            let chatMessages: [Chat.Message] = [.system(""), .user("Hi")]
+            let userInput = UserInput(chat: chatMessages)
+            let lmInput = try await container.prepare(input: userInput)
+            let params = GenerateParameters(
+                maxTokens: 1,
+                temperature: 0.0,
+                topP: 1.0,
+                repetitionPenalty: 1.0
+            )
+            let stream = try await container.generate(input: lmInput, parameters: params)
+            for await _ in stream { break }
+            NSLog("MLXLLMEngine: warmup complete")
+        } catch {
+            NSLog("MLXLLMEngine: warmup failed (non-fatal): %@", error.localizedDescription)
+        }
+    }
+
     /// Generate a streaming response.
     func generate(
         messages: [LLMMessage],

@@ -43,8 +43,15 @@ protocol LLMEngine: Actor {
         systemPrompt: String,
         options: GenerationOptions
     ) -> AsyncThrowingStream<String, Error>
+    /// Run a minimal warmup inference to pre-compile Metal shaders.
+    func warmup() async
     var isLoaded: Bool { get }
     var loadState: MLEngineLoadState { get }
+}
+
+extension LLMEngine {
+    /// Default no-op for engines that don't implement warmup.
+    func warmup() async {}
 }
 
 /// Text-to-speech engine protocol.

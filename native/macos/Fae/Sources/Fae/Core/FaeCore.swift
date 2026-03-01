@@ -225,6 +225,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     NSLog("FaeCore: rescue mode — scheduler skipped")
                 }
 
+                // Warm up LLM — first MLX inference compiles Metal shaders.
+                // This can take 30–60s on cold start. Running warmup here, before
+                // the ready announcement, ensures Fae is actually responsive
+                // when she says hello. Subsequent launches are fast because
+                // macOS caches the compiled Metal shaders.
+                NSLog("FaeCore: warming up LLM...")
+                await llmEngine.warmup()
+                NSLog("FaeCore: LLM ready for conversation")
+
                 pipelineState = .running
                 eventBus.send(.runtimeState(.started))
                 NSLog("FaeCore: pipeline started")

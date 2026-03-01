@@ -52,6 +52,11 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// `transitionToReadyCanvas()` from overwriting the enrollment card.
     private var enrollmentModeActive: Bool = false
 
+    /// UserDefaults key — set after the user has seen the full startup canvas
+    /// experience (crawl + ready page) at least once. On subsequent launches
+    /// the canvas stays closed so it doesn't interrupt the user's workflow.
+    private static let hasShownStartupCanvasKey = "fae.hasShownStartupCanvas"
+
     private var observations: [NSObjectProtocol] = []
 
     init() {
@@ -270,9 +275,10 @@ final class PipelineAuxBridgeController: ObservableObject {
     // MARK: - Loading Canvas
 
     /// Push the Star Wars-style informational canvas and show it.
-    /// This gives non-technical users an engaging, honest overview of
-    /// what's happening while Fae loads her models.
+    /// Only shown on the first-ever launch — on subsequent launches the canvas
+    /// stays closed so it doesn't interrupt the user's workflow.
     private func showLoadingCanvas() {
+        guard !UserDefaults.standard.bool(forKey: Self.hasShownStartupCanvasKey) else { return }
         canvasController?.setContent(LoadingCanvasContent.crawlExperience())
         auxiliaryWindows?.showCanvas()
     }
@@ -280,9 +286,12 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Clear the crawl and replace with the interactive "Fae is Ready" FAQ page.
     /// Gives users time to finish reading the crawl ending before swapping.
     /// After 20s of the ready page being shown, auto-hide the canvas if still visible.
+    /// Marks the startup canvas as seen so it is skipped on subsequent launches.
     private func transitionToReadyCanvas() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
             guard let self, self.hasShownLoadingCanvas, !self.enrollmentModeActive else { return }
+            // Mark startup canvas as seen — skip on all future launches.
+            UserDefaults.standard.set(true, forKey: Self.hasShownStartupCanvasKey)
             self.canvasController?.setContent(LoadingCanvasContent.readyExperience())
 
             // Auto-hide the canvas after 20s if the user hasn't interacted with it.

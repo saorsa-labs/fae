@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.59] - 2026-03-01
+
+### Fixed
+- **Canvas shown on every launch** — startup canvas (Star Wars crawl + ready FAQ) now only auto-opens on the very first launch; subsequent launches leave the canvas closed. Persisted via `UserDefaults` key `fae.hasShownStartupCanvas`.
+- **"Ready too soon" announcement** — Fae now runs a one-token LLM warmup inference after models load but before speaking the greeting. Metal shader compilation (30–60s on cold GPU cache) now happens silently before "Hello, I'm Fae" plays, so she is actually responsive when she announces ready.
+- **LLM not generating / no speech bubble** — root cause was the Metal JIT warmup freeze on first inference after launch. After warmup completes, typed and spoken queries both generate LLM tokens as expected, and the speech bubble appears correctly on the main window.
+
 ## [v0.8.58] - 2026-03-01
 
 ### Fixed
