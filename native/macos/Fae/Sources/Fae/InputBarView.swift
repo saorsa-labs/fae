@@ -134,7 +134,7 @@ struct InputBarView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 13, weight: .regular, design: .serif))
             .foregroundColor(.white.opacity(0.92))
-            .lineLimit(1...8)
+            .lineLimit(1...20)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(

@@ -86,7 +86,7 @@ final class WindowStateController: ObservableObject {
             window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: false)
 
             window.minSize = NSSize(width: 280, height: 400)
-            window.maxSize = NSSize(width: 500, height: 700)
+            window.maxSize = NSSize(width: 500, height: 900)
 
             // ── Re-enforce after SwiftUI resets ──────────────────────
             DispatchQueue.main.async { [weak self] in
@@ -296,11 +296,11 @@ final class WindowStateController: ObservableObject {
 
     /// Expand the window by `extra` points beyond the base compact height.
     ///
-    /// Smoothly animates the height increase. Clamped so total height <= 700pt.
+    /// Smoothly animates the height increase. Clamped so total height <= 900pt.
     /// Only takes effect in compact mode — ignored when collapsed.
     func requestExtraHeight(_ extra: CGFloat) {
         guard mode == .compact, window != nil else { return }
-        let clamped = min(extra, 700 - compactHeight)
+        let clamped = min(extra, 900 - compactHeight)
         guard abs(clamped - extraHeight) > 4 else { return } // avoid micro-jitter
         extraHeight = clamped
         applyCurrentHeight(animated: true)

@@ -115,6 +115,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let sparkleUpdater = SparkleUpdaterController()
     let relayServer = FaeRelayServer()
     let aboutWindow = AboutWindowController()
+    let memoryImport = MemoryImportWindowController()
     let hotkeyManager = GlobalHotkeyManager()
     let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
@@ -216,6 +217,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         aboutWindow.conversation = conversation
         aboutWindow.sparkleUpdater = sparkleUpdater
         aboutWindow.faeCore = faeCore
+        memoryImport.conversation = conversation
+        memoryImport.auxiliaryWindows = auxiliaryWindows
         relayServer.bindOrbState(orbState)
         relayServer.commandSender = faeCore
         relayServer.audioSender = faeCore
@@ -559,6 +562,13 @@ struct FaeApp: App {
                 Button("Ask About Tools") {
                     askFae("What tools do you have and how do I configure them?")
                 }
+
+                Divider()
+
+                Button("Import Memories\u{2026}") {
+                    appDelegate.memoryImport.show()
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
 
                 Divider()
 
