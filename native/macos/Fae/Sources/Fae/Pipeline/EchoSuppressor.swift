@@ -46,6 +46,16 @@ struct EchoSuppressor {
     /// Short utterance guard expiry.
     private var shortUtteranceGuardUntil: Date?
 
+    // MARK: - Computed Properties
+
+    /// Whether the echo suppressor is currently actively suppressing audio.
+    /// True when assistant is speaking or within the echo tail window.
+    var isInSuppression: Bool {
+        if assistantSpeaking { return true }
+        if let until = suppressUntil, Date() < until { return true }
+        return false
+    }
+
     // MARK: - Public API
 
     /// Call when assistant starts speaking.

@@ -284,6 +284,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
         Task { await pipelineCoordinator?.cancel() }
     }
 
+    /// Toggle barge-in on/off, persist to config, and update the live pipeline.
+    func setBargeInEnabled(_ enabled: Bool) {
+        config.bargeIn.enabled = enabled
+        persistConfig(reason: "config.patch.barge_in.enabled")
+        if let coordinator = pipelineCoordinator {
+            Task { await coordinator.setBargeInEnabled(enabled) }
+        }
+    }
+
     /// Toggle thinking mode on/off, persist to config, and update the live pipeline.
     func setThinkingEnabled(_ enabled: Bool) {
         thinkingEnabled = enabled
@@ -682,6 +691,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let value = value as? Bool else { return }
             config.llm.thinkingEnabled = value
             persistConfig(reason: "config.patch.llm.thinking_enabled")
+
+        case "barge_in.enabled":
+            guard let value = value as? Bool else { return }
+            setBargeInEnabled(value)
 
         case "onboarded":
             guard let value = value as? Bool else { return }

@@ -5,7 +5,9 @@ import SwiftUI
 /// General settings tab: audio input/output and window behavior.
 struct SettingsGeneralTab: View {
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
+    @EnvironmentObject private var faeCore: FaeCore
     @StateObject private var audio = AudioDeviceController()
+    @AppStorage("bargeInEnabled") private var bargeInEnabled: Bool = true
 
     var body: some View {
         Form {
@@ -90,6 +92,18 @@ struct SettingsGeneralTab: View {
                         )
                 }
                 Text("Summon requires Accessibility permission (granted on first use).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Voice Interaction") {
+                Toggle("Allow barge-in (interrupt Fae while speaking)",
+                       isOn: $bargeInEnabled)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .onChange(of: bargeInEnabled) { _, newValue in
+                        faeCore.setBargeInEnabled(newValue)
+                    }
+                Text("When enabled, speaking while Fae is talking will interrupt her. Disable if Fae's own voice through speakers causes garbled speech.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

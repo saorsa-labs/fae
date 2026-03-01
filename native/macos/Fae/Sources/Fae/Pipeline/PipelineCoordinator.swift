@@ -76,6 +76,15 @@ actor PipelineCoordinator {
         thinkingEnabledLive = enabled
     }
 
+    /// Live override for barge-in — set by FaeCore when the user toggles the setting.
+    /// `nil` means fall back to `config.bargeIn.enabled`.
+    private var bargeInEnabledLive: Bool?
+
+    /// Update the barge-in flag without restarting the pipeline.
+    func setBargeInEnabled(_ enabled: Bool) {
+        bargeInEnabledLive = enabled
+    }
+
     // MARK: - Pipeline State
 
     private var mode: PipelineMode = .conversation
@@ -380,19 +389,24 @@ actor PipelineCoordinator {
                 NSLog("phase1.first_audio_latency_ms=%.2f", latencyMs)
             }
 
-            // Track barge-in.
-            if vadOutput.speechStarted {
+            // Track barge-in — skip when echo suppressor is active to prevent
+            // Fae's own voice from triggering barge-in.
+            if vadOutput.speechStarted && !echoSuppressor.isInSuppression {
                 pendingBargeIn = PendingBargeIn(capturedAt: Date(), lastRms: vadOutput.rms)
+            } else if vadOutput.speechStarted && echoSuppressor.isInSuppression {
+                // Don't create barge-in candidate during echo suppression.
+                pendingBargeIn = nil
             }
             if vadOutput.isSpeech, pendingBargeIn != nil {
                 pendingBargeIn?.speechSamples += chunk.samples.count
                 pendingBargeIn?.lastRms = vadOutput.rms
 
                 // Check barge-in confirmation.
+                let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
                 let confirmSamples = (config.bargeIn.confirmMs * config.audio.inputSampleRate) / 1000
                 if let barge = pendingBargeIn,
                    barge.speechSamples >= confirmSamples,
-                   config.bargeIn.enabled
+                   bargeInEnabled
                 {
                     handleBargeIn(rms: barge.lastRms)
                     pendingBargeIn = nil
@@ -402,6 +416,7 @@ actor PipelineCoordinator {
             // Adjust VAD silence threshold based on assistant state.
             if assistantSpeaking {
                 vad.setSilenceThresholdMs(config.bargeIn.bargeInSilenceMs)
+                pendingBargeIn = nil  // Clear any pending barge-in during active speech
             } else {
                 vad.setSilenceThresholdMs(config.vad.minSilenceDurationMs)
             }
@@ -652,6 +667,7 @@ actor PipelineCoordinator {
 
         if !isToolFollowUp {
             interrupted = false
+            lastAssistantResponseText = ""
             assistantGenerating = true
             eventBus.send(.assistantGenerating(true))
 
@@ -837,6 +853,7 @@ actor PipelineCoordinator {
                         let isMetaCommentary = !firstTtsSent && TextProcessing.isMetaCommentary(cleaned)
                         if !cleaned.isEmpty && !isMetaCommentary {
                             firstTtsSent = true
+                            lastAssistantResponseText += " " + cleaned
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
                             await speakText(cleaned, isFinal: false)
                         } else if isMetaCommentary {
@@ -849,6 +866,7 @@ actor PipelineCoordinator {
                             let cleaned = TextProcessing.stripNonSpeechChars(text)
                             if !cleaned.isEmpty {
                                 firstTtsSent = true
+                                lastAssistantResponseText += " " + cleaned
                                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                                 await speakText(cleaned, isFinal: false)
                             }
@@ -1015,6 +1033,7 @@ actor PipelineCoordinator {
         }
 
         assistantSpeaking = true
+        lastAssistantStart = Date()
         echoSuppressor.onAssistantSpeechStart()
 
         // Emotional prosody: when enabled and no explicit voiceInstruct (i.e. not roleplay),
@@ -1064,7 +1083,7 @@ actor PipelineCoordinator {
     // MARK: - Barge-In
 
     private func handleBargeIn(rms: Float) {
-        guard config.bargeIn.enabled else { return }
+        guard bargeInEnabledLive ?? config.bargeIn.enabled else { return }
         guard assistantSpeaking || assistantGenerating else { return }
         guard rms >= config.bargeIn.minRms else { return }
 
