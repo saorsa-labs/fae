@@ -670,7 +670,8 @@ actor PipelineCoordinator {
                 soulContract: soul,
                 customInstructionsOverride: isRescueMode ? "" : nil,
                 toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
-                installedSkills: skills
+                installedSkills: skills,
+                suppressThinking: !config.llm.thinkingEnabled
             )
             if let context = memoryContext {
                 systemPrompt += "\n\n" + context
@@ -690,8 +691,7 @@ actor PipelineCoordinator {
             temperature: config.llm.temperature,
             topP: config.llm.topP,
             maxTokens: config.llm.maxTokens,
-            repetitionPenalty: config.llm.repeatPenalty,
-            suppressThinking: !config.llm.thinkingEnabled
+            repetitionPenalty: config.llm.repeatPenalty
         )
 
         // Stream tokens.

@@ -47,22 +47,20 @@ actor MLXLLMEngine: LLMEngine {
 
                 do {
                     // Build chat messages with system prompt.
-                    // NOTE: Qwen3's /no_think token only works when placed at the
-                    // START of the final user message (not in the system message).
-                    // We inject it in the loop below when appending the last user turn.
+                    // Thinking suppression is handled at the system-prompt level
+                    // (PersonalityManager injects the directive there) rather than
+                    // by appending "/no_think" to user messages.  Appending "/no_think"
+                    // as literal text causes mlx-swift-lm to pass it through to the
+                    // model as user content — Qwen3 then reasons *about* the string
+                    // instead of treating it as a control directive, producing visible
+                    // thinking text and breaking tool calls.
                     var chatMessages: [Chat.Message] = [
                         .system(systemPrompt),
                     ]
-                    // /no_think must be appended at the END of the last user message —
-                    // this is how mlx-lm Python suppresses Qwen3 thinking mode.
-                    // Placing it at the start (prefix) has no effect and causes the
-                    // model to wrap its entire output in <think>...</think>.
-                    let lastUserIndex = messages.indices.last(where: { messages[$0].role == .user })
-                    for (i, msg) in messages.enumerated() {
+                    for (_, msg) in messages.enumerated() {
                         switch msg.role {
                         case .user:
-                            let noThink = (i == lastUserIndex && options.suppressThinking) ? " /no_think" : ""
-                            chatMessages.append(.user(msg.content + noThink))
+                            chatMessages.append(.user(msg.content))
                         case .assistant:
                             chatMessages.append(.assistant(msg.content))
                         case .system:

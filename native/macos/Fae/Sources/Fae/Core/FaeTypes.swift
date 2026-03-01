@@ -58,7 +58,4 @@ struct GenerationOptions: Sendable {
     var topP: Float = 0.9
     var maxTokens: Int = 2048
     var repetitionPenalty: Float? = 1.1
-    /// When true, appends /no_think to the last user message to suppress
-    /// Qwen3 thinking tokens. Defaults to true (thinking suppressed).
-    var suppressThinking: Bool = true
 }

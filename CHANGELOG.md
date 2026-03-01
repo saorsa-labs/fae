@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.55] - 2026-03-01
+
+### Fixed
+
+- **Thinking content spoken aloud** — removed `/no_think` text injection from user messages entirely. mlx-swift-lm has no chat-template-level `enable_thinking` support, so injecting `/no_think` as literal user text caused the model to reason about the string conversationally (no `<think>` wrapper, so `ThinkTagStripper` couldn't catch it), output visible reasoning as plain text, and break tool calls. Thinking suppression now moves to the system prompt via `PersonalityManager.assemblePrompt(suppressThinking:)`.
+- **Tool use broken** — same root cause as above. With `/no_think` polluting user messages the model responded with reasoning text instead of `<tool_call>` markup. Fixed by the same change.
+- **Voice XML tags spoken literally in normal chat** — `PersonalityManager.roleplayPrompt` instructed the LLM to use `<voice character="Anchor">` tags for news without starting a roleplay session. Since `VoiceTagStripper` only runs when `roleplayActive`, the tags passed through to TTS as raw markup. Fixed: instruction now requires a roleplay session even for news. Added `<voice ...>` tag stripping in `TextProcessing.stripNonSpeechChars` as a safety net.
+
 ## [v0.8.54] - 2026-03-01
 
 ### Fixed

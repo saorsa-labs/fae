@@ -80,6 +80,11 @@ enum TextProcessing {
     /// Remove characters that shouldn't be spoken by TTS.
     static func stripNonSpeechChars(_ text: String) -> String {
         var result = text
+        // Strip any leaked <voice ...> XML tags (keep the text content between them).
+        if let regex = try? NSRegularExpression(pattern: "<voice[^>]*>|</voice>") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
         // Remove markdown-style formatting.
         result = result.replacingOccurrences(of: "**", with: "")
         result = result.replacingOccurrences(of: "__", with: "")

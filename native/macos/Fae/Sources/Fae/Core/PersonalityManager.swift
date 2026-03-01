@@ -132,10 +132,10 @@ enum PersonalityManager {
         - After finishing, stop the session.
 
         News reading:
-        - When asked to "read me the news about X" or similar, search for relevant articles, then read with a professional \
-        news anchor style using <voice character="Anchor">headline text</voice> tags.
+        - When asked to "read me the news about X" or similar, start a roleplay session first, assign an \
+        "Anchor" voice with a professional news anchor style, then read with voice tags.
         - Attribute sources: "According to [Source]..." — always credit where information came from.
-        - No roleplay session needed for news — just use voice tags inline.
+        - ALWAYS start a roleplay session before using any voice tags, even for news.
         """
 
     // MARK: - Acknowledgment Arrays
@@ -236,12 +236,22 @@ enum PersonalityManager {
         customInstructionsOverride: String? = nil,
         memoryContext: String? = nil,
         toolSchemas: String? = nil,
-        installedSkills: [String] = []
+        installedSkills: [String] = [],
+        suppressThinking: Bool = true
     ) -> String {
         var parts: [String] = []
 
         // 1. Core prompt.
         parts.append(voiceCorePrompt)
+
+        // 1b. Thinking mode directive.
+        if suppressThinking {
+            parts.append("""
+                Thinking mode: DISABLED.
+                Never output <think>...</think> reasoning blocks or any internal reasoning.
+                Respond directly and concisely. Do not show your work.
+                """)
+        }
 
         // 2. Vision.
         if visionCapable {
