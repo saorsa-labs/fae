@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.65] - 2026-03-01
+
+### Fixed
+
+- **Turn-transition TTS deadlock** — after the first successful turn, all subsequent turns produced zero LLM output because `pendingTTSTask` from the previous turn was never cancelled. When a new user utterance interrupted the assistant, `processTranscription` set `interrupted = true` but left stale TTS tasks in the queue. The new turn reset `interrupted = false`, causing old tasks to resume and block the pipeline. Now cancels `pendingTTSTask` both in the interruption path and at the start of each new generation turn.
+
 ## [v0.8.64] - 2026-03-01
 
 ### Fixed

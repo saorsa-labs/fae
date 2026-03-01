@@ -661,6 +661,8 @@ actor PipelineCoordinator {
         // If assistant is still active, interrupt.
         if assistantSpeaking || assistantGenerating {
             interrupted = true
+            pendingTTSTask?.cancel()
+            pendingTTSTask = nil
             await playback.stop()
         }
 
@@ -688,6 +690,9 @@ actor PipelineCoordinator {
 
         if !isToolFollowUp {
             interrupted = false
+            // Ensure no stale TTS tasks from a previous turn can block this one.
+            pendingTTSTask?.cancel()
+            pendingTTSTask = nil
             lastAssistantResponseText = ""
             assistantGenerating = true
             eventBus.send(.assistantGenerating(true))
