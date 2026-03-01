@@ -287,7 +287,16 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Gives users time to finish reading the crawl ending before swapping.
     /// After 20s of the ready page being shown, auto-hide the canvas if still visible.
     /// Marks the startup canvas as seen so it is skipped on subsequent launches.
-    private func transitionToReadyCanvas() {
+    ///
+    /// - Parameter force: When `true`, bypass the "already seen" guard. Used after
+    ///   enrollment completes so the user always sees the ready page post-enrollment.
+    private func transitionToReadyCanvas(force: Bool = false) {
+        // On 2nd+ launches the startup canvas experience is complete — skip entirely
+        // unless forced (e.g. after enrollment).
+        if !force, UserDefaults.standard.bool(forKey: Self.hasShownStartupCanvasKey) {
+            return
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
             guard let self, self.hasShownLoadingCanvas, !self.enrollmentModeActive else { return }
             // Mark startup canvas as seen — skip on all future launches.
@@ -423,7 +432,7 @@ final class PipelineAuxBridgeController: ObservableObject {
 
         case "pipeline.enrollment_complete":
             enrollmentModeActive = false
-            transitionToReadyCanvas()
+            transitionToReadyCanvas(force: true)
 
         case "pipeline.briefing_ready":
             let count = payload["item_count"] as? Int ?? 0

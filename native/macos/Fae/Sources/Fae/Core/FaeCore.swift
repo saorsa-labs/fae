@@ -880,6 +880,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try FileManager.default.removeItem(at: customSkillsDir)
             }
 
+            // Clear UserDefaults keys so the startup canvas and onboarding replay.
+            UserDefaults.standard.removeObject(forKey: "fae.hasShownStartupCanvas")
+
             config = FaeConfig()
             isOnboarded = false
             isLicenseAccepted = false
