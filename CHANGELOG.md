@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.57] - 2026-03-01
+
+### Fixed
+
+- **Speaking in tongues (again, root fix)** — `thinkEndSeen` was hardcoded to `false` every call, meaning ALL tokens were buffered as a think block on every generation. Now initialised to `true` when thinking mode is disabled OR on tool follow-up turns, so non-thinking responses route directly to TTS. Safety timeout raised from 5 K → 80 K chars so long reasoning blocks no longer trigger premature flush-through.
+- **Orb window covered by large text overlay** — `SubtitleStateController.appendStreamingSentence` accumulated all sentences into one growing string that grew to cover the orb. Now replaces with the latest sentence only. `ConversationBridgeController` was also passing the fully-accumulated text to `finalizeAssistantMessage`; now passes only the final sentence.
+- **Debug console showing only STT events** — no `debugLog` calls existed in the LLM token loop. Added `.llmThink` logging inside the think-suppression buffer and `.llmToken` logging on the normal TTS path so all LLM output is visible in real time.
+- **PersonalityManager thinking suppression** — the `suppressThinking` parameter was accepted but never used; re-added a concise "Thinking mode: OFF" system-prompt directive when thinking is disabled.
+- **`</think>` tags reaching TTS** — added belt-and-suspenders stripping of `<think>` and `</think>` in `TextProcessing.stripNonSpeechChars`.
+
+### Added
+
+- **Thinking mode toggle button** — a "brain" pill button in the main window input bar (alongside Show Discussions / Show Canvas). Tap to toggle Fae's extended reasoning on/off. State is highlighted in heather/purple when on, persists to `config.toml`, and takes effect on the next query with no restart required.
+
 ## [v0.8.56] - 2026-03-01
 
 ### Fixed
