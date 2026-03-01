@@ -55,8 +55,9 @@ struct FaeConfig: Codable {
         var maxHistoryMessages: Int = 10
         var voiceModelPreset: String = "auto"
         var enableVision: Bool = false
-        /// When true, Qwen3 thinking mode is enabled (extended reasoning).
-        /// When false (default), /no_think is appended to suppress thinking tokens.
+        /// When true, model thinking mode is enabled (extended reasoning).
+        /// When false (default), Fae suppresses reasoning via
+        /// `enable_thinking: false` in the chat template context.
         var thinkingEnabled: Bool = false
     }
 

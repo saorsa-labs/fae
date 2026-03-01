@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.64] - 2026-03-01
+
+### Fixed
+
+- **Non-blocking TTS streaming** — TTS synthesis no longer blocks the LLM token stream. Previously, `await speakText()` inside the token generation loop caused 3-5 second gaps between spoken sentences while TTS synthesized each one. Now uses a chained `enqueueTTS()` task queue that runs TTS concurrently with continued LLM token generation, eliminating inter-sentence pauses.
+- **TTS text normalization** — enhanced `stripNonSpeechChars()` to clean up text that was confusing the TTS model and causing garbled/drunk-sounding speech:
+  - Strip ALL XML-style tags (not just voice/think) — catches any leaked markup
+  - Remove markdown heading markers (`# `, `## `, etc.)
+  - Remove markdown list markers (`- `, `* `, `1. `, etc.)
+  - Remove bare URLs (they sound terrible when spoken)
+  - Remove square brackets (markdown link remnants)
+  - Collapse all whitespace (spaces, tabs, newlines) into single spaces
+
 ## [v0.8.63] - 2026-03-01
 
 ### Added

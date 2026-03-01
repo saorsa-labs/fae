@@ -149,6 +149,10 @@ actor PipelineCoordinator {
     private var pipelineTask: Task<Void, Never>?
     private var captureStream: AsyncStream<AudioChunk>?
 
+    /// Chained TTS task — each sentence enqueues onto this so TTS runs in order
+    /// without blocking the LLM token stream.
+    private var pendingTTSTask: Task<Void, Never>?
+
     // MARK: - Capability Tickets
 
     /// Task-scoped capability grant consumed by the broker.
@@ -249,6 +253,8 @@ actor PipelineCoordinator {
     /// loop checks `interrupted` at each step and exits cleanly.
     func cancel() {
         interrupted = true
+        pendingTTSTask?.cancel()
+        pendingTTSTask = nil
         Task { await playback.stop() }
         NSLog("PipelineCoordinator: cancelled by user")
     }
@@ -811,7 +817,7 @@ actor PipelineCoordinator {
                         let cleaned = TextProcessing.stripNonSpeechChars(beforeTag)
                         if !cleaned.isEmpty {
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                            await speakText(cleaned, isFinal: false)
+                            enqueueTTS(cleaned, isFinal: false)
                         }
                     }
                     sentenceBuffer = ""
@@ -874,7 +880,7 @@ actor PipelineCoordinator {
                         let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                         if !cleaned.isEmpty {
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                            await speakText(cleaned, isFinal: false, voiceInstruct: voice)
+                            enqueueTTS(cleaned, isFinal: false, voiceInstruct: voice)
                         }
                     }
                 } else {
@@ -892,7 +898,7 @@ actor PipelineCoordinator {
                             firstTtsSent = true
                             lastAssistantResponseText += " " + cleaned
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                            await speakText(cleaned, isFinal: false)
+                            enqueueTTS(cleaned, isFinal: false)
                         } else if isMetaCommentary {
                             debugLog(debugConsole, .llmThink, "[suppressed meta-commentary] \(cleaned)")
                         }
@@ -905,7 +911,7 @@ actor PipelineCoordinator {
                                 firstTtsSent = true
                                 lastAssistantResponseText += " " + cleaned
                                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                                await speakText(cleaned, isFinal: false)
+                                enqueueTTS(cleaned, isFinal: false)
                             }
                             sentenceBuffer = String(sentenceBuffer[clause...])
                         }
@@ -953,10 +959,12 @@ actor PipelineCoordinator {
                     let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                     if !cleaned.isEmpty {
                         eventBus.send(.assistantText(text: cleaned, isFinal: true))
-                        await speakText(cleaned, isFinal: true, voiceInstruct: voice)
+                        enqueueTTS(cleaned, isFinal: true, voiceInstruct: voice)
                         spokeSomething = true
                     }
                 }
+                // Wait for all TTS (streaming + final) to complete.
+                await awaitPendingTTS()
                 if !spokeSomething && assistantSpeaking {
                     await playback.markEnd()
                 }
@@ -965,8 +973,11 @@ actor PipelineCoordinator {
                 let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
                 if !finalText.isEmpty {
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
-                    await speakText(finalText, isFinal: true)
-                } else if assistantSpeaking {
+                    enqueueTTS(finalText, isFinal: true)
+                }
+                // Wait for all TTS (streaming + final) to complete.
+                await awaitPendingTTS()
+                if finalText.isEmpty && assistantSpeaking {
                     await playback.markEnd()
                 }
             }
@@ -1065,15 +1076,50 @@ actor PipelineCoordinator {
 
     // MARK: - TTS
 
+    /// Non-blocking TTS enqueue — chains onto `pendingTTSTask` so sentences synthesize
+    /// in order without blocking the LLM token stream.
+    ///
+    /// Call this from inside the token generation loop. The LLM keeps producing tokens
+    /// while TTS runs concurrently on the actor (re-entrant at `await` points).
+    private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) {
+        // Set speaking state immediately so echo suppressor and barge-in work correctly.
+        if !assistantSpeaking {
+            assistantSpeaking = true
+            lastAssistantStart = Date()
+            echoSuppressor.onAssistantSpeechStart()
+        }
+
+        let previous = pendingTTSTask
+        pendingTTSTask = Task {
+            await previous?.value  // Ensure sentence ordering
+            guard !interrupted else { return }
+            await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
+        }
+    }
+
+    /// Wait for all pending TTS work to complete. Call after the token loop ends.
+    private func awaitPendingTTS() async {
+        await pendingTTSTask?.value
+        pendingTTSTask = nil
+    }
+
+    /// Blocking TTS — used by `speakDirect`, `speakWithVoice`, and other non-streaming paths
+    /// where we want to wait for speech to finish before continuing.
     private func speakText(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
+        if !assistantSpeaking {
+            assistantSpeaking = true
+            lastAssistantStart = Date()
+            echoSuppressor.onAssistantSpeechStart()
+        }
+        await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
+    }
+
+    /// Core TTS synthesis — shared by both `enqueueTTS` and `speakText`.
+    private func synthesizeSentence(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
         guard await ttsEngine.isLoaded else {
             NSLog("PipelineCoordinator: TTS not loaded, skipping speech")
             return
         }
-
-        assistantSpeaking = true
-        lastAssistantStart = Date()
-        echoSuppressor.onAssistantSpeechStart()
 
         // Emotional prosody: when enabled and no explicit voiceInstruct (i.e. not roleplay),
         // classify sentiment and use instruct mode with emotion description.
@@ -1199,7 +1245,7 @@ actor PipelineCoordinator {
 
     // MARK: - Tool Call Parsing
 
-    private struct ToolCall: @unchecked Sendable {
+    struct ToolCall: @unchecked Sendable {
         let name: String
         let arguments: [String: Any]
     }
@@ -1208,7 +1254,7 @@ actor PipelineCoordinator {
     /// Supports two formats:
     /// - JSON (Qwen3): `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
     /// - XML (Qwen3.5): `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
-    private static func parseToolCalls(from text: String) -> [ToolCall] {
+    static func parseToolCalls(from text: String) -> [ToolCall] {
         var calls: [ToolCall] = []
         var searchRange = text.startIndex..<text.endIndex
 

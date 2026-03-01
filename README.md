@@ -258,6 +258,7 @@ Fae now uses a **core-enforced security spine** (not prompt-only safety):
   - relay actions routed through same broker/capability policy
 - **Append-only security logging** with reason codes, redaction, rotation/retention, and forensic mode.
 - **Local security dashboard** (Developer tab) to inspect allow/confirm/deny distribution, reason codes, and action categories.
+- **External Review**: [Deep Analysis: Security, Memory, and the Local-First Paradigm — Reviewed by Gemini 3.1 Pro High](docs/verification/fae-security-review.md)
 
 See: [Security Index](docs/guides/security-index.md), [Security Autonomy Boundary + Execution Plan](docs/guides/security-autonomy-boundary-and-execution-plan.md), [Security Launch SLOs](docs/guides/security-autonomy-launch-slos.md), and [Security PR Review Checklist](docs/checklists/security-pr-review-checklist.md).
 

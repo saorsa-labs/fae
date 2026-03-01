@@ -109,26 +109,54 @@ enum TextProcessing {
 
     // MARK: - Non-Speech Character Stripping
 
-    /// Remove characters that shouldn't be spoken by TTS.
+    /// Remove characters that shouldn't be spoken by TTS and normalize for clean speech.
     static func stripNonSpeechChars(_ text: String) -> String {
         var result = text
-        // Strip any leaked <voice ...> XML tags (keep the text content between them).
-        if let regex = try? NSRegularExpression(pattern: "<voice[^>]*>|</voice>") {
+
+        // Strip any leaked XML-style tags (voice, think, tool_call, etc.).
+        if let regex = try? NSRegularExpression(pattern: "</?[a-zA-Z_][a-zA-Z0-9_]*[^>]*>") {
             let range = NSRange(result.startIndex..., in: result)
             result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
         }
-        // Strip any leaked think tags (should not reach TTS, but belt-and-suspenders).
-        result = result.replacingOccurrences(of: "</think>", with: "")
-        result = result.replacingOccurrences(of: "<think>", with: "")
+
         // Remove markdown-style formatting.
         result = result.replacingOccurrences(of: "**", with: "")
         result = result.replacingOccurrences(of: "__", with: "")
         result = result.replacingOccurrences(of: "```", with: "")
         result = result.replacingOccurrences(of: "`", with: "")
-        // Remove code block markers.
         result = result.replacingOccurrences(of: "---", with: "")
-        // Trim whitespace.
+
+        // Remove markdown heading markers at line starts (# Heading).
+        if let headingRegex = try? NSRegularExpression(pattern: "(?m)^#{1,6}\\s+") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = headingRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        // Remove markdown list markers at line starts (- item, * item, 1. item).
+        if let listRegex = try? NSRegularExpression(pattern: "(?m)^\\s*(?:[-*•]|\\d+\\.)\\s+") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = listRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        // Remove bare URLs (https://... or http://...) — they sound terrible when spoken.
+        if let urlRegex = try? NSRegularExpression(pattern: "https?://\\S+") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = urlRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        // Remove square brackets (markdown link syntax remnants like [text]).
+        result = result.replacingOccurrences(of: "[", with: "")
+        result = result.replacingOccurrences(of: "]", with: "")
+
+        // Collapse all whitespace (spaces, tabs, newlines) into single spaces.
+        if let wsRegex = try? NSRegularExpression(pattern: "\\s+") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = wsRegex.stringByReplacingMatches(in: result, range: range, withTemplate: " ")
+        }
+
+        // Trim leading/trailing whitespace.
         result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+
         return result
     }
 
