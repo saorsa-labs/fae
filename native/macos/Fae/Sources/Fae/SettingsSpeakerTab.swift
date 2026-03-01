@@ -11,7 +11,6 @@ struct SettingsSpeakerTab: View {
     @State private var ownerEnrollmentCount: Int = 0
     @State private var ownerLastSeen: Date?
     @State private var hasOwner: Bool = false
-    @State private var showEnrollmentSheet: Bool = false
     @State private var showTestResult: Bool = false
     @State private var testResultText: String = ""
     @State private var isEditing: Bool = false
@@ -76,7 +75,7 @@ struct SettingsSpeakerTab: View {
                     .controlSize(.small)
 
                     Button("Re-enroll") {
-                        showEnrollmentSheet = true
+                        commandSender?.sendCommand(name: "speaker.start_enrollment", payload: [:])
                     }
                     .controlSize(.small)
                 }
@@ -92,7 +91,7 @@ struct SettingsSpeakerTab: View {
                     Text("No owner voice enrolled")
                         .foregroundStyle(.secondary)
                     Button("Enroll Now") {
-                        showEnrollmentSheet = true
+                        commandSender?.sendCommand(name: "speaker.start_enrollment", payload: [:])
                     }
                 }
             }

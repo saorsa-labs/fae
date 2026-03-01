@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.56] - 2026-03-01
+
+### Fixed
+
+- **Thinking content still spoken** — root cause identified: Qwen3 emits `<think>` as a **special token** that mlx-swift-lm decodes to empty string, so `ThinkTagStripper` never sees it and `insideThink` is never set. `</think>` IS emitted as literal text. The v0.8.55 system-prompt directive ("Thinking mode: DISABLED") caused the model to output reasoning as plain text with no tags, making it unfilterable. Fix: removed the backfiring system-prompt directive; added `thinkEndSeen` logic in `PipelineCoordinator.generateWithTools()` that buffers all tokens until `</think>` is seen (or a 5K-char safety timeout), discards the think block, and only then routes tokens to TTS.
+- **Think content polluting conversation history** — `fullResponse` (containing all think reasoning) was stored via `conversationState.addAssistantMessage()`, corrupting the context for recursive tool calls (e.g. calendar tool result never spoken). Fixed with `stripThinkContent()` applied before storing to history.
+- **Voice enrollment buttons non-functional** — Settings > Speaker "Enroll Now" and "Re-enroll" buttons set `showEnrollmentSheet = true` but no `.sheet()` modifier existed in the view — the sheet never appeared. Fixed: buttons now send `speaker.start_enrollment` command to `FaeCore`, which triggers `runVoiceEnrollmentFlow()` with the current pipeline coordinator.
+
 ## [v0.8.55] - 2026-03-01
 
 ### Fixed

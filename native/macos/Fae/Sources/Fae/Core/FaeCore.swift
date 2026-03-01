@@ -520,6 +520,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 await pipelineCoordinator?.testSpeakerMatch()
             }
 
+        case "speaker.start_enrollment":
+            if let coordinator = pipelineCoordinator {
+                Task {
+                    await runVoiceEnrollmentFlow(coordinator: coordinator)
+                }
+            }
+
         case "skills.reload":
             Task {
                 await scheduler?.triggerTask(id: "skill_health_check")

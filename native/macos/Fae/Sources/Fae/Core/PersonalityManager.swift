@@ -244,15 +244,6 @@ enum PersonalityManager {
         // 1. Core prompt.
         parts.append(voiceCorePrompt)
 
-        // 1b. Thinking mode directive.
-        if suppressThinking {
-            parts.append("""
-                Thinking mode: DISABLED.
-                Never output <think>...</think> reasoning blocks or any internal reasoning.
-                Respond directly and concisely. Do not show your work.
-                """)
-        }
-
         // 2. Vision.
         if visionCapable {
             parts.append(visionPrompt)

@@ -701,6 +701,10 @@ actor PipelineCoordinator {
         var fullResponse = ""
         var sentenceBuffer = ""
         var detectedToolCall = false
+        // Qwen3 emits <think> as a special token (decoded to empty string by mlx-swift-lm)
+        // but </think> as regular literal text. Suppress all TTS until </think> is seen.
+        var thinkEndSeen = false
+        var thinkAccum = ""
         let llmStartedAt = Date()
         var llmTokenCount = 0
 
@@ -742,6 +746,33 @@ actor PipelineCoordinator {
                 if detectedToolCall {
                     // Accumulate tool call content without speaking.
                     continue
+                }
+
+                // Think block suppression: Qwen3's <think> is a special token decoded to ""
+                // so ThinkTagStripper never sees it. </think> IS emitted as literal text.
+                // Buffer everything until </think>, then discard the think block.
+                if !thinkEndSeen {
+                    thinkAccum += visible
+                    if let endRange = thinkAccum.range(of: "</think>") {
+                        let afterThink = String(thinkAccum[endRange.upperBound...])
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        thinkAccum = ""
+                        thinkEndSeen = true
+                        // Seed sentenceBuffer with any content following </think>.
+                        if !afterThink.isEmpty && !roleplayActive {
+                            sentenceBuffer = afterThink
+                        }
+                        continue
+                    }
+                    // Safety timeout: if fullResponse is very long with no </think>,
+                    // the model likely skipped the think block; start speaking.
+                    if fullResponse.count > 5_000 {
+                        thinkAccum = ""
+                        thinkEndSeen = true
+                        // Fall through to normal routing.
+                    } else {
+                        continue
+                    }
                 }
 
                 // Roleplay mode: route through voice tag parser for per-character TTS.
@@ -853,7 +884,7 @@ actor PipelineCoordinator {
                 }
             }
 
-            let spokenText = Self.stripVoiceTagMarkup(Self.stripToolCallMarkup(fullResponse))
+            let spokenText = Self.stripThinkContent(Self.stripVoiceTagMarkup(Self.stripToolCallMarkup(fullResponse)))
             if !spokenText.isEmpty {
                 lastAssistantResponseText = spokenText
                 await conversationState.addAssistantMessage(spokenText)
@@ -893,8 +924,8 @@ actor PipelineCoordinator {
             return
         }
 
-        // Add the assistant's tool-calling message to history.
-        await conversationState.addAssistantMessage(fullResponse)
+        // Add the assistant's tool-calling message to history (strip think content).
+        await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse))
 
         for call in toolCalls.prefix(5) {
             let callId = UUID().uuidString
@@ -1178,6 +1209,14 @@ actor PipelineCoordinator {
             )
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Strip everything up to and including the first `</think>` tag.
+    ///
+    /// Prevents Qwen3 reasoning content from polluting conversation history and TTS.
+    private static func stripThinkContent(_ text: String) -> String {
+        guard let endRange = text.range(of: "</think>") else { return text }
+        return String(text[endRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func serializeArguments(_ args: [String: Any]) -> String {
