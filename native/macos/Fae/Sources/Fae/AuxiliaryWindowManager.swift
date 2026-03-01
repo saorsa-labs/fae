@@ -21,12 +21,20 @@ final class AuxiliaryWindowManager: ObservableObject {
     @Published private(set) var isConversationVisible: Bool = false
     @Published private(set) var isCanvasVisible: Bool = false
     @Published private(set) var isApprovalVisible: Bool = false
+    @Published private(set) var isDebugConsoleVisible: Bool = false
 
     // MARK: - Private State
 
     private var conversationPanel: NSPanel?
     private var canvasPanel: NSPanel?
     private var approvalPanel: NSPanel?
+    private var debugConsolePanel: NSPanel?
+    private var debugConsolePanelDelegate: PanelCloseDelegate?
+
+    // MARK: - Debug Console Controller
+
+    /// Set by FaeAppDelegate during wiring before the debug console is shown.
+    var debugConsoleController: DebugConsoleController?
 
     private static let autoHideKey = "fae.windows.autoHideOnCollapse"
 
@@ -141,6 +149,35 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     func toggleConversation() {
         isConversationVisible ? hideConversation() : showConversation()
+    }
+
+    // MARK: - Debug Console
+
+    func showDebugConsole() {
+        guard let controller = debugConsoleController else { return }
+        if debugConsolePanel == nil { debugConsolePanel = makeDebugConsolePanel(controller: controller) }
+        guard let panel = debugConsolePanel else { return }
+        // Position at bottom-left of screen if no position set yet.
+        if !panel.isVisible {
+            if let screen = windowState?.window?.screen ?? NSScreen.main {
+                let frame = panel.frame
+                let x = screen.visibleFrame.minX + 20
+                let y = screen.visibleFrame.minY + 20
+                panel.setFrameOrigin(NSPoint(x: x, y: y))
+                _ = frame // silence unused warning
+            }
+        }
+        panel.orderFront(nil)
+        isDebugConsoleVisible = true
+    }
+
+    func hideDebugConsole() {
+        debugConsolePanel?.orderOut(nil)
+        isDebugConsoleVisible = false
+    }
+
+    func toggleDebugConsole() {
+        isDebugConsoleVisible ? hideDebugConsole() : showDebugConsole()
     }
 
     // MARK: - Approval Overlay
@@ -470,6 +507,32 @@ final class AuxiliaryWindowManager: ObservableObject {
             hosting.trailingAnchor.constraint(equalTo: panelContentView.trailingAnchor),
         ])
 
+        return panel
+    }
+
+    private func makeDebugConsolePanel(controller: DebugConsoleController) -> NSPanel {
+        let delegate = PanelCloseDelegate { [weak self] in
+            self?.hideDebugConsole()
+        }
+        debugConsolePanelDelegate = delegate
+        let size = NSSize(width: 600, height: 400)
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .utilityWindow, .nonactivatingPanel, .resizable, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Fae Debug Console"
+        panel.isReleasedWhenClosed = false
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.isMovableByWindowBackground = false
+        panel.level = .floating
+        panel.hasShadow = true
+        panel.minSize = NSSize(width: 400, height: 250)
+        panel.delegate = delegate
+
+        embedSwiftUI(DebugConsoleWindowView(controller: controller), in: panel)
         return panel
     }
 

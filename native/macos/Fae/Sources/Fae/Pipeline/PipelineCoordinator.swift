@@ -54,6 +54,17 @@ actor PipelineCoordinator {
     private let toolAnalytics: ToolAnalytics?
     private let isRescueMode: Bool
 
+    // MARK: - Debug Console
+
+    /// Optional debug console for real-time pipeline visibility.
+    /// Set after init via `setDebugConsole(_:)`.
+    private var debugConsole: DebugConsoleController?
+
+    /// Wire up the debug console after initialization.
+    func setDebugConsole(_ console: DebugConsoleController?) {
+        debugConsole = console
+    }
+
     // MARK: - Pipeline State
 
     private var mode: PipelineMode = .conversation
@@ -442,6 +453,14 @@ actor PipelineCoordinator {
                     currentSpeakerRole = .owner
                     currentSpeakerIsOwner = true
                     NSLog("PipelineCoordinator: owner voice enrolled from first speech")
+                    NotificationCenter.default.post(
+                        name: .faePipelineState,
+                        object: nil,
+                        userInfo: [
+                            "event": "pipeline.enrollment_complete",
+                            "payload": [:] as [String: Any],
+                        ]
+                    )
                 } else if let match = await store.match(
                     embedding: embedding,
                     threshold: config.speaker.threshold
@@ -526,6 +545,7 @@ actor PipelineCoordinator {
             let text = TextProcessing.correctNameRecognition(rawText)
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
+            debugLog(debugConsole, .stt, text)
 
             // Echo detection — if the transcribed text is a fragment of the last
             // assistant response, the mic picked up speaker output. Drop it.
@@ -632,6 +652,10 @@ actor PipelineCoordinator {
 
             // Memory recall — inject context before generation.
             let memoryContext = await memoryOrchestrator?.recall(query: userText)
+            if let ctx = memoryContext, !ctx.isEmpty {
+                let preview = String(ctx.prefix(120)).replacingOccurrences(of: "\n", with: " ")
+                debugLog(debugConsole, .memory, "Recalled: \(preview)…")
+            }
 
             // Build system prompt with tool schemas.
             // Owner gating: non-owner voices don't see tool schemas → LLM won't use tools.
@@ -666,7 +690,8 @@ actor PipelineCoordinator {
             temperature: config.llm.temperature,
             topP: config.llm.topP,
             maxTokens: config.llm.maxTokens,
-            repetitionPenalty: config.llm.repeatPenalty
+            repetitionPenalty: config.llm.repeatPenalty,
+            suppressThinking: !config.llm.thinkingEnabled
         )
 
         // Stream tokens.
@@ -877,8 +902,10 @@ actor PipelineCoordinator {
 
             eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))
             NSLog("PipelineCoordinator: executing tool '%@'", call.name)
+            debugLog(debugConsole, .toolCall, "\(call.name)(\(inputJSON.prefix(80)))")
 
             let result = await executeTool(call)
+            debugLog(debugConsole, .toolResult, "\(call.name) → \(result.isError ? "error" : "ok") \(String(result.output.prefix(100)))")
 
             eventBus.send(.toolResult(
                 id: callId,

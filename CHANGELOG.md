@@ -2,7 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.8.4] - 2026-02-28
+## [v0.8.53] - 2026-03-01
+
+### Added
+
+- **Debug Console** — floating `NSPanel` (Cmd+Shift+L) showing real-time pipeline internals: raw STT transcriptions, LLM tokens, speaker scores, tool calls/results, and memory recall. Color-coded by event kind; auto-scroll, Clear, and Copy All buttons.
+- **Thinking mode toggle** — `FaeConfig.llm.thinkingEnabled` (default: off) controls whether Qwen3's `/no_think` directive is appended. Togglable in Settings > Models.
+
+### Fixed
+
+- **Enrollment canvas overwrite** — `transitionToReadyCanvas()` no longer fires while the enrollment card is visible. An `enrollmentModeActive` guard prevents the canvas from being replaced by the ready state during the voice enrollment flow.
+- **Enrollment intro shortened** — replaced the 3-sentence verbose intro (which could confuse the echo suppressor) with a brief 2-sentence version: *"Hi, I'm Fae. Please read the phrase on the canvas aloud to register your voice."*
+- **Dark halo around collapsed orb** — `window.hasShadow` is now disabled in collapsed (120×120) mode to remove the dark circle that appeared around the circular orb; shadow is restored when expanding to compact mode.
+
+## [v0.8.52] - 2026-02-28
 
 ### Fixed
 

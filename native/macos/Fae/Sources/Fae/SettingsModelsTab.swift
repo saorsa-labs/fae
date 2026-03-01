@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsModelsTab: View {
     var commandSender: HostCommandSender?
 
+    @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
     @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
     @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
@@ -257,6 +258,18 @@ struct SettingsModelsTab: View {
                 }
                 .foregroundStyle(.orange)
             }
+
+            Toggle("Enable Thinking Mode", isOn: $thinkingEnabled)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .onChange(of: thinkingEnabled) {
+                    commandSender?.sendCommand(
+                        name: "config.patch",
+                        payload: ["key": "llm.thinking_enabled", "value": thinkingEnabled]
+                    )
+                }
+            Text("When on, Qwen3 reasons step by step before answering. Slower but more thorough for complex questions.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 

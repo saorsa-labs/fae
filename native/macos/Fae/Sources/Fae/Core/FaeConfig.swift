@@ -54,6 +54,9 @@ struct FaeConfig: Codable {
         var maxHistoryMessages: Int = 10
         var voiceModelPreset: String = "auto"
         var enableVision: Bool = false
+        /// When true, Qwen3 thinking mode is enabled (extended reasoning).
+        /// When false (default), /no_think is appended to suppress thinking tokens.
+        var thinkingEnabled: Bool = false
     }
 
     // MARK: - TTS
@@ -455,6 +458,9 @@ struct FaeConfig: Codable {
                 case "enableVision":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.enableVision = v
+                case "thinkingEnabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.thinkingEnabled = v
                 default: break
                 }
             case "tts":
@@ -670,6 +676,7 @@ struct FaeConfig: Codable {
         lines.append("maxHistoryMessages = \(llm.maxHistoryMessages)")
         lines.append("voiceModelPreset = \(encodeString(llm.voiceModelPreset))")
         lines.append("enableVision = \(llm.enableVision ? "true" : "false")")
+        lines.append("thinkingEnabled = \(llm.thinkingEnabled ? "true" : "false")")
         lines.append("")
 
         lines.append("[tts]")

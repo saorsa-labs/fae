@@ -61,8 +61,8 @@ actor MLXLLMEngine: LLMEngine {
                     for (i, msg) in messages.enumerated() {
                         switch msg.role {
                         case .user:
-                            let content = (i == lastUserIndex) ? msg.content + " /no_think" : msg.content
-                            chatMessages.append(.user(content))
+                            let noThink = (i == lastUserIndex && options.suppressThinking) ? " /no_think" : ""
+                            chatMessages.append(.user(msg.content + noThink))
                         case .assistant:
                             chatMessages.append(.assistant(msg.content))
                         case .system:

@@ -62,6 +62,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var vectorStore: VectorStore?
     private let speakerProfileStore: SpeakerProfileStore
     private var scheduler: FaeScheduler?
+    private var debugConsoleRef: DebugConsoleController?
 
     /// Pending query continuations keyed by command name.
     private var pendingQueries: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
@@ -189,6 +190,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
 
+                // Wire debug console if one was set before the coordinator started.
+                if let dc = debugConsoleRef {
+                    await coordinator.setDebugConsole(dc)
+                }
+
                 // Skip scheduler in rescue mode.
                 if !isRescue {
                     let sched = FaeScheduler(
@@ -267,6 +273,19 @@ final class FaeCore: ObservableObject, HostCommandSender {
         Task { await pipelineCoordinator?.cancel() }
     }
 
+    /// Wire the debug console to the pipeline coordinator.
+    ///
+    /// Must be called from the main actor before or after `start()`. If the
+    /// coordinator is already running, the console is wired immediately;
+    /// otherwise the reference is stored and applied after the coordinator
+    /// is created inside the async `start()` Task.
+    func setDebugConsole(_ console: DebugConsoleController?) {
+        debugConsoleRef = console
+        if let coordinator = pipelineCoordinator {
+            Task { await coordinator.setDebugConsole(console) }
+        }
+    }
+
     // MARK: - Voice Enrollment Flow
 
     /// Run the voice enrollment flow when no owner voiceprint is enrolled.
@@ -277,6 +296,19 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private func runVoiceEnrollmentFlow(coordinator: PipelineCoordinator) async {
         // Choose an enrollment phrase — something warm and natural to say aloud.
         let phrase = "Hello Fae, I'm your primary user and I'm glad to meet you."
+
+        // Signal enrollment start — prevents transitionToReadyCanvas() from
+        // overwriting the enrollment card during the 8s post-load delay.
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .faePipelineState,
+                object: nil,
+                userInfo: [
+                    "event": "pipeline.enrollment_started",
+                    "payload": [:] as [String: Any],
+                ]
+            )
+        }
 
         // Show the phrase on the canvas so the user can read it.
         let html = enrollmentCardHTML(phrase: phrase)
@@ -293,13 +325,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
             )
         }
 
-        // Speak the intro — Fae explains what she needs.
-        let intro = """
-            Hi there! I'm Fae. Before we get started, I'd like to recognise your voice \
-            so I know you're my primary user. I've put a phrase on the canvas — \
-            just read it aloud and I'll learn to recognise you. \
-            Please say: \(phrase)
-            """
+        // Speak the intro — brief so it doesn't confuse the echo suppressor.
+        let intro = "Hi, I'm Fae. Please read the phrase on the canvas aloud to register your voice."
         await coordinator.speakDirect(intro)
 
         // Prime the LLM: the next time the user speaks, Fae should greet them warmly,
@@ -622,6 +649,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
             else { return }
             config.llm.voiceModelPreset = value
             persistConfig(reason: "config.patch.llm.voice_model_preset")
+
+        case "llm.thinking_enabled":
+            guard let value = value as? Bool else { return }
+            config.llm.thinkingEnabled = value
+            persistConfig(reason: "config.patch.llm.thinking_enabled")
 
         case "onboarded":
             guard let value = value as? Bool else { return }

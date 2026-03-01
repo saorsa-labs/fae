@@ -159,6 +159,10 @@ final class WindowStateController: ObservableObject {
         // collapsed orb (80x80 is smaller than the 280x400 minimum).
         window.minSize = NSSize(width: collapsedSize, height: collapsedSize)
 
+        // Remove the window shadow in collapsed mode — the shadow appears
+        // as a dark halo around the circular orb.
+        window.hasShadow = false
+
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.5
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -200,6 +204,7 @@ final class WindowStateController: ObservableObject {
 
         window.level = .floating
         window.minSize = NSSize(width: collapsedSize, height: collapsedSize)
+        window.hasShadow = false
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.4
@@ -217,9 +222,10 @@ final class WindowStateController: ObservableObject {
 
         guard let window else { return }
 
-        // Restore normal window level and min size.
+        // Restore normal window level, min size, and shadow.
         window.level = .normal
         window.minSize = NSSize(width: 280, height: 400)
+        window.hasShadow = true
 
         guard let screen = window.screen ?? NSScreen.screens.first else { return }
         let targetSize = NSSize(width: compactWidth, height: compactHeight)

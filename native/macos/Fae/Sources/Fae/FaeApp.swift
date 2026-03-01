@@ -116,6 +116,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let relayServer = FaeRelayServer()
     let aboutWindow = AboutWindowController()
     let hotkeyManager = GlobalHotkeyManager()
+    let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
 
     var deviceTransferObserver: NSObjectProtocol?
@@ -166,6 +167,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         auxiliaryWindows.observeWindowState()
         auxiliaryWindows.approvalController = approvalOverlay
         auxiliaryWindows.observeApprovalController()
+        auxiliaryWindows.debugConsoleController = debugConsole
+        faeCore.setDebugConsole(debugConsole)
         onboarding.onPermissionResult = { capability, state in
             guard state == "granted" else { return }
             NotificationCenter.default.post(
@@ -527,6 +530,13 @@ struct FaeApp: App {
                     appDelegate.auxiliaryWindows.toggleConversation()
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(appDelegate.auxiliaryWindows.isDebugConsoleVisible ? "Hide Debug Console" : "Debug Console") {
+                    appDelegate.auxiliaryWindows.toggleDebugConsole()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .help) {
                 Button("Ask Fae\u{2026}") {

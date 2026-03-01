@@ -48,6 +48,10 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Set once on the first loading event to avoid re-showing on restarts.
     private var hasShownLoadingCanvas: Bool = false
 
+    /// When true, voice enrollment is in progress. Prevents
+    /// `transitionToReadyCanvas()` from overwriting the enrollment card.
+    private var enrollmentModeActive: Bool = false
+
     private var observations: [NSObjectProtocol] = []
 
     init() {
@@ -278,7 +282,7 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// After 20s of the ready page being shown, auto-hide the canvas if still visible.
     private func transitionToReadyCanvas() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
-            guard let self, self.hasShownLoadingCanvas else { return }
+            guard let self, self.hasShownLoadingCanvas, !self.enrollmentModeActive else { return }
             self.canvasController?.setContent(LoadingCanvasContent.readyExperience())
 
             // Auto-hide the canvas after 20s if the user hasn't interacted with it.
@@ -404,6 +408,13 @@ final class PipelineAuxBridgeController: ObservableObject {
         case "pipeline.conversation_snapshot":
             // Snapshot received — don't update status string, it's a data event.
             break
+
+        case "pipeline.enrollment_started":
+            enrollmentModeActive = true
+
+        case "pipeline.enrollment_complete":
+            enrollmentModeActive = false
+            transitionToReadyCanvas()
 
         case "pipeline.briefing_ready":
             let count = payload["item_count"] as? Int ?? 0
