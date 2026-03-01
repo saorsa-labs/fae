@@ -551,6 +551,63 @@ jobs:
 
           echo "ARTIFACTS_DIR=$ARTIFACTS_DIR" >> "$GITHUB_ENV"
 
+      - name: Validate appcast.xml
+        if: env.SPARKLE_SIGNATURE != ''
+        run: |
+          APPCAST="$ARTIFACTS_DIR/appcast.xml"
+
+          echo "=== appcast.xml contents ==="
+          cat "$APPCAST"
+          echo ""
+
+          # 1. Well-formed XML — parse with Python's strict XML parser.
+          python3 - "$APPCAST" << 'PYEOF'
+          import sys, xml.etree.ElementTree as ET
+          try:
+              ET.parse(sys.argv[1])
+              print("XML: well-formed")
+          except ET.ParseError as e:
+              print(f"::error::appcast.xml is not well-formed XML: {e}", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+          # 2. Extract edSignature value via the XML parser (not grep) so we test what
+          #    Sparkle will actually see.
+          SIG=$(python3 - "$APPCAST" << 'PYEOF'
+          import sys, xml.etree.ElementTree as ET
+          NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+          tree = ET.parse(sys.argv[1])
+          enc = tree.find(".//enclosure")
+          if enc is None:
+              print("", end="")
+              sys.exit(0)
+          print(enc.get(f"{{{NS}}}edSignature", ""), end="")
+          PYEOF
+          )
+
+          echo "edSignature value: '$SIG'"
+
+          # Must not be empty.
+          if [ -z "$SIG" ]; then
+            echo "::error::sparkle:edSignature is empty in appcast.xml"
+            exit 1
+          fi
+
+          # Must not contain spaces — the sign_update output embedding bug produces
+          # something like: sparkle:edSignature="BASE64==" sparkle:version="2"
+          if echo "$SIG" | grep -q ' '; then
+            echo "::error::sparkle:edSignature contains spaces — sign_update output was not parsed correctly. Raw value: $SIG"
+            exit 1
+          fi
+
+          # Must be valid base64 (alphanumeric + / + = padding only).
+          if ! echo "$SIG" | grep -qE '^[A-Za-z0-9+/]+=*$'; then
+            echo "::error::sparkle:edSignature is not valid base64: $SIG"
+            exit 1
+          fi
+
+          echo "appcast.xml validation passed — edSignature is ${#SIG} chars of valid base64"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
