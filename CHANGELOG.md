@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.54] - 2026-03-01
+
+### Fixed
+
+- **Appcast validation** — release workflow now validates `appcast.xml` before uploading: parses as XML, extracts `sparkle:edSignature` via the XML parser, and asserts it is non-empty, space-free, and valid base64. Prevents the `sign_update` output-embedding bug from shipping a broken update feed to users.
+
 ## [v0.8.53] - 2026-03-01
 
 ### Added
