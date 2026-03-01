@@ -433,10 +433,19 @@ jobs:
             fi
 
             DMG_SIZE=$(stat -f%z "$INSTALLER_DMG" 2>/dev/null || stat --format=%s "$INSTALLER_DMG")
-            SIGNATURE=$("$SIGN_UPDATE" "$INSTALLER_DMG" --ed-key-file <(echo "$SPARKLE_KEY") 2>/dev/null || echo "")
+            RAW_SIG=$("$SIGN_UPDATE" "$INSTALLER_DMG" --ed-key-file <(echo "$SPARKLE_KEY") 2>/dev/null || echo "")
+            # sign_update outputs the full attribute string:
+            #   sparkle:edSignature="BASE64==" sparkle:version="2"
+            # or in older builds just the base64 value.
+            # Extract only the base64 value so we can embed it cleanly in the XML template.
+            SIGNATURE=$(echo "$RAW_SIG" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+            if [ -z "$SIGNATURE" ]; then
+              # Fallback: assume raw output is already the bare base64 value.
+              SIGNATURE="$RAW_SIG"
+            fi
             echo "SPARKLE_SIGNATURE=$SIGNATURE" >> "$GITHUB_ENV"
             echo "DMG_SIZE=$DMG_SIZE" >> "$GITHUB_ENV"
-            echo "Sparkle signature generated (${#SIGNATURE} chars)"
+            echo "Sparkle signature extracted (${#SIGNATURE} chars)"
           fi
 
       - name: Extract release notes from CHANGELOG
