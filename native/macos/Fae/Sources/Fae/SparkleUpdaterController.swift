@@ -98,10 +98,18 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
 // MARK: - SPUUpdaterDelegate
 
 extension SparkleUpdaterController: SPUUpdaterDelegate {
-    /// Return `nil` to use the Info.plist SUFeedURL as-is.
-    /// Override here if you need to append query parameters (e.g. OS version, channel).
+    /// Append a timestamp query parameter to bypass NSURLCache.
+    ///
+    /// Sparkle's background checks can race with new releases — if a check
+    /// completes seconds before a release is published, NSURLCache may return
+    /// the stale appcast for subsequent manual checks. A timestamp query
+    /// parameter ensures every check uses a unique URL, forcing a fresh fetch.
     nonisolated func feedURLString(for updater: SPUUpdater) -> String? {
-        nil
+        guard let base = Bundle.main.infoDictionary?["SUFeedURL"] as? String,
+              !base.isEmpty, !base.contains("__")
+        else { return nil }
+        let ts = Int(Date().timeIntervalSince1970)
+        return "\(base)?t=\(ts)"
     }
 }
 

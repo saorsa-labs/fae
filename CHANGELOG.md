@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.58] - 2026-03-01
+
+### Fixed
+- Speaking in tongues: LLM meta-commentary ("The user says...") suppressed before TTS via system prompt instruction and first-sentence pipeline filter
+- Thinking toggle pill: simplified to "Thinking" + green/red dot indicator (cleaner, narrower)
+- Sparkle cache-busting: timestamp query parameter on feed URL prevents stale NSURLCache hits after releases
+
 ## [v0.8.57] - 2026-03-01
 
 ### Fixed

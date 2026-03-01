@@ -246,35 +246,23 @@ struct InputBarView: View {
         Button(action: {
             faeCore.setThinkingEnabled(!faeCore.thinkingEnabled)
         }) {
-            HStack(spacing: 4) {
-                Image(systemName: faeCore.thinkingEnabled ? "brain.fill" : "brain")
-                    .font(.system(size: 10, weight: .medium))
-                Text(faeCore.thinkingEnabled ? "Thinking On" : "Thinking Off")
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(faeCore.thinkingEnabled ? Color.green : Color.red)
+                    .frame(width: 6, height: 6)
+                Text("Thinking")
                     .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.45))
             }
-            .foregroundColor(
-                faeCore.thinkingEnabled
-                    ? Self.heather
-                    : Color.white.opacity(0.45)
-            )
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(
-                        faeCore.thinkingEnabled
-                            ? Self.heather.opacity(0.12)
-                            : Color.white.opacity(0.05)
-                    )
+                    .fill(Color.white.opacity(0.05))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(
-                        faeCore.thinkingEnabled
-                            ? Self.heather.opacity(0.25)
-                            : Color.white.opacity(0.08),
-                        lineWidth: 1
-                    )
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

@@ -75,6 +75,38 @@ enum TextProcessing {
         return nil
     }
 
+    // MARK: - Meta-Commentary Detection
+
+    /// Returns true if the text looks like the model is narrating/describing what the user
+    /// said rather than responding directly. These are leaked reasoning patterns that should
+    /// never reach TTS.
+    static func isMetaCommentary(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let patterns = [
+            "the user says",
+            "the user said",
+            "the user is saying",
+            "you said",
+            "you're saying",
+            "you are saying",
+            "this appears to be",
+            "this seems to be",
+            "this is a brief",
+            "this is a short",
+            "this is a simple",
+            "that sounds like",
+            "that seems like",
+            "it seems like the user",
+            "it appears the user",
+            "the message is",
+            "the user's message",
+            "their statement",
+            "the statement",
+            "responding to something",
+        ]
+        return patterns.contains { lower.hasPrefix($0) || lower.contains($0) }
+    }
+
     // MARK: - Non-Speech Character Stripping
 
     /// Remove characters that shouldn't be spoken by TTS.

@@ -719,6 +719,7 @@ actor PipelineCoordinator {
         let suppressThink = !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
         var thinkEndSeen = suppressThink || isToolFollowUp
         var thinkAccum = ""
+        var firstTtsSent = false
         let llmStartedAt = Date()
         var llmTokenCount = 0
 
@@ -823,9 +824,16 @@ actor PipelineCoordinator {
                     if let boundary = TextProcessing.findSentenceBoundary(in: sentenceBuffer) {
                         let sentence = String(sentenceBuffer[..<boundary])
                         let cleaned = TextProcessing.stripNonSpeechChars(sentence)
-                        if !cleaned.isEmpty {
+                        // Safety filter: if this is the very first TTS sentence and it looks
+                        // like the model is narrating/describing what the user said (leaked
+                        // reasoning), discard it and log to debug console instead.
+                        let isMetaCommentary = !firstTtsSent && TextProcessing.isMetaCommentary(cleaned)
+                        if !cleaned.isEmpty && !isMetaCommentary {
+                            firstTtsSent = true
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
                             await speakText(cleaned, isFinal: false)
+                        } else if isMetaCommentary {
+                            debugLog(debugConsole, .llmThink, "[suppressed meta-commentary] \(cleaned)")
                         }
                         sentenceBuffer = String(sentenceBuffer[boundary...])
                     } else if sentenceBuffer.count > 200 {
@@ -833,6 +841,7 @@ actor PipelineCoordinator {
                             let text = String(sentenceBuffer[..<clause])
                             let cleaned = TextProcessing.stripNonSpeechChars(text)
                             if !cleaned.isEmpty {
+                                firstTtsSent = true
                                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                                 await speakText(cleaned, isFinal: false)
                             }
