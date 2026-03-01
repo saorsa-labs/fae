@@ -53,11 +53,15 @@ actor MLXLLMEngine: LLMEngine {
                     var chatMessages: [Chat.Message] = [
                         .system(systemPrompt),
                     ]
+                    // /no_think must be appended at the END of the last user message —
+                    // this is how mlx-lm Python suppresses Qwen3 thinking mode.
+                    // Placing it at the start (prefix) has no effect and causes the
+                    // model to wrap its entire output in <think>...</think>.
                     let lastUserIndex = messages.indices.last(where: { messages[$0].role == .user })
                     for (i, msg) in messages.enumerated() {
                         switch msg.role {
                         case .user:
-                            let content = (i == lastUserIndex) ? "/no_think\n" + msg.content : msg.content
+                            let content = (i == lastUserIndex) ? msg.content + " /no_think" : msg.content
                             chatMessages.append(.user(content))
                         case .assistant:
                             chatMessages.append(.assistant(msg.content))
