@@ -80,6 +80,12 @@ actor PipelineCoordinator {
     private var previousSpeakerLabel: String?
     private var utterancesSinceOwnerVerified: Int = 0
 
+    // MARK: - Enrollment State
+
+    /// One-shot system prompt addition for the LLM's first response after owner enrollment.
+    /// Set by FaeCore during the voice enrollment flow; cleared after first use.
+    private var firstOwnerEnrollmentContext: String?
+
     // MARK: - Timing & Echo Detection
 
     private var lastAssistantStart: Date?
@@ -287,6 +293,13 @@ actor PipelineCoordinator {
         }
     }
 
+    /// Set one-shot context to be injected into the next LLM system prompt.
+    /// Used by the voice enrollment flow to prime Fae's first response to a new owner.
+    /// Cleared automatically after the first use.
+    func setFirstOwnerEnrollmentContext(_ context: String) {
+        firstOwnerEnrollmentContext = context
+    }
+
     /// Inject remote PCM audio into the speech pipeline (e.g. companion handoff).
     func injectAudio(samples: [Float], sampleRate: Int = 16_000) async {
         guard !samples.isEmpty else { return }
@@ -416,8 +429,9 @@ actor PipelineCoordinator {
                 )
 
                 // First-launch enrollment: first voice becomes the owner.
+                // Fires whenever there is no owner profile — regardless of onboarded flag.
                 let hasOwner = await store.hasOwnerProfile()
-                if !hasOwner && !config.onboarded {
+                if !hasOwner {
                     let ownerName = config.userName ?? "Owner"
                     await store.enroll(
                         label: "owner", embedding: embedding,
@@ -636,6 +650,11 @@ actor PipelineCoordinator {
             )
             if let context = memoryContext {
                 systemPrompt += "\n\n" + context
+            }
+            // First-owner enrollment: one-shot context prime — cleared after first use.
+            if let enrollCtx = firstOwnerEnrollmentContext {
+                systemPrompt += "\n\n" + enrollCtx
+                firstOwnerEnrollmentContext = nil
             }
             self.currentSystemPrompt = systemPrompt
         }

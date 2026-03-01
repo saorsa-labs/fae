@@ -221,8 +221,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 eventBus.send(.runtimeState(.started))
                 NSLog("FaeCore: pipeline started")
 
-                // First launch greeting — Fae introduces herself.
-                if !config.onboarded {
+                // Owner enrollment check — if no owner voiceprint is enrolled,
+                // run the voice enrollment flow so Fae can recognise her primary user.
+                let hasOwner = await speakerProfileStore.hasOwnerProfile()
+                if !hasOwner {
+                    await runVoiceEnrollmentFlow(coordinator: coordinator)
+                } else if !config.onboarded {
+                    // First-launch greeting for returning users who already have a voiceprint.
                     let greeting: String
                     if let name = config.userName, !name.isEmpty {
                         greeting = "Hello \(name). I'm Fae, your personal AI companion."
@@ -260,6 +265,123 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Cancel the current generation immediately without stopping the pipeline.
     func cancel() {
         Task { await pipelineCoordinator?.cancel() }
+    }
+
+    // MARK: - Voice Enrollment Flow
+
+    /// Run the voice enrollment flow when no owner voiceprint is enrolled.
+    ///
+    /// Fae introduces herself, shows a phrase on the canvas, asks the user to
+    /// read it aloud so her voice becomes the enrolled owner, then primes the
+    /// LLM to ask for basic personal info (name, age, etc.).
+    private func runVoiceEnrollmentFlow(coordinator: PipelineCoordinator) async {
+        // Choose an enrollment phrase — something warm and natural to say aloud.
+        let phrase = "Hello Fae, I'm your primary user and I'm glad to meet you."
+
+        // Show the phrase on the canvas so the user can read it.
+        let html = enrollmentCardHTML(phrase: phrase)
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .faePipelineState,
+                object: nil,
+                userInfo: ["event": "pipeline.canvas_visibility", "payload": ["visible": true]]
+            )
+            NotificationCenter.default.post(
+                name: .faePipelineState,
+                object: nil,
+                userInfo: ["event": "pipeline.canvas_content", "payload": ["html": html]]
+            )
+        }
+
+        // Speak the intro — Fae explains what she needs.
+        let intro = """
+            Hi there! I'm Fae. Before we get started, I'd like to recognise your voice \
+            so I know you're my primary user. I've put a phrase on the canvas — \
+            just read it aloud and I'll learn to recognise you. \
+            Please say: \(phrase)
+            """
+        await coordinator.speakDirect(intro)
+
+        // Prime the LLM: the next time the user speaks, Fae should greet them warmly,
+        // confirm enrollment if recognised, and naturally ask for their name and a bit
+        // about themselves. This context is injected once then discarded.
+        let enrollmentContext = """
+            ENROLLMENT CONTEXT (one-time, not for the user to see):
+            The user has just read an enrollment phrase aloud so that Fae can learn \
+            to recognise their voice. This is their very first interaction. \
+            Greet them warmly as Fae's new primary user. \
+            Tell them their voice has been registered and you'll always know it's them. \
+            Then naturally ask for their first name, roughly how old they are, and \
+            whether they'd like to share anything else about themselves — \
+            keep it conversational, not like a form. \
+            Do not use any tools yet; just have a friendly introductory chat.
+            """
+        await coordinator.setFirstOwnerEnrollmentContext(enrollmentContext)
+    }
+
+    /// HTML for the voice enrollment canvas card.
+    private func enrollmentCardHTML(phrase: String) -> String {
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <style>
+          body {
+            margin: 0; padding: 40px;
+            background: #0a0a0f;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+            color: #e8e0f0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            min-height: 100vh; box-sizing: border-box;
+          }
+          .card {
+            background: rgba(255,255,255,0.06);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(180,140,220,0.25);
+            border-radius: 20px;
+            padding: 48px 56px;
+            max-width: 560px;
+            text-align: center;
+            box-shadow: 0 8px 48px rgba(120,60,180,0.18);
+          }
+          .icon { font-size: 48px; margin-bottom: 24px; }
+          h1 {
+            font-size: 22px; font-weight: 600;
+            color: #c8a8e8; margin: 0 0 16px;
+          }
+          p {
+            font-size: 15px; line-height: 1.6;
+            color: rgba(232,224,240,0.7); margin: 0 0 32px;
+          }
+          .phrase {
+            font-size: 20px; font-weight: 500;
+            color: #e8e0f0;
+            background: rgba(140,80,220,0.15);
+            border: 1px solid rgba(140,80,220,0.35);
+            border-radius: 12px;
+            padding: 20px 28px;
+            line-height: 1.5;
+            font-style: italic;
+          }
+          .hint {
+            margin-top: 24px;
+            font-size: 13px; color: rgba(232,224,240,0.45);
+          }
+        </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">🎙️</div>
+            <h1>Voice Enrollment</h1>
+            <p>Read the phrase below aloud so Fae can learn to recognise your voice.</p>
+            <div class="phrase">\(phrase)</div>
+            <p class="hint">Speak clearly in a natural voice.</p>
+          </div>
+        </body>
+        </html>
+        """
     }
 
     // MARK: - HostCommandSender Conformance
