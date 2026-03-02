@@ -8,7 +8,7 @@ struct SettingsModelsTab: View {
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
     @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
     @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
-    @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = true
+    @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = false
     @AppStorage("emotionalProsody") private var emotionalProsody: Bool = false
     @AppStorage("voiceWarmth") private var voiceWarmth: Double = 3.0
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1

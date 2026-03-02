@@ -6,7 +6,7 @@ struct SettingsSpeakerTab: View {
 
     @State private var voiceIdentityEnabled: Bool = false
     @State private var voiceIdentityMode: String = "assist"
-    @State private var approvalRequiresMatch: Bool = true
+    @State private var approvalRequiresMatch: Bool = false
     @State private var ownerName: String = ""
     @State private var ownerEnrollmentCount: Int = 0
     @State private var ownerLastSeen: Date?

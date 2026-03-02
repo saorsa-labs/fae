@@ -125,7 +125,7 @@ struct FaeConfig: Codable {
         var enabled: Bool = true
         var threshold: Float = 0.70
         var ownerThreshold: Float = 0.75
-        var requireOwnerForTools: Bool = true
+        var requireOwnerForTools: Bool = false
         var progressiveEnrollment: Bool = true
         var maxEnrollments: Int = 50
         /// Minimum liveness score (0 = disabled, 1 = maximum strictness).
@@ -140,7 +140,7 @@ struct FaeConfig: Codable {
         var enabled: Bool = false
         /// assist|enforce
         var mode: String = "assist"
-        var approvalRequiresMatch: Bool = true
+        var approvalRequiresMatch: Bool = false
     }
 
     // MARK: - Channels
