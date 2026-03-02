@@ -462,6 +462,7 @@ actor PipelineCoordinator {
             awaitingApproval: awaitingApproval
         ) else {
             NSLog("PipelineCoordinator: dropping %.1fs speech segment (echo suppression)", durationSecs)
+            debugLog(debugConsole, .pipeline, "Echo suppressed: \(String(format: "%.1f", durationSecs))s segment (rms=\(String(format: "%.3f", rms)))")
             return
         }
 
@@ -601,6 +602,7 @@ actor PipelineCoordinator {
                 let assistLower = lastAssistantResponseText.lowercased()
                 if assistLower.contains(sttLower) || sttLower.contains(assistLower) {
                     NSLog("PipelineCoordinator: dropping echo (STT matched last assistant response)")
+                    debugLog(debugConsole, .pipeline, "Echo dropped (text match): \"\(text.prefix(60))\"")
                     return
                 }
                 // Check for significant overlap via shared words.
@@ -611,6 +613,7 @@ actor PipelineCoordinator {
                     if Double(overlap.count) / Double(sttWords.count) >= 0.6 {
                         NSLog("PipelineCoordinator: dropping echo (%.0f%% word overlap with last response)",
                               Double(overlap.count) / Double(sttWords.count) * 100)
+                        debugLog(debugConsole, .pipeline, "Echo dropped (\(Int(Double(overlap.count) / Double(sttWords.count) * 100))%% overlap): \"\(text.prefix(60))\"")
                         return
                     }
                 }
@@ -787,6 +790,8 @@ actor PipelineCoordinator {
         let llmStartedAt = Date()
         var llmTokenCount = 0
 
+        debugLog(debugConsole, .pipeline, "LLM generating (maxTokens=\(options.maxTokens), history=\(history.count) msgs, turn=\(turnCount))")
+
         let tokenStream = await llmEngine.generate(
             messages: history,
             systemPrompt: systemPrompt,
@@ -931,6 +936,7 @@ actor PipelineCoordinator {
         if llmElapsed > 0 {
             let throughput = Double(llmTokenCount) / llmElapsed
             NSLog("phase1.llm_token_throughput_tps=%.2f", throughput)
+            debugLog(debugConsole, .pipeline, "LLM done: \(llmTokenCount) tokens in \(String(format: "%.1f", llmElapsed))s (\(String(format: "%.1f", throughput)) t/s)")
         }
 
         // Flush remaining text.
@@ -939,6 +945,9 @@ actor PipelineCoordinator {
 
         // Parse tool calls from the full response.
         let toolCalls = Self.parseToolCalls(from: fullResponse)
+        if !toolCalls.isEmpty {
+            debugLog(debugConsole, .pipeline, "Found \(toolCalls.count) tool call(s): \(toolCalls.map(\.name).joined(separator: ", "))")
+        }
 
         if toolCalls.isEmpty {
             // No tool calls — flush remaining speech and finish.

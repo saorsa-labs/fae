@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.66] - 2026-03-02
+
+### Fixed
+
+- **LLM max tokens too low for tool calls** — default `maxTokens` was 512, which caused the model to hit the token limit before it could emit `<tool_call>` markup. The LLM would say "Let me search for..." but run out of tokens before producing the actual tool call JSON. Increased default to 2048, which gives the model enough room for thinking + speech + tool call markup.
+
+### Improved
+
+- **Debug console logging** — added pipeline-level events to the debug console for better diagnostics:
+  - LLM generation start (maxTokens, history count, turn number)
+  - LLM generation complete (token count, elapsed time, throughput)
+  - Tool call detection (count and names)
+  - Echo suppression events (audio-level and text-overlap with details)
+
 ## [v0.8.65] - 2026-03-01
 
 ### Fixed

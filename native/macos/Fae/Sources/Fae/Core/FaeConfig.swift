@@ -46,7 +46,7 @@ struct FaeConfig: Codable {
     // MARK: - LLM
 
     struct LlmConfig: Codable {
-        var maxTokens: Int = 512
+        var maxTokens: Int = 2048
         var contextSizeTokens: Int = 16_384
         var temperature: Float = 0.7
         var topP: Float = 0.9
