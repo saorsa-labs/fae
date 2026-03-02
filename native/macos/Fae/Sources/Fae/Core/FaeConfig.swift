@@ -46,7 +46,7 @@ struct FaeConfig: Codable {
     // MARK: - LLM
 
     struct LlmConfig: Codable {
-        var maxTokens: Int = 2048
+        var maxTokens: Int = 4096
         var contextSizeTokens: Int = 16_384
         var temperature: Float = 0.7
         var topP: Float = 0.9
@@ -252,7 +252,7 @@ struct FaeConfig: Codable {
         let available = contextSize - systemBudget - maxTokens
         guard available > 0 else { return 6 }
         let computed = available / 400
-        return min(max(computed, 6), 50)
+        return min(max(computed, 6), 100)
     }
 
     // MARK: - STT Model Selection
