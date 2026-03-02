@@ -201,27 +201,41 @@ struct FaeConfig: Codable {
             // 11.7 T/s in mlx-swift-lm — sufficient for chat with thinking feedback.
             // Auto-selected on 64+ GB systems.
             return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
+        case "qwen3_5_9b":
+            // Qwen3.5-9B: hybrid Gated DeltaNet + Gated Attention, 4-bit.
+            return ("mlx-community/Qwen3.5-9B-4bit", 65_536)
+        case "qwen3_5_4b":
+            // Qwen3.5-4B: hybrid architecture, 4-bit.
+            return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
+        case "qwen3_5_2b":
+            // Qwen3.5-2B: hybrid architecture, 4-bit.
+            return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
+        case "qwen3_5_0_8b":
+            // Qwen3.5-0.8B: hybrid architecture, 4-bit. Smallest Qwen3.5.
+            return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
+        // Legacy Qwen3 presets — migrated to nearest Qwen3.5 equivalent.
         case "qwen3_8b":
-            return ("mlx-community/Qwen3-8B-4bit", 32_768)
+            return ("mlx-community/Qwen3.5-9B-4bit", 65_536)
         case "qwen3_4b":
-            return ("mlx-community/Qwen3-4B-4bit", 16_384)
+            return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
         case "qwen3_1_7b":
-            return ("mlx-community/Qwen3-1.7B-4bit", 8_192)
+            return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
         case "qwen3_0_6b":
-            return ("mlx-community/Qwen3-0.6B-4bit", 4_096)
+            return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
         default: // "auto"
-            // Qwen3.5 models across the board — Qwen3 quality is insufficient.
-            // Qwen3.5-27B (dense, 4-bit ~14 GB weights) is the smallest 3.5 model available.
-            // Smaller 3.5 variants expected from Qwen soon — update tiers when released.
+            // Qwen3.5 at every tier — full lineup (0.8B/2B/4B/9B/27B/35B-A3B) released March 2026.
+            // Hybrid Gated DeltaNet + Gated Attention architecture across all sizes.
             //
-            // 96+ GB: Qwen3.5-35B-A3B with full 65K context — plenty of headroom.
-            // 80-95 GB: Qwen3.5-35B-A3B with 49K context — comfortable headroom.
-            // 64-79 GB: Qwen3.5-35B-A3B with 32K context — MoE ~18.8 GB + 4.5 GB KV.
-            // 48-63 GB: Qwen3.5-27B with 32K context — dense 27B fits comfortably.
-            // 32-47 GB: Qwen3.5-27B with 16K context — good headroom for STT+TTS.
-            // 24-31 GB: Qwen3.5-27B with 8K context — tight but workable with all models.
-            // 16-23 GB: Qwen3.5-27B with 4K context — very tight, may use memory pressure.
-            // <16 GB: Qwen3-1.7B — only option that fits alongside STT+TTS.
+            // 96+ GB: 35B-A3B MoE with full 65K context — plenty of headroom.
+            // 80-95 GB: 35B-A3B MoE with 49K context — comfortable headroom.
+            // 64-79 GB: 35B-A3B MoE with 32K context — MoE ~18.8 GB + KV cache.
+            // 48-63 GB: 27B dense with 32K context — fits comfortably.
+            // 32-47 GB: 27B dense with 16K context — good headroom for STT+TTS.
+            // 24-31 GB: 9B with 32K context — 5 GB weights leaves 14-21 GB for KV.
+            // 16-23 GB: 4B with 16K context — 2.5 GB weights + full STT/TTS stack.
+            // 12-15 GB: 2B with 8K context — 1.2 GB weights, small STT/TTS.
+            // 8-11 GB: 0.8B with 4K context — 0.5 GB weights, minimal footprint.
+            // <8 GB: 0.8B with 2K context — absolute minimum viable.
             if totalGB >= 96 {
                 return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
             } else if totalGB >= 80 {
@@ -233,11 +247,15 @@ struct FaeConfig: Codable {
             } else if totalGB >= 32 {
                 return ("NexVeridian/Qwen3.5-27B-4bit", 16_384)
             } else if totalGB >= 24 {
-                return ("NexVeridian/Qwen3.5-27B-4bit", 8_192)
+                return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
             } else if totalGB >= 16 {
-                return ("NexVeridian/Qwen3.5-27B-4bit", 4_096)
+                return ("mlx-community/Qwen3.5-4B-4bit", 16_384)
+            } else if totalGB >= 12 {
+                return ("mlx-community/Qwen3.5-2B-4bit", 8_192)
+            } else if totalGB >= 8 {
+                return ("mlx-community/Qwen3.5-0.8B-4bit", 4_096)
             } else {
-                return ("mlx-community/Qwen3-1.7B-4bit", 4_096)
+                return ("mlx-community/Qwen3.5-0.8B-4bit", 2_048)
             }
         }
     }
@@ -258,11 +276,14 @@ struct FaeConfig: Codable {
     // MARK: - STT Model Selection
 
     /// Select the appropriate STT model based on system RAM.
+    ///
+    /// - >=16 GiB: 1.7B (full quality — smaller LLMs free up RAM for STT)
+    /// - <16 GiB: 0.6B (compact)
     static func recommendedSTTModel(
         totalMemoryBytes: UInt64? = nil
     ) -> String {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
-        if totalGB >= 32 {
+        if totalGB >= 16 {
             return "mlx-community/Qwen3-ASR-1.7B-4bit"
         } else {
             return "mlx-community/Qwen3-ASR-0.6B-4bit"
@@ -273,13 +294,13 @@ struct FaeConfig: Codable {
 
     /// Select the appropriate TTS model based on system RAM.
     ///
-    /// - >=32 GiB: 1.7B CustomVoice (voice cloning via fae.wav)
-    /// - <32 GiB: 0.6B standard (no voice cloning)
+    /// - >=16 GiB: 1.7B CustomVoice (voice cloning via fae.wav)
+    /// - <16 GiB: 0.6B standard (no voice cloning)
     static func recommendedTTSModel(
         totalMemoryBytes: UInt64? = nil
     ) -> String {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
-        if totalGB >= 32 {
+        if totalGB >= 16 {
             return "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
         } else {
             return "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16"

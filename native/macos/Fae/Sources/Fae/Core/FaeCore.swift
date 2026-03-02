@@ -181,17 +181,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let recommendedContext = await modelManager.recommendedContextSize
                 let configuredContext = max(config.llm.contextSizeTokens, 1_024)
                 let contextSize = min(recommendedContext, configuredContext)
+                // Cap maxTokens to half the context — prevents tiny context tiers
+                // (2K/4K) from having a generation budget larger than context itself.
+                let effectiveMaxTokens = min(config.llm.maxTokens, contextSize / 2)
                 let maxHistory = FaeConfig.recommendedMaxHistory(
-                    contextSize: contextSize, maxTokens: config.llm.maxTokens
+                    contextSize: contextSize, maxTokens: effectiveMaxTokens
                 )
                 await conversationState.setMaxHistory(maxHistory)
                 await conversationState.setContextBudget(
                     contextSize: contextSize,
-                    reservedTokens: 5000 + config.llm.maxTokens
+                    reservedTokens: 5000 + effectiveMaxTokens
                 )
                 NSLog(
-                    "FaeCore: context=%d (recommended=%d configured=%d) maxHistory=%d",
-                    contextSize, recommendedContext, configuredContext, maxHistory
+                    "FaeCore: context=%d (recommended=%d configured=%d) maxHistory=%d maxTokens=%d",
+                    contextSize, recommendedContext, configuredContext, maxHistory, effectiveMaxTokens
                 )
 
                 let isRescue = self.rescueMode?.isActive ?? false

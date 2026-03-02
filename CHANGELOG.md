@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.70] - 2026-03-02
+
+### Added
+
+- **Qwen3.5 full model lineup** — granular RAM tiers using the complete Qwen3.5 family (0.8B/2B/4B/9B/27B/35B-A3B), providing Qwen3.5 quality at every RAM tier from 8 GB MacBook Air to 192+ GB Mac Studio.
+  - 24-31 GB: **9B@32K** (was 27B@8K) — comfortable context with smaller model
+  - 16-23 GB: **4B@16K** (was 27B@4K) — no more memory pressure
+  - 12-15 GB: **2B@8K** — new tier for entry-level machines
+  - 8-11 GB: **0.8B@4K** — replaces Qwen3-1.7B with Qwen3.5 quality
+  - <8 GB: **0.8B@2K** — new minimum viable tier
+- **4 new manual presets** — `qwen3_5_9b`, `qwen3_5_4b`, `qwen3_5_2b`, `qwen3_5_0_8b` in config.toml
+- **Settings UI updated** — model picker shows all Qwen3.5 options with accurate RAM requirements
+
+### Improved
+
+- **STT/TTS on lower-RAM machines** — threshold lowered from 32 GB to 16 GB, giving 16-31 GB machines the full 1.7B STT/TTS stack (was 0.6B)
+- **maxTokens safety cap** — generation budget now capped at `contextSize / 2` to prevent tiny context tiers (2K/4K) from having maxTokens larger than context
+
 ## [v0.8.69] - 2026-03-02
 
 ### Added

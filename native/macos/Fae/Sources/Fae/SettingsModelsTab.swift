@@ -20,11 +20,20 @@ struct SettingsModelsTab: View {
     @State private var showFilePicker: Bool = false
 
     private let voiceModelOptions: [(label: String, value: String, description: String)] = [
-        ("Auto (Recommended)", "auto", "Uses Qwen3-8B on 48+ GB, Qwen3-4B on 32+ GB, otherwise Qwen3-1.7B."),
-        ("Qwen3-8B", "qwen3_8b", "Highest quality responses. Best for systems with 48+ GB RAM."),
-        ("Qwen3-4B", "qwen3_4b", "Higher instruction quality, slightly slower first response."),
-        ("Qwen3-1.7B", "qwen3_1_7b", "Good balance of quality and speed."),
-        ("Qwen3-0.6B", "qwen3_0_6b", "Fastest response time, lower quality. Best for quick voice interactions.")
+        ("Auto (Recommended)", "auto",
+         "Selects the best Qwen3.5 model for your system RAM — from 35B-A3B on 64+ GB to 0.8B on 8 GB."),
+        ("Qwen3.5-35B-A3B", "qwen3_5_35b_a3b",
+         "MoE flagship (3B active). Best quality. Requires 64+ GB RAM."),
+        ("Qwen3.5-27B", "qwen3_5_27b",
+         "Dense 27B. Excellent quality. Requires 32+ GB RAM."),
+        ("Qwen3.5-9B", "qwen3_5_9b",
+         "Hybrid 9B. Great balance of quality and speed. Requires 24+ GB RAM."),
+        ("Qwen3.5-4B", "qwen3_5_4b",
+         "Hybrid 4B. Good quality, fast responses. Requires 16+ GB RAM."),
+        ("Qwen3.5-2B", "qwen3_5_2b",
+         "Compact 2B. Decent quality, very fast. Requires 12+ GB RAM."),
+        ("Qwen3.5-0.8B", "qwen3_5_0_8b",
+         "Tiny 0.8B. Basic quality, instant responses. Runs on 8+ GB RAM."),
     ]
 
     private let voiceIdentityModes: [(label: String, value: String, description: String)] = [
@@ -267,7 +276,7 @@ struct SettingsModelsTab: View {
                         payload: ["key": "llm.thinking_enabled", "value": thinkingEnabled]
                     )
                 }
-            Text("When on, Qwen3 reasons step by step before answering. Slower but more thorough for complex questions.")
+            Text("When on, Qwen3.5 reasons step by step before answering. Slower but more thorough for complex questions.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

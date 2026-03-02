@@ -61,26 +61,29 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |--------|-------|-----------|-----------|---------|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3.5-27B / 35B-A3B | MLX | 4-bit | Conversation, reasoning, tool use |
+| LLM | Qwen3.5 (0.8B–35B-A3B) | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
-Auto mode selects the LLM based on system RAM (Qwen3.5 across all tiers ≥16 GB):
+Auto mode selects the LLM based on system RAM (Qwen3.5 at every tier):
 - 96+ GiB → Qwen3.5-35B-A3B (65K context)
 - 80-95 GiB → Qwen3.5-35B-A3B (49K context)
 - 64-79 GiB → Qwen3.5-35B-A3B (32K context)
 - 48-63 GiB → Qwen3.5-27B (32K context)
 - 32-47 GiB → Qwen3.5-27B (16K context)
-- 24-31 GiB → Qwen3.5-27B (8K context)
-- 16-23 GiB → Qwen3.5-27B (4K context) — tight, may use memory pressure
-- <16 GiB → Qwen3-1.7B (4K context) — only Qwen3 model that fits
+- 24-31 GiB → Qwen3.5-9B (32K context)
+- 16-23 GiB → Qwen3.5-4B (16K context)
+- 12-15 GiB → Qwen3.5-2B (8K context)
+- 8-11 GiB → Qwen3.5-0.8B (4K context)
+- <8 GiB → Qwen3.5-0.8B (2K context) — minimal viable
 
 Context window is now properly wired from model selection through to the pipeline.
 `FaeConfig.recommendedMaxHistory()` scales conversation history with context size
-(formula: `(contextSize - 5000 - maxTokens) / 400`, clamped to [6, 50]).
+(formula: `(contextSize - 5000 - maxTokens) / 400`, clamped to [6, 100]).
 `ConversationStateTracker` also performs token-aware truncation (chars / 3.5 estimate)
 to prevent overflow when individual messages are very long.
+`maxTokens` is capped at `contextSize / 2` to prevent generation budget exceeding context on small tiers.
 
 ### Unified pipeline
 
@@ -863,7 +866,7 @@ curl -s -X POST http://127.0.0.1:8000/speak \
 
 Benchmarks: `docs/benchmarks/llm-benchmarks.md`.
 
-Auto mode selects based on system RAM (Qwen3.5 for all tiers ≥16 GB):
+Auto mode selects based on system RAM (Qwen3.5 at every tier):
 
 | System RAM | Model | Context | Notes |
 |------------|-------|---------|-------|
@@ -871,12 +874,16 @@ Auto mode selects based on system RAM (Qwen3.5 for all tiers ≥16 GB):
 | 64-95 GB | Qwen3.5-35B-A3B | 32-49K | MoE, scales context with RAM |
 | 48-63 GB | Qwen3.5-27B | 32K | Dense 27B, comfortable fit |
 | 32-47 GB | Qwen3.5-27B | 16K | Good headroom for STT+TTS |
-| 24-31 GB | Qwen3.5-27B | 8K | Tight but workable |
-| 16-23 GB | Qwen3.5-27B | 4K | May use memory pressure |
-| <16 GB | Qwen3-1.7B | 4K | Only option that fits |
+| 24-31 GB | Qwen3.5-9B | 32K | Hybrid 9B, comfortable 32K context |
+| 16-23 GB | Qwen3.5-4B | 16K | Hybrid 4B + full STT/TTS stack |
+| 12-15 GB | Qwen3.5-2B | 8K | Compact 2B, small STT/TTS |
+| 8-11 GB | Qwen3.5-0.8B | 4K | Tiny 0.8B, minimal footprint |
+| <8 GB | Qwen3.5-0.8B | 2K | Absolute minimum viable |
+
+Manual presets: `qwen3_5_35b_a3b`, `qwen3_5_27b`, `qwen3_5_9b`, `qwen3_5_4b`, `qwen3_5_2b`, `qwen3_5_0_8b`.
+Legacy Qwen3 presets (`qwen3_8b`, `qwen3_4b`, `qwen3_1_7b`, `qwen3_0_6b`) are silently migrated to the nearest Qwen3.5 equivalent.
 
 Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, answer quality.
-Smaller Qwen3.5 models expected soon — update tiers when released.
 
 ## Thinking Mode Implementation
 
