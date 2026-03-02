@@ -682,9 +682,18 @@ struct InputRequestTool: Tool {
 /// `PipelineCoordinator.inputRequired()` also uses this bridge so that both
 /// entry points share the same continuation table and observer.
 actor InputRequestBridge {
+    struct FormField: Sendable {
+        let id: String
+        let label: String
+        let placeholder: String
+        let isSecure: Bool
+        let required: Bool
+    }
+
     static let shared = InputRequestBridge()
 
-    private var continuations: [String: CheckedContinuation<String?, Never>] = [:]
+    private var textContinuations: [String: CheckedContinuation<String?, Never>] = [:]
+    private var formContinuations: [String: CheckedContinuation<[String: String]?, Never>] = [:]
     private nonisolated(unsafe) var observer: NSObjectProtocol?
 
     private init() {
@@ -696,7 +705,8 @@ actor InputRequestBridge {
             guard let self else { return }
             let requestId = notification.userInfo?["request_id"] as? String ?? ""
             let text = notification.userInfo?["text"] as? String ?? ""
-            Task { await self.resolve(requestId: requestId, text: text) }
+            let formValues = Self.parseFormValues(notification.userInfo)
+            Task { await self.resolve(requestId: requestId, text: text, formValues: formValues) }
         }
     }
 
@@ -704,14 +714,14 @@ actor InputRequestBridge {
         if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
-    /// Post an input request to the UI and suspend until the user responds.
+    /// Post a single-field input request to the UI and suspend until the user responds.
     ///
     /// - Returns: The user's text, or nil if cancelled or timed out.
     func request(prompt: String, placeholder: String, isSecure: Bool) async -> String? {
         let requestId = UUID().uuidString
 
         return await withCheckedContinuation { continuation in
-            continuations[requestId] = continuation
+            textContinuations[requestId] = continuation
 
             NotificationCenter.default.post(
                 name: .faeInputRequired,
@@ -721,26 +731,99 @@ actor InputRequestBridge {
                     "prompt": prompt,
                     "placeholder": placeholder,
                     "is_secure": isSecure,
+                    "mode": "text",
                 ]
             )
 
             Task { [requestId] in
                 try? await Task.sleep(for: .seconds(120))
-                // Dismiss the UI card by posting an empty response, then resume nil.
                 await self.resolveWithTimeout(requestId: requestId)
             }
         }
     }
 
-    private func resolve(requestId: String, text: String) {
-        if let continuation = continuations.removeValue(forKey: requestId) {
-            continuation.resume(returning: text.isEmpty ? nil : text)
+    /// Post a multi-field form request to the UI and suspend until submit/cancel.
+    ///
+    /// - Returns: Field-value map, or nil if cancelled/timed out.
+    func requestForm(
+        title: String,
+        prompt: String,
+        fields: [FormField]
+    ) async -> [String: String]? {
+        guard !fields.isEmpty else { return nil }
+
+        let requestId = UUID().uuidString
+        let fieldPayload: [[String: Any]] = fields.map {
+            [
+                "id": $0.id,
+                "label": $0.label,
+                "placeholder": $0.placeholder,
+                "is_secure": $0.isSecure,
+                "required": $0.required,
+            ]
+        }
+
+        return await withCheckedContinuation { continuation in
+            formContinuations[requestId] = continuation
+
+            NotificationCenter.default.post(
+                name: .faeInputRequired,
+                object: nil,
+                userInfo: [
+                    "request_id": requestId,
+                    "mode": "form",
+                    "title": title,
+                    "prompt": prompt,
+                    "fields": fieldPayload,
+                ]
+            )
+
+            Task { [requestId] in
+                try? await Task.sleep(for: .seconds(120))
+                await self.resolveWithTimeout(requestId: requestId)
+            }
+        }
+    }
+
+    private static func parseFormValues(_ userInfo: [AnyHashable: Any]?) -> [String: String]? {
+        guard let raw = userInfo?["form_values"] else { return nil }
+
+        if let typed = raw as? [String: String] {
+            return typed
+                .mapValues { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.value.isEmpty }
+        }
+
+        if let anyMap = raw as? [String: Any] {
+            var mapped: [String: String] = [:]
+            for (key, value) in anyMap {
+                let text = "\(value)".trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    mapped[key] = text
+                }
+            }
+            return mapped.isEmpty ? nil : mapped
+        }
+
+        return nil
+    }
+
+    private func resolve(requestId: String, text: String, formValues: [String: String]?) {
+        if let continuation = formContinuations.removeValue(forKey: requestId) {
+            continuation.resume(returning: formValues)
+            return
+        }
+
+        if let continuation = textContinuations.removeValue(forKey: requestId) {
+            continuation.resume(returning: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text)
         }
     }
 
     private func resolveWithTimeout(requestId: String) async {
-        guard let continuation = continuations.removeValue(forKey: requestId) else { return }
-        // Post an empty response so ApprovalOverlayController dismisses the card.
+        let textContinuation = textContinuations.removeValue(forKey: requestId)
+        let formContinuation = formContinuations.removeValue(forKey: requestId)
+        guard textContinuation != nil || formContinuation != nil else { return }
+
         await MainActor.run {
             NotificationCenter.default.post(
                 name: .faeInputResponse,
@@ -748,6 +831,8 @@ actor InputRequestBridge {
                 userInfo: ["request_id": requestId, "text": ""]
             )
         }
-        continuation.resume(returning: nil)
+
+        textContinuation?.resume(returning: nil)
+        formContinuation?.resume(returning: nil)
     }
 }

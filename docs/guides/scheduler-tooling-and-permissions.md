@@ -15,6 +15,10 @@ Scheduler authority lives in:
 
 ## Scheduler tool integration
 
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+Preferred user flow: ask Fae conversationally to create/update/disable scheduled tasks. Raw scheduler file details below are implementation-level context, not the recommended user entrypoint.
+
 Scheduler tools write/read `~/Library/Application Support/fae/scheduler.json` and coordinate with runtime via notifications:
 
 - `.faeSchedulerUpdate` → enable/disable task state

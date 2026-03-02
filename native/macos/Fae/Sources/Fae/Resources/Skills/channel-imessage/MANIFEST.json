@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute",
+    "status",
+    "configure",
+    "test_connection",
+    "disconnect"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files"
+  ],
+  "riskTier": "low",
+  "timeoutSeconds": 20,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "1f4eb153ac4b493f03b2abf4d221f7399b3f2619b488c313e6ebe1c0063b4bb3",
+      "scripts/channel_imessage.py": "2ffa17be4baef64d4f4a4cad9cd86f8683937d6c90bb8b6aed4f81e96be2d92c"
+    },
+    "signature": null
+  },
+  "settings": {
+    "version": 1,
+    "kind": "channel",
+    "key": "imessage",
+    "display_name": "iMessage",
+    "description": "Configure local iMessage integration for Fae",
+    "fields": [],
+    "actions": {
+      "status": "status",
+      "configure": "configure",
+      "test": "test_connection",
+      "disconnect": "disconnect"
+    }
+  }
+}

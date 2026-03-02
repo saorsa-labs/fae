@@ -2,6 +2,8 @@
 
 This index is the entry point for Fae's security architecture, policy, rollout, and validation docs.
 
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
 ## Start here
 
 - [Security Autonomy Boundary + Execution Plan](security-autonomy-boundary-and-execution-plan.md)  
@@ -21,6 +23,9 @@ This index is the entry point for Fae's security architecture, policy, rollout, 
 - [Security Confirmation Copy](security-confirmation-copy.md)  
   Plain-language prompts for confirms/denies.
 
+- [Deferred Tool Execution](deferred-tool-execution.md)  
+  Non-blocking read-only tool jobs and their safety constraints.
+
 - [User Security Behavior Contract](user-security-behavior-contract.md)  
   User-facing safety expectations and product behavior contract.
 
@@ -28,6 +33,12 @@ This index is the entry point for Fae's security architecture, policy, rollout, 
 
 - [Skills Manifest Migration Plan](skills-manifest-migration-plan.md)  
   Migration and enforcement strategy for executable skill manifests.
+
+- [Channels Setup Guide](channels-setup.md)  
+  Skill-first conversational channel onboarding and guided forms.
+
+- [Self-Modification Guide](self-modification.md)  
+  How users ask Fae to change behavior/settings with skills-first preferences.
 
 ## Testing and adversarial validation
 

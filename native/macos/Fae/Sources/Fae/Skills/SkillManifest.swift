@@ -20,6 +20,8 @@ struct SkillCapabilityManifest: Codable, Sendable {
     let riskTier: SkillRiskTier
     let timeoutSeconds: Int
     let integrity: SkillIntegrityManifest?
+    /// Optional settings contract used by conversational setup and Settings UI.
+    let settings: SkillSettingsContract?
 
     static let currentSchemaVersion = 1
 
@@ -34,7 +36,8 @@ struct SkillCapabilityManifest: Codable, Sendable {
                 dataClasses: ["none"],
                 riskTier: .low,
                 timeoutSeconds: 15,
-                integrity: nil
+                integrity: nil,
+                settings: nil
             )
 
         case .executable:
@@ -46,7 +49,8 @@ struct SkillCapabilityManifest: Codable, Sendable {
                 dataClasses: ["local_files"],
                 riskTier: .medium,
                 timeoutSeconds: 30,
-                integrity: nil
+                integrity: nil,
+                settings: nil
             )
         }
     }
@@ -60,7 +64,8 @@ struct SkillCapabilityManifest: Codable, Sendable {
             dataClasses: dataClasses,
             riskTier: riskTier,
             timeoutSeconds: timeoutSeconds,
-            integrity: integrity
+            integrity: integrity,
+            settings: settings
         )
     }
 }
@@ -69,6 +74,120 @@ enum SkillRiskTier: String, Codable, Sendable {
     case low
     case medium
     case high
+}
+
+/// Declarative settings contract for a skill (optional).
+///
+/// This allows Fae to ask users only for missing configuration values and to
+/// render guided forms in Settings without hardcoding per-skill UI.
+struct SkillSettingsContract: Codable, Sendable {
+    let version: Int
+    let kind: String
+    let key: String
+    let displayName: String
+    let description: String?
+    let fields: [SkillSettingsField]
+    let actions: SkillSettingsActions
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case kind
+        case key
+        case displayName = "display_name"
+        case description
+        case fields
+        case actions
+    }
+}
+
+struct SkillSettingsField: Codable, Sendable {
+    let id: String
+    let type: SkillSettingsFieldType
+    let label: String
+    let required: Bool
+    let prompt: String?
+    let placeholder: String?
+    let help: String?
+    let defaultValue: String?
+    let options: [SkillSettingsOption]?
+    let validation: SkillSettingsValidation?
+    let sensitive: Bool?
+    let store: SkillSettingsStore?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case required
+        case prompt
+        case placeholder
+        case help
+        case defaultValue = "default"
+        case options
+        case validation
+        case sensitive
+        case store
+    }
+}
+
+enum SkillSettingsFieldType: String, Codable, Sendable {
+    case text
+    case secret
+    case bool
+    case select
+    case multiselect
+    case number
+    case url
+    case phone
+    case json
+}
+
+struct SkillSettingsOption: Codable, Sendable {
+    let value: String
+    let label: String
+}
+
+struct SkillSettingsValidation: Codable, Sendable {
+    let minLength: Int?
+    let maxLength: Int?
+    let regex: String?
+    let allowedValues: [String]?
+    let minNumber: Double?
+    let maxNumber: Double?
+    let mustBeHttps: Bool?
+    let mustBeNonEmptyTrimmed: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case minLength = "min_length"
+        case maxLength = "max_length"
+        case regex
+        case allowedValues = "allowed_values"
+        case minNumber = "min_number"
+        case maxNumber = "max_number"
+        case mustBeHttps = "must_be_https"
+        case mustBeNonEmptyTrimmed = "must_be_non_empty_trimmed"
+    }
+}
+
+enum SkillSettingsStore: String, Codable, Sendable {
+    case configStore = "config_store"
+    case secretStore = "secret_store"
+}
+
+struct SkillSettingsActions: Codable, Sendable {
+    let status: String?
+    let configure: String?
+    let test: String?
+    let disconnect: String?
+    let sendSample: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case configure
+        case test
+        case disconnect
+        case sendSample = "send_sample"
+    }
 }
 
 enum SkillManifestPolicy {

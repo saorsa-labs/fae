@@ -38,6 +38,9 @@ final class ConversationController: ObservableObject {
     /// Whether the assistant is currently generating a response.
     @Published var isGenerating: Bool = false
 
+    /// Count of deferred/background tool jobs currently running.
+    @Published var backgroundToolJobsInFlight: Int = 0
+
     /// Text currently streaming from the assistant (sentence fragments as they arrive).
     @Published var streamingText: String = ""
     /// Whether a streaming response is actively being built.
@@ -113,6 +116,24 @@ final class ConversationController: ObservableObject {
 
     func clearMessages() {
         messages.removeAll()
+    }
+
+    // MARK: - Background Tool Activity
+
+    var isBackgroundLookupActive: Bool {
+        backgroundToolJobsInFlight > 0
+    }
+
+    func beginBackgroundLookup() {
+        backgroundToolJobsInFlight += 1
+    }
+
+    func endBackgroundLookup() {
+        backgroundToolJobsInFlight = max(0, backgroundToolJobsInFlight - 1)
+    }
+
+    func resetBackgroundLookups() {
+        backgroundToolJobsInFlight = 0
     }
 
     // MARK: - Streaming

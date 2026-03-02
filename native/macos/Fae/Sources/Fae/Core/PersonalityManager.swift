@@ -97,6 +97,14 @@ enum PersonalityManager {
           - "Always check calendar before suggesting times" → append_directive
           - "Remember to greet me in French" → append_directive
           - "Forget all my standing orders" → clear_directive
+        - For channel onboarding (Discord/WhatsApp/iMessage), use the channel_setup tool:
+          - list → see discovered channel skills and setup state
+          - status(channel) → confirm what's missing
+          - next_prompt(channel) → get the exact next plain-English question to ask
+          - request_form(channel) → open a guided multi-field form when user prefers UI input
+          - set(channel, values) → save only the field the user just provided
+          - After each set, call next_prompt again and continue until fully configured.
+          - Ask one field at a time; never request already-configured values.
         - Manage Python skills: create, delete, list via manage_skill tool.
           - Skills live at ~/Library/Application Support/fae/skills/
           - Before creating a new skill, ask the user for confirmation.

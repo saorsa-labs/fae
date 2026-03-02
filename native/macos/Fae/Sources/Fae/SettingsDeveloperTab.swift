@@ -7,6 +7,9 @@ struct SettingsDeveloperTab: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @State private var commandText: String = ""
 
+    @AppStorage("fae.feature.world_class_settings") private var worldClassSettingsEnabled: Bool = true
+    @AppStorage("fae.feature.channel_setup_forms") private var channelSetupFormsEnabled: Bool = true
+
     @State private var dashboard = SecurityDashboardSnapshot.empty
     @State private var dashboardLoading = false
     @State private var dashboardError: String?
@@ -47,6 +50,27 @@ struct SettingsDeveloperTab: View {
                 Text("Last: \(handoff.lastCommandText)")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Rollout Flags (Local)") {
+                Toggle("World-class settings IA", isOn: $worldClassSettingsEnabled)
+                Toggle("Channel setup guided forms", isOn: $channelSetupFormsEnabled)
+
+                HStack {
+                    Text("Form opens")
+                    Spacer()
+                    Text("\(UserDefaults.standard.integer(forKey: "channel_setup.request_form.opened"))")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.footnote)
+
+                HStack {
+                    Text("Form submissions")
+                    Spacer()
+                    Text("\(UserDefaults.standard.integer(forKey: "channel_setup.request_form.submitted"))")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.footnote)
             }
 
             Section("Security Dashboard (Local/Dev)") {

@@ -30,6 +30,7 @@ final class ToolRegistry: Sendable {
             EditTool(),
             BashTool(),
             SelfConfigTool(),
+            ChannelSetupTool(),
             WebSearchTool(),
             FetchURLTool(),
             // Skill tools
@@ -116,7 +117,7 @@ final class ToolRegistry: Sendable {
 
     /// Additional tools available in "read_write" mode.
     private static let writeTools: Set<String> = [
-        "write", "edit", "self_config",
+        "write", "edit", "self_config", "channel_setup",
         "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
         "manage_skill",
     ]

@@ -322,6 +322,7 @@ final class ToolModeFilteringTests: XCTestCase {
         XCTAssertFalse(registry.isToolAllowed("write", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("run_skill", mode: "read_only"))
+        XCTAssertFalse(registry.isToolAllowed("channel_setup", mode: "read_only"))
     }
 
     // MARK: - Read-Write Mode
@@ -331,6 +332,7 @@ final class ToolModeFilteringTests: XCTestCase {
         XCTAssertTrue(registry.isToolAllowed("write", mode: "read_write"))
         XCTAssertTrue(registry.isToolAllowed("edit", mode: "read_write"))
         XCTAssertTrue(registry.isToolAllowed("self_config", mode: "read_write"))
+        XCTAssertTrue(registry.isToolAllowed("channel_setup", mode: "read_write"))
         XCTAssertTrue(registry.isToolAllowed("scheduler_create", mode: "read_write"))
     }
 

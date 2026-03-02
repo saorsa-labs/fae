@@ -25,6 +25,7 @@ These guidelines keep Fae highly autonomous for non-technical users while ensuri
 - User-specific task decomposition
 - Reusable automation playbooks
 - Skill metadata and capability requests
+- User-facing setup/configuration flows (**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.)
 
 ### Must never be skills-only
 
@@ -46,6 +47,8 @@ These guidelines keep Fae highly autonomous for non-technical users while ensuri
 8. Relay commands cannot bypass local safety policy.
 9. Security decisions are written to append-only local log records.
 10. Sensitive data is redacted before persistence.
+11. Tool-backed answers must be grounded in actual tool results (no fabricated fallback content).
+12. Deferred/background tool execution must not bypass approval, identity, or broker checks.
 
 ## 3. Threat model assumptions
 
@@ -66,6 +69,7 @@ For any PR touching tools, skills, relay, scheduler actions, or config:
 - [ ] Are secrets redacted from logs/analytics?
 - [ ] Are tests added for bypass attempts and edge cases?
 - [ ] Is user-facing confirmation copy plain-language and non-technical?
+- [ ] For new configurable workflows, did we apply the canonical preference: Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing?
 
 If any answer is “no”, block merge.
 

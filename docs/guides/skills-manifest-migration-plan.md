@@ -2,67 +2,92 @@
 
 ## Goal
 
-Migrate existing executable skills to `MANIFEST.json` capability declarations without breaking user workflows.
+Migrate and standardize skills so configuration is **skill-owned** and Fae can configure behavior conversationally.
 
-## Inventory classes
+Primary policy:
+
+- **Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+## Migration scope
 
 1. Built-in instruction skills
 2. Built-in executable skills
 3. Personal/community directory-based executable skills
 4. Legacy flat `.py` skills (no skill directory)
+5. Configurable skills with `settings` contract (channels first)
 
-## Migration policy
+## Runtime policy (current)
 
-- Instruction skills: optional manifest, conservative defaults allowed.
-- Executable skills: manifest required for execution.
+- Instruction skills: manifest optional, conservative defaults allowed.
+- Executable skills: valid `MANIFEST.json` required for execution.
+- Configurable skills: should define `settings` contract when they expose user-facing setup.
 - Legacy flat `.py` skills: treated as non-compliant until migrated.
 
-## Phased rollout
+## Why this migration exists
 
-## Phase 1: Detection (non-breaking)
+Without manifest contracts, behavior tends to drift into hardcoded app logic.
+
+With manifest + settings contracts:
+
+- Fae can discover configurable capabilities automatically,
+- ask plain-English missing-field prompts,
+- launch guided forms from chat,
+- render settings status from one source of truth,
+- and let users request more changes directly.
+
+## Rollout phases
+
+### Phase 1 — Detection (shipped)
 
 - Discover skills and report manifest status:
   - compliant
   - missing
   - invalid
-- Emit warnings in logs/UI diagnostics only.
+- Surface issues in logs/diagnostics.
 
-## Phase 2: Auto-stub generation
-
-- Generate conservative `MANIFEST.json` stubs for missing executable directory skills.
-- Mark generated files as user-editable.
-
-## Phase 3: Enforced execution gate
+### Phase 2 — Enforced execution gate (shipped)
 
 - Deny executable skill run if manifest missing/invalid.
 - Keep instruction skills functional.
+- Enforce integrity checks for executable skill payloads.
 
-## Phase 4: Legacy `.py` migration helper
+### Phase 3 — Settings-contract adoption (in progress, channels first)
 
-- Create migration utility:
-  - wraps legacy script into `skills/{name}/scripts/{name}.py`
-  - creates `SKILL.md` template
-  - creates conservative `MANIFEST.json`
+- Add optional `settings` block to manifests.
+- Use settings contract for capability state, prompting, and UI generation.
+- Ship first-party channel skills (`discord`, `whatsapp`, `imessage`) under this model.
+
+### Phase 4 — Legacy `.py` migration helper (planned)
+
+- Wrap legacy script into `skills/{name}/scripts/{name}.py`
+- Generate `SKILL.md` template
+- Generate conservative `MANIFEST.json`
+- Optionally generate starter `settings` contract when configuration is required
 
 ## Validation checklist
 
-- schemaVersion matches runtime
-- `capabilities` non-empty
-- executable includes `execute`
-- executable includes `allowedTools: ["run_skill"]`
+At load/discovery time:
+
+- schema version supported by runtime
+- `capabilities` non-empty for executable skills
+- executable skills include `execute`
+- executable skills declare allowed tools correctly
 - timeout within allowed range
-- allowedDomains optional but validated if present
-- executable manifests include integrity checksums for `SKILL.md` and scripts
-- integrity verification blocks tampered executable skills
+- allowed domains validated (if present)
+- integrity checksums cover executable payloads (`SKILL.md`, scripts)
+- settings contract validates (field IDs/types/actions)
+- no secret defaults in manifest settings
 
-## Rollback strategy
+## Storage and security expectations
 
-- Keep legacy files untouched during conversion.
-- Write migrated skill into new directory path.
-- Allow user to revert by deleting migrated directory.
+- Secret fields are keychain-backed.
+- Sensitive values are never echoed in logs/diagnostics.
+- Status responses report presence/validity, not raw secret values.
+- Disconnect/removal should clear both config-store and keychain values where applicable.
 
 ## Success criteria
 
-- >= 95% executable skills migrated or manifest-compliant before enforcement default-on
-- zero critical breakage in built-in skill set
-- clear user-facing errors for non-compliant skills
+- Executable skills are manifest-compliant by default.
+- Channel and settings onboarding flows are contract-driven.
+- Users can request most configuration changes in natural language.
+- Reduced hardcoded per-integration settings logic in app UI/runtime.

@@ -116,6 +116,10 @@ Episode embeddings are stored non-blocking after each capture via `VectorStore.u
 
 ## Config
 
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+Preferred path: ask Fae to change memory settings conversationally (for example, enable/disable memory or adjust max recall results). Raw config editing remains available for advanced/manual workflows.
+
 Memory config in `config.toml`:
 
 ```toml

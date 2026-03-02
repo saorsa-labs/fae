@@ -24,6 +24,20 @@ struct ConversationWindowView: View {
                 .font(.system(size: 11, weight: .medium, design: .default))
                 .tracking(2)
                 .foregroundStyle(Color.white.opacity(0.45))
+
+            if conversationController.isBackgroundLookupActive {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.55))
+                        .frame(width: 5, height: 5)
+                    Text("background lookup")
+                        .font(.system(size: 10, weight: .regular, design: .default))
+                        .foregroundStyle(Color.white.opacity(0.35))
+                }
+                .padding(.leading, 8)
+                .transition(.opacity)
+            }
+
             Spacer()
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
@@ -36,6 +50,7 @@ struct ConversationWindowView: View {
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 14)
+        .animation(.easeInOut(duration: 0.2), value: conversationController.isBackgroundLookupActive)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.white.opacity(0.07))

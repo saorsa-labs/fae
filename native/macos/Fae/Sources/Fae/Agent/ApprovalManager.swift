@@ -11,6 +11,7 @@ import Foundation
 actor ApprovalManager {
     private let eventBus: FaeEventBus
     private var pendingApprovals: [UInt64: CheckedContinuation<Bool, Never>] = [:]
+    private var pendingOrder: [UInt64] = []
     private var nextRequestId: UInt64 = 1
 
     static let timeoutSeconds: TimeInterval = 20
@@ -36,6 +37,7 @@ actor ApprovalManager {
         // Wait for response with timeout.
         let approved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             pendingApprovals[requestId] = continuation
+            pendingOrder.append(requestId)
 
             // Start timeout task.
             Task {
@@ -48,12 +50,21 @@ actor ApprovalManager {
     }
 
     /// Resolve a pending approval (called from FaeCore when user responds).
-    func resolve(requestId: UInt64, approved: Bool) {
+    func resolve(requestId: UInt64, approved: Bool, source: String = "user") {
         resolveIfPending(requestId: requestId, approved: approved)
-        eventBus.send(.approvalResolved(id: requestId, approved: approved, source: "user"))
+        eventBus.send(.approvalResolved(id: requestId, approved: approved, source: source))
+    }
+
+    /// Resolve the most recent pending approval (used by voice yes/no).
+    @discardableResult
+    func resolveMostRecent(approved: Bool, source: String = "voice") -> Bool {
+        guard let requestId = pendingOrder.last else { return false }
+        resolve(requestId: requestId, approved: approved, source: source)
+        return true
     }
 
     private func resolveIfPending(requestId: UInt64, approved: Bool) {
+        pendingOrder.removeAll { $0 == requestId }
         if let continuation = pendingApprovals.removeValue(forKey: requestId) {
             continuation.resume(returning: approved)
         }

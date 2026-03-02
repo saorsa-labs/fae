@@ -31,11 +31,42 @@ When possible, Fae prefers safer reversible behavior (for example checkpoints or
 
 If Fae needs your input, she asks directly and briefly.
 
+## Confirmation contract (voice + UI)
+
+When confirmation is required, Fae must:
+
+- state the concrete action target (command/path/recipient/tool)
+- clearly ask for **"yes or no"**
+- present **Yes / No buttons** in the approval overlay
+- avoid continuing tool execution until an explicit approval/denial is received
+
+While approval is pending, Fae treats unrelated speech as non-answers and asks again for a clear yes/no when needed.
+
+## Grounded-answer contract (no fabrication)
+
+If a request depends on tool data, Fae must not guess.
+
+- If tools are unavailable, blocked, denied, or missing required permissions, she says so plainly.
+- If a tool-backed lookup did not run, she reports that and asks to retry rather than hallucinating an answer.
+- If owner voice enrollment is required for tool use, she explains that enrollment is needed first.
+
+## Deferred background tool contract
+
+For eligible read-only lookups, Fae may defer tool execution to the background:
+
+- immediate acknowledgment that she is checking in background
+- no bypass of approval/identity rules
+- post completion results back into the active conversation when ready
+
 ## Your control
+
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
 
 You can choose a simple safety style:
 - **Balanced** (recommended)
 - **More autonomous**
 - **More cautious**
+
+You can also ask Fae directly to change safety/settings behavior in plain language (for example, "be more cautious" or "switch me back to balanced"). Fae should guide and confirm changes clearly.
 
 Advanced controls exist, but safe defaults are built in even if you never open settings.

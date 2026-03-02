@@ -89,4 +89,161 @@ final class SkillBypassRegressionTests: XCTestCase {
 
         XCTAssertFalse(tampered.isEnabled, "Tampered executable skill should be disabled")
     }
+
+    func testValidSettingsContractKeepsExecutableSkillEnabled() async throws {
+        let manager = SkillManager()
+        let skillName = "settings_ok_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+        }
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Skill with valid settings contract",
+            body: "This skill validates settings schema acceptance.",
+            scriptContent: "print('ok')"
+        )
+
+        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(skillName)
+        let manifestURL = SkillManifestPolicy.manifestURL(for: skillDir)
+
+        // Keep integrity valid by rewriting checksums from current files.
+        let integrity = SkillManifestPolicy.buildIntegrity(for: skillDir)
+        let manifest = SkillCapabilityManifest(
+            schemaVersion: 1,
+            capabilities: ["execute", "status", "configure"],
+            allowedTools: ["run_skill"],
+            allowedDomains: [],
+            dataClasses: ["local_files"],
+            riskTier: .medium,
+            timeoutSeconds: 30,
+            integrity: integrity,
+            settings: SkillSettingsContract(
+                version: 1,
+                kind: "channel",
+                key: "discord",
+                displayName: "Discord",
+                description: "Configure Discord",
+                fields: [
+                    SkillSettingsField(
+                        id: "bot_token",
+                        type: .secret,
+                        label: "Bot token",
+                        required: true,
+                        prompt: "Enter your bot token",
+                        placeholder: nil,
+                        help: nil,
+                        defaultValue: nil,
+                        options: nil,
+                        validation: nil,
+                        sensitive: true,
+                        store: .secretStore
+                    )
+                ],
+                actions: SkillSettingsActions(
+                    status: "status",
+                    configure: "configure",
+                    test: nil,
+                    disconnect: nil,
+                    sendSample: nil
+                )
+            )
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(manifest)
+        try data.write(to: manifestURL)
+
+        let skills = await manager.discoverSkills()
+        guard let skill = skills.first(where: { $0.name == skillName }) else {
+            XCTFail("Expected skill in discovery results")
+            return
+        }
+
+        XCTAssertTrue(skill.isEnabled, "Valid settings contract should keep skill enabled")
+
+        let configurable = await manager.configurableSkills(kind: "channel")
+        let found = configurable.first(where: { $0.name == skillName })
+        XCTAssertNotNil(found, "Configurable channel skill should be auto-discovered")
+        XCTAssertEqual(found?.key, "discord")
+    }
+
+    func testInvalidSettingsActionDisablesExecutableSkill() async throws {
+        let manager = SkillManager()
+        let skillName = "settings_bad_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+        }
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Skill with invalid settings actions",
+            body: "This skill should be disabled due to manifest mismatch.",
+            scriptContent: "print('ok')"
+        )
+
+        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(skillName)
+        let manifestURL = SkillManifestPolicy.manifestURL(for: skillDir)
+
+        let invalidManifest = SkillCapabilityManifest(
+            schemaVersion: 1,
+            capabilities: ["execute", "status"],
+            allowedTools: ["run_skill"],
+            allowedDomains: [],
+            dataClasses: ["local_files"],
+            riskTier: .medium,
+            timeoutSeconds: 30,
+            integrity: SkillManifestPolicy.buildIntegrity(for: skillDir),
+            settings: SkillSettingsContract(
+                version: 1,
+                kind: "channel",
+                key: "discord",
+                displayName: "Discord",
+                description: "Configure Discord",
+                fields: [
+                    SkillSettingsField(
+                        id: "bot_token",
+                        type: .secret,
+                        label: "Bot token",
+                        required: true,
+                        prompt: "Enter your bot token",
+                        placeholder: nil,
+                        help: nil,
+                        defaultValue: nil,
+                        options: nil,
+                        validation: nil,
+                        sensitive: true,
+                        store: .secretStore
+                    )
+                ],
+                actions: SkillSettingsActions(
+                    status: "status",
+                    configure: "configure",
+                    test: nil,
+                    disconnect: nil,
+                    sendSample: nil
+                )
+            )
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(invalidManifest)
+        try data.write(to: manifestURL)
+
+        let skills = await manager.discoverSkills()
+        guard let skill = skills.first(where: { $0.name == skillName }) else {
+            XCTFail("Expected skill in discovery results")
+            return
+        }
+
+        XCTAssertFalse(skill.isEnabled, "Invalid settings action/capability mismatch should disable skill")
+    }
 }

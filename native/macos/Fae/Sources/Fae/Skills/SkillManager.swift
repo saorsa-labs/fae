@@ -10,6 +10,28 @@ import Foundation
 /// - **Personal**: User-created in `~/Library/Application Support/fae/skills/`.
 /// - **Community**: Imported from URL (stored alongside personal skills).
 actor SkillManager {
+    struct ConfigurableFieldDescriptor: Sendable {
+        let id: String
+        let label: String
+        let required: Bool
+        let prompt: String?
+        let placeholder: String?
+        let type: SkillSettingsFieldType
+        let sensitive: Bool
+    }
+
+    struct ConfigurableSkillDescriptor: Sendable {
+        let name: String
+        let kind: String
+        let key: String
+        let displayName: String
+        let isEnabled: Bool
+        let tier: SkillTier
+        let actionNames: [String]
+        let requiredFieldIDs: [String]
+        let fields: [ConfigurableFieldDescriptor]
+    }
+
     private var runningProcesses: [String: Process] = [:]
     private var skillCache: [String: SkillMetadata] = [:]
     private var activatedBodies: [String: String] = [:]
@@ -55,8 +77,8 @@ actor SkillManager {
         var all: [SkillMetadata] = []
         skillCache.removeAll()
 
-        // Built-in skills from app bundle.
-        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+        // Built-in skills from app resource bundle.
+        if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
             all.append(contentsOf: scanDirectory(builtinDir, tier: .builtin))
         }
 
@@ -90,6 +112,73 @@ actor SkillManager {
     func promptMetadata() -> [(name: String, description: String, type: SkillType)] {
         let skills = discoverSkills()
         return skills.filter(\.isEnabled).map { ($0.name, $0.description, $0.type) }
+    }
+
+    /// Return discovered skills that expose a settings contract.
+    ///
+    /// Used by Settings UI and channel orchestration for auto-discovery.
+    /// Pass `kind: "channel"` to only retrieve channel-integrations.
+    func configurableSkills(kind: String? = nil) -> [ConfigurableSkillDescriptor] {
+        let allSkills = discoverSkills()
+        let requestedKind = kind?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var results: [ConfigurableSkillDescriptor] = []
+        results.reserveCapacity(allSkills.count)
+
+        for skill in allSkills {
+            guard let manifest = try? loadManifest(for: skill),
+                  let settings = manifest.settings
+            else {
+                continue
+            }
+
+            if let requestedKind,
+               !requestedKind.isEmpty,
+               settings.kind.caseInsensitiveCompare(requestedKind) != .orderedSame
+            {
+                continue
+            }
+
+            let actionNames = [
+                settings.actions.status,
+                settings.actions.configure,
+                settings.actions.test,
+                settings.actions.disconnect,
+                settings.actions.sendSample,
+            ].compactMap { $0 }
+
+            let fields = settings.fields.map {
+                ConfigurableFieldDescriptor(
+                    id: $0.id,
+                    label: $0.label,
+                    required: $0.required,
+                    prompt: $0.prompt,
+                    placeholder: $0.placeholder,
+                    type: $0.type,
+                    sensitive: $0.sensitive ?? ($0.type == .secret)
+                )
+            }
+
+            let requiredFieldIDs = fields
+                .filter { $0.required }
+                .map(\.id)
+
+            results.append(
+                ConfigurableSkillDescriptor(
+                    name: skill.name,
+                    kind: settings.kind,
+                    key: settings.key,
+                    displayName: settings.displayName,
+                    isEnabled: skill.isEnabled,
+                    tier: skill.tier,
+                    actionNames: actionNames,
+                    requiredFieldIDs: requiredFieldIDs,
+                    fields: fields
+                )
+            )
+        }
+
+        return results
     }
 
     /// List installed skill names (static — no actor instance needed).
@@ -440,7 +529,7 @@ actor SkillManager {
         }
 
         // Check built-in directory.
-        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+        if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
             let builtinSkillDir = builtinDir.appendingPathComponent(name)
             let builtinMd = builtinSkillDir.appendingPathComponent("SKILL.md")
             if let metadata = SkillParser.parse(skillURL: builtinMd, tier: .builtin) {
@@ -492,6 +581,10 @@ actor SkillManager {
             throw SkillError.invalidManifest("capabilities must not be empty")
         }
 
+        if let settings = manifest.settings {
+            try validateSettingsContract(settings, capabilities: manifest.capabilities)
+        }
+
         if type == .executable {
             guard manifest.capabilities.contains("execute") else {
                 throw SkillError.invalidManifest("executable skills must declare capability 'execute'")
@@ -507,6 +600,62 @@ actor SkillManager {
                 )
             }
         }
+    }
+
+    private static func validateSettingsContract(
+        _ settings: SkillSettingsContract,
+        capabilities: [String]
+    ) throws {
+        guard settings.version >= 1 else {
+            throw SkillError.invalidManifest("settings.version must be >= 1")
+        }
+        guard !settings.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SkillError.invalidManifest("settings.key must not be empty")
+        }
+        guard !settings.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SkillError.invalidManifest("settings.display_name must not be empty")
+        }
+
+        var seenFieldIds: Set<String> = []
+        for field in settings.fields {
+            let fieldID = field.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !fieldID.isEmpty else {
+                throw SkillError.invalidManifest("settings.fields[].id must not be empty")
+            }
+            if seenFieldIds.contains(fieldID) {
+                throw SkillError.invalidManifest("settings field ids must be unique: \(fieldID)")
+            }
+            seenFieldIds.insert(fieldID)
+
+            guard !field.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw SkillError.invalidManifest("settings.fields[\(fieldID)].label must not be empty")
+            }
+
+            if field.type == .secret, field.defaultValue != nil {
+                throw SkillError.invalidManifest("settings.fields[\(fieldID)] secret fields cannot define default values")
+            }
+
+            if let options = field.options,
+               !options.isEmpty,
+               !(field.type == .select || field.type == .multiselect)
+            {
+                throw SkillError.invalidManifest("settings.fields[\(fieldID)] options are only valid for select/multiselect")
+            }
+        }
+
+        let declared = Set(capabilities)
+        func ensureAction(_ action: String?) throws {
+            guard let action else { return }
+            guard declared.contains(action) else {
+                throw SkillError.invalidManifest("settings action '\(action)' must be present in capabilities")
+            }
+        }
+
+        try ensureAction(settings.actions.status)
+        try ensureAction(settings.actions.configure)
+        try ensureAction(settings.actions.test)
+        try ensureAction(settings.actions.disconnect)
+        try ensureAction(settings.actions.sendSample)
     }
 
     /// Find a Python script in a skill's scripts/ directory.
@@ -537,7 +686,7 @@ actor SkillManager {
         }
 
         // Check built-in skills.
-        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+        if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
             let builtinScripts = builtinDir
                 .appendingPathComponent(skillName)
                 .appendingPathComponent("scripts")

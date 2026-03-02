@@ -4,6 +4,14 @@ Fae runs locally on-device and supports switching **voice model presets** for th
 
 ## What is supported
 
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+Preferred path: ask Fae to switch voice model preset conversationally.
+
+Examples:
+- "Switch my voice model to qwen3_4b"
+- "Set voice model preset to auto"
+
 You can switch the preset used by local inference:
 
 - `auto` (recommended)

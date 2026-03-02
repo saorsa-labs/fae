@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute",
+    "status",
+    "configure",
+    "test_connection",
+    "disconnect",
+    "send_sample"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files"
+  ],
+  "riskTier": "medium",
+  "timeoutSeconds": 30,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "11838cc664c38a8e62afa30f01a2e0dede95ff9f68d3e214d55179ee73e71572",
+      "scripts/channel_whatsapp.py": "e1ed90ad105e5f0cd8bfdccd6df60fc77e4a275f26d834e6fe798bc8e78892ab"
+    },
+    "signature": null
+  },
+  "settings": {
+    "version": 1,
+    "kind": "channel",
+    "key": "whatsapp",
+    "display_name": "WhatsApp",
+    "description": "Configure WhatsApp integration for Fae",
+    "fields": [
+      {
+        "id": "access_token",
+        "type": "secret",
+        "label": "Access Token",
+        "required": true,
+        "prompt": "Please paste your WhatsApp access token.",
+        "placeholder": "Access token",
+        "sensitive": true,
+        "store": "secret_store",
+        "validation": {
+          "min_length": 20,
+          "must_be_non_empty_trimmed": true
+        }
+      },
+      {
+        "id": "phone_number_id",
+        "type": "text",
+        "label": "Phone Number ID",
+        "required": true,
+        "prompt": "What is your WhatsApp phone number ID?",
+        "placeholder": "1234567890",
+        "sensitive": false,
+        "store": "config_store",
+        "validation": {
+          "min_length": 6,
+          "must_be_non_empty_trimmed": true
+        }
+      },
+      {
+        "id": "verify_token",
+        "type": "secret",
+        "label": "Verify Token",
+        "required": true,
+        "prompt": "Please choose or paste your webhook verify token.",
+        "placeholder": "Verify token",
+        "sensitive": true,
+        "store": "secret_store",
+        "validation": {
+          "min_length": 6,
+          "must_be_non_empty_trimmed": true
+        }
+      },
+      {
+        "id": "allowed_numbers",
+        "type": "text",
+        "label": "Allowed Numbers",
+        "required": false,
+        "prompt": "Optionally list allowed sender numbers (comma-separated).",
+        "placeholder": "+441234567890, +15551234567",
+        "sensitive": false,
+        "store": "config_store"
+      }
+    ],
+    "actions": {
+      "status": "status",
+      "configure": "configure",
+      "test": "test_connection",
+      "disconnect": "disconnect",
+      "send_sample": "send_sample"
+    }
+  }
+}

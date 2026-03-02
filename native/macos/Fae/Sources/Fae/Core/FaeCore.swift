@@ -33,9 +33,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Config migration: enforce minimum maxTokens for tool calls.
         // Early configs persisted maxTokens=512 which is far too low for the LLM
         // to emit speech + <tool_call> JSON. Bump any legacy value below 2048.
-        if loaded.llm.maxTokens < 2048 {
+        let migratedMaxTokens = loaded.llm.maxTokens < 2048
+        if migratedMaxTokens {
             NSLog("FaeCore: migrating maxTokens %d → 4096 (legacy config too low for tool calls)", loaded.llm.maxTokens)
             loaded.llm.maxTokens = 4096
+        }
+
+        // Channel secret migration: move legacy inline channel tokens from config
+        // into Keychain, keeping read compatibility for existing installs.
+        let migratedSecrets = Self.migrateChannelSecretsToKeychain(&loaded)
+
+        if migratedSecrets || migratedMaxTokens {
             try? loaded.save()
         }
 
@@ -711,8 +719,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     func respondToApproval(requestID: UInt64, approved: Bool) {
-        eventBus.send(.approvalResolved(id: requestID, approved: approved, source: "button"))
-        Task { await approvalManager.resolve(requestId: requestID, approved: approved) }
+        Task { await approvalManager.resolve(requestId: requestID, approved: approved, source: "button") }
     }
 
     func patchConfig(key: String, payload: [String: Any]) {
@@ -822,13 +829,34 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.speaker.requireOwnerForTools = value
             persistConfig(reason: "config.patch.voice_identity.approval_requires_match")
 
+        case "memory.enabled":
+            guard let value = value as? Bool else { return }
+            config.memory.enabled = value
+            persistConfig(reason: "config.patch.memory.enabled")
+
+        case "memory.max_recall_results":
+            let parsed: Int?
+            if let v = value as? Int {
+                parsed = v
+            } else if let v = value as? Double {
+                parsed = Int(v)
+            } else {
+                parsed = nil
+            }
+            guard let results = parsed, (1 ... 50).contains(results) else { return }
+            config.memory.maxRecallResults = results
+            persistConfig(reason: "config.patch.memory.max_recall_results")
+
         case "channels.enabled":
             guard let value = value as? Bool else { return }
             config.channels.enabled = value
             persistConfig(reason: "config.patch.channels.enabled")
 
         case "channels.discord.bot_token":
-            config.channels.discord.botToken = sanitizedString(value)
+            let token = sanitizedString(value)
+            updateChannelSecret(key: "channels.discord.bot_token", value: token)
+            // Keep inline field cleared after migration to avoid plaintext secrets on disk.
+            config.channels.discord.botToken = nil
             persistConfig(reason: "config.patch.channels.discord.bot_token")
 
         case "channels.discord.guild_id":
@@ -842,7 +870,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         case "channels.whatsapp.access_token":
-            config.channels.whatsapp.accessToken = sanitizedString(value)
+            let token = sanitizedString(value)
+            updateChannelSecret(key: "channels.whatsapp.access_token", value: token)
+            config.channels.whatsapp.accessToken = nil
             persistConfig(reason: "config.patch.channels.whatsapp.access_token")
 
         case "channels.whatsapp.phone_number_id":
@@ -850,7 +880,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             persistConfig(reason: "config.patch.channels.whatsapp.phone_number_id")
 
         case "channels.whatsapp.verify_token":
-            config.channels.whatsapp.verifyToken = sanitizedString(value)
+            let token = sanitizedString(value)
+            updateChannelSecret(key: "channels.whatsapp.verify_token", value: token)
+            config.channels.whatsapp.verifyToken = nil
             persistConfig(reason: "config.patch.channels.whatsapp.verify_token")
 
         case "channels.whatsapp.allowed_numbers":
@@ -946,6 +978,44 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 .filter { !$0.isEmpty }
         }
         return nil
+    }
+
+    private func updateChannelSecret(key: String, value: String?) {
+        if let value, !value.isEmpty {
+            do {
+                try CredentialManager.store(key: key, value: value)
+            } catch {
+                NSLog("FaeCore: failed to store channel secret '%@': %@", key, error.localizedDescription)
+            }
+        } else {
+            CredentialManager.delete(key: key)
+        }
+    }
+
+    private static func migrateChannelSecretsToKeychain(_ config: inout FaeConfig) -> Bool {
+        var migrated = false
+
+        func migrate(_ configValue: inout String?, key: String) {
+            guard let secret = configValue?.trimmingCharacters(in: .whitespacesAndNewlines), !secret.isEmpty else {
+                return
+            }
+
+            if CredentialManager.retrieve(key: key) == nil {
+                try? CredentialManager.store(key: key, value: secret)
+            }
+            configValue = nil
+            migrated = true
+        }
+
+        migrate(&config.channels.discord.botToken, key: "channels.discord.bot_token")
+        migrate(&config.channels.whatsapp.accessToken, key: "channels.whatsapp.access_token")
+        migrate(&config.channels.whatsapp.verifyToken, key: "channels.whatsapp.verify_token")
+
+        if migrated {
+            NSLog("FaeCore: migrated legacy channel secrets to Keychain")
+        }
+
+        return migrated
     }
 
     private func saveOnboardingContactInfo(email: String?, phone: String?) async {

@@ -34,6 +34,7 @@ Fae is an always-present companion, not a summoned assistant. She listens contin
 - **Direct conversation** — talk to Fae naturally and she responds with warmth and clarity.
 - **Overheard conversations** — if people nearby are discussing something Fae can help with, she may politely offer useful information.
 - **Background noise** — Fae stays quiet when the TV is on, music is playing, or conversations don't involve her.
+- **Idle noise guard** — short out-of-context snippets (one or two words/click-like artifacts) are ignored after silence, while brief replies still work naturally during active follow-up windows.
 - **Listening control** — press Stop/Start Listening to toggle, or say "go to sleep Fae" / "hey Fae".
 
 Fae uses echo cancellation, voice activity detection, and speaker identity to separate your speech from ambient noise and her own voice.
@@ -69,7 +70,8 @@ Fae recognises your voice and can distinguish you from others in the room using 
 - **ECAPA-TDNN speaker encoder** — Core ML model running on the Neural Engine, produces 1024-dim x-vector embeddings.
 - **First-launch enrollment** — the first voice Fae hears becomes the "owner" automatically.
 - **Progressive enrollment** — each recognised interaction strengthens the voice profile.
-- **Owner gating** — when enabled, non-owner voices don't see tool schemas, preventing strangers from running commands.
+- **Owner enrollment required** — if owner gating is enabled and no owner voiceprint exists yet, Fae withholds tool execution until enrollment completes.
+- **Owner gating** — known non-owner voices don't see tool schemas, preventing strangers from running commands.
 - **Self-echo rejection** — Fae's own voice is enrolled as `fae_self` and filtered from the pipeline.
 - **Text injection** — always trusted (physical device access implies owner).
 
@@ -82,9 +84,24 @@ Fae can change her own personality and learn new skills:
 - **Personality tuning** — say "be more cheerful", "less chatty", "speak formally" and Fae persists the preference via `self_config` tool.
 - **Directive** — critical overriding instructions stored at `~/Library/Application Support/fae/directive.md`, loaded on every prompt.
 - **Skills (v2)** — directory-based skills following the [Agent Skills](https://agentskills.io/specification) open standard. Built-in skills in the app bundle, personal skills at `~/Library/Application Support/fae/skills/`. Instruction skills inject context; executable skills run Python via `uv run --script`.
+- **Skill-first settings** — when possible, Fae prefers skill contracts over hardcoded app code paths. This lets her configure channels and behavior conversationally, ask for missing inputs in plain English, and adapt without users editing raw config.
+- **User-driven evolution** — users can ask Fae to change and extend behavior directly (create/update skills, reconfigure channels, adjust preferences) as long as the request is within policy and tool permissions.
 - **Skill management** — create, activate, run, and delete skills via dedicated tools (`activate_skill`, `run_skill`, `manage_skill`).
 
 See [Self-Modification Guide](docs/guides/self-modification.md).
+
+### Skill-First Extensibility (Project Preference)
+
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+That means:
+
+- new integrations should be expressed as skills with explicit manifests/contracts,
+- setup should be conversational (ask for missing input, then apply),
+- settings UX should be generated from contracts rather than bespoke per-channel forms,
+- users should be able to ask Fae to change behavior directly instead of editing raw files.
+
+This keeps Fae more self-configurable and lets users request changes to more of the system safely.
 
 ### Proactive Intelligence
 
@@ -103,6 +120,7 @@ Fae can manage applications on your Mac through desktop automation tools:
 
 - Open, close, and interact with desktop applications.
 - Read and write files, configure software, and manage system settings.
+- Prefer skill-based configuration contracts (channels/settings) over hardcoded one-off code paths when implementing new capabilities.
 - Execute shell commands with a safety-first approval model.
 
 Tool modes control how much access Fae has:
@@ -114,6 +132,10 @@ Tool modes control how much access Fae has:
 | `read_write` | Read and write files |
 | `full` | Full access including shell commands (with approval) |
 | `full_no_approval` | Full access without approval prompts |
+
+Approval UX in `full` mode is explicit: Fae asks in plain language, says "yes or no" out loud, and shows Yes/No buttons in the overlay. If a tool-backed request cannot be executed (denied, unavailable, or no schema access), Fae states that clearly instead of inventing results.
+
+For read-only lookups (calendar/notes/mail/contacts/web/read), Fae can run tool calls as deferred background jobs: she acknowledges immediately, keeps the conversation responsive, and posts the grounded result back into the conversation when the tools finish. See `docs/guides/deferred-tool-execution.md`.
 
 ### Scheduler
 
@@ -195,17 +217,17 @@ The unified pipeline handles everything in a single pass — the LLM decides whe
 3. **Speaker ID** — ECAPA-TDNN embedding, owner verification
 4. **Echo suppression** — time-based + text-overlap + voice identity filtering
 5. **STT** — Qwen3-ASR transcription
-6. **LLM** — Qwen3 with inline tool calling (max 5 tool turns per query)
+6. **LLM** — Qwen3 with inline tool calling (max 5 tool turns per query), plus deferred background execution for eligible read-only lookups
 7. **TTS** — Qwen3-TTS with voice cloning, sentence-level streaming
 8. **Playback** — with barge-in interruption support
 
 **Latency profile:** End-to-end response time depends on request complexity. Simple greetings take a few seconds; tool-heavy tasks (web search + memory recall + file operations) can take 10-30 seconds. The orb and thinking tone provide continuous feedback throughout. Fae favours correctness over speed — she will search, verify, and cross-reference rather than guess.
 
-### Tools (21 Built-in)
+### Tools (Built-in)
 
 | Category | Tools |
 |---|---|
-| Core + Web | `read`, `write`, `edit`, `bash`, `self_config`, `web_search`, `fetch_url` |
+| Core + Web | `read`, `write`, `edit`, `bash`, `self_config`, `web_search`, `fetch_url`, `channel_setup` |
 | Skills | `activate_skill`, `run_skill`, `manage_skill` |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
@@ -263,6 +285,12 @@ Fae now uses a **core-enforced security spine** (not prompt-only safety):
 See: [Security Index](docs/guides/security-index.md), [Security Autonomy Boundary + Execution Plan](docs/guides/security-autonomy-boundary-and-execution-plan.md), [Security Launch SLOs](docs/guides/security-autonomy-launch-slos.md), and [Security PR Review Checklist](docs/checklists/security-pr-review-checklist.md).
 
 ## Configuration
+
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+**Preferred:** ask Fae in chat to change settings. She will use skill/tool contracts, request missing values in plain English, and open guided forms when needed.
+
+Raw config remains available for advanced troubleshooting:
 
 Config file: `~/Library/Application Support/fae/config.toml` (macOS)
 

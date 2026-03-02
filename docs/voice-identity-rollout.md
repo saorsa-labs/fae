@@ -6,6 +6,10 @@ Voice identity is now integrated in the Swift runtime.
 
 ## Current config surface
 
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+Preferred user flow: ask Fae conversationally to adjust voice identity mode/settings. Runtime applies changes through the same config patch/get surface.
+
 Voice identity settings are served through `config.patch` / `config.get` using:
 
 - `voice_identity.enabled`

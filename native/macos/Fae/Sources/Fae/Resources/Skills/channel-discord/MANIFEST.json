@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute",
+    "status",
+    "configure",
+    "test_connection",
+    "disconnect",
+    "send_sample"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files"
+  ],
+  "riskTier": "medium",
+  "timeoutSeconds": 30,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "c3df5b3d0f229be9b386f518f55619fffa6ddfb8365187bfe6649ccb9480244f",
+      "scripts/channel_discord.py": "0369d41ed1e025f2cbf1d2369b8a8c900492c78b414a4851dad0b38cb7770e40"
+    },
+    "signature": null
+  },
+  "settings": {
+    "version": 1,
+    "kind": "channel",
+    "key": "discord",
+    "display_name": "Discord",
+    "description": "Configure Discord integration for Fae",
+    "fields": [
+      {
+        "id": "bot_token",
+        "type": "secret",
+        "label": "Bot Token",
+        "required": true,
+        "prompt": "Please paste your Discord bot token.",
+        "placeholder": "Bot token",
+        "sensitive": true,
+        "store": "secret_store",
+        "validation": {
+          "min_length": 20,
+          "must_be_non_empty_trimmed": true
+        }
+      },
+      {
+        "id": "guild_id",
+        "type": "text",
+        "label": "Guild ID",
+        "required": true,
+        "prompt": "What is your Discord server (guild) ID?",
+        "placeholder": "123456789012345678",
+        "sensitive": false,
+        "store": "config_store",
+        "validation": {
+          "min_length": 8,
+          "must_be_non_empty_trimmed": true
+        }
+      },
+      {
+        "id": "allowed_channel_ids",
+        "type": "text",
+        "label": "Allowed Channel IDs",
+        "required": false,
+        "prompt": "Optionally provide channel IDs allowed to talk to Fae (comma-separated).",
+        "placeholder": "123..., 456...",
+        "sensitive": false,
+        "store": "config_store"
+      }
+    ],
+    "actions": {
+      "status": "status",
+      "configure": "configure",
+      "test": "test_connection",
+      "disconnect": "disconnect",
+      "send_sample": "send_sample"
+    }
+  }
+}

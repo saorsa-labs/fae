@@ -20,67 +20,109 @@ struct SettingsView: View {
     /// Hold Option while opening Settings to reveal the Developer tab.
     @State private var showDeveloper: Bool = false
 
+    @AppStorage("fae.feature.world_class_settings")
+    private var worldClassSettingsEnabled: Bool = true
+
     var body: some View {
         TabView {
-            SettingsGeneralTab()
-                .environmentObject(auxiliaryWindows)
+            if worldClassSettingsEnabled {
+                SettingsOverviewTab(commandSender: commandSender)
+                    .environmentObject(auxiliaryWindows)
+                    .tabItem {
+                        Label("Overview", systemImage: "rectangle.grid.2x2")
+                    }
+
+                SettingsSkillsChannelsWorkspace(commandSender: commandSender)
+                    .environmentObject(auxiliaryWindows)
+                    .tabItem {
+                        Label("Skills & Channels", systemImage: "bubble.left.and.bubble.right")
+                    }
+
+                SettingsPrivacySecurityTab(
+                    commandSender: commandSender,
+                    personalityEditor: personalityEditor,
+                    onToggleRescue: onToggleRescue
+                )
                 .tabItem {
-                    Label("General", systemImage: "gear")
+                    Label("Privacy & Security", systemImage: "lock.shield")
                 }
 
-            SettingsModelsTab(commandSender: commandSender)
-                .tabItem {
-                    Label("Models", systemImage: "cpu")
-                }
+                SettingsMemoryTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Memory", systemImage: "brain")
+                    }
 
-            SettingsSpeakerTab(commandSender: commandSender)
-                .tabItem {
-                    Label("Voice Identity", systemImage: "person.wave.2")
-                }
-
-            SettingsToolsTab(commandSender: commandSender)
-                .tabItem {
-                    Label("Tools", systemImage: "wrench.and.screwdriver")
-                }
-
-            SettingsPersonalityTab(
-                personalityEditor: personalityEditor,
-                onToggleRescue: onToggleRescue
-            )
-            .tabItem {
-                Label("Personality", systemImage: "heart")
-            }
-
-            SettingsSchedulesTab(commandSender: commandSender)
-                .tabItem {
-                    Label("Schedules", systemImage: "calendar.badge.clock")
-                }
-
-            SettingsChannelsTab(commandSender: commandSender)
-                .environmentObject(auxiliaryWindows)
-                .tabItem {
-                    Label("Channels", systemImage: "bubble.left.and.bubble.right")
-                }
-
-            SettingsSkillsTab(commandSender: commandSender)
-                .tabItem {
-                    Label("Skills", systemImage: "sparkles")
-                }
-
-            SettingsAboutTab(commandSender: commandSender)
+                SettingsDiagnosticsTab(
+                    commandSender: commandSender,
+                    showDeveloper: showDeveloper
+                )
+                .environmentObject(orbState)
                 .environmentObject(handoff)
                 .environmentObject(onboarding)
                 .tabItem {
-                    Label("About", systemImage: "info.circle")
+                    Label("Diagnostics", systemImage: "stethoscope")
+                }
+            } else {
+                SettingsGeneralTab()
+                    .environmentObject(auxiliaryWindows)
+                    .tabItem {
+                        Label("General", systemImage: "gear")
+                    }
+
+                SettingsModelsTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Models", systemImage: "cpu")
+                    }
+
+                SettingsSpeakerTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Voice Identity", systemImage: "person.wave.2")
+                    }
+
+                SettingsToolsTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Tools", systemImage: "wrench.and.screwdriver")
+                    }
+
+                SettingsPersonalityTab(
+                    personalityEditor: personalityEditor,
+                    onToggleRescue: onToggleRescue
+                )
+                .tabItem {
+                    Label("Personality", systemImage: "heart")
                 }
 
-            if showDeveloper {
-                SettingsDeveloperTab()
-                    .environmentObject(orbState)
-                    .environmentObject(handoff)
+                SettingsSchedulesTab(commandSender: commandSender)
                     .tabItem {
-                        Label("Developer", systemImage: "hammer")
+                        Label("Schedules", systemImage: "calendar.badge.clock")
                     }
+
+                SettingsChannelsTab(commandSender: commandSender)
+                    .environmentObject(auxiliaryWindows)
+                    .tabItem {
+                        Label("Channels", systemImage: "bubble.left.and.bubble.right")
+                    }
+
+                SettingsSkillsTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Skills", systemImage: "sparkles")
+                    }
+
+                SettingsAboutTab(commandSender: commandSender)
+                    .environmentObject(handoff)
+                    .environmentObject(onboarding)
+                    .tabItem {
+                        Label("About", systemImage: "info.circle")
+                    }
+
+                if showDeveloper {
+                    SettingsDeveloperTab()
+                        .environmentObject(orbState)
+                        .environmentObject(handoff)
+                        .tabItem {
+                            Label("Developer", systemImage: "hammer")
+                        }
+                }
             }
         }
         .frame(minWidth: 500, minHeight: 420)

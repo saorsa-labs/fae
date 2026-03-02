@@ -47,15 +47,21 @@ This handles natural voice variation — morning voice, tired voice, different m
 
 When `requireOwnerForTools` is enabled (default: true), Fae strips tool schemas from the LLM system prompt for unrecognized voices. This means:
 
-- **Owner voice** → full tool access (bash, file write, web search, etc.)
-- **Unknown voice** → conversational responses only, no tool execution
-- **Text input** → always trusted (typed by someone physically at the device)
+- **No owner enrolled yet + owner gating enabled** → tool execution is withheld until owner enrollment completes.
+- **Owner voice** → full tool access (subject to tool mode and approval policy).
+- **Known non-owner voice** → tool schemas are withheld.
+- **Unknown/unmatched voice** → follows current policy profile; tool access depends on tool mode + gating settings.
+- **Text input** → always trusted (typed by someone physically at the device).
 
-This prevents a scenario where someone else's voice (or audio from a speaker/TV) triggers Fae to execute commands.
+This reduces the chance that someone else's voice (or audio from a speaker/TV) can trigger privileged tool execution.
 
 ## Configuration
 
-Settings are in `~/Library/Application Support/fae/config.toml` under the `[speaker]` section:
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+Preferred path: ask Fae in chat to change voice identity behavior (for example, enable/disable speaker gating or adjust thresholds). She should apply changes via supported tool/setting contracts and confirm in plain English.
+
+Advanced/manual path: settings are in `~/Library/Application Support/fae/config.toml` under the `[speaker]` section:
 
 ```toml
 [speaker]
@@ -113,14 +119,15 @@ This downloads the ONNX model, converts to Core ML, and compiles to `.mlmodelc` 
 ### Fae doesn't recognize me
 
 - Check logs for "speaker not recognized" — the similarity score may be below threshold
-- Lower `threshold` in config (e.g., 0.60) for more lenient matching
+- Ask Fae to lower the speaker threshold (or edit config manually, e.g. `threshold = 0.60`) for more lenient matching
 - Try re-enrolling: delete `speakers.json` and restart — the next voice becomes owner
 - Ensure you're speaking clearly with consistent microphone positioning
 
 ### Tools don't work for me
 
 - Check if `requireOwnerForTools` is `true` and your voice isn't matching as owner
-- Verify owner enrollment: check `speakers.json` for an "owner" profile
+- Verify owner enrollment: check `speakers.json` for an "owner" profile (if missing, tools can be withheld until enrollment)
+- If approval is pending, answer with a clear "yes" or "no" (or press the Yes/No button)
 - Text injection always bypasses voice gating — use the text input as a fallback
 
 ### Model not loading

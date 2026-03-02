@@ -2,6 +2,19 @@
 
 Fae can modify her own behavior, communication style, and capabilities at your request. Changes persist across conversations.
 
+## Core Preference: Skills Over Hardcoded Code Paths
+
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+Why:
+
+- keeps behavior extensible without invasive app rewrites,
+- enables conversational configuration ("ask Fae, don’t edit raw config"),
+- lets users request changes to more of the system directly,
+- keeps settings/UI generation aligned with manifest contracts.
+
+In practice, this means channel onboarding, configuration prompts, and many behavior changes should be modeled as skill/config contracts first.
+
 ## Personality Tuning (SelfConfigTool)
 
 The `self_config` tool lets Fae save personality preferences that apply to every future interaction.
@@ -155,6 +168,19 @@ from rich import print
 result = requests.get("https://api.example.com/data")
 print(result.json())
 ```
+
+## Conversational Settings & Channel Changes
+
+Users should be able to ask for changes directly, for example:
+
+- "Set up Discord"
+- "Reconfigure WhatsApp"
+- "Turn channels off"
+- "Change memory recall to 8"
+
+Fae should prefer conversational setup and guided forms (when available) instead of asking users to edit raw config files manually.
+
+For channels specifically, see: [Channels Setup Guide](./channels-setup.md).
 
 ## Integration with Memory
 

@@ -106,4 +106,74 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(reloaded.llm.voiceModelPreset, "qwen3_8b")
         XCTAssertTrue(reloaded.onboarded)
     }
+
+    @MainActor
+    func testFaeCorePersistsMemoryPatchKeys() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "memory.enabled", "value": false]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "memory.max_recall_results", "value": 12]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertFalse(reloaded.memory.enabled)
+        XCTAssertEqual(reloaded.memory.maxRecallResults, 12)
+    }
+
+    @MainActor
+    func testFaeCoreStoresChannelSecretsInKeychainWithConfigCompatibility() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let originalConfig = try? Data(contentsOf: url)
+
+        let secretKey = "channels.discord.bot_token"
+        let originalSecret = CredentialManager.retrieve(key: secretKey)
+
+        defer {
+            if let originalConfig {
+                try? originalConfig.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+
+            if let originalSecret {
+                try? CredentialManager.store(key: secretKey, value: originalSecret)
+            } else {
+                CredentialManager.delete(key: secretKey)
+            }
+        }
+
+        let core = FaeCore()
+        let newSecret = "discord-test-token-123"
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": secretKey, "value": newSecret]
+        )
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertNil(reloaded.channels.discord.botToken)
+        XCTAssertEqual(CredentialManager.retrieve(key: secretKey), newSecret)
+    }
 }

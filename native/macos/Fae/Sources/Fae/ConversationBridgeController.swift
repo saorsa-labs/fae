@@ -231,6 +231,13 @@ final class ConversationBridgeController: ObservableObject {
             let message = "⚙ Working: \(name)…"
             subtitleState?.showPersistentToolMessage(message)
             conversationController?.appendMessage(role: .tool, content: message)
+
+            // Subtle UI signal for deferred/background tool work: only mark as
+            // background when no active assistant generation is in progress.
+            if conversationController?.isGenerating == false {
+                conversationController?.beginBackgroundLookup()
+            }
+
         case "result":
             let success = userInfo["success"] as? Bool ?? false
             if success {
@@ -241,6 +248,11 @@ final class ConversationBridgeController: ObservableObject {
             let message = success ? "✓ Done: \(name)" : "✗ Failed: \(name)"
             subtitleState?.showToolMessage(message)
             conversationController?.appendMessage(role: .tool, content: message)
+
+            if conversationController?.isBackgroundLookupActive == true {
+                conversationController?.endBackgroundLookup()
+            }
+
         default:
             break
         }
@@ -429,8 +441,10 @@ final class ConversationBridgeController: ObservableObject {
             break
         case "runtime.stopped":
             subtitleState?.hideProgress()
+            conversationController?.resetBackgroundLookups()
         case "runtime.error":
             subtitleState?.hideProgress()
+            conversationController?.resetBackgroundLookups()
             let payload = userInfo["payload"] as? [String: Any] ?? [:]
             let message = payload["error"] as? String ?? "unknown error"
             appendStatusMessage("Pipeline error: \(message)")

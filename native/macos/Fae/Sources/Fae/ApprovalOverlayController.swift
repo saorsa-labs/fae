@@ -35,16 +35,28 @@ final class ApprovalOverlayController: ObservableObject {
         let description: String
     }
 
-    /// A pending text-input request from the LLM.
+    struct InputField: Identifiable {
+        let id: String
+        let label: String
+        let placeholder: String
+        let isSecure: Bool
+        let required: Bool
+    }
+
+    /// A pending input request from the LLM.
     struct InputRequest: Identifiable {
         /// Unique request identifier (UUID string).
         let id: String
-        /// Prompt text shown above the input field.
+        /// Card title shown in the header.
+        let title: String
+        /// Prompt text shown above the field(s).
         let prompt: String
-        /// Placeholder text for the input field.
-        let placeholder: String
-        /// Whether the field should obscure input (password mode).
-        let isSecure: Bool
+        /// One or more input fields.
+        let fields: [InputField]
+
+        var isForm: Bool {
+            fields.count > 1 || (fields.first?.id != "text")
+        }
     }
 
     private var observations: [NSObjectProtocol] = []
@@ -151,6 +163,17 @@ final class ApprovalOverlayController: ObservableObject {
         activeInput = nil
     }
 
+    /// Submit form input values from the user.
+    func submitForm(values: [String: String]) {
+        guard let request = activeInput else { return }
+        NotificationCenter.default.post(
+            name: .faeInputResponse,
+            object: nil,
+            userInfo: ["request_id": request.id, "form_values": values]
+        )
+        activeInput = nil
+    }
+
     /// Cancel/dismiss the input request (Escape key or Cancel button).
     func cancelInput() {
         guard let request = activeInput else { return }
@@ -166,15 +189,45 @@ final class ApprovalOverlayController: ObservableObject {
 
     private func handleInputRequired(_ info: [AnyHashable: Any]) {
         let requestId = info["request_id"] as? String ?? UUID().uuidString
+        let mode = (info["mode"] as? String ?? "text").lowercased()
+        let title = info["title"] as? String ?? "Fae needs your input"
         let prompt = info["prompt"] as? String ?? "Input required"
-        let placeholder = info["placeholder"] as? String ?? ""
-        let isSecure = info["is_secure"] as? Bool ?? false
+
+        let fields: [InputField]
+        if mode == "form", let rawFields = info["fields"] as? [[String: Any]], !rawFields.isEmpty {
+            fields = rawFields.compactMap { field in
+                guard let id = field["id"] as? String, !id.isEmpty else { return nil }
+                let label = field["label"] as? String ?? id
+                let placeholder = field["placeholder"] as? String ?? ""
+                let isSecure = field["is_secure"] as? Bool ?? false
+                let required = field["required"] as? Bool ?? true
+                return InputField(
+                    id: id,
+                    label: label,
+                    placeholder: placeholder,
+                    isSecure: isSecure,
+                    required: required
+                )
+            }
+        } else {
+            let placeholder = info["placeholder"] as? String ?? ""
+            let isSecure = info["is_secure"] as? Bool ?? false
+            fields = [
+                InputField(
+                    id: "text",
+                    label: "Value",
+                    placeholder: placeholder,
+                    isSecure: isSecure,
+                    required: true
+                )
+            ]
+        }
 
         activeInput = InputRequest(
             id: requestId,
+            title: title,
             prompt: prompt,
-            placeholder: placeholder,
-            isSecure: isSecure
+            fields: fields
         )
     }
 
@@ -230,6 +283,10 @@ final class ApprovalOverlayController: ObservableObject {
             return "Edit: \(path)"
         case "self_config":
             return "Update Fae settings"
+        case "channel_setup":
+            let action = obj?["action"] as? String ?? "status"
+            let channel = obj?["channel"] as? String ?? "channel"
+            return "Channel setup (\(action)): \(truncate(channel, to: 30))"
 
         // MARK: Web tools
 

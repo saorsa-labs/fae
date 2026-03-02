@@ -54,7 +54,9 @@ let package = Package(
                 "NebulaOrb.metal",
             ],
             resources: [
-                .process("Resources"),
+                // Copy to preserve directory hierarchy (required for multiple
+                // skill bundles each containing SKILL.md / MANIFEST.json).
+                .copy("Resources"),
             ],
             linkerSettings: [
                 // System frameworks for native Swift pipeline.

@@ -343,7 +343,7 @@ struct SettingsSkillsTab: View {
         var all: [SkillMetadata] = []
 
         // Built-in skills from app bundle.
-        if let builtinDir = Bundle.main.url(forResource: "Skills", withExtension: nil) {
+        if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
             all.append(contentsOf: scanSkillDirectory(builtinDir, tier: .builtin, fm: fm))
         }
 

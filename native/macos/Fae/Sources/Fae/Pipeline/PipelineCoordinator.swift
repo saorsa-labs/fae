@@ -175,6 +175,19 @@ actor PipelineCoordinator {
     /// without blocking the LLM token stream.
     private var pendingTTSTask: Task<Void, Never>?
 
+    // MARK: - Deferred Tool Jobs
+
+    private struct DeferredToolJob: Sendable {
+        let id: UUID
+        let userText: String
+        let toolCalls: [ToolCall]
+        let assistantToolMessage: String
+        let forceSuppressThinking: Bool
+    }
+
+    /// In-flight deferred tool tasks keyed by job ID.
+    private var deferredToolTasks: [UUID: Task<Void, Never>] = [:]
+
     // MARK: - Capability Tickets
 
     /// Task-scoped capability grant consumed by the broker.
@@ -263,6 +276,7 @@ actor PipelineCoordinator {
     func stop() async {
         pipelineTask?.cancel()
         pipelineTask = nil
+        cancelDeferredToolJobs()
         await capture.stopCapture()
         await playback.stop()
         eventBus.send(.pipelineStateChanged(.stopped))
@@ -279,6 +293,13 @@ actor PipelineCoordinator {
         pendingTTSTask = nil
         Task { await playback.stop() }
         NSLog("PipelineCoordinator: cancelled by user")
+    }
+
+    private func cancelDeferredToolJobs() {
+        for (_, task) in deferredToolTasks {
+            task.cancel()
+        }
+        deferredToolTasks.removeAll()
     }
 
     // MARK: - Input Request
@@ -478,8 +499,10 @@ actor PipelineCoordinator {
         engagedUntil = nil
         lastAssistantResponseText = ""
         activeCapabilityTicket = nil
+        awaitingApproval = false
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
+        cancelDeferredToolJobs()
         await conversationState.clear()
         NSLog("PipelineCoordinator: conversation reset via %@ trigger: %@", source, trigger)
         debugLog(debugConsole, .pipeline, "Conversation reset (\(source)): \(trigger)")
@@ -703,6 +726,27 @@ actor PipelineCoordinator {
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
 
+            // Approval gate — while a tool approval is pending, only yes/no responses
+            // are accepted. This prevents unrelated chatter/noise from being routed to the LLM.
+            if awaitingApproval {
+                if let decision = VoiceCommandParser.parseApprovalResponse(text),
+                   let manager = approvalManager,
+                   await manager.resolveMostRecent(approved: decision, source: "voice")
+                {
+                    awaitingApproval = false
+                    let ack = decision
+                        ? PersonalityManager.nextApprovalGranted()
+                        : PersonalityManager.nextApprovalDenied()
+                    await speakDirect(ack)
+                } else {
+                    let words = text.split(whereSeparator: { $0.isWhitespace }).count
+                    if words > 2 {
+                        await speakDirect(PersonalityManager.nextApprovalAmbiguous())
+                    }
+                }
+                return
+            }
+
             // Echo detection — if the transcribed text is a fragment of the last
             // assistant response, the mic picked up speaker output. Drop it.
             if !lastAssistantResponseText.isEmpty {
@@ -740,12 +784,20 @@ actor PipelineCoordinator {
             }
 
             // Conversation gate — direct address check.
+            let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+            let addressedToFae = isAddressedToFae(text)
             if config.conversation.requireDirectAddress {
-                let nameFound = TextProcessing.findNameMention(in: text) != nil
-                let inFollowup = engagedUntil.map { Date() < $0 } ?? false
-                if !nameFound && !inFollowup && !awaitingApproval {
+                if !addressedToFae && !inFollowup && !awaitingApproval {
                     return // Drop — not addressed to Fae.
                 }
+            }
+
+            // Noise gate for idle periods: ignore very short, out-of-context utterances
+            // after silence (clicks, accidental mic hits, tiny fragments).
+            let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
+            if !awaitingApproval && !inFollowup && !addressedToFae && wordCount <= 2 {
+                debugLog(debugConsole, .pipeline, "Dropped short idle utterance: \"\(text)\"")
+                return
             }
 
             // Process through LLM.
@@ -788,7 +840,8 @@ actor PipelineCoordinator {
     private func generateWithTools(
         userText: String,
         isToolFollowUp: Bool,
-        turnCount: Int
+        turnCount: Int,
+        forceSuppressThinking: Bool = false
     ) async {
         let maxToolTurns = 5
 
@@ -830,18 +883,21 @@ actor PipelineCoordinator {
             }
 
             // Build system prompt with tool schemas.
-            // Owner gating: only *known* non-owner voices are blocked from tools.
-            // Unknown speakers (encoder not loaded, no match) still get tools — this is
-            // a single-user device where physical access implies trust. Only positively
-            // matched non-owner profiles are gated.
+            let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+            let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
+                && config.speaker.enabled
+                && !ownerProfileExists
             let includeTools = toolMode != "off"
                 && !(config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner)
+                && !ownerEnrollmentRequired
 
             // Diagnostic logging — critical for debugging tool use failures.
             if !includeTools {
                 let reason: String
                 if toolMode == "off" {
                     reason = "toolMode=off"
+                } else if ownerEnrollmentRequired {
+                    reason = "owner_enrollment_required"
                 } else if config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner {
                     reason = "requireOwnerForTools=true and speaker matched as non-owner (\(currentSpeakerLabel ?? "unknown"))"
                 } else {
@@ -854,7 +910,7 @@ actor PipelineCoordinator {
                 if currentSpeakerIsOwner {
                     ownerDetail = "ownerVerified=true"
                 } else if currentSpeakerLabel == nil {
-                    ownerDetail = "speakerUnknown (tools allowed — physical access trusted)"
+                    ownerDetail = "speakerUnknown"
                 } else {
                     ownerDetail = "speaker=\(currentSpeakerLabel ?? "?")"
                 }
@@ -919,12 +975,13 @@ actor PipelineCoordinator {
         await conversationState.setReservedTokens(dynamicReservedTokens)
         let history = await conversationState.history
 
+        let suppressThinking = forceSuppressThinking || !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
         let options = GenerationOptions(
             temperature: config.llm.temperature,
             topP: config.llm.topP,
             maxTokens: config.llm.maxTokens,
             repetitionPenalty: config.llm.repeatPenalty,
-            suppressThinking: !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
+            suppressThinking: suppressThinking
         )
 
         // Stream tokens.
@@ -938,15 +995,38 @@ actor PipelineCoordinator {
         // but </think> as regular literal text. Suppress all TTS until </think> is seen.
         // When thinking is disabled OR this is a tool follow-up (no think block expected),
         // mark think as already seen so tokens route directly to TTS.
-        let suppressThink = !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
-        var thinkEndSeen = suppressThink || isToolFollowUp
+        var thinkEndSeen = options.suppressThinking || isToolFollowUp
         var thinkAccum = ""
         var firstTtsSent = false
         let llmStartedAt = Date()
         var llmTokenCount = 0
+        var spokenTextThisTurn = ""
+
+        if turnCount == 0 {
+            // Keep echo matching aligned with what we actually speak this turn.
+            lastAssistantResponseText = ""
+        }
+
+        func recordSpokenText(_ text: String) {
+            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return }
+            if spokenTextThisTurn.isEmpty {
+                spokenTextThisTurn = cleaned
+            } else {
+                spokenTextThisTurn += " " + cleaned
+            }
+            if lastAssistantResponseText.isEmpty {
+                lastAssistantResponseText = cleaned
+            } else {
+                lastAssistantResponseText += " " + cleaned
+            }
+        }
 
         let systemPromptTokens = Self.estimateTokenCount(for: systemPrompt)
-        debugLog(debugConsole, .pipeline, "LLM generating (maxTokens=\(options.maxTokens), history=\(history.count) msgs, turn=\(turnCount), sysPrompt≈\(systemPromptTokens) tok, ctx=\(config.llm.contextSizeTokens))")
+        if forceSuppressThinking {
+            debugLog(debugConsole, .pipeline, "Retrying turn with thinking suppression forced")
+        }
+        debugLog(debugConsole, .pipeline, "LLM generating (maxTokens=\(options.maxTokens), history=\(history.count) msgs, turn=\(turnCount), sysPrompt≈\(systemPromptTokens) tok, ctx=\(config.llm.contextSizeTokens), suppressThinking=\(options.suppressThinking))")
         if options.maxTokens < 1024 {
             debugLog(debugConsole, .pipeline, "⚠️ maxTokens=\(options.maxTokens) is very low — tool call JSON needs ~200-500 tokens")
         }
@@ -985,6 +1065,7 @@ actor PipelineCoordinator {
                         let beforeTag = String(sentenceBuffer[..<tagRange.lowerBound])
                         let cleaned = TextProcessing.stripNonSpeechChars(beforeTag)
                         if !cleaned.isEmpty {
+                            recordSpokenText(cleaned)
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
                             enqueueTTS(cleaned, isFinal: false)
                         }
@@ -1048,6 +1129,7 @@ actor PipelineCoordinator {
                         }
                         let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                         if !cleaned.isEmpty {
+                            recordSpokenText(cleaned)
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
                             enqueueTTS(cleaned, isFinal: false, voiceInstruct: voice)
                         }
@@ -1065,7 +1147,7 @@ actor PipelineCoordinator {
                         let isMetaCommentary = !firstTtsSent && TextProcessing.isMetaCommentary(cleaned)
                         if !cleaned.isEmpty && !isMetaCommentary {
                             firstTtsSent = true
-                            lastAssistantResponseText += " " + cleaned
+                            recordSpokenText(cleaned)
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
                             enqueueTTS(cleaned, isFinal: false)
                         } else if isMetaCommentary {
@@ -1078,7 +1160,7 @@ actor PipelineCoordinator {
                             let cleaned = TextProcessing.stripNonSpeechChars(text)
                             if !cleaned.isEmpty {
                                 firstTtsSent = true
-                                lastAssistantResponseText += " " + cleaned
+                                recordSpokenText(cleaned)
                                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                                 enqueueTTS(cleaned, isFinal: false)
                             }
@@ -1137,6 +1219,7 @@ actor PipelineCoordinator {
                     }
                     let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                     if !cleaned.isEmpty {
+                        recordSpokenText(cleaned)
                         eventBus.send(.assistantText(text: cleaned, isFinal: true))
                         enqueueTTS(cleaned, isFinal: true, voiceInstruct: voice)
                         spokeSomething = true
@@ -1151,6 +1234,7 @@ actor PipelineCoordinator {
                 sentenceBuffer += remaining
                 let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
                 if !finalText.isEmpty {
+                    recordSpokenText(finalText)
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
                     enqueueTTS(finalText, isFinal: true)
                 }
@@ -1161,9 +1245,50 @@ actor PipelineCoordinator {
                 }
             }
 
-            let spokenText = Self.stripThinkContent(Self.stripVoiceTagMarkup(Self.stripToolCallMarkup(fullResponse)))
+            let spokenText = spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines)
+            let visibleResponse = fullResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+            if spokenText.isEmpty && visibleResponse.isEmpty && !options.suppressThinking && !forceSuppressThinking {
+                debugLog(debugConsole, .pipeline, "No visible response after thinking block — retrying with thinking disabled")
+                await generateWithTools(
+                    userText: userText,
+                    isToolFollowUp: true,
+                    turnCount: turnCount,
+                    forceSuppressThinking: true
+                )
+                return
+            }
+
+            if turnCount == 0,
+               toolCalls.isEmpty,
+               Self.isToolBackedLookupRequest(userText)
+            {
+                let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+                let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
+                    && config.speaker.enabled
+                    && !ownerProfileExists
+
+                let fallback: String
+                if effectiveToolMode() == "off" {
+                    fallback = "I can’t check that right now because tools are off. If you enable tools, I can fetch the real result."
+                } else if ownerEnrollmentRequired {
+                    fallback = "I need to enroll your primary voice before I can run tools for that. Please complete voice enrollment, then ask me again."
+                } else {
+                    fallback = "I need to check that with a tool before I answer, and I couldn’t run one this turn. Please ask me to try again."
+                }
+
+                eventBus.send(.assistantText(text: fallback, isFinal: true))
+                enqueueTTS(fallback, isFinal: true)
+                await awaitPendingTTS()
+                assistantGenerating = false
+                eventBus.send(.assistantGenerating(false))
+                engagedUntil = Date().addingTimeInterval(
+                    Double(config.conversation.directAddressFollowupS)
+                )
+                activeCapabilityTicket = nil
+                return
+            }
+
             if !spokenText.isEmpty {
-                lastAssistantResponseText = spokenText
                 await conversationState.addAssistantMessage(spokenText)
 
                 // Memory capture.
@@ -1179,6 +1304,8 @@ actor PipelineCoordinator {
                 if let feeling = SentimentClassifier.classify(spokenText) {
                     eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
                 }
+            } else if !visibleResponse.isEmpty {
+                debugLog(debugConsole, .llmThink, "[suppressed non-spoken output] \(String(fullResponse.prefix(160)))")
             }
 
             assistantGenerating = false
@@ -1193,6 +1320,31 @@ actor PipelineCoordinator {
         }
 
         // Tool calls found — execute them.
+        if turnCount == 0,
+           !isToolFollowUp,
+           Self.canRunDeferredToolCalls(toolCalls, registry: registry)
+        {
+            let assistantToolMessage = Self.stripThinkContent(fullResponse)
+            await startDeferredToolJob(
+                userText: userText,
+                toolCalls: Array(toolCalls.prefix(5)),
+                assistantToolMessage: assistantToolMessage,
+                forceSuppressThinking: forceSuppressThinking
+            )
+
+            let ack = "I’ll check that in the background and report back as soon as it’s ready."
+            eventBus.send(.assistantText(text: ack, isFinal: true))
+            enqueueTTS(ack, isFinal: true)
+
+            assistantGenerating = false
+            eventBus.send(.assistantGenerating(false))
+            engagedUntil = Date().addingTimeInterval(
+                Double(config.conversation.directAddressFollowupS)
+            )
+            activeCapabilityTicket = nil
+            return
+        }
+
         guard turnCount < maxToolTurns else {
             let msg = "I've used several tools but couldn't complete that. Could you try rephrasing?"
             eventBus.send(.assistantText(text: msg, isFinal: true))
@@ -1206,6 +1358,10 @@ actor PipelineCoordinator {
         // Add the assistant's tool-calling message to history (strip think content).
         await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse))
 
+        var toolSuccessCount = 0
+        var toolFailureCount = 0
+        var firstToolError: String?
+
         for call in toolCalls.prefix(5) {
             let callId = UUID().uuidString
             let inputJSON = Self.serializeArguments(call.arguments)
@@ -1216,6 +1372,14 @@ actor PipelineCoordinator {
 
             let result = await executeTool(call)
             debugLog(debugConsole, .toolResult, "\(call.name) → \(result.isError ? "error" : "ok") \(String(result.output.prefix(100)))")
+            if result.isError {
+                toolFailureCount += 1
+                if firstToolError == nil {
+                    firstToolError = result.output
+                }
+            } else {
+                toolSuccessCount += 1
+            }
 
             eventBus.send(.toolResult(
                 id: callId,
@@ -1242,11 +1406,23 @@ actor PipelineCoordinator {
             )
         }
 
+        if toolFailureCount > 0 && toolSuccessCount == 0 {
+            let reason = firstToolError ?? "the tool call was denied or failed"
+            let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
+            eventBus.send(.assistantText(text: msg, isFinal: true))
+            await speakText(msg, isFinal: true)
+            assistantGenerating = false
+            eventBus.send(.assistantGenerating(false))
+            activeCapabilityTicket = nil
+            return
+        }
+
         // Recurse: generate again with tool results in context.
         await generateWithTools(
             userText: userText,
             isToolFollowUp: true,
-            turnCount: turnCount + 1
+            turnCount: turnCount + 1,
+            forceSuppressThinking: forceSuppressThinking
         )
     }
 
@@ -1536,6 +1712,81 @@ actor PipelineCoordinator {
         return String(text[endRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Tool names eligible for non-blocking background execution.
+    private static let deferredToolAllowlist: Set<String> = [
+        "calendar", "reminders", "contacts", "mail", "notes",
+        "web_search", "fetch_url", "read", "scheduler_list",
+    ]
+
+    /// Returns true when every tool call is read-only and safe to defer.
+    private static func canRunDeferredToolCalls(
+        _ calls: [ToolCall],
+        registry: ToolRegistry
+    ) -> Bool {
+        guard !calls.isEmpty else { return false }
+
+        for call in calls {
+            guard deferredToolAllowlist.contains(call.name),
+                  let tool = registry.tool(named: call.name),
+                  !tool.requiresApproval,
+                  tool.riskLevel != .high,
+                  isReadOnlyDeferredAction(call)
+            else {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    /// Action-level guard for tools that can be both read and write.
+    private static func isReadOnlyDeferredAction(_ call: ToolCall) -> Bool {
+        switch call.name {
+        case "calendar":
+            let action = (call.arguments["action"] as? String) ?? ""
+            return ["list_today", "list_week", "list_date", "search"].contains(action)
+
+        case "reminders":
+            let action = (call.arguments["action"] as? String) ?? ""
+            return ["list_incomplete", "search"].contains(action)
+
+        case "contacts":
+            let action = (call.arguments["action"] as? String) ?? ""
+            return ["search", "get_phone", "get_email"].contains(action)
+
+        case "mail":
+            let action = (call.arguments["action"] as? String) ?? ""
+            return ["check_inbox", "read_recent"].contains(action)
+
+        case "notes":
+            let action = (call.arguments["action"] as? String) ?? ""
+            return ["search", "list_recent"].contains(action)
+
+        case "scheduler_list", "web_search", "fetch_url", "read":
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    /// Heuristic: requests that should be grounded in live tool data (calendar/notes/mail/etc.)
+    /// rather than answered from model prior.
+    private static func isToolBackedLookupRequest(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let toolNouns = [
+            "calendar", "diary", "schedule", "event", "events",
+            "note", "notes", "reminder", "reminders",
+            "mail", "email", "inbox", "contact", "contacts",
+        ]
+        let lookupVerbs = [
+            "check", "show", "read", "find", "look up", "list", "what's", "what is",
+        ]
+        let hasNoun = toolNouns.contains { lower.contains($0) }
+        let hasVerb = lookupVerbs.contains { lower.contains($0) }
+        return hasNoun && hasVerb
+    }
+
     private static func estimateTokenCount(for text: String) -> Int {
         Int(Double(text.count) / 3.5)
     }
@@ -1560,6 +1811,100 @@ actor PipelineCoordinator {
     }
 
     // MARK: - Tool Execution
+
+    private func startDeferredToolJob(
+        userText: String,
+        toolCalls: [ToolCall],
+        assistantToolMessage: String,
+        forceSuppressThinking: Bool
+    ) async {
+        let job = DeferredToolJob(
+            id: UUID(),
+            userText: userText,
+            toolCalls: toolCalls,
+            assistantToolMessage: assistantToolMessage,
+            forceSuppressThinking: forceSuppressThinking
+        )
+
+        await conversationState.addAssistantMessage(job.assistantToolMessage)
+        debugLog(debugConsole, .pipeline, "Deferred tool job queued: \(job.id.uuidString.prefix(8)) (\(job.toolCalls.count) call(s))")
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runDeferredToolJob(job)
+        }
+        deferredToolTasks[job.id] = task
+    }
+
+    private func runDeferredToolJob(_ job: DeferredToolJob) async {
+        defer { deferredToolTasks[job.id] = nil }
+        guard !Task.isCancelled else { return }
+
+        debugLog(debugConsole, .pipeline, "Deferred tool job started: \(job.id.uuidString.prefix(8))")
+
+        var toolSuccessCount = 0
+        var toolFailureCount = 0
+        var firstToolError: String?
+
+        for call in job.toolCalls {
+            guard !Task.isCancelled else { return }
+
+            let callId = UUID().uuidString
+            let inputJSON = Self.serializeArguments(call.arguments)
+            eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))
+
+            let result = await executeTool(call)
+            if result.isError {
+                toolFailureCount += 1
+                if firstToolError == nil {
+                    firstToolError = result.output
+                }
+            } else {
+                toolSuccessCount += 1
+            }
+
+            eventBus.send(.toolResult(
+                id: callId,
+                name: call.name,
+                success: !result.isError,
+                output: String(result.output.prefix(200))
+            ))
+
+            await conversationState.addToolResult(
+                id: callId,
+                name: call.name,
+                content: result.output
+            )
+        }
+
+        guard !Task.isCancelled else { return }
+
+        if toolFailureCount > 0 && toolSuccessCount == 0 {
+            let reason = firstToolError ?? "the tool call was denied or failed"
+            let msg = "I couldn't complete that background check because the required tool didn't run: \(reason)"
+            eventBus.send(.assistantText(text: msg, isFinal: true))
+            await speakText(msg, isFinal: true)
+            return
+        }
+
+        if currentSystemPrompt == nil {
+            let msg = "I finished the background check, but I need you to ask once more so I can present the result properly."
+            eventBus.send(.assistantText(text: msg, isFinal: true))
+            await speakText(msg, isFinal: true)
+            return
+        }
+
+        assistantGenerating = true
+        eventBus.send(.assistantGenerating(true))
+        await playback.playThinkingTone()
+
+        await generateWithTools(
+            userText: job.userText,
+            isToolFollowUp: true,
+            turnCount: 1,
+            forceSuppressThinking: job.forceSuppressThinking
+        )
+    }
 
     private static let toolTimeoutSeconds: TimeInterval = 30
 
@@ -1691,10 +2036,13 @@ actor PipelineCoordinator {
 
         case .confirm(let prompt, _):
             if let manager = approvalManager {
+                awaitingApproval = true
+                await speakDirect(prompt.message)
                 let approved = await manager.requestApproval(
                     toolName: call.name,
                     description: prompt.message
                 )
+                awaitingApproval = false
                 approvedByUser = approved
                 if !approved {
                     if let analytics = toolAnalytics {
@@ -1938,50 +2286,56 @@ actor PipelineCoordinator {
     private static func buildApprovalDescription(
         toolName: String, reason: String, arguments: [String: Any]
     ) -> String {
+        let summary: String
         switch toolName {
         case "bash":
             if let command = arguments["command"] as? String {
                 let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
                 let preview = trimmed.count > 140 ? String(trimmed.prefix(140)) + "…" : trimmed
-                return "I can run this command: \(preview). Run it now?"
+                summary = "I can run this command: \(preview)."
+            } else {
+                summary = "I can run a shell command for this step."
             }
-            return "I can run a shell command for this step. Run it now?"
 
         case "write":
             if let path = arguments["path"] as? String {
-                return "I can write to \(path). Proceed?"
+                summary = "I can write to \(path)."
+            } else {
+                summary = "I can write file content for this step."
             }
-            return "I can write file content for this step. Proceed?"
 
         case "edit":
             if let path = arguments["path"] as? String {
-                return "I can edit \(path). Proceed?"
+                summary = "I can edit \(path)."
+            } else {
+                summary = "I can edit a file for this step."
             }
-            return "I can edit a file for this step. Proceed?"
 
         case "self_config":
-            return "I can update your persistent Fae directive. Apply this change?"
+            summary = "I can update your persistent Fae directive."
 
         case "run_skill":
             let skillName = arguments["name"] as? String ?? "a skill"
-            return "I can run \(skillName) now. Continue?"
+            summary = "I can run \(skillName) now."
 
         case "manage_skill":
             let action = arguments["action"] as? String ?? "modify"
-            return "I can \(action) a skill in your local skills library. Continue?"
+            summary = "I can \(action) a skill in your local skills library."
 
         case "scheduler_create":
-            return "I can create a scheduled task that runs automatically later. Create it?"
+            summary = "I can create a scheduled task that runs automatically later."
 
         case "scheduler_update":
-            return "I can update a scheduled task. Apply the change?"
+            summary = "I can update a scheduled task."
 
         case "scheduler_delete":
-            return "I can delete this scheduled task. Delete it now?"
+            summary = "I can delete this scheduled task."
 
         default:
-            return "I can use \(toolName) for this step. Continue?"
+            summary = "I can use \(toolName) for this step."
         }
+
+        return "\(summary) Say yes or no, or press the Yes/No button."
     }
 
     // MARK: - Helpers
