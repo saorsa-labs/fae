@@ -148,6 +148,35 @@ enum TextProcessing {
         result = result.replacingOccurrences(of: "[", with: "")
         result = result.replacingOccurrences(of: "]", with: "")
 
+        // Remove parentheses (markdown link remnants, citations).
+        result = result.replacingOccurrences(of: "(", with: "")
+        result = result.replacingOccurrences(of: ")", with: "")
+
+        // Normalize punctuation that confuses TTS.
+        // Replace ellipsis character and multi-dot with single period.
+        result = result.replacingOccurrences(of: "…", with: ".")
+        result = result.replacingOccurrences(of: "...", with: ".")
+
+        // Replace em-dash and en-dash with comma (natural pause).
+        result = result.replacingOccurrences(of: "—", with: ",")
+        result = result.replacingOccurrences(of: "–", with: ",")
+
+        // Remove asterisks (emphasis remnants).
+        result = result.replacingOccurrences(of: "*", with: "")
+
+        // Collapse repeated punctuation (e.g. "!!" → "!", ",," → ",").
+        if let dupPunct = try? NSRegularExpression(pattern: "([.!?,;:])\\1+") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = dupPunct.stringByReplacingMatches(in: result, range: range, withTemplate: "$1")
+        }
+
+        // Remove quotes (TTS reads them as "quote" sometimes).
+        result = result.replacingOccurrences(of: "\"", with: "")
+        result = result.replacingOccurrences(of: "\u{201C}", with: "") // left double
+        result = result.replacingOccurrences(of: "\u{201D}", with: "") // right double
+        result = result.replacingOccurrences(of: "\u{2018}", with: "") // left single
+        result = result.replacingOccurrences(of: "\u{2019}", with: "'") // right single → apostrophe
+
         // Collapse all whitespace (spaces, tabs, newlines) into single spaces.
         if let wsRegex = try? NSRegularExpression(pattern: "\\s+") {
             let range = NSRange(result.startIndex..., in: result)

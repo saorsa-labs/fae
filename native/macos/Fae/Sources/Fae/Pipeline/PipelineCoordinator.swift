@@ -130,6 +130,10 @@ actor PipelineCoordinator {
     private var currentSpeakerDisplayName: String?
     private var currentSpeakerRole: SpeakerRole?
     private var currentSpeakerIsOwner: Bool = false
+    /// True when speaker verification ran and matched a non-owner profile.
+    /// Distinguished from "not matched at all" (unknown/degraded) — only this
+    /// flag should hard-block tools when `requireOwnerForTools` is enabled.
+    private var currentSpeakerIsKnownNonOwner: Bool = false
     private var previousSpeakerLabel: String?
     private var utterancesSinceOwnerVerified: Int = 0
 
@@ -319,6 +323,7 @@ actor PipelineCoordinator {
         currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
         currentSpeakerRole = .owner
         currentSpeakerIsOwner = true
+        currentSpeakerIsKnownNonOwner = false
 
         if gateState == .idle {
             guard isAddressedToFae(trimmed) else {
@@ -568,6 +573,7 @@ actor PipelineCoordinator {
         currentSpeakerDisplayName = nil
         currentSpeakerRole = nil
         currentSpeakerIsOwner = false
+        currentSpeakerIsKnownNonOwner = false
         if config.speaker.enabled,
            let encoder = speakerEncoder, await encoder.isLoaded,
            let store = speakerProfileStore
@@ -608,6 +614,7 @@ actor PipelineCoordinator {
                     currentSpeakerDisplayName = match.displayName
                     currentSpeakerRole = match.role
                     currentSpeakerIsOwner = match.role == .owner
+                    currentSpeakerIsKnownNonOwner = match.role != .owner
 
                     // Progressive enrollment: strengthen known profiles (skip fae_self).
                     if config.speaker.progressiveEnrollment, match.role != .faeSelf {
@@ -620,11 +627,21 @@ actor PipelineCoordinator {
 
                     NSLog("PipelineCoordinator: speaker matched: %@ (%@), similarity: %.3f",
                           match.displayName, match.label, match.similarity)
+                    debugLog(debugConsole, .speaker, "Matched: \(match.displayName) (\(match.label)) sim=\(String(format: "%.3f", match.similarity)) owner=\(currentSpeakerIsOwner)")
                 } else {
                     NSLog("PipelineCoordinator: speaker not recognized")
+                    debugLog(debugConsole, .speaker, "Not recognized (no match above threshold \(String(format: "%.2f", config.speaker.threshold)))")
                 }
             } catch {
                 NSLog("PipelineCoordinator: speaker embed failed: %@", error.localizedDescription)
+                debugLog(debugConsole, .speaker, "Embed failed: \(error.localizedDescription)")
+            }
+        } else {
+            // Speaker verification not available — log why.
+            if !config.speaker.enabled {
+                debugLog(debugConsole, .speaker, "Speaker ID disabled in config")
+            } else {
+                debugLog(debugConsole, .speaker, "Speaker encoder not loaded — owner verification skipped")
             }
         }
 
@@ -779,6 +796,7 @@ actor PipelineCoordinator {
 
         guard await llmEngine.isLoaded else {
             NSLog("PipelineCoordinator: LLM not loaded")
+            debugLog(debugConsole, .pipeline, "⚠️ LLM not loaded — cannot generate")
             return
         }
 
@@ -812,9 +830,37 @@ actor PipelineCoordinator {
             }
 
             // Build system prompt with tool schemas.
-            // Owner gating: non-owner voices don't see tool schemas → LLM won't use tools.
+            // Owner gating: only *known* non-owner voices are blocked from tools.
+            // Unknown speakers (encoder not loaded, no match) still get tools — this is
+            // a single-user device where physical access implies trust. Only positively
+            // matched non-owner profiles are gated.
             let includeTools = toolMode != "off"
-                && !(config.speaker.requireOwnerForTools && !currentSpeakerIsOwner)
+                && !(config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner)
+
+            // Diagnostic logging — critical for debugging tool use failures.
+            if !includeTools {
+                let reason: String
+                if toolMode == "off" {
+                    reason = "toolMode=off"
+                } else if config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner {
+                    reason = "requireOwnerForTools=true and speaker matched as non-owner (\(currentSpeakerLabel ?? "unknown"))"
+                } else {
+                    reason = "unknown"
+                }
+                debugLog(debugConsole, .pipeline, "⚠️ Tools HIDDEN from LLM: \(reason)")
+                NSLog("PipelineCoordinator: tools hidden — %@", reason)
+            } else {
+                let ownerDetail: String
+                if currentSpeakerIsOwner {
+                    ownerDetail = "ownerVerified=true"
+                } else if currentSpeakerLabel == nil {
+                    ownerDetail = "speakerUnknown (tools allowed — physical access trusted)"
+                } else {
+                    ownerDetail = "speaker=\(currentSpeakerLabel ?? "?")"
+                }
+                debugLog(debugConsole, .pipeline, "Tools enabled (mode=\(toolMode), \(ownerDetail))")
+            }
+
             let skillDescs: [(name: String, description: String, type: SkillType)]
             let legacySkills: [String]
             if includeTools, let sm = skillManager {
@@ -832,6 +878,11 @@ actor PipelineCoordinator {
                 let schemas = registry.toolSchemas(for: toolMode)
                 return schemas.isEmpty ? nil : schemas
             }()
+
+            if let schemas = toolSchemas {
+                let schemaCount = schemas.components(separatedBy: "\"name\":").count - 1
+                debugLog(debugConsole, .pipeline, "Tool schemas: ~\(schemaCount) tools, \(schemas.count) chars")
+            }
 
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
             var systemPrompt = PersonalityManager.assemblePrompt(
@@ -894,7 +945,11 @@ actor PipelineCoordinator {
         let llmStartedAt = Date()
         var llmTokenCount = 0
 
-        debugLog(debugConsole, .pipeline, "LLM generating (maxTokens=\(options.maxTokens), history=\(history.count) msgs, turn=\(turnCount))")
+        let systemPromptTokens = Self.estimateTokenCount(for: systemPrompt)
+        debugLog(debugConsole, .pipeline, "LLM generating (maxTokens=\(options.maxTokens), history=\(history.count) msgs, turn=\(turnCount), sysPrompt≈\(systemPromptTokens) tok, ctx=\(config.llm.contextSizeTokens))")
+        if options.maxTokens < 1024 {
+            debugLog(debugConsole, .pipeline, "⚠️ maxTokens=\(options.maxTokens) is very low — tool call JSON needs ~200-500 tokens")
+        }
 
         let tokenStream = await llmEngine.generate(
             messages: history,
@@ -1034,6 +1089,7 @@ actor PipelineCoordinator {
             }
         } catch {
             NSLog("PipelineCoordinator: LLM error: %@", error.localizedDescription)
+            debugLog(debugConsole, .pipeline, "⚠️ LLM error: \(error.localizedDescription)")
         }
 
         let llmElapsed = Date().timeIntervalSince(llmStartedAt)
@@ -1041,6 +1097,11 @@ actor PipelineCoordinator {
             let throughput = Double(llmTokenCount) / llmElapsed
             NSLog("phase1.llm_token_throughput_tps=%.2f", throughput)
             debugLog(debugConsole, .pipeline, "LLM done: \(llmTokenCount) tokens in \(String(format: "%.1f", llmElapsed))s (\(String(format: "%.1f", throughput)) t/s)")
+            if llmTokenCount == 0 {
+                debugLog(debugConsole, .pipeline, "⚠️ 0 tokens generated — possible memory pressure, model not loaded, or context overflow")
+            } else if throughput < 2.0 {
+                debugLog(debugConsole, .pipeline, "⚠️ Very low throughput (\(String(format: "%.1f", throughput)) t/s) — system under memory pressure?")
+            }
         }
 
         // Flush remaining text.
@@ -1236,8 +1297,10 @@ actor PipelineCoordinator {
     private func synthesizeSentence(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
         guard await ttsEngine.isLoaded else {
             NSLog("PipelineCoordinator: TTS not loaded, skipping speech")
+            debugLog(debugConsole, .pipeline, "⚠️ TTS not loaded — skipping speech")
             return
         }
+        debugLog(debugConsole, .pipeline, "TTS: \"\(String(text.prefix(80)))\"\(text.count > 80 ? "…" : "") (final=\(isFinal))")
 
         // Emotional prosody: when enabled and no explicit voiceInstruct (i.e. not roleplay),
         // classify sentiment and use instruct mode with emotion description.

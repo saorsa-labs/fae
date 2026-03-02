@@ -177,21 +177,124 @@ struct BashTool: Tool {
 struct SelfConfigTool: Tool {
     let name = "self_config"
     let description = """
-        Modify Fae's directive — critical overriding instructions that apply to every conversation. \
-        Use this when the user wants to set a standing order or rule \
-        (e.g., "always check my calendar before suggesting times", "never discuss topic X"). \
-        Actions: get_directive, set_directive, append_directive, clear_directive. \
+        Manage Fae's behavior settings and standing directives. \
+        Actions: adjust_setting (change a live setting like speed, temperature, thinking mode), \
+        get_settings (view all adjustable settings and current values), \
+        get_directive, set_directive, append_directive, clear_directive (manage standing orders). \
         Legacy aliases: get_instructions, set_instructions, append_instructions, clear_instructions.
         """
     let parametersSchema = #"""
-        {"action": "string (required: get_directive|set_directive|append_directive|clear_directive)", "value": "string (required for set/append)"}
+        {"action": "string (required: adjust_setting|get_settings|get_directive|set_directive|append_directive|clear_directive)", "key": "string (required for adjust_setting)", "value": "any (required for adjust_setting and set/append)"}
         """#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
-    let example = #"<tool_call>{"name":"self_config","arguments":{"action":"append_directive","value":"Always check calendar before suggesting meeting times"}}</tool_call>"#
+    let example = #"<tool_call>{"name":"self_config","arguments":{"action":"adjust_setting","key":"tts.speed","value":1.2}}</tool_call>"#
 
     /// Maximum character length for directive.
     private static let maxInstructionLength = 4000
+
+    /// Callback to FaeCore.patchConfig — set by FaeCore at startup.
+    @MainActor static var configPatcher: ((String, Any) -> Void)?
+
+    /// Specification for an adjustable setting — type, range, and human description.
+    private struct SettingSpec {
+        enum ValueType {
+            case float(min: Float, max: Float)
+            case bool
+            case int(min: Int, max: Int)
+        }
+
+        let valueType: ValueType
+        let description: String
+
+        func validate(_ value: Any) -> String? {
+            switch valueType {
+            case .float(let min, let max):
+                guard let f = coerceFloat(value) else {
+                    return "Expected a number between \(min) and \(max)"
+                }
+                guard f >= min, f <= max else {
+                    return "Value \(f) out of range [\(min), \(max)]"
+                }
+                return nil
+            case .bool:
+                if value is Bool { return nil }
+                if let s = value as? String, ["true", "false"].contains(s.lowercased()) { return nil }
+                return "Expected true or false"
+            case .int(let min, let max):
+                guard let i = coerceInt(value) else {
+                    return "Expected an integer between \(min) and \(max)"
+                }
+                guard i >= min, i <= max else {
+                    return "Value \(i) out of range [\(min), \(max)]"
+                }
+                return nil
+            }
+        }
+
+        func coerce(_ value: Any) -> Any {
+            switch valueType {
+            case .float: return coerceFloat(value) as Any
+            case .bool:
+                if let b = value as? Bool { return b }
+                if let s = value as? String { return s.lowercased() == "true" }
+                return value
+            case .int: return coerceInt(value) as Any
+            }
+        }
+
+        private func coerceFloat(_ value: Any) -> Float? {
+            if let f = value as? Float { return f }
+            if let d = value as? Double { return Float(d) }
+            if let i = value as? Int { return Float(i) }
+            if let s = value as? String { return Float(s) }
+            return nil
+        }
+
+        private func coerceInt(_ value: Any) -> Int? {
+            if let i = value as? Int { return i }
+            if let d = value as? Double { return Int(d) }
+            if let f = value as? Float { return Int(f) }
+            if let s = value as? String { return Int(s) }
+            return nil
+        }
+    }
+
+    /// Adjustable settings allow-list with type, range, and description.
+    private static let adjustableKeys: [String: SettingSpec] = [
+        "tts.speed": SettingSpec(
+            valueType: .float(min: 0.8, max: 1.4),
+            description: "Speaking speed (0.8=slow, 1.0=normal, 1.4=fast)"
+        ),
+        "tts.warmth": SettingSpec(
+            valueType: .float(min: 1.0, max: 5.0),
+            description: "Voice warmth (1=neutral, 5=warm)"
+        ),
+        "tts.emotional_prosody": SettingSpec(
+            valueType: .bool,
+            description: "Expressive voice (trades voice fidelity for emotion)"
+        ),
+        "llm.temperature": SettingSpec(
+            valueType: .float(min: 0.3, max: 1.0),
+            description: "Creativity (0.3=precise, 0.7=balanced, 1.0=creative)"
+        ),
+        "llm.thinking_enabled": SettingSpec(
+            valueType: .bool,
+            description: "Extended reasoning mode"
+        ),
+        "barge_in.enabled": SettingSpec(
+            valueType: .bool,
+            description: "Allow user to interrupt mid-speech"
+        ),
+        "conversation.require_direct_address": SettingSpec(
+            valueType: .bool,
+            description: "Only respond when addressed by name"
+        ),
+        "conversation.direct_address_followup_s": SettingSpec(
+            valueType: .int(min: 5, max: 60),
+            description: "Seconds to keep listening after name-addressed (5-60)"
+        ),
+    ]
 
     /// Patterns that indicate an attempt to bypass safety.
     private static let jailbreakPatterns: [String] = [
@@ -248,6 +351,29 @@ struct SelfConfigTool: Tool {
         }
 
         switch action {
+        case "adjust_setting":
+            guard let key = input["key"] as? String else {
+                return .error("Missing required parameter: key")
+            }
+            guard let spec = Self.adjustableKeys[key] else {
+                return .error(
+                    "Unknown setting: \(key). Adjustable: \(Self.adjustableKeys.keys.sorted().joined(separator: ", "))"
+                )
+            }
+            guard let value = input["value"] else {
+                return .error("Missing required parameter: value")
+            }
+            if let err = spec.validate(value) {
+                return .error(err)
+            }
+            let coerced = spec.coerce(value)
+            await MainActor.run { Self.configPatcher?(key, coerced) }
+            return .success("Updated \(key) to \(coerced). The change is live.")
+
+        case "get_settings":
+            let currentConfig = FaeConfig.load()
+            return .success(Self.formatCurrentSettings(currentConfig))
+
         case "get_directive", "get_instructions":
             let current = Self.readInstructions()
             if current.isEmpty {
@@ -282,7 +408,9 @@ struct SelfConfigTool: Tool {
             return .success("Directive cleared. Reverting to default personality.")
 
         default:
-            return .error("Unknown action: \(action). Use: get_directive, set_directive, append_directive, clear_directive")
+            return .error(
+                "Unknown action: \(action). Use: adjust_setting, get_settings, get_directive, set_directive, append_directive, clear_directive"
+            )
         }
     }
 
@@ -297,6 +425,26 @@ struct SelfConfigTool: Tool {
         let dir = filePath.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? text.write(to: filePath, atomically: true, encoding: .utf8)
+    }
+
+    /// Format current adjustable settings for the LLM.
+    private static func formatCurrentSettings(_ config: FaeConfig) -> String {
+        var lines: [String] = ["Current settings:"]
+        lines.append("  tts.speed = \(config.tts.speed) — Speaking speed (0.8=slow, 1.0=normal, 1.4=fast)")
+        lines.append("  tts.warmth = \(config.tts.warmth) — Voice warmth (1=neutral, 5=warm)")
+        lines.append("  tts.emotional_prosody = \(config.tts.emotionalProsody) — Expressive voice")
+        lines.append("  llm.temperature = \(config.llm.temperature) — Creativity (0.3=precise, 1.0=creative)")
+        lines.append("  llm.thinking_enabled = \(config.llm.thinkingEnabled) — Extended reasoning")
+        lines.append("  barge_in.enabled = \(config.bargeIn.enabled) — Allow interruption")
+        lines.append(
+            "  conversation.require_direct_address = \(config.conversation.requireDirectAddress)"
+                + " — Name-gated responses"
+        )
+        lines.append(
+            "  conversation.direct_address_followup_s = \(config.conversation.directAddressFollowupS)"
+                + " — Follow-up window (seconds)"
+        )
+        return lines.joined(separator: "\n")
     }
 }
 

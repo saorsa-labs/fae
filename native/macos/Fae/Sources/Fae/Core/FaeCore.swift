@@ -28,7 +28,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var schedulerObservers: [NSObjectProtocol] = []
 
     init() {
-        let loaded = FaeConfig.load()
+        var loaded = FaeConfig.load()
+
+        // Config migration: enforce minimum maxTokens for tool calls.
+        // Early configs persisted maxTokens=512 which is far too low for the LLM
+        // to emit speech + <tool_call> JSON. Bump any legacy value below 2048.
+        if loaded.llm.maxTokens < 2048 {
+            NSLog("FaeCore: migrating maxTokens %d → 4096 (legacy config too low for tool calls)", loaded.llm.maxTokens)
+            loaded.llm.maxTokens = 4096
+            try? loaded.save()
+        }
+
         self.config = loaded
         self.isOnboarded = loaded.onboarded
         self.isLicenseAccepted = loaded.licenseAccepted
@@ -216,6 +226,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
+
+                // Wire SelfConfigTool's configPatcher to this FaeCore instance.
+                SelfConfigTool.configPatcher = { [weak self] key, value in
+                    self?.patchConfig(key: key, payload: ["value": value])
+                }
 
                 // Wire debug console if one was set before the coordinator started.
                 if let dc = debugConsoleRef {
@@ -841,6 +856,37 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 persistConfig(reason: "config.patch.channels.whatsapp.allowed_numbers")
             }
 
+        case "llm.temperature":
+            let parsedTemp: Float?
+            if let v = value as? Float {
+                parsedTemp = v
+            } else if let v = value as? Double {
+                parsedTemp = Float(v)
+            } else {
+                parsedTemp = nil
+            }
+            guard let temp = parsedTemp, temp >= 0.3, temp <= 1.0 else { return }
+            config.llm.temperature = temp
+            persistConfig(reason: "config.patch.llm.temperature")
+
+        case "conversation.require_direct_address":
+            guard let value = value as? Bool else { return }
+            config.conversation.requireDirectAddress = value
+            persistConfig(reason: "config.patch.conversation.require_direct_address")
+
+        case "conversation.direct_address_followup_s":
+            let parsedS: Int?
+            if let v = value as? Int {
+                parsedS = v
+            } else if let v = value as? Double {
+                parsedS = Int(v)
+            } else {
+                parsedS = nil
+            }
+            guard let seconds = parsedS, seconds >= 5, seconds <= 60 else { return }
+            config.conversation.directAddressFollowupS = seconds
+            persistConfig(reason: "config.patch.conversation.direct_address_followup_s")
+
         default:
             NSLog("FaeCore: ignoring unknown config key '%@'", key)
         }
@@ -858,6 +904,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
         config.onboarded = true
         persistConfig(reason: "onboarding.complete")
         NSLog("FaeCore: onboarding complete")
+    }
+
+    /// Check if an owner voiceprint is enrolled in the speaker profile store.
+    func hasOwnerVoiceprint() async -> Bool {
+        await speakerProfileStore.hasOwnerProfile()
     }
 
     // MARK: - Audio Injection (for companion relay)

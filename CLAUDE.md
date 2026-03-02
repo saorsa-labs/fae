@@ -352,9 +352,9 @@ Behavior:
 
 - **First launch**: first speaker auto-enrolled as "owner" (no explicit enrollment step)
 - **Progressive enrollment**: each recognized interaction adds to the profile centroid (up to 50 embeddings)
-- **Owner gating**: when `requireOwnerForTools = true`, non-owner voices don't see tool schemas
+- **Owner gating**: when `requireOwnerForTools = true`, *known* non-owner voices don't see tool schemas. Unknown speakers (encoder not loaded, no match) still get tools — physical device access implies trust. Only positively matched non-owner profiles are blocked.
 - **Text injection**: always trusted (physical device access)
-- **Degraded mode**: if model not found or load fails, pipeline continues without voice identity
+- **Degraded mode**: if model not found or load fails, pipeline continues without voice identity — tools remain available
 
 Config: `[speaker]` section in `config.toml` — see `docs/guides/voice-identity.md`.
 
@@ -366,7 +366,31 @@ Fae can modify her own behavior and learn new skills. See `docs/guides/self-modi
 
 ### SelfConfigTool
 
-The `self_config` tool persists personality preferences to `~/Library/Application Support/fae/directive.md`.
+The `self_config` tool manages both live behavior settings and persistent directives.
+
+**Behavior settings** (bidirectional with Settings UI):
+
+| Action | Parameters | Description |
+|--------|------------|-------------|
+| `adjust_setting` | `key`, `value` | Change a live setting (speed, temperature, etc.) |
+| `get_settings` | — | View all adjustable settings and current values |
+
+Adjustable keys:
+
+| Key | Type | Range | Natural language triggers |
+|-----|------|-------|--------------------------|
+| `tts.speed` | Float | 0.8–1.4 | "Speak faster/slower" |
+| `tts.warmth` | Float | 1.0–5.0 | "Sound warmer/cooler" |
+| `tts.emotional_prosody` | Bool | — | "Be more expressive" |
+| `llm.temperature` | Float | 0.3–1.0 | "Be more creative/precise" |
+| `llm.thinking_enabled` | Bool | — | "Think step by step" |
+| `barge_in.enabled` | Bool | — | "Let me interrupt you" |
+| `conversation.require_direct_address` | Bool | — | "Only respond when I say your name" |
+| `conversation.direct_address_followup_s` | Int | 5–60 | "Keep listening longer" |
+
+Changes route through `FaeCore.patchConfig()` — the same pathway Settings UI uses. Fully bidirectional.
+
+**Directives** (persistent standing orders):
 
 | Action | Description |
 |--------|-------------|
@@ -374,6 +398,8 @@ The `self_config` tool persists personality preferences to `~/Library/Applicatio
 | `set_directive` | Replace directive with new text |
 | `append_directive` | Add without removing existing |
 | `clear_directive` | Remove all, revert to defaults |
+
+Directive path: `~/Library/Application Support/fae/directive.md`
 
 Legacy aliases (`get_instructions`, etc.) still work for backward compatibility.
 

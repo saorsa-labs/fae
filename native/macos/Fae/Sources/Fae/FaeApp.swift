@@ -393,8 +393,56 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("Fae: contacts access not granted or Me Card not found")
             }
 
+            // Wait for the voice enrollment flow to complete (owner voiceprint enrolled)
+            // before marking onboarding as done. If enrollment is already done or not
+            // needed, this returns immediately. Timeout after 120s to avoid blocking forever.
+            let enrollmentDone = await self.waitForOwnerEnrollment(timeout: 120)
+            if enrollmentDone {
+                NSLog("Fae: owner voice enrolled — completing onboarding")
+            } else {
+                NSLog("Fae: enrollment timeout — completing onboarding anyway")
+            }
+
             self.faeCore.completeOnboarding()
             self.onboarding.isComplete = true
+        }
+    }
+
+    /// Wait until an owner voiceprint is enrolled (or already exists).
+    /// Returns `true` if enrolled, `false` if timed out.
+    private func waitForOwnerEnrollment(timeout: TimeInterval) async -> Bool {
+        // Check if owner already enrolled.
+        let hasOwner = await faeCore.hasOwnerVoiceprint()
+        if hasOwner { return true }
+
+        // Listen for enrollment_complete notification.
+        return await withCheckedContinuation { continuation in
+            var observer: NSObjectProtocol?
+            var timerTask: Task<Void, Never>?
+
+            observer = NotificationCenter.default.addObserver(
+                forName: .faePipelineState,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let event = notification.userInfo?["event"] as? String,
+                   event == "pipeline.enrollment_complete"
+                {
+                    timerTask?.cancel()
+                    if let obs = observer {
+                        NotificationCenter.default.removeObserver(obs)
+                    }
+                    continuation.resume(returning: true)
+                }
+            }
+
+            timerTask = Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if let obs = observer {
+                    NotificationCenter.default.removeObserver(obs)
+                }
+                continuation.resume(returning: false)
+            }
         }
     }
 
@@ -468,6 +516,7 @@ struct FaeApp: App {
             .environmentObject(appDelegate.onboarding)
             .environmentObject(appDelegate.conversation)
             .environmentObject(appDelegate.rescueMode)
+            .environmentObject(appDelegate.faeCore)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {

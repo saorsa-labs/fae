@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.69] - 2026-03-02
+
+### Added
+
+- **Conversational self-configuration** — Fae can now adjust her own behavior settings through natural conversation. "Speak faster", "be more creative", "think step by step" all work via the `self_config` tool's new `adjust_setting` action. Settings are bidirectional: changes made conversationally appear in the Settings UI and vice versa.
+  - 8 adjustable settings: `tts.speed`, `tts.warmth`, `tts.emotional_prosody`, `llm.temperature`, `llm.thinking_enabled`, `barge_in.enabled`, `conversation.require_direct_address`, `conversation.direct_address_followup_s`
+  - `get_settings` action returns all current values with human-readable descriptions
+  - Type-safe validation with range enforcement (e.g., speed must be 0.8–1.4)
+  - Changes route through the same `patchConfig` pathway as the Settings UI — fully bidirectional
+  - New `patchConfig` handlers for `llm.temperature`, `conversation.require_direct_address`, and `conversation.direct_address_followup_s`
+
+### Improved
+
+- **Self-modification prompt clarity** — rewritten to clearly distinguish `adjust_setting` (live behavior changes) from directive actions (standing orders). Removed stale `set_instructions`/`append_instructions` references.
+
+## [v0.8.68] - 2026-03-02
+
+### Fixed
+
+- **Tool gating false-blocks on unrecognized voice** — when speaker verification failed (encoder not loaded, no match above threshold), `currentSpeakerIsOwner` defaulted to `false` which caused `requireOwnerForTools` to hide ALL tool schemas from the LLM. Fae would say "I'll look into it" but never emit `<tool_call>` markup because she literally couldn't see any tools. Fixed by distinguishing "unknown speaker" (no match — tools allowed, physical access is trusted) from "known non-owner" (positively matched as a different person — tools blocked). Text input continues to always trust tools.
+- **Onboarding waits for voice enrollment** — `completeOnboarding()` no longer fires on a 4-second timer regardless of enrollment state. Now waits up to 120s for the `pipeline.enrollment_complete` notification (owner voiceprint registered) before marking onboarding as done. If enrollment was already complete or times out, proceeds anyway.
+- **Config migration for maxTokens** — enforces minimum `maxTokens=2048` at startup. Early configs persisted `maxTokens=512` which was too low for the LLM to emit speech + `<tool_call>` JSON. Migration detects the legacy value, bumps to 4096, and saves back to config.toml. Fixes tool calls never firing on existing installations.
+- **TTS text normalization** — improved `stripNonSpeechChars()` to handle punctuation edge cases that confused Qwen3-TTS:
+  - Ellipsis (`…` and `...`) → single period
+  - Em-dash/en-dash (`—`/`–`) → comma (natural pause)
+  - Repeated punctuation (`!!`, `,,`) → single character
+  - Smart quotes → removed or converted to apostrophe
+  - Parentheses and asterisks stripped
+  - Prevents garbled pronunciation from stacked punctuation
+
+### Improved
+
+- **Comprehensive debug console logging** — added diagnostic events throughout the pipeline for live debugging:
+  - Speaker identity: match result, similarity score, owner status, or why verification was skipped
+  - Tool gating: explicit log when tools are hidden from LLM, with reason (mode=off, owner not verified)
+  - Tool schema count and size in chars
+  - Context budget: system prompt token estimate, context window size, maxTokens
+  - LLM warnings: 0-token generation, low throughput (<2 t/s) indicating memory pressure
+  - LLM errors now routed to debug console (were NSLog-only)
+  - TTS: text chunks being synthesized (first 80 chars), final flag, not-loaded warning
+
 ## [v0.8.67] - 2026-03-02
 
 ### Fixed
