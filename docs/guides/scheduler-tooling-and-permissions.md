@@ -50,7 +50,15 @@ When an Apple tool (CalendarTool, RemindersTool, ContactsTool, MailTool, NotesTo
 MailTool and NotesTool use a try→detect→request→retry pattern since mail/notes automation
 permissions are only detectable from AppleScript error messages, not via a pre-flight API.
 
-**Capability strings**: `"calendar"`, `"reminders"`, `"contacts"`, `"mail"`, `"notes"`.
+**Capability strings**: `"calendar"`, `"reminders"`, `"contacts"`, `"mail"`, `"notes"`, `"screen_recording"`, `"camera"`, `"desktop_automation"`.
+
+### Vision + Computer Use permissions
+
+Vision tools trigger JIT permission requests via `JitPermissionController`:
+
+- **Screen Recording** (`"screen_recording"`) — `CGPreflightScreenCaptureAccess()` checks current state; `CGRequestScreenCaptureAccess()` triggers system prompt; polls every 2s for up to 30s.
+- **Camera** (`"camera"`) — `AVCaptureDevice.requestAccess(for: .video)` — native async permission dialog.
+- **Accessibility** (`"desktop_automation"`) — opens System Settings > Privacy & Security > Accessibility; polls `AXIsProcessTrusted()` every 2s. Note: may already be granted via GlobalHotkeyManager (Ctrl+Shift+A).
 
 ## Settings > Tools permission UI
 
@@ -64,3 +72,11 @@ permission state with grant buttons:
 
 Permission state is read from `PermissionStatusProvider` and refreshed 2 seconds after
 any grant attempt.
+
+### Settings > Models vision permissions
+
+`SettingsModelsTab.swift` includes a "Vision" section showing:
+
+- **Enable Vision** toggle (`vision.enabled`)
+- **Vision Model** picker (Auto / 8-bit / 4-bit)
+- Permission badges for **Screen Recording**, **Camera**, and **Accessibility**

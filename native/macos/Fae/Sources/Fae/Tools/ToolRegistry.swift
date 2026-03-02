@@ -53,12 +53,32 @@ final class ToolRegistry: Sendable {
             SchedulerTriggerTool(),
             // Roleplay
             RoleplayTool(),
+            // Vision & computer use tools
+            ScreenshotTool(),
+            CameraTool(),
+            ReadScreenTool(),
+            ClickTool(),
+            TypeTextTool(),
+            ScrollTool(),
+            FindElementTool(),
         ]
         return tools
     }
 
     func tool(named name: String) -> (any Tool)? {
         tools[name]
+    }
+
+    /// Return a tool with VLM provider injected for vision tools.
+    func tool(named name: String, vlmProvider: VLMProvider?) -> (any Tool)? {
+        guard let tool = tools[name] else { return nil }
+        // Inject VLM provider into vision tools that need it.
+        if let provider = vlmProvider {
+            if var vt = tool as? ScreenshotTool { vt.vlmProvider = provider; return vt }
+            if var vt = tool as? CameraTool { vt.vlmProvider = provider; return vt }
+            if var vt = tool as? ReadScreenTool { vt.vlmProvider = provider; return vt }
+        }
+        return tool
     }
 
     var allTools: [any Tool] {
@@ -113,13 +133,17 @@ final class ToolRegistry: Sendable {
         "scheduler_list", "roleplay",
         "activate_skill",
         "input_request",
+        "find_element",
     ]
 
     /// Additional tools available in "read_write" mode.
     private static let writeTools: Set<String> = [
         "write", "edit", "self_config", "channel_setup",
         "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
-        "manage_skill",
+        "manage_skill", "run_skill",
+        // Vision & computer use tools require read_write or higher.
+        "screenshot", "camera", "read_screen",
+        "click", "type_text", "scroll",
     ]
 
     // MARK: - Private

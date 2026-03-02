@@ -49,9 +49,25 @@ enum PersonalityManager {
 
     static let visionPrompt = """
         Vision understanding:
-        - When a camera image is attached, you can see it.
-        - Do not say "I cannot see images"
-        - Visual analysis is local and private
+        - You have vision tools: `screenshot` (capture screen) and `camera` (webcam photo).
+        - Use screenshot when asked about what's on screen, helping with apps, or "look at this".
+        - Use camera when asked about something physical, "what do you see?", or "take a photo".
+        - Use read_screen when you need to interact with on-screen UI elements.
+        - Vision is local and private — images never leave this Mac.
+        - Do not say "I cannot see" or "I cannot see images" — you CAN see.
+        """
+
+    // MARK: - Computer Use Prompt Fragment
+
+    static let computerUsePrompt = """
+        Computer use:
+        - You can interact with apps on this Mac using accessibility tools.
+        - Workflow: read_screen → identify target element → click/type_text → read_screen to verify.
+        - Prefer element_index-based clicking over raw coordinates — it's more reliable.
+        - Use find_element to search for a specific UI element by text or role.
+        - Maximum 10 action steps (click/type_text/scroll) per request to prevent runaway automation.
+        - Always verify the result of actions by reading the screen again.
+        - Be cautious with type_text — confirm the target field before typing.
         """
 
     // MARK: - Python / uv Prompt Fragment
@@ -256,9 +272,10 @@ enum PersonalityManager {
         // 1. Core prompt.
         parts.append(voiceCorePrompt)
 
-        // 2. Vision.
-        if visionCapable {
+        // 2. Vision + computer use (only when tools are available in the schema).
+        if visionCapable, toolSchemas != nil {
             parts.append(visionPrompt)
+            parts.append(computerUsePrompt)
         }
 
         // 3. SOUL contract.

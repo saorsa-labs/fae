@@ -5,6 +5,8 @@ struct SettingsModelsTab: View {
     var commandSender: HostCommandSender?
 
     @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
+    @AppStorage("visionEnabled") private var visionEnabled: Bool = false
+    @AppStorage("visionModelPreset") private var visionModelPreset: String = "auto"
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
     @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
     @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
@@ -41,12 +43,19 @@ struct SettingsModelsTab: View {
         ("Enforce", "enforce", "Only accepts the enrolled speaker for gated voice interaction.")
     ]
 
+    private let visionModelOptions: [(label: String, value: String, description: String)] = [
+        ("Auto", "auto", "Selects the best VLM for your system RAM. Requires 24+ GB."),
+        ("Qwen3-VL-4B (8-bit)", "qwen3_vl_4b_8bit", "Higher quality. Requires 48+ GB RAM alongside LLM."),
+        ("Qwen3-VL-4B (4-bit)", "qwen3_vl_4b_4bit", "Memory-efficient. Requires 24+ GB RAM alongside LLM."),
+    ]
+
     var body: some View {
         Form {
             faeVoiceSection
             voiceProsodySection
             voiceIdentitySection
             voiceModelSection
+            visionSection
             referenceSection
         }
         .formStyle(.grouped)
@@ -283,6 +292,66 @@ struct SettingsModelsTab: View {
     }
 
     @ViewBuilder
+    private var visionSection: some View {
+        Section("Vision") {
+            Toggle("Enable Vision", isOn: $visionEnabled)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .onChange(of: visionEnabled) {
+                    guard !hydratingFromConfig else { return }
+                    commandSender?.sendCommand(
+                        name: "config.patch",
+                        payload: ["key": "vision.enabled", "value": visionEnabled]
+                    )
+                    showRestartNotice = true
+                }
+
+            Picker("Vision Model", selection: $visionModelPreset) {
+                ForEach(visionModelOptions, id: \.value) { option in
+                    Text(option.label).tag(option.value)
+                }
+            }
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .disabled(!visionEnabled)
+            .onChange(of: visionModelPreset) {
+                guard !hydratingFromConfig else { return }
+                commandSender?.sendCommand(
+                    name: "config.patch",
+                    payload: ["key": "vision.model_preset", "value": visionModelPreset]
+                )
+                showRestartNotice = true
+            }
+
+            if let current = visionModelOptions.first(where: { $0.value == visionModelPreset }) {
+                Text(current.description)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Permission status badges.
+            let permissions = PermissionStatusProvider.current()
+            HStack(spacing: 12) {
+                permissionBadge("Screen Recording", granted: permissions.screenRecording)
+                permissionBadge("Camera", granted: permissions.camera)
+                permissionBadge("Accessibility", granted: AccessibilityBridge.isAccessibilityEnabled())
+            }
+            .font(.system(size: 11, design: .rounded))
+
+            Text("Vision loads an additional VLM model on demand. Requires 24+ GB RAM. Screen Recording and Camera permissions are requested when first used.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func permissionBadge(_ label: String, granted: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle")
+                .foregroundStyle(granted ? .green : .secondary)
+            Text(label)
+                .foregroundStyle(granted ? .primary : .secondary)
+        }
+    }
+
+    @ViewBuilder
     private var referenceSection: some View {
         Section("Reference") {
             Text("Read-only model/provider details have moved to Help > Model & Voice Reference.")
@@ -309,8 +378,17 @@ struct SettingsModelsTab: View {
             name: "config.get",
             payload: ["key": "tts"]
         )
+        async let visionResponse = sender.queryCommand(
+            name: "config.get",
+            payload: ["key": "vision"]
+        )
 
-        let (voiceIdentity, voiceModel, ttsConfig) = await (voiceIdentityResponse, voiceModelResponse, ttsResponse)
+        let (voiceIdentity, voiceModel, ttsConfig, visionConfig) = await (
+            voiceIdentityResponse,
+            voiceModelResponse,
+            ttsResponse,
+            visionResponse
+        )
 
         hydratingFromConfig = true
         defer { hydratingFromConfig = false }
@@ -354,6 +432,27 @@ struct SettingsModelsTab: View {
             }
             if let speed = tts["speed"] as? Double {
                 voiceSpeed = speed
+            }
+        }
+
+        let visionPayload = unwrapPayload(visionConfig)
+        if let vision = visionPayload["vision"] as? [String: Any] {
+            if let enabled = vision["enabled"] as? Bool {
+                visionEnabled = enabled
+            }
+            if let presetRaw = vision["model_preset"] as? String {
+                let preset: String
+                switch presetRaw {
+                case "qwen3_vl_8b":
+                    preset = "qwen3_vl_4b_8bit"
+                case "qwen3_vl_4b":
+                    preset = "qwen3_vl_4b_4bit"
+                default:
+                    preset = presetRaw
+                }
+                if visionModelOptions.contains(where: { $0.value == preset }) {
+                    visionModelPreset = preset
+                }
             }
         }
     }

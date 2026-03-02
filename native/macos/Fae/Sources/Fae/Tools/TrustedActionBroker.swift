@@ -86,11 +86,15 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
         "roleplay",
+        // Vision & computer use tools.
+        "screenshot", "camera", "read_screen",
+        "click", "type_text", "scroll", "find_element",
     ]
 
     /// Medium-risk tools that should still confirm when user intent is ambiguous.
     private static let highImpactMediumTools: Set<String> = [
         "run_skill",
+        "screenshot", "camera", "scroll",
     ]
 
     init(knownTools: Set<String>, speakerConfig: FaeConfig.SpeakerConfig) {

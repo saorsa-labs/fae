@@ -18,6 +18,7 @@ struct FaeConfig: Codable {
     var channels: ChannelsConfig = ChannelsConfig()
     var scheduler: SchedulerConfig = SchedulerConfig()
     var skills: SkillsConfig = SkillsConfig()
+    var vision: VisionConfig = VisionConfig()
     var userName: String?
     var onboarded: Bool = false
     var licenseAccepted: Bool = false
@@ -180,6 +181,15 @@ struct FaeConfig: Codable {
         var disabledBuiltins: [String] = []
     }
 
+    // MARK: - Vision
+
+    struct VisionConfig: Codable {
+        /// Master toggle for vision capabilities (screenshot, camera, read_screen).
+        var enabled: Bool = false
+        /// VLM model preset: "auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit".
+        var modelPreset: String = "auto"
+    }
+
     // MARK: - Model Selection
 
     /// Select the appropriate LLM model based on system RAM and preset.
@@ -304,6 +314,37 @@ struct FaeConfig: Codable {
             return "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
         } else {
             return "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16"
+        }
+    }
+
+    // MARK: - VLM Model Selection
+
+    /// Select the appropriate VLM model based on system RAM and preset.
+    ///
+    /// Returns `nil` when insufficient RAM for vision alongside the text LLM + STT + TTS stack.
+    /// VLM loads on-demand (not at startup) so it only uses RAM when vision tools fire.
+    static func recommendedVLMModel(
+        totalMemoryBytes: UInt64? = nil,
+        preset: String = "auto"
+    ) -> (modelId: String, contextSize: Int)? {
+        let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+
+        switch preset.lowercased() {
+        case "qwen3_vl_4b_8bit", "qwen3_vl_8b":
+            return ("mlx-community/Qwen3-VL-4B-Instruct-8bit", 16_384)
+        case "qwen3_vl_4b_4bit", "qwen3_vl_4b":
+            return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
+        default: // "auto"
+            // 48+ GB: Qwen3-VL-4B-Instruct 8-bit alongside 27B/35B text LLM.
+            // 24-47 GB: Qwen3-VL-4B-Instruct 4-bit alongside 9B/27B text LLM.
+            // <24 GB: disabled — not enough headroom for VLM + text LLM + STT + TTS.
+            if totalGB >= 48 {
+                return ("mlx-community/Qwen3-VL-4B-Instruct-8bit", 16_384)
+            } else if totalGB >= 24 {
+                return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
+            } else {
+                return nil
+            }
         }
     }
 
@@ -634,6 +675,16 @@ struct FaeConfig: Codable {
                     config.channels.whatsapp.allowedNumbers = v
                 default: break
                 }
+            case "vision":
+                switch key {
+                case "enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.vision.enabled = v
+                case "modelPreset", "model_preset":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.vision.modelPreset = v
+                default: break
+                }
             case "scheduler":
                 switch key {
                 case "morningBriefingHour":
@@ -759,6 +810,11 @@ struct FaeConfig: Codable {
         lines.append("[scheduler]")
         lines.append("morningBriefingHour = \(scheduler.morningBriefingHour)")
         lines.append("skillProposalsHour = \(scheduler.skillProposalsHour)")
+        lines.append("")
+
+        lines.append("[vision]")
+        lines.append("enabled = \(vision.enabled ? "true" : "false")")
+        lines.append("modelPreset = \(encodeString(vision.modelPreset))")
         lines.append("")
 
         lines.append("[speaker]")

@@ -67,6 +67,10 @@ final class JitPermissionController: ObservableObject {
             requestNotes(capability: capability)
         case "desktop_automation":
             requestDesktopAutomation(capability: capability)
+        case "screen_recording":
+            requestScreenRecording(capability: capability)
+        case "camera":
+            requestCamera(capability: capability)
         default:
             NSLog("JitPermissionController: unsupported JIT capability '%@' — denying", capability)
             postDenied(capability: capability)
@@ -167,6 +171,33 @@ final class JitPermissionController: ObservableObject {
         pollForAccessibilityPermission(capability: capability)
     }
 
+    // MARK: - Screen Recording
+
+    private func requestScreenRecording(capability: String) {
+        // Screen Recording permission requires the user to toggle it in System Settings.
+        // CGRequestScreenCaptureAccess() shows the system prompt on first call.
+        let alreadyGranted = CGPreflightScreenCaptureAccess()
+        if alreadyGranted {
+            postGranted(capability: capability)
+            return
+        }
+        CGRequestScreenCaptureAccess()
+        pollForScreenRecordingPermission(capability: capability)
+    }
+
+    // MARK: - Camera
+
+    private func requestCamera(capability: String) {
+        Task {
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            if granted {
+                postGranted(capability: capability)
+            } else {
+                postDenied(capability: capability)
+            }
+        }
+    }
+
     // MARK: - Permission Polling Helpers
 
     /// Polls for an Automation permission grant by attempting a scripting bridge
@@ -222,6 +253,22 @@ final class JitPermissionController: ObservableObject {
             for _ in 0..<maxAttempts {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if AXIsProcessTrusted() {
+                    postGranted(capability: capability)
+                    return
+                }
+            }
+            postDenied(capability: capability)
+        }
+    }
+
+    /// Polls for Screen Recording permission. Checks every 2 seconds for
+    /// up to 30 seconds.
+    private func pollForScreenRecordingPermission(capability: String) {
+        Task {
+            let maxAttempts = 15  // 15 * 2s = 30s
+            for _ in 0..<maxAttempts {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if CGPreflightScreenCaptureAccess() {
                     postGranted(capability: capability)
                     return
                 }

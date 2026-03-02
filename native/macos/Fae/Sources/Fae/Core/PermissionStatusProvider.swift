@@ -1,5 +1,6 @@
 import AVFoundation
 @preconcurrency import Contacts
+import CoreGraphics
 import EventKit
 import Foundation
 
@@ -11,21 +12,27 @@ enum PermissionStatusProvider {
         let contacts: Bool
         let calendar: Bool
         let reminders: Bool
+        let screenRecording: Bool
+        let camera: Bool
     }
 
     /// Query current authorization status for all relevant permissions.
     static func current() -> Snapshot {
         let mic: Bool = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let contacts: Bool = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        let cam: Bool = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
 
         let cal = Self.isEventKitAuthorized(for: .event)
         let rem = Self.isEventKitAuthorized(for: .reminder)
+        let screen = CGPreflightScreenCaptureAccess()
 
         return Snapshot(
             microphone: mic,
             contacts: contacts,
             calendar: cal,
-            reminders: rem
+            reminders: rem,
+            screenRecording: screen,
+            camera: cam
         )
     }
 
@@ -39,6 +46,8 @@ enum PermissionStatusProvider {
         if snap.contacts { granted.append("Contacts") } else { denied.append("Contacts") }
         if snap.calendar { granted.append("Calendar") } else { denied.append("Calendar") }
         if snap.reminders { granted.append("Reminders") } else { denied.append("Reminders") }
+        if snap.screenRecording { granted.append("Screen Recording") } else { denied.append("Screen Recording") }
+        if snap.camera { granted.append("Camera") } else { denied.append("Camera") }
 
         var lines: [String] = []
         if !granted.isEmpty {

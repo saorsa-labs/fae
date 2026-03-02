@@ -56,7 +56,12 @@ actor PipelineCoordinator {
     private let speakerProfileStore: SpeakerProfileStore?
     private let skillManager: SkillManager?
     private let toolAnalytics: ToolAnalytics?
+    private let modelManager: ModelManager?
     private let isRescueMode: Bool
+
+    /// Counter for computer-use action steps per conversation turn (click/type/scroll).
+    private var computerUseStepCount: Int = 0
+    private static let maxComputerUseSteps = 10
 
     // MARK: - Debug Console
 
@@ -211,6 +216,7 @@ actor PipelineCoordinator {
         speakerProfileStore: SpeakerProfileStore? = nil,
         skillManager: SkillManager? = nil,
         toolAnalytics: ToolAnalytics? = nil,
+        modelManager: ModelManager? = nil,
         rescueMode: Bool = false
     ) {
         self.eventBus = eventBus
@@ -232,6 +238,7 @@ actor PipelineCoordinator {
         self.speakerProfileStore = speakerProfileStore
         self.skillManager = skillManager
         self.toolAnalytics = toolAnalytics
+        self.modelManager = modelManager
         self.isRescueMode = rescueMode
 
         // Configure VAD from config.
@@ -289,6 +296,7 @@ actor PipelineCoordinator {
     /// loop checks `interrupted` at each step and exits cleanly.
     func cancel() {
         interrupted = true
+        computerUseStepCount = 0
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
         Task { await playback.stop() }
@@ -500,6 +508,7 @@ actor PipelineCoordinator {
         lastAssistantResponseText = ""
         activeCapabilityTicket = nil
         awaitingApproval = false
+        computerUseStepCount = 0
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
         cancelDeferredToolJobs()
@@ -668,12 +677,28 @@ actor PipelineCoordinator {
             }
         }
 
-        // Self-echo rejection: if the segment matches Fae's own voice, drop it.
-        // This catches echo that slips through the time-based echo suppressor
-        // (e.g. when the echo tail expires but Fae's voice is still in the room).
+        // Self-echo rejection: if the segment matches Fae's own voice AND we are
+        // near an echo window, drop it. Outside the echo window the mic is hearing
+        // a real person — since TTS clones the owner's voice, the fae_self profile
+        // is nearly identical to the owner profile and would false-positive on real
+        // speech if we rejected unconditionally.
         if currentSpeakerLabel == "fae_self" {
-            NSLog("PipelineCoordinator: dropping %.1fs segment (matched Fae's own voice)", durationSecs)
-            return
+            let recentlySpoke = lastAssistantStart.map { Date().timeIntervalSince($0) < 10 } ?? false
+            if recentlySpoke {
+                NSLog("PipelineCoordinator: dropping %.1fs segment (matched Fae's own voice, near echo window)", durationSecs)
+                debugLog(debugConsole, .pipeline, "Echo rejected (voice match fae_self, recent speech)")
+                return
+            }
+            // Outside echo window — real person speaking. The fae_self match is a
+            // false positive (encoder similarity too high). Clear speaker identity and
+            // let the speech through as unknown — physical device access implies trust.
+            NSLog("PipelineCoordinator: fae_self match ignored (no recent assistant speech)")
+            debugLog(debugConsole, .speaker, "fae_self false positive outside echo window — passing through as unknown")
+            currentSpeakerLabel = nil
+            currentSpeakerDisplayName = nil
+            currentSpeakerRole = nil
+            currentSpeakerIsOwner = false
+            currentSpeakerIsKnownNonOwner = false
         }
 
         // Liveness enforcement: reject speech with low liveness score in enforce mode.
@@ -845,6 +870,11 @@ actor PipelineCoordinator {
     ) async {
         let maxToolTurns = 5
 
+        // Reset computer-use step counter at the start of each user turn.
+        if !isToolFollowUp {
+            computerUseStepCount = 0
+        }
+
         await refreshDegradedModeIfNeeded(context: "before_generation")
 
         guard await llmEngine.isLoaded else {
@@ -943,6 +973,7 @@ actor PipelineCoordinator {
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
+                visionCapable: config.vision.enabled,
                 userName: config.userName,
                 speakerDisplayName: currentSpeakerDisplayName,
                 speakerRole: currentSpeakerRole,
@@ -1915,7 +1946,22 @@ actor PipelineCoordinator {
             return .error("Tool '\(call.name)' is not available in current mode (\(toolMode))")
         }
 
-        guard let tool = registry.tool(named: call.name) else {
+        // Computer-use action step limiter (click/type_text/scroll).
+        let actionTools: Set<String> = ["click", "type_text", "scroll"]
+        if actionTools.contains(call.name) {
+            computerUseStepCount += 1
+            if computerUseStepCount > Self.maxComputerUseSteps {
+                return .error("Computer use step limit reached (\(Self.maxComputerUseSteps) per turn). Ask the user before continuing.")
+            }
+        }
+
+        // Build VLM provider closure for vision tools.
+        let vlmProvider: VLMProvider? = { [weak self] in
+            guard let self, let mm = self.modelManager else { return nil }
+            return try await mm.loadVLMIfNeeded(config: self.config)
+        }
+
+        guard let tool = registry.tool(named: call.name, vlmProvider: vlmProvider) else {
             return .error("Unknown tool: \(call.name)")
         }
 

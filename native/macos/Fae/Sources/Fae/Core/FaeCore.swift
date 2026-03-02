@@ -233,6 +233,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     speakerProfileStore: speakerProfileStore,
                     skillManager: skillManager,
                     toolAnalytics: toolAnalytics,
+                    modelManager: modelManager,
                     rescueMode: isRescue
                 )
                 try await coordinator.start()
@@ -922,6 +923,30 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.conversation.directAddressFollowupS = seconds
             persistConfig(reason: "config.patch.conversation.direct_address_followup_s")
 
+        case "vision.enabled":
+            guard let enabled = value as? Bool else { return }
+            config.vision.enabled = enabled
+            persistConfig(reason: "config.patch.vision.enabled")
+
+        case "vision.model_preset", "vision.modelPreset":
+            guard let preset = value as? String,
+                  !preset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+            let raw = preset.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized: String
+            switch raw {
+            case "qwen3_vl_8b":
+                normalized = "qwen3_vl_4b_8bit"
+            case "qwen3_vl_4b":
+                normalized = "qwen3_vl_4b_4bit"
+            default:
+                normalized = raw
+            }
+            let allowed = ["auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit"]
+            guard allowed.contains(normalized) else { return }
+            config.vision.modelPreset = normalized
+            persistConfig(reason: "config.patch.vision.model_preset")
+
         default:
             NSLog("FaeCore: ignoring unknown config key '%@'", key)
         }
@@ -1268,6 +1293,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         "emotional_prosody": config.tts.emotionalProsody,
                         "custom_voice_path": config.tts.customVoicePath as Any,
                         "custom_reference_text": config.tts.customReferenceText as Any,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
+        case "vision":
+            return [
+                "payload": [
+                    "vision": [
+                        "enabled": config.vision.enabled,
+                        "model_preset": config.vision.modelPreset,
                     ] as [String: Any],
                 ] as [String: Any],
             ]

@@ -176,4 +176,43 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertNil(reloaded.channels.discord.botToken)
         XCTAssertEqual(CredentialManager.retrieve(key: secretKey), newSecret)
     }
+
+    @MainActor
+    func testFaeCorePersistsVisionPatchKeysAndSupportsVisionConfigGet() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "vision.enabled", "value": true]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "vision.model_preset", "value": "qwen3_vl_4b_4bit"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertTrue(reloaded.vision.enabled)
+        XCTAssertEqual(reloaded.vision.modelPreset, "qwen3_vl_4b_4bit")
+
+        let response = await core.queryCommand(name: "config.get", payload: ["key": "vision"])
+        let payload = response?["payload"] as? [String: Any]
+        let vision = payload?["vision"] as? [String: Any]
+        XCTAssertEqual(vision?["enabled"] as? Bool, true)
+        XCTAssertEqual(vision?["model_preset"] as? String, "qwen3_vl_4b_4bit")
+    }
 }

@@ -35,6 +35,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 // MLX LLM inference.
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXVLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
                 // MLX Audio — STT and TTS.
@@ -66,6 +67,7 @@ let package = Package(
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("CoreML"),
+                .linkedFramework("ScreenCaptureKit"),
             ]
         ),
 

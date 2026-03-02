@@ -114,6 +114,18 @@ Fae doesn't just respond — she learns forward from your conversations and acts
 - **Skill proposals** — when Fae notices patterns, she proposes new skills. Always asks before installing.
 - **Noise control** — daily delivery budgets and quiet hours prevent Fae from ever becoming annoying.
 
+### Vision + Computer Use
+
+Fae can see your screen, use the webcam, and interact with apps — all locally, all private:
+
+- **Screenshot** — capture the screen or a specific app window and describe what's visible via on-device VLM (Qwen3-VL).
+- **Camera** — capture a webcam frame and describe what Fae sees.
+- **Read screen** — combines screenshot with the macOS Accessibility tree to produce a numbered element list for interaction.
+- **Click, type, scroll** — interact with apps using element-based or coordinate-based actions via macOS Accessibility API.
+- **Find element** — search the UI tree for buttons, fields, and links by text or role.
+
+Vision requires enabling in Settings > Models and sufficient RAM (24+ GB). The VLM loads on-demand — not at startup — to conserve RAM.
+
 ### Desktop Automation
 
 Fae can manage applications on your Mac through desktop automation tools:
@@ -174,7 +186,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker │
 │                         │              │                      │
 │                         │              ├── Memory (SQLite)     │
-│                         │              ├── Tools (21 built-in) │
+│                         │              ├── Tools (30 built-in) │
 │                         │              ├── Scheduler           │
 │                         │              └── Self-Config         │
 │                         │                                     │
@@ -186,6 +198,11 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  │ Qwen3-ASR │ │ Qwen3.5    │ │ Qwen3-TTS │ │ ECAPA-TDNN  │  │
 │  │ 1.7B 4bit │ │ MLX 4bit   │ │ 1.7B bf16 │ │ Core ML     │  │
 │  └───────────┘ └────────────┘ └───────────┘ └─────────────┘  │
+│  ┌───────────┐                                                │
+│  │ VLM       │  (on-demand, vision tools only)                │
+│  │ Qwen3-VL  │                                                │
+│  │ 4B/8B     │                                                │
+│  └───────────┘                                                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -196,6 +213,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
 | LLM | Qwen3.5-27B / 35B-A3B | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
+| VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit | Vision — screen/camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
@@ -231,6 +249,8 @@ The unified pipeline handles everything in a single pass — the LLM decides whe
 | Skills | `activate_skill`, `run_skill`, `manage_skill` |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
+| Vision | `screenshot`, `camera`, `read_screen` |
+| Computer Use | `click`, `type_text`, `scroll`, `find_element` |
 | Roleplay | `roleplay` |
 
 The LLM decides when to use tools — no separate routing or intent classification needed.
@@ -316,6 +336,10 @@ maxEnrollments = 50
 [conversation]
 requireDirectAddress = false
 directAddressFollowupS = 20
+
+[vision]
+enabled = false
+modelPreset = "auto"
 ```
 
 ## Documentation

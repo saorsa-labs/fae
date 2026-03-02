@@ -214,6 +214,12 @@ private struct ActivityCardView: View {
     private var iconName: String {
         switch card.kind {
         case .toolCall(let name):
+            if name == "screenshot" { return "camera.viewfinder" }
+            if name == "camera" { return "camera.fill" }
+            if name == "read_screen" { return "eye" }
+            if name == "click" { return "cursorarrow.click.2" }
+            if name == "type_text" { return "keyboard" }
+            if name == "scroll" { return "arrow.up.and.down.and.arrow.left.and.right" }
             if name.contains("search") { return "magnifyingglass" }
             if name.contains("read") || name.contains("fetch") { return "doc.text" }
             if name.contains("write") || name.contains("edit") { return "pencil" }

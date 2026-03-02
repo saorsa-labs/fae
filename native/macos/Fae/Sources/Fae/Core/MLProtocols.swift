@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import Foundation
 
 // MARK: - Engine Load State
@@ -85,6 +86,21 @@ protocol EmbeddingEngine: Actor {
     func embed(text: String) async throws -> [Float]
     var isLoaded: Bool { get }
     var loadState: MLEngineLoadState { get }
+}
+
+/// Vision-language model engine protocol.
+///
+/// Implementations: `MLXVLMEngine` (Qwen3-VL via mlx-swift-lm MLXVLM module).
+protocol VLMEngine: Actor {
+    func load(modelID: String) async throws
+    func describe(image: CGImage, prompt: String, options: GenerationOptions) -> AsyncThrowingStream<String, Error>
+    func warmup() async
+    var isLoaded: Bool { get }
+    var loadState: MLEngineLoadState { get }
+}
+
+extension VLMEngine {
+    func warmup() async {}
 }
 
 /// Speaker embedding engine protocol for voice identity / speaker verification.

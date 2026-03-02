@@ -198,3 +198,5 @@ Self-modification integrates with Fae's memory system:
 - Writing and running Python scripts requires approval when in `full` tool mode.
 - Write-path security (`PathPolicy`) blocks writes to dotfiles, system paths, and Fae's own config.
 - Per-tool rate limiting prevents runaway tool use.
+- Computer use tools (click, type_text, scroll) are limited to 10 action steps per conversation turn.
+- Vision tools require explicit enablement (`vision.enabled = true`) and sufficient RAM (24+ GB).

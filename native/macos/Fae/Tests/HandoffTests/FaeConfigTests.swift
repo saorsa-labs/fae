@@ -109,4 +109,36 @@ final class FaeConfigTests: XCTestCase {
 
         XCTAssertEqual(loaded.memory.maxRecallResults, 11)
     }
+
+    func testRecommendedVLMModelAcceptsCurrentPresetNames() {
+        let preset4bit = FaeConfig.recommendedVLMModel(
+            totalMemoryBytes: UInt64(24) * 1024 * 1024 * 1024,
+            preset: "qwen3_vl_4b_4bit"
+        )
+        XCTAssertEqual(preset4bit?.modelId, "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit")
+
+        let preset8bit = FaeConfig.recommendedVLMModel(
+            totalMemoryBytes: UInt64(48) * 1024 * 1024 * 1024,
+            preset: "qwen3_vl_4b_8bit"
+        )
+        XCTAssertEqual(preset8bit?.modelId, "mlx-community/Qwen3-VL-4B-Instruct-8bit")
+    }
+
+    func testVisionModelPresetParsesSnakeCaseKey() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [vision]
+        enabled = true
+        model_preset = "qwen3_vl_4b_4bit"
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertTrue(config.vision.enabled)
+        XCTAssertEqual(config.vision.modelPreset, "qwen3_vl_4b_4bit")
+    }
 }

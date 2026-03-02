@@ -39,7 +39,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker│
 │                         │              │                     │
 │                         │              ├── Memory (SQLite)    │
-│                         │              ├── Tools (21 built-in)│
+│                         │              ├── Tools (30 built-in)│
 │                         │              ├── Skills (v2)        │
 │                         │              ├── Scheduler          │
 │                         │              ├── Backup (Git Vault) │
@@ -53,6 +53,11 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  │ Qwen3-ASR │ │ Qwen3-8B   │ │ Qwen3-TTS │ │ ECAPA-TDNN │  │
 │  │ 1.7B 4bit │ │ MLX 4bit   │ │ 1.7B bf16 │ │ Core ML    │  │
 │  └───────────┘ └────────────┘ └───────────┘ └────────────┘  │
+│  ┌───────────┐                                               │
+│  │ VLM       │ ← on-demand, not loaded at startup            │
+│  │ Qwen3-VL  │                                               │
+│  │ 4B/8B 4bit│                                               │
+│  └───────────┘                                               │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -63,6 +68,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
 | LLM | Qwen3.5 (0.8B–35B-A3B) | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
+| VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit/8-bit | Vision — screen + camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
@@ -178,7 +184,7 @@ Implementation: `Scheduler/FaeScheduler.swift`
 
 ## Tool system
 
-Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. Full inventory (21 tools):
+Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. Full inventory (30 tools):
 
 | Category | Tools |
 |----------|-------|
@@ -187,6 +193,8 @@ Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. 
 | Skills | `activate_skill` (load skill instructions), `run_skill` (execute Python), `manage_skill` (create/delete/list) |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
+| Vision | `screenshot` (screen capture → VLM), `camera` (webcam capture → VLM), `read_screen` (screenshot + accessibility tree) |
+| Computer Use | `click` (element or coordinate click), `type_text` (type into element/field), `scroll` (directional scroll), `find_element` (search UI elements) |
 | Roleplay | `roleplay` (multi-voice reading sessions) |
 | Input | `input_request` (prompt user for text/password; 120s timeout) |
 
@@ -363,6 +371,78 @@ Config: `[speaker]` section in `config.toml` — see `docs/guides/voice-identity
 
 Model conversion: `python3 scripts/convert_speaker_model.py` (ONNX → Core ML, one-time).
 
+## Vision + computer use
+
+Fae can see the screen and interact with apps via on-device vision (Qwen3-VL) and macOS Accessibility API. All processing is local — images never leave the Mac.
+
+### VLM engine (on-demand)
+
+The VLM does **not** load at startup — it loads on-demand when a vision tool first fires, to conserve RAM for the core STT+LLM+TTS pipeline.
+
+RAM-tiered model selection:
+
+| System RAM | VLM Model | Notes |
+|-----------|-----------|-------|
+| 48+ GB | Qwen3-VL-8B (8-bit) | Alongside text LLM |
+| 24-47 GB | Qwen3-VL-4B (4-bit) | Alongside text LLM |
+| <24 GB | Disabled (nil) | Not enough headroom |
+
+Config: `[vision]` section in config.toml. Enable via Settings > Models or `self_config(adjust_setting, vision.enabled, true)`.
+
+### Vision tools
+
+| Tool | Risk | Params | Behavior |
+|------|------|--------|----------|
+| `screenshot` | medium | `prompt`, `app?` | Capture screen/window via ScreenCaptureKit → VLM description |
+| `camera` | medium | `prompt` | Capture webcam frame via AVCaptureSession → VLM description |
+| `read_screen` | high | `prompt?`, `app?` | Screenshot + Accessibility tree → VLM + numbered element list |
+
+### Computer use tools
+
+| Tool | Risk | Params | Behavior |
+|------|------|--------|----------|
+| `click` | high | `element_index` or `x`/`y` | AXUIElement press or CGEvent mouse click |
+| `type_text` | high | `text`, `element_index?` | AXUIElement setValue or CGEvent keystroke synthesis |
+| `scroll` | medium | `direction`, `amount?` | CGEvent scroll wheel |
+| `find_element` | low | `query`, `role?`, `app?` | AXUIElement tree search with fuzzy title matching |
+
+### Computer use workflow
+
+The LLM follows: `read_screen` → identify target → `click`/`type_text` → `read_screen` to verify. Max 10 action steps (click/type_text/scroll) per conversation turn to prevent runaway automation.
+
+### JIT permissions
+
+Vision tools trigger JIT permission requests via `JitPermissionController`:
+- **Screen Recording** — `CGRequestScreenCaptureAccess()` with polling
+- **Camera** — `AVCaptureDevice.requestAccess(for: .video)`
+- **Accessibility** — `AXIsProcessTrustedWithOptions` (may already be granted via GlobalHotkeyManager)
+
+### TrustedActionBroker policies
+
+| Tool | Balanced | Autonomous | Cautious |
+|------|----------|------------|----------|
+| `screenshot` | allow w/ ticket | allow | confirm |
+| `camera` | confirm (high-impact) | confirm (high-impact) | confirm |
+| `read_screen` | confirm | confirm | confirm |
+| `click` | confirm | confirm | confirm |
+| `type_text` | confirm | confirm | confirm |
+| `scroll` | confirm (high-impact) | confirm (high-impact) | confirm |
+| `find_element` | allow | allow | confirm |
+
+### Implementation files
+
+| File | Role |
+|------|------|
+| `ML/MLXVLMEngine.swift` | Qwen3-VL inference actor via MLXVLM (~120 lines) |
+| `Tools/VisionTools.swift` | All 7 vision + computer use tool implementations |
+| `Tools/AccessibilityBridge.swift` | macOS AXUIElement wrapper: query, press, setValue, tree search |
+| `ML/ModelManager.swift` | On-demand VLM loading/unloading via `loadVLMIfNeeded()` |
+| `Core/FaeConfig.swift` | `VisionConfig` struct, `recommendedVLMModel()` static method |
+| `Core/PersonalityManager.swift` | `visionPrompt` + `computerUsePrompt` fragments |
+| `Core/PermissionStatusProvider.swift` | Screen Recording + Camera permission checks |
+| `JitPermissionController.swift` | Screen Recording + Camera JIT permission flow |
+| `SettingsModelsTab.swift` | Vision section (toggle, model picker, permission badges) |
+
 ## Self-modification
 
 Fae can modify her own behavior and learn new skills. See `docs/guides/self-modification.md`.
@@ -390,6 +470,7 @@ Adjustable keys:
 | `barge_in.enabled` | Bool | — | "Let me interrupt you" |
 | `conversation.require_direct_address` | Bool | — | "Only respond when I say your name" |
 | `conversation.direct_address_followup_s` | Int | 5–60 | "Keep listening longer" |
+| `vision.enabled` | Bool | — | "Enable/disable vision" |
 
 Changes route through `FaeCore.patchConfig()` — the same pathway Settings UI uses. Fully bidirectional.
 
@@ -535,7 +616,8 @@ Fae doesn't just respond — she actively learns from conversations and acts on 
 8. Activated skill instructions — full SKILL.md body for active skills
 9. Python/uv capability prompt (when tools available)
 10. Self-modification prompt (when tools available)
-11. Proactive behavior prompt (when tools available)
+11. Vision + computer use prompt (when vision enabled)
+12. Proactive behavior prompt (when tools available)
 
 In **rescue mode**, step 2 uses the bundled default soul and step 4 uses empty string (bypassed, not deleted).
 
@@ -625,6 +707,10 @@ bargeInSilenceMs = 600
 [conversation]
 requireDirectAddress = false
 directAddressFollowupS = 20
+
+[vision]
+enabled = false
+modelPreset = "auto"
 ```
 
 Data paths:
@@ -667,10 +753,11 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 
 | File | Role |
 |------|------|
-| `ML/ModelManager.swift` | Loads STT, LLM, TTS, Speaker engines; tracks degraded mode |
+| `ML/ModelManager.swift` | Loads STT, LLM, TTS, Speaker engines; on-demand VLM loading; tracks degraded mode |
 | `ML/MLXSTTEngine.swift` | Qwen3-ASR speech-to-text via mlx-swift |
 | `ML/MLXLLMEngine.swift` | Qwen3 LLM inference via mlx-swift |
 | `ML/MLXTTSEngine.swift` | Qwen3-TTS text-to-speech via mlx-audio-swift |
+| `ML/MLXVLMEngine.swift` | Qwen3-VL vision-language model inference via MLXVLM (on-demand) |
 | `ML/MLXEmbeddingEngine.swift` | Hash-384 embedding engine for semantic search |
 | `ML/CoreMLSpeakerEncoder.swift` | ECAPA-TDNN Core ML speaker embedding |
 | `ML/SpeakerProfileStore.swift` | Speaker profile enrollment, matching, persistence |
@@ -716,6 +803,8 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `Tools/InputSanitizer.swift` | Shell metacharacter detection, bash command classification |
 | `Tools/ToolRateLimiter.swift` | Per-tool sliding-window rate limiter |
 | `Tools/ToolRiskPolicy.swift` | Risk-level → approval routing |
+| `Tools/VisionTools.swift` | Vision + computer use tools (screenshot, camera, read_screen, click, type_text, scroll, find_element) |
+| `Tools/AccessibilityBridge.swift` | macOS Accessibility API wrapper for UI interaction (AXUIElement) |
 
 ### Audio
 
@@ -974,3 +1063,12 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - Streaming `lastAssistantResponseText` accumulation for current-turn echo detection
   - Barge-in toggle in Settings > General > Voice Interaction
   - Live `bargeInEnabledLive` override without pipeline restart
+- **v0.8.72** — Vision + Computer Use: Fae can see the screen and interact with apps
+  - MLXVLMEngine: on-demand Qwen3-VL inference via MLXVLM (RAM-tiered: 48+→8B, 24-47→4B, <24→disabled)
+  - 7 new tools: screenshot, camera, read_screen, click, type_text, scroll, find_element (total: 30)
+  - AccessibilityBridge: macOS AXUIElement wrapper for UI interaction
+  - VisionConfig: `[vision]` section in config.toml + Settings > Models UI
+  - JIT permissions: Screen Recording + Camera via JitPermissionController
+  - TrustedActionBroker: policies for all 7 vision/computer use tools
+  - Computer use step limiter: max 10 action steps per turn
+  - PersonalityManager: expanded visionPrompt + new computerUsePrompt

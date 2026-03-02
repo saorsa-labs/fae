@@ -31,6 +31,34 @@ actor ModelManager {
     /// The recommended context size (tokens) for the loaded model, based on RAM tier.
     private(set) var recommendedContextSize: Int = 16_384
 
+    /// On-demand VLM engine — loaded only when vision tools are invoked.
+    private var vlmEngine: MLXVLMEngine?
+
+    /// Load the VLM engine on-demand if vision is enabled and sufficient RAM exists.
+    ///
+    /// Returns the engine if already loaded or successfully loaded. Returns nil if
+    /// vision is disabled or insufficient RAM.
+    func loadVLMIfNeeded(config: FaeConfig) async throws -> MLXVLMEngine? {
+        if let engine = vlmEngine, await engine.isLoaded { return engine }
+        guard config.vision.enabled else { return nil }
+        guard let (modelId, _) = FaeConfig.recommendedVLMModel(preset: config.vision.modelPreset) else {
+            NSLog("ModelManager: VLM not available — insufficient RAM for vision model")
+            return nil
+        }
+        let engine = MLXVLMEngine()
+        try await engine.load(modelID: modelId)
+        eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
+        self.vlmEngine = engine
+        NSLog("ModelManager: VLM loaded on-demand (%@)", modelId)
+        return engine
+    }
+
+    /// Unload the VLM engine to reclaim RAM.
+    func unloadVLM() {
+        vlmEngine = nil
+        NSLog("ModelManager: VLM unloaded")
+    }
+
     /// Load all pipeline models (STT, LLM, TTS, Speaker) with progress events.
     ///
     /// Uses degraded-mode loading: if one engine fails, the others still load.

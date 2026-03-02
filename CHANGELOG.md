@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.72] - 2026-03-02
+
+### Added
+
+- **Vision + Computer Use** — Fae can now see the screen and interact with apps, all on-device via Qwen3-VL (MLXVLM).
+  - **MLXVLMEngine**: on-demand VLM inference actor using `VLMModelFactory` from mlx-swift-lm's MLXVLM module. RAM-tiered model selection: 48+ GB → Qwen3-VL-8B (8-bit), 24-47 GB → Qwen3-VL-4B (4-bit), <24 GB → disabled. VLM loads only when vision tools fire — not at startup.
+  - **7 new tools**: `screenshot` (screen capture via ScreenCaptureKit → VLM description), `camera` (webcam via AVCaptureSession → VLM description), `read_screen` (screenshot + Accessibility tree → numbered element list), `click` (AXUIElement press or CGEvent mouse), `type_text` (AXUIElement setValue or CGEvent keystrokes), `scroll` (CGEvent scroll wheel), `find_element` (Accessibility tree search with fuzzy matching).
+  - **AccessibilityBridge**: macOS Accessibility API wrapper for querying UI elements, pressing buttons, setting text field values, and recursive tree search. Depth limit 15, max 500 elements.
+  - **Computer use step limiter**: max 10 action steps (click/type_text/scroll) per conversation turn to prevent runaway automation.
+  - **VisionConfig**: `[vision]` section in config.toml with `enabled` and `modelPreset` fields. Enable via Settings > Models or `self_config(adjust_setting, vision.enabled, true)`.
+  - **Settings UI**: Vision section in Models tab with enable toggle, model picker (Auto/8-bit/4-bit), and permission status badges (Screen Recording, Camera, Accessibility).
+  - **JIT permissions**: Screen Recording (`CGRequestScreenCaptureAccess()` with polling) and Camera (`AVCaptureDevice.requestAccess(for: .video)`) added to `JitPermissionController`.
+  - **TrustedActionBroker policies**: all 7 vision/computer use tools added to `explicitRuleTools`; screenshot, camera, and scroll added to `highImpactMediumTools` for confirmation when intent is ambiguous.
+  - **Personality prompts**: expanded `visionPrompt` and new `computerUsePrompt` wired into system prompt assembly when vision is enabled.
+  - **PermissionStatusProvider**: Screen Recording and Camera permission tracking added to status snapshot.
+
 ## [v0.8.70] - 2026-03-02
 
 ### Added

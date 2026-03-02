@@ -46,8 +46,8 @@ final class EndToEndApprovalFlowTests: XCTestCase {
     // MARK: - Combined Voice + Risk
 
     func testNonOwnerMediumRiskRequiresBothPolicies() async throws {
-        let config = FaeConfig.SpeakerConfig()
-        // requireOwnerForTools defaults to true
+        var config = FaeConfig.SpeakerConfig()
+        config.requireOwnerForTools = true
 
         let voiceDecision = VoiceIdentityPolicy.evaluateSensitiveAction(
             config: config,

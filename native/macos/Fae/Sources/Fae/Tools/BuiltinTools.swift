@@ -202,6 +202,7 @@ struct SelfConfigTool: Tool {
             case float(min: Float, max: Float)
             case bool
             case int(min: Int, max: Int)
+            case string(allowed: [String])
         }
 
         let valueType: ValueType
@@ -229,6 +230,14 @@ struct SelfConfigTool: Tool {
                     return "Value \(i) out of range [\(min), \(max)]"
                 }
                 return nil
+            case .string(let allowed):
+                guard let s = coerceString(value) else {
+                    return "Expected one of: \(allowed.joined(separator: ", "))"
+                }
+                guard allowed.contains(s) else {
+                    return "Invalid value '\(s)'. Allowed: \(allowed.joined(separator: ", "))"
+                }
+                return nil
             }
         }
 
@@ -240,6 +249,7 @@ struct SelfConfigTool: Tool {
                 if let s = value as? String { return s.lowercased() == "true" }
                 return value
             case .int: return coerceInt(value) as Any
+            case .string: return coerceString(value) as Any
             }
         }
 
@@ -257,6 +267,12 @@ struct SelfConfigTool: Tool {
             if let f = value as? Float { return Int(f) }
             if let s = value as? String { return Int(s) }
             return nil
+        }
+
+        private func coerceString(_ value: Any) -> String? {
+            guard let s = value as? String else { return nil }
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
         }
     }
 
@@ -293,6 +309,14 @@ struct SelfConfigTool: Tool {
         "conversation.direct_address_followup_s": SettingSpec(
             valueType: .int(min: 5, max: 60),
             description: "Seconds to keep listening after name-addressed (5-60)"
+        ),
+        "vision.enabled": SettingSpec(
+            valueType: .bool,
+            description: "Enable vision tools (screenshot, camera, read_screen). Requires restart."
+        ),
+        "vision.model_preset": SettingSpec(
+            valueType: .string(allowed: ["auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit"]),
+            description: "Vision model preset (auto, qwen3_vl_4b_4bit, qwen3_vl_4b_8bit)."
         ),
     ]
 
@@ -444,6 +468,8 @@ struct SelfConfigTool: Tool {
             "  conversation.direct_address_followup_s = \(config.conversation.directAddressFollowupS)"
                 + " — Follow-up window (seconds)"
         )
+        lines.append("  vision.enabled = \(config.vision.enabled) — Enable on-device vision tools")
+        lines.append("  vision.model_preset = \(config.vision.modelPreset) — Vision model preset")
         return lines.joined(separator: "\n")
     }
 }
