@@ -38,6 +38,15 @@ actor ConversationStateTracker {
         self.reservedTokens = reservedTokens
     }
 
+    /// Update only the reserved-token portion of the budget.
+    ///
+    /// Useful when the dynamic system prompt size changes turn-to-turn
+    /// (memory context, activated skills, tool schemas).
+    func setReservedTokens(_ reservedTokens: Int) {
+        self.reservedTokens = max(reservedTokens, 0)
+        trimHistory()
+    }
+
     // MARK: - History Management
 
     /// Add a user message to history, optionally annotated with speaker name.
@@ -61,7 +70,12 @@ actor ConversationStateTracker {
 
     /// Add a tool result to history.
     func addToolResult(id: String, name: String, content: String) {
-        history.append(LLMMessage(role: .tool, content: content, toolCallID: id, name: name))
+        let maxToolResultChars = 2_000
+        let normalized = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bounded = normalized.count > maxToolResultChars
+            ? String(normalized.prefix(maxToolResultChars)) + "\n[truncated]"
+            : normalized
+        history.append(LLMMessage(role: .tool, content: bounded, toolCallID: id, name: name))
         trimHistory()
     }
 

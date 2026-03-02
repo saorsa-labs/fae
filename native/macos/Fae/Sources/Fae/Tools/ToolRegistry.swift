@@ -75,7 +75,8 @@ final class ToolRegistry: Sendable {
 
     /// JSON schema descriptions filtered by tool mode.
     ///
-    /// - `off` / `read_only`: read-only tools (no writes, no bash)
+    /// - `off`: no tools
+    /// - `read_only`: read-only tools (no writes, no bash)
     /// - `read_write`: read tools + write/edit/self_config + scheduler mutation
     /// - `full`: all tools (with approval for writes)
     /// - `full_no_approval`: all tools
@@ -87,7 +88,9 @@ final class ToolRegistry: Sendable {
     /// Check whether a tool is allowed in the given mode.
     func isToolAllowed(_ name: String, mode: String) -> Bool {
         switch mode {
-        case "off", "read_only":
+        case "off":
+            return false
+        case "read_only":
             return Self.readOnlyTools.contains(name)
         case "read_write":
             return Self.readOnlyTools.contains(name) || Self.writeTools.contains(name)
@@ -106,7 +109,7 @@ final class ToolRegistry: Sendable {
     private static let readOnlyTools: Set<String> = [
         "read", "web_search", "fetch_url",
         "calendar", "reminders", "contacts", "mail", "notes",
-        "scheduler_list", "roleplay", "run_skill",
+        "scheduler_list", "roleplay",
         "activate_skill",
         "input_request",
     ]

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.67] - 2026-03-02
+
+### Fixed
+
+- **Conversation reset trigger + sleep gate** — saying "that will do Fae" (and apostrophe/spacing variants) now performs a hard conversation reset in both voice and text input paths. Fae clears turn history/system-prompt cache, sleeps, and ignores follow-up input until directly addressed again.
+- **Drift from false name capture** — memory name extraction no longer treats generic "I'm ..." phrases as identity updates. Added stricter name validation to prevent spurious profile rewrites.
+- **Tool mode semantics** — `off` now truly disables all tools. `read_only` no longer allows executable `run_skill`.
+- **Settings write-through gaps** — wired missing `config.patch` handlers for `tts.speed`, `tts.emotional_prosody`, `tts.warmth`, `tts.custom_voice_path`, and `tts.custom_reference_text`.
+- **Settings hydration gap** — added `config.get("tts")` response payload so the Models tab reflects persisted TTS settings correctly.
+
+### Improved
+
+- **Live settings application** — tool mode and TTS playback speed now update in the running pipeline without requiring restart.
+- **Context stability under long sessions** — tool result payloads are now bounded before entering conversation history, and reserved-token budgeting is recalculated dynamically from the real assembled system prompt size each turn.
+- **Context budget honoring user cap** — runtime context budget now respects the configured `llm.contextSizeTokens` cap while still using model-tier recommendations as an upper bound.
+- **Tool mode regression tests updated** — test suite now enforces true-off mode behavior and read-only execution restrictions.
+
 ## [v0.8.66] - 2026-03-02
 
 ### Fixed

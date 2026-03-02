@@ -167,8 +167,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     embeddingEngine: neuralEmbedder
                 )
 
-                // Wire context-aware history limits from model selection.
-                let contextSize = await modelManager.recommendedContextSize
+                // Wire context-aware history limits from model selection + user cap.
+                let recommendedContext = await modelManager.recommendedContextSize
+                let configuredContext = max(config.llm.contextSizeTokens, 1_024)
+                let contextSize = min(recommendedContext, configuredContext)
                 let maxHistory = FaeConfig.recommendedMaxHistory(
                     contextSize: contextSize, maxTokens: config.llm.maxTokens
                 )
@@ -177,7 +179,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     contextSize: contextSize,
                     reservedTokens: 5000 + config.llm.maxTokens
                 )
-                NSLog("FaeCore: context=%d maxHistory=%d", contextSize, maxHistory)
+                NSLog(
+                    "FaeCore: context=%d (recommended=%d configured=%d) maxHistory=%d",
+                    contextSize, recommendedContext, configuredContext, maxHistory
+                )
 
                 let isRescue = self.rescueMode?.isActive ?? false
 
@@ -704,6 +709,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             toolMode = value
             config.toolMode = value
             persistConfig(reason: "config.patch.tool_mode")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setToolMode(value) }
+            }
 
         case "llm.voice_model_preset":
             guard let value = value as? String,
@@ -714,12 +722,61 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         case "llm.thinking_enabled":
             guard let value = value as? Bool else { return }
-            config.llm.thinkingEnabled = value
-            persistConfig(reason: "config.patch.llm.thinking_enabled")
+            setThinkingEnabled(value)
 
         case "barge_in.enabled":
             guard let value = value as? Bool else { return }
             setBargeInEnabled(value)
+
+        case "tts.speed":
+            let parsedSpeed: Float?
+            if let v = value as? Float {
+                parsedSpeed = v
+            } else if let v = value as? Double {
+                parsedSpeed = Float(v)
+            } else {
+                parsedSpeed = nil
+            }
+            guard let speed = parsedSpeed else { return }
+            config.tts.speed = speed
+            persistConfig(reason: "config.patch.tts.speed")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setPlaybackSpeed(speed) }
+            }
+
+        case "tts.emotional_prosody":
+            guard let value = value as? Bool else { return }
+            config.tts.emotionalProsody = value
+            persistConfig(reason: "config.patch.tts.emotional_prosody")
+
+        case "tts.warmth":
+            let parsedWarmth: Float?
+            if let v = value as? Float {
+                parsedWarmth = v
+            } else if let v = value as? Double {
+                parsedWarmth = Float(v)
+            } else {
+                parsedWarmth = nil
+            }
+            guard let warmth = parsedWarmth else { return }
+            config.tts.warmth = warmth
+            persistConfig(reason: "config.patch.tts.warmth")
+
+        case "tts.custom_voice_path":
+            if let raw = value as? String, raw.lowercased() == "nil" {
+                config.tts.customVoicePath = nil
+            } else {
+                config.tts.customVoicePath = sanitizedString(value)
+            }
+            persistConfig(reason: "config.patch.tts.custom_voice_path")
+
+        case "tts.custom_reference_text":
+            if let raw = value as? String, raw.lowercased() == "nil" {
+                config.tts.customReferenceText = nil
+            } else {
+                config.tts.customReferenceText = sanitizedString(value)
+            }
+            persistConfig(reason: "config.patch.tts.custom_reference_text")
 
         case "onboarded":
             guard let value = value as? Bool else { return }
@@ -1075,6 +1132,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 "payload": [
                     "llm": [
                         "voice_model_preset": config.llm.voiceModelPreset,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
+        case "tts":
+            return [
+                "payload": [
+                    "tts": [
+                        "speed": Double(config.tts.speed),
+                        "warmth": Double(config.tts.warmth),
+                        "emotional_prosody": config.tts.emotionalProsody,
+                        "custom_voice_path": config.tts.customVoicePath as Any,
+                        "custom_reference_text": config.tts.customReferenceText as Any,
                     ] as [String: Any],
                 ] as [String: Any],
             ]

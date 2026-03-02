@@ -433,25 +433,50 @@ actor MemoryOrchestrator {
         }
     }
 
-    /// Extract a name from statements like "my name is X", "I'm X", "call me X".
+    /// Extract a name from statements like "my name is X", "call me X".
+    ///
+    /// Deliberately avoids generic patterns like "I'm X" which create frequent
+    /// false positives during normal conversation.
     private func extractName(from lower: String, fullText: String) -> String? {
         let patterns = [
-            "my name is ", "i'm ", "call me ", "i am ",
-            "my name's ", "you can call me ", "people call me ",
+            "my name is ", "my name's ", "call me ",
+            "you can call me ", "people call me ",
         ]
         for pattern in patterns {
-            if lower.contains(pattern),
-               let range = lower.range(of: pattern)
-            {
+            if let range = lower.range(of: pattern) {
                 let after = fullText[range.upperBound...]
-                let name = after.prefix(while: { $0.isLetter || $0 == " " || $0 == "-" })
+                let candidate = after.prefix(while: { $0.isLetter || $0 == " " || $0 == "-" || $0 == "'" })
                     .trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty, name.count < 50 {
-                    return name
+                if isLikelyHumanName(candidate) {
+                    return candidate
                 }
             }
         }
         return nil
+    }
+
+    private func isLikelyHumanName(_ candidate: String) -> Bool {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 50 else { return false }
+
+        let words = trimmed
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard !words.isEmpty, words.count <= 4 else { return false }
+
+        let blockedTokens: Set<String> = [
+            "in", "my", "own", "kitchen", "here", "there", "home",
+            "doing", "good", "fine", "okay", "ok", "the", "a", "an",
+        ]
+
+        for word in words {
+            let lowered = word.lowercased()
+            if blockedTokens.contains(lowered) { return false }
+            if word.rangeOfCharacter(from: CharacterSet.decimalDigits) != nil { return false }
+            if word.count < 2 { return false }
+        }
+
+        return true
     }
 
     /// Extract preference statements like "I prefer X", "I like X".

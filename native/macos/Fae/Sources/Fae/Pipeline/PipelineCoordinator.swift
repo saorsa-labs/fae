@@ -89,6 +89,24 @@ actor PipelineCoordinator {
         bargeInEnabledLive = enabled
     }
 
+    /// Live override for tool mode — set by FaeCore when the user changes tool settings.
+    /// `nil` means fall back to `config.toolMode`.
+    private var toolModeLive: String?
+
+    /// Update the tool mode without restarting the pipeline.
+    func setToolMode(_ mode: String) {
+        if isRescueMode {
+            toolModeLive = "read_only"
+            return
+        }
+        toolModeLive = mode
+    }
+
+    /// Update playback speed live without restarting.
+    func setPlaybackSpeed(_ speed: Float) async {
+        await playback.setSpeed(speed)
+    }
+
     // MARK: - Pipeline State
 
     private var mode: PipelineMode = .conversation
@@ -288,11 +306,27 @@ actor PipelineCoordinator {
 
     /// Inject text directly into the LLM (bypasses STT).
     func injectText(_ text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if isConversationStopTrigger(trimmed) {
+            await resetConversationSession(trigger: trimmed, source: "text")
+            return
+        }
+
         // Text input is trusted (physically typed by the user at the device).
         currentSpeakerLabel = "owner"
         currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
         currentSpeakerRole = .owner
         currentSpeakerIsOwner = true
+
+        if gateState == .idle {
+            guard isAddressedToFae(trimmed) else {
+                debugLog(debugConsole, .pipeline, "Text ignored while sleeping (not addressed)")
+                return
+            }
+            wake()
+        }
 
         // If assistant is active, trigger barge-in.
         if assistantSpeaking || assistantGenerating {
@@ -300,7 +334,7 @@ actor PipelineCoordinator {
             await playback.stop()
         }
 
-        await processTranscription(text: text, rms: nil, durationSecs: nil)
+        await processTranscription(text: trimmed, rms: nil, durationSecs: nil)
     }
 
     /// Speak text directly via TTS without going through the LLM.
@@ -387,6 +421,63 @@ actor PipelineCoordinator {
         engagedUntil = Date().addingTimeInterval(
             Double(config.conversation.directAddressFollowupS)
         )
+    }
+
+    private func effectiveToolMode() -> String {
+        if isRescueMode {
+            return "read_only"
+        }
+        return toolModeLive ?? config.toolMode
+    }
+
+    private static func normalizeForPhraseMatch(_ text: String) -> String {
+        let lower = text.lowercased()
+        let mapped = lower.map { ch -> Character in
+            if ch.isLetter || ch.isNumber {
+                return ch
+            }
+            return " "
+        }
+        return String(mapped)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    private func isConversationStopTrigger(_ text: String) -> Bool {
+        let normalizedText = Self.normalizeForPhraseMatch(text)
+        var phrases = config.conversation.sleepPhrases
+        // Common apostrophe-less variant missed by strict literal matching.
+        phrases.append("thatll do fae")
+
+        for phrase in phrases {
+            let normalizedPhrase = Self.normalizeForPhraseMatch(phrase)
+            if !normalizedPhrase.isEmpty, normalizedText.contains(normalizedPhrase) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func isAddressedToFae(_ text: String) -> Bool {
+        if TextProcessing.findNameMention(in: text) != nil {
+            return true
+        }
+        let normalizedText = Self.normalizeForPhraseMatch(text)
+        let wakeWord = Self.normalizeForPhraseMatch(config.conversation.wakeWord)
+        return !wakeWord.isEmpty && normalizedText.contains(wakeWord)
+    }
+
+    private func resetConversationSession(trigger: String, source: String) async {
+        sleep()
+        currentSystemPrompt = nil
+        engagedUntil = nil
+        lastAssistantResponseText = ""
+        activeCapabilityTicket = nil
+        pendingTTSTask?.cancel()
+        pendingTTSTask = nil
+        await conversationState.clear()
+        NSLog("PipelineCoordinator: conversation reset via %@ trigger: %@", source, trigger)
+        debugLog(debugConsole, .pipeline, "Conversation reset (\(source)): \(trigger)")
     }
 
     // MARK: - Main Pipeline Loop
@@ -621,14 +712,14 @@ actor PipelineCoordinator {
 
             eventBus.send(.transcription(text: text, isFinal: true))
 
-            // Gate check.
-            guard gateState == .active else { return }
-
-            // Check for sleep phrases.
-            let lower = text.lowercased()
-            if config.conversation.sleepPhrases.contains(where: { lower.contains($0) }) {
-                sleep()
+            if isConversationStopTrigger(text) {
+                await resetConversationSession(trigger: text, source: "voice")
                 return
+            }
+
+            if gateState != .active {
+                guard isAddressedToFae(text) else { return }
+                wake()
             }
 
             // Conversation gate — direct address check.
@@ -707,8 +798,9 @@ actor PipelineCoordinator {
             await conversationState.addUserMessage(userText, speakerDisplayName: currentSpeakerDisplayName)
 
             // Issue a short-lived capability ticket for this turn.
+            let toolMode = effectiveToolMode()
             activeCapabilityTicket = CapabilityTicketIssuer.issue(
-                mode: config.toolMode,
+                mode: toolMode,
                 registry: registry
             )
 
@@ -721,7 +813,8 @@ actor PipelineCoordinator {
 
             // Build system prompt with tool schemas.
             // Owner gating: non-owner voices don't see tool schemas → LLM won't use tools.
-            let includeTools = !(config.speaker.requireOwnerForTools && !currentSpeakerIsOwner)
+            let includeTools = toolMode != "off"
+                && !(config.speaker.requireOwnerForTools && !currentSpeakerIsOwner)
             let skillDescs: [(name: String, description: String, type: SkillType)]
             let legacySkills: [String]
             if includeTools, let sm = skillManager {
@@ -734,6 +827,12 @@ actor PipelineCoordinator {
                 skillDescs = []
                 legacySkills = []
             }
+            let toolSchemas: String? = {
+                guard includeTools else { return nil }
+                let schemas = registry.toolSchemas(for: toolMode)
+                return schemas.isEmpty ? nil : schemas
+            }()
+
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
@@ -742,7 +841,7 @@ actor PipelineCoordinator {
                 speakerRole: currentSpeakerRole,
                 soulContract: soul,
                 directiveOverride: isRescueMode ? "" : nil,
-                toolSchemas: includeTools ? registry.toolSchemas(for: config.toolMode) : nil,
+                toolSchemas: toolSchemas,
                 installedSkills: legacySkills,
                 skillDescriptions: skillDescs
             )
@@ -761,8 +860,13 @@ actor PipelineCoordinator {
             self.currentSystemPrompt = systemPrompt
         }
 
-        let history = await conversationState.history
         guard let systemPrompt = self.currentSystemPrompt else { return }
+        let dynamicReservedTokens = max(
+            1024,
+            Self.estimateTokenCount(for: systemPrompt) + config.llm.maxTokens
+        )
+        await conversationState.setReservedTokens(dynamicReservedTokens)
+        let history = await conversationState.history
 
         let options = GenerationOptions(
             temperature: config.llm.temperature,
@@ -1369,6 +1473,10 @@ actor PipelineCoordinator {
         return String(text[endRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private static func estimateTokenCount(for text: String) -> Int {
+        Int(Double(text.count) / 3.5)
+    }
+
     private static func serializeArguments(_ args: [String: Any]) -> String {
         if let data = try? JSONSerialization.data(withJSONObject: args),
            let str = String(data: data, encoding: .utf8)
@@ -1394,8 +1502,9 @@ actor PipelineCoordinator {
 
     private func executeTool(_ call: ToolCall) async -> ToolResult {
         // Tool mode enforcement — reject tools not allowed in current mode.
-        guard registry.isToolAllowed(call.name, mode: config.toolMode) else {
-            return .error("Tool '\(call.name)' is not available in current mode (\(config.toolMode))")
+        let toolMode = effectiveToolMode()
+        guard registry.isToolAllowed(call.name, mode: toolMode) else {
+            return .error("Tool '\(call.name)' is not available in current mode (\(toolMode))")
         }
 
         guard let tool = registry.tool(named: call.name) else {
@@ -1678,7 +1787,7 @@ actor PipelineCoordinator {
     /// - read_write/full => balanced profile
     /// - full_no_approval => autonomous profile
     private func currentPolicyProfile() -> PolicyProfile {
-        switch config.toolMode {
+        switch effectiveToolMode() {
         case "off", "read_only":
             return .moreCautious
         case "full_no_approval":

@@ -293,17 +293,17 @@ final class ToolModeFilteringTests: XCTestCase {
 
     // MARK: - Off Mode
 
-    func testOffModeAllowsReadTools() {
-        XCTAssertTrue(registry.isToolAllowed("read", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("web_search", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("fetch_url", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("calendar", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("contacts", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("reminders", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("mail", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("notes", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("scheduler_list", mode: "off"))
-        XCTAssertTrue(registry.isToolAllowed("roleplay", mode: "off"))
+    func testOffModeDisablesAllTools() {
+        XCTAssertFalse(registry.isToolAllowed("read", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("web_search", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("fetch_url", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("calendar", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("contacts", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("reminders", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("mail", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("notes", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("scheduler_list", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("roleplay", mode: "off"))
     }
 
     func testOffModeBlocksWriteTools() {
@@ -316,11 +316,12 @@ final class ToolModeFilteringTests: XCTestCase {
 
     // MARK: - Read-Only Mode
 
-    func testReadOnlyModeSameAsOff() {
+    func testReadOnlyModeAllowsReadButBlocksMutationAndExecution() {
         XCTAssertTrue(registry.isToolAllowed("read", mode: "read_only"))
         XCTAssertTrue(registry.isToolAllowed("web_search", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("write", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_only"))
+        XCTAssertFalse(registry.isToolAllowed("run_skill", mode: "read_only"))
     }
 
     // MARK: - Read-Write Mode
@@ -348,12 +349,9 @@ final class ToolModeFilteringTests: XCTestCase {
 
     // MARK: - Schema Filtering
 
-    func testOffModeSchemasExcludeWriteTools() {
+    func testOffModeSchemasAreEmpty() {
         let schemas = registry.toolSchemas(for: "off")
-        XCTAssertFalse(schemas.contains("## bash\n"))
-        XCTAssertFalse(schemas.contains("## write\n"))
-        XCTAssertTrue(schemas.contains("## read\n"))
-        XCTAssertTrue(schemas.contains("## web_search\n"))
+        XCTAssertEqual(schemas, "")
     }
 
     func testFullModeSchemasIncludeAll() {
