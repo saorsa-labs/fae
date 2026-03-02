@@ -184,7 +184,7 @@ Implementation: `Scheduler/FaeScheduler.swift`
 
 ## Tool system
 
-Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. Full inventory (30 tools):
+Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. Full inventory (31 tools):
 
 | Category | Tools |
 |----------|-------|
@@ -195,6 +195,7 @@ Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. 
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
 | Vision | `screenshot` (screen capture → VLM), `camera` (webcam capture → VLM), `read_screen` (screenshot + accessibility tree) |
 | Computer Use | `click` (element or coordinate click), `type_text` (type into element/field), `scroll` (directional scroll), `find_element` (search UI elements) |
+| Voice Identity | `voice_identity` (enroll speakers, verify identity, manage profiles — beep-guided capture) |
 | Roleplay | `roleplay` (multi-voice reading sessions) |
 | Input | `input_request` (prompt user for text/password; 120s timeout) |
 
@@ -351,6 +352,8 @@ Fae can read plays, scripts, books, and news using distinct character voices.
 ECAPA-TDNN speaker encoder (from Qwen3-TTS) runs via Core ML on the Neural Engine.
 Produces 1024-dim x-vector embeddings from audio for speaker verification.
 
+Speaker recognition is **always on** — no settings toggle. The ECAPA-TDNN encoder loads unconditionally when the Core ML model exists.
+
 | File | Role |
 |------|------|
 | `Core/MLProtocols.swift` | `SpeakerEmbeddingEngine` protocol |
@@ -358,14 +361,42 @@ Produces 1024-dim x-vector embeddings from audio for speaker verification.
 | `ML/SpeakerProfileStore.swift` | Profile enrollment, matching, JSON persistence |
 | `Core/FaeConfig.swift` | `SpeakerConfig` — thresholds, gating, progressive enrollment |
 | `Resources/Models/SpeakerEncoder.mlmodelc/` | Compiled Core ML model (~18MB) |
+| `Tools/VoiceIdentityTool.swift` | Tool: check_status, collect_sample, confirm_identity, rename_speaker, list_speakers |
+| `Resources/Skills/voice-identity/SKILL.md` | Built-in skill: enrollment choreography, introduction flow, re-verification |
 
 Behavior:
 
-- **First launch**: first speaker auto-enrolled as "owner" (no explicit enrollment step)
+- **First launch**: Fae detects no owner profile, auto-activates `voice-identity` skill, and conversationally guides enrollment using the `voice_identity` tool (beep → speak → enroll cycle)
 - **Progressive enrollment**: each recognized interaction adds to the profile centroid (up to 50 embeddings)
 - **Owner gating**: when `requireOwnerForTools = true`, *known* non-owner voices don't see tool schemas. Unknown speakers (encoder not loaded, no match) still get tools — physical device access implies trust. Only positively matched non-owner profiles are blocked.
+- **Introduction flow**: "Fae, meet Alice" triggers the voice-identity skill's introduction instructions — Fae collects voice samples from the new person with beep-guided capture
+- **Re-verification**: when voice confidence drops, Fae proactively offers to collect fresh samples
 - **Text injection**: always trusted (physical device access)
 - **Degraded mode**: if model not found or load fails, pipeline continues without voice identity — tools remain available
+
+### VoiceIdentityTool
+
+The `voice_identity` tool manages enrollment and verification via 5 actions:
+
+| Action | Description |
+|--------|-------------|
+| `check_status` | Returns enrollment state, speaker count, confidence scores |
+| `collect_sample` | Plays ready beep → captures ~3s audio → embeds → enrolls against label |
+| `confirm_identity` | Matches current speaker against all profiles |
+| `rename_speaker` | Updates display name for a speaker label |
+| `list_speakers` | Lists all enrolled speakers with roles, counts, last-seen |
+
+The `collect_sample` sequence: play `readyBeep()` → wait 200ms → capture 3s via `AudioCaptureManager` → embed via `CoreMLSpeakerEncoder` → enroll via `SpeakerProfileStore`.
+
+Risk level: `.low` (read-heavy, enrollment is additive). No approval needed.
+
+### Voice identity skill
+
+Built-in instruction skill at `Resources/Skills/voice-identity/SKILL.md`. Covers:
+- First-launch enrollment (3 samples, conversational)
+- Introducing new people ("Fae, meet Alice")
+- Re-verification when confidence drops
+- Multi-speaker awareness
 
 Config: `[speaker]` section in `config.toml` — see `docs/guides/voice-identity.md`.
 
@@ -690,7 +721,7 @@ enabled = true
 maxRecallResults = 6
 
 [speaker]
-enabled = true
+# Speaker recognition is always on (no enabled toggle)
 threshold = 0.70
 ownerThreshold = 0.75
 requireOwnerForTools = false
@@ -804,6 +835,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `Tools/ToolRateLimiter.swift` | Per-tool sliding-window rate limiter |
 | `Tools/ToolRiskPolicy.swift` | Risk-level → approval routing |
 | `Tools/VisionTools.swift` | Vision + computer use tools (screenshot, camera, read_screen, click, type_text, scroll, find_element) |
+| `Tools/VoiceIdentityTool.swift` | Voice identity tool: check_status, collect_sample, confirm_identity, rename_speaker, list_speakers |
 | `Tools/AccessibilityBridge.swift` | macOS Accessibility API wrapper for UI interaction (AXUIElement) |
 
 ### Audio
@@ -812,7 +844,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 |------|------|
 | `Audio/AudioCaptureManager.swift` | Microphone capture (16kHz mono) |
 | `Audio/AudioPlaybackManager.swift` | Audio playback with barge-in support |
-| `Audio/AudioToneGenerator.swift` | Thinking tone (A3→C4, 300ms) |
+| `Audio/AudioToneGenerator.swift` | Thinking tone (A3→C4, 300ms), listening tone (C5→E5, 200ms), ready beep (G5, 150ms) |
 
 ### Scheduler, Skills & Backup
 
@@ -1072,3 +1104,17 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - TrustedActionBroker: policies for all 7 vision/computer use tools
   - Computer use step limiter: max 10 action steps per turn
   - PersonalityManager: expanded visionPrompt + new computerUsePrompt
+- **v0.8.74** — Voice Pipeline Overhaul: TTS consistency, timestamps, diarization, conversational voice identity
+  - Phase 1A: Remove emotional prosody → instruct mode path (was switching from voice clone to text description)
+  - Phase 1A: Remove SentimentClassifier.ttsInstruct(), Emotional Prosody toggle, Voice Warmth slider
+  - Phase 1B: Add wall-clock `capturedAt` timestamps on SpeechSegment and STTResult
+  - Phase 1B: Flow utterance timestamps through pipeline to memory capture (stored as `utterance_at` in metadata JSON)
+  - Phase 2: Propagate speakerId to ALL memory record types (not just episodes)
+  - Phase 2: Add multi-speaker awareness to system prompt
+  - Phase 3: New VoiceIdentityTool (check_status, collect_sample, confirm_identity, rename_speaker, list_speakers)
+  - Phase 3: New voice-identity built-in skill (SKILL.md) for Fae-driven enrollment
+  - Phase 3: Ready beep tone (G5, 150ms, 0.12 vol) signals "speak now" before voice capture
+  - Phase 3: Replace mechanical enrollment with conversational skill-driven flow
+  - Phase 3: Speaker recognition always on (remove config.speaker.enabled gate)
+  - Phase 3: Voice identity awareness + multi-speaker awareness in system prompt
+  - Total: 31 tools (was 30)
