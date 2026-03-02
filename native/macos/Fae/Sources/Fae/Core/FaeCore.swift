@@ -81,6 +81,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var neuralEmbedder: NeuralEmbeddingEngine?
     private var vectorStore: VectorStore?
     private let speakerProfileStore: SpeakerProfileStore
+    private var skillManagerRef: SkillManager?
     private var scheduler: FaeScheduler?
     private var debugConsoleRef: DebugConsoleController?
     private var vaultManager: GitVaultManager?
@@ -215,7 +216,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 }
 
                 let skillManager = SkillManager()
-                let registry = ToolRegistry.buildDefault(skillManager: skillManager)
+                self.skillManagerRef = skillManager
+                let registry = ToolRegistry.buildDefault(
+                    skillManager: skillManager,
+                    speakerEncoder: speakerEncoder,
+                    speakerProfileStore: speakerProfileStore,
+                    audioCaptureManager: captureManager,
+                    audioPlaybackManager: playbackManager
+                )
                 let toolAnalytics = try? Self.createToolAnalyticsStore()
                 let coordinator = PipelineCoordinator(
                     eventBus: eventBus,
@@ -292,10 +300,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 NSLog("FaeCore: pipeline started")
 
                 // Owner enrollment check — if no owner voiceprint is enrolled,
-                // run the voice enrollment flow so Fae can recognise her primary user.
+                // auto-activate the voice-identity skill so Fae guides enrollment
+                // conversationally via the voice_identity tool.
                 let hasOwner = await speakerProfileStore.hasOwnerProfile()
                 if !hasOwner {
-                    await runVoiceEnrollmentFlow(coordinator: coordinator)
+                    await runSkillDrivenEnrollment(coordinator: coordinator, skillManager: skillManager)
                 } else if !config.onboarded {
                     // First-launch greeting for returning users who already have a voiceprint.
                     let greeting: String
@@ -326,6 +335,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             scheduler = nil
             await pipelineCoordinator?.stop()
             pipelineCoordinator = nil
+            skillManagerRef = nil
             memoryStore = nil
             entityStore = nil
             entityLinker = nil
@@ -373,129 +383,30 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
-    // MARK: - Voice Enrollment Flow
+    // MARK: - Skill-Driven Voice Enrollment
 
-    /// Run the voice enrollment flow when no owner voiceprint is enrolled.
-    ///
-    /// Fae introduces herself, shows a phrase on the canvas, asks the user to
-    /// read it aloud so her voice becomes the enrolled owner, then primes the
-    /// LLM to ask for basic personal info (name, age, etc.).
-    private func runVoiceEnrollmentFlow(coordinator: PipelineCoordinator) async {
-        // Choose an enrollment phrase — something warm and natural to say aloud.
-        let phrase = "Hello Fae, I'm your primary user and I'm glad to meet you."
+    /// Activate the voice-identity skill and prime the LLM to guide enrollment
+    /// conversationally when no owner voiceprint exists.
+    private func runSkillDrivenEnrollment(
+        coordinator: PipelineCoordinator,
+        skillManager: SkillManager
+    ) async {
+        // Activate the voice-identity skill so its full instructions load into context.
+        _ = await skillManager.activate(skillName: "voice-identity")
 
-        // Signal enrollment start — prevents transitionToReadyCanvas() from
-        // overwriting the enrollment card during the 8s post-load delay.
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .faePipelineState,
-                object: nil,
-                userInfo: [
-                    "event": "pipeline.enrollment_started",
-                    "payload": [:] as [String: Any],
-                ]
-            )
-        }
-
-        // Show the phrase on the canvas so the user can read it.
-        let html = enrollmentCardHTML(phrase: phrase)
-        await MainActor.run {
-            NotificationCenter.default.post(
-                name: .faePipelineState,
-                object: nil,
-                userInfo: ["event": "pipeline.canvas_visibility", "payload": ["visible": true]]
-            )
-            NotificationCenter.default.post(
-                name: .faePipelineState,
-                object: nil,
-                userInfo: ["event": "pipeline.canvas_content", "payload": ["html": html]]
-            )
-        }
-
-        // Speak the intro — brief so it doesn't confuse the echo suppressor.
-        let intro = "Hi, I'm Fae. For best results, please move somewhere quiet and turn off any music or background noise. When you're ready, read the phrase on the canvas aloud to register your voice."
+        // Brief spoken intro — Fae then takes over via the skill.
+        let intro = "Hi, I'm Fae. I'd love to learn your voice so I can recognise you. Just talk to me naturally and I'll guide you through it."
         await coordinator.speakDirect(intro)
 
-        // Prime the LLM: the next time the user speaks, Fae should greet them warmly,
-        // confirm enrollment if recognised, and naturally ask for their name and a bit
-        // about themselves. This context is injected once then discarded.
+        // Prime the LLM with one-shot enrollment context (discarded after first turn).
         let enrollmentContext = """
             ENROLLMENT CONTEXT (one-time, not for the user to see):
-            The user has just read an enrollment phrase aloud so that Fae can learn \
-            to recognise their voice. This is their very first interaction. \
-            Greet them warmly as Fae's new primary user. \
-            Tell them their voice has been registered and you'll always know it's them. \
-            Then naturally ask for their first name, roughly how old they are, and \
-            whether they'd like to share anything else about themselves — \
-            keep it conversational, not like a form. \
-            Do not use any tools yet; just have a friendly introductory chat.
+            No primary user is enrolled. The voice-identity skill is now active. \
+            Follow the skill's first-launch enrollment instructions. \
+            Use the voice_identity tool to collect voice samples and enroll the user as owner. \
+            Be warm and conversational — this is their very first interaction with Fae.
             """
         await coordinator.setFirstOwnerEnrollmentContext(enrollmentContext)
-    }
-
-    /// HTML for the voice enrollment canvas card.
-    private func enrollmentCardHTML(phrase: String) -> String {
-        """
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <meta charset="utf-8">
-        <style>
-          body {
-            margin: 0; padding: 40px;
-            background: #0a0a0f;
-            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
-            color: #e8e0f0;
-            display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            min-height: 100vh; box-sizing: border-box;
-          }
-          .card {
-            background: rgba(255,255,255,0.06);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(180,140,220,0.25);
-            border-radius: 20px;
-            padding: 48px 56px;
-            max-width: 560px;
-            text-align: center;
-            box-shadow: 0 8px 48px rgba(120,60,180,0.18);
-          }
-          .icon { font-size: 48px; margin-bottom: 24px; }
-          h1 {
-            font-size: 22px; font-weight: 600;
-            color: #c8a8e8; margin: 0 0 16px;
-          }
-          p {
-            font-size: 15px; line-height: 1.6;
-            color: rgba(232,224,240,0.7); margin: 0 0 32px;
-          }
-          .phrase {
-            font-size: 20px; font-weight: 500;
-            color: #e8e0f0;
-            background: rgba(140,80,220,0.15);
-            border: 1px solid rgba(140,80,220,0.35);
-            border-radius: 12px;
-            padding: 20px 28px;
-            line-height: 1.5;
-            font-style: italic;
-          }
-          .hint {
-            margin-top: 24px;
-            font-size: 13px; color: rgba(232,224,240,0.45);
-          }
-        </style>
-        </head>
-        <body>
-          <div class="card">
-            <div class="icon">🎙️</div>
-            <h1>Voice Enrollment</h1>
-            <p>Read the phrase below aloud so Fae can learn to recognise your voice.</p>
-            <div class="phrase">\(phrase)</div>
-            <p class="hint">Speak clearly in a natural voice.</p>
-          </div>
-        </body>
-        </html>
-        """
     }
 
     // MARK: - HostCommandSender Conformance
@@ -608,9 +519,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         case "speaker.start_enrollment":
-            if let coordinator = pipelineCoordinator {
+            if let coordinator = pipelineCoordinator,
+               let sm = skillManagerRef
+            {
                 Task {
-                    await runVoiceEnrollmentFlow(coordinator: coordinator)
+                    await runSkillDrivenEnrollment(coordinator: coordinator, skillManager: sm)
                 }
             }
 
@@ -770,23 +683,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 Task { await coordinator.setPlaybackSpeed(speed) }
             }
 
-        case "tts.emotional_prosody":
-            guard let value = value as? Bool else { return }
-            config.tts.emotionalProsody = value
-            persistConfig(reason: "config.patch.tts.emotional_prosody")
-
-        case "tts.warmth":
-            let parsedWarmth: Float?
-            if let v = value as? Float {
-                parsedWarmth = v
-            } else if let v = value as? Double {
-                parsedWarmth = Float(v)
-            } else {
-                parsedWarmth = nil
-            }
-            guard let warmth = parsedWarmth else { return }
-            config.tts.warmth = warmth
-            persistConfig(reason: "config.patch.tts.warmth")
+        case "tts.emotional_prosody", "tts.warmth":
+            break // Legacy keys — silently ignored (emotional prosody removed in v2.0).
 
         case "tts.custom_voice_path":
             if let raw = value as? String, raw.lowercased() == "nil" {
@@ -813,8 +711,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "voice_identity.enabled":
             guard let value = value as? Bool else { return }
             config.voiceIdentity.enabled = value
-            // Keep speaker gating aligned with identity toggle.
-            config.speaker.enabled = value
             persistConfig(reason: "config.patch.voice_identity.enabled")
 
         case "voice_identity.mode":
@@ -1289,8 +1185,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 "payload": [
                     "tts": [
                         "speed": Double(config.tts.speed),
-                        "warmth": Double(config.tts.warmth),
-                        "emotional_prosody": config.tts.emotionalProsody,
                         "custom_voice_path": config.tts.customVoicePath as Any,
                         "custom_reference_text": config.tts.customReferenceText as Any,
                     ] as [String: Any],

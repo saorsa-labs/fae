@@ -49,11 +49,15 @@ actor ConversationStateTracker {
 
     // MARK: - History Management
 
-    /// Add a user message to history, optionally annotated with speaker name.
-    func addUserMessage(_ text: String, speakerDisplayName: String? = nil) {
+    /// Add a user message to history, optionally annotated with speaker name and ID.
+    func addUserMessage(_ text: String, speakerDisplayName: String? = nil, speakerId: String? = nil) {
         let content: String
-        if let name = speakerDisplayName {
+        if let name = speakerDisplayName, let speakerId, !speakerId.isEmpty {
+            content = "[\(name) | id:\(speakerId)]: \(text)"
+        } else if let name = speakerDisplayName {
             content = "[\(name)]: \(text)"
+        } else if let speakerId, !speakerId.isEmpty {
+            content = "[speaker id:\(speakerId)]: \(text)"
         } else {
             content = text
         }

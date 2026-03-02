@@ -30,6 +30,30 @@ enum AudioToneGenerator {
         )
     }
 
+    /// Ready beep: single clean note signaling "speak now" before voice capture.
+    /// G5 (784 Hz), 150ms, volume 0.12. Quick attack/decay envelope.
+    static func readyBeep() -> [Float] {
+        let freq = 784.0  // G5
+        let duration = 0.150
+        let volume: Float = 0.12
+        let totalSamples = Int(sampleRate * duration)
+        let fadeLen = Int(Double(totalSamples) * 0.15)
+        var output = [Float](repeating: 0, count: totalSamples)
+        for i in 0..<totalSamples {
+            let envelope: Float
+            if i < fadeLen {
+                envelope = Float(i) / Float(fadeLen)
+            } else if i > totalSamples - fadeLen {
+                envelope = Float(totalSamples - i) / Float(fadeLen)
+            } else {
+                envelope = 1.0
+            }
+            let phase = 2.0 * Double.pi * freq * Double(i) / sampleRate
+            output[i] = volume * envelope * Float(sin(phase))
+        }
+        return output
+    }
+
     // MARK: - Private
 
     private static func generateTwoNote(

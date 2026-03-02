@@ -76,10 +76,6 @@ struct FaeConfig: Codable {
         var customVoicePath: String?
         /// Reference text for the custom voice WAV.
         var customReferenceText: String?
-        /// Enable emotional prosody via instruct mode (trades voice fidelity for emotion).
-        var emotionalProsody: Bool = false
-        /// Voice warmth level (1-5 scale), adjusts instruct baseline.
-        var warmth: Float = 3.0
     }
 
     // MARK: - STT
@@ -123,7 +119,6 @@ struct FaeConfig: Codable {
     // MARK: - Speaker
 
     struct SpeakerConfig: Codable {
-        var enabled: Bool = true
         var threshold: Float = 0.70
         var ownerThreshold: Float = 0.75
         var requireOwnerForTools: Bool = false
@@ -569,12 +564,8 @@ struct FaeConfig: Codable {
                     config.tts.customVoicePath = rawValue == "nil" ? nil : parseString(rawValue)
                 case "customReferenceText":
                     config.tts.customReferenceText = rawValue == "nil" ? nil : parseString(rawValue)
-                case "emotionalProsody":
-                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.tts.emotionalProsody = v
-                case "warmth":
-                    guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.tts.warmth = v
+                case "emotionalProsody", "warmth":
+                    break // Legacy keys — silently ignored (emotional prosody removed in v2.0).
                 default: break
                 }
             case "stt":
@@ -698,8 +689,7 @@ struct FaeConfig: Codable {
             case "speaker":
                 switch key {
                 case "enabled":
-                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.speaker.enabled = v
+                    break // Legacy key — speaker recognition is always on (v2.0).
                 case "threshold":
                     guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.speaker.threshold = v
@@ -777,8 +767,6 @@ struct FaeConfig: Codable {
         lines.append("referenceText = \(encodeStringOrNil(tts.referenceText))")
         lines.append("customVoicePath = \(encodeStringOrNil(tts.customVoicePath))")
         lines.append("customReferenceText = \(encodeStringOrNil(tts.customReferenceText))")
-        lines.append("emotionalProsody = \(tts.emotionalProsody ? "true" : "false")")
-        lines.append("warmth = \(formatFloat(tts.warmth))")
         lines.append("")
 
         lines.append("[stt]")
@@ -818,7 +806,6 @@ struct FaeConfig: Codable {
         lines.append("")
 
         lines.append("[speaker]")
-        lines.append("enabled = \(speaker.enabled ? "true" : "false")")
         lines.append("threshold = \(formatFloat(speaker.threshold))")
         lines.append("ownerThreshold = \(formatFloat(speaker.ownerThreshold))")
         lines.append("requireOwnerForTools = \(speaker.requireOwnerForTools ? "true" : "false")")

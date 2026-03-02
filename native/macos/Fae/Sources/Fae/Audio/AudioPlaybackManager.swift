@@ -142,6 +142,12 @@ actor AudioPlaybackManager {
         enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
     }
 
+    /// Play the ready beep: G5, 150ms, volume 0.12.
+    func playReadyBeep() {
+        let samples = AudioToneGenerator.readyBeep()
+        enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
+    }
+
     // MARK: - File Playback
 
     /// Play a WAV file from disk (for skill audio output).

@@ -141,6 +141,8 @@ actor PipelineCoordinator {
     private var currentSpeakerIsKnownNonOwner: Bool = false
     private var previousSpeakerLabel: String?
     private var utterancesSinceOwnerVerified: Int = 0
+    /// Wall-clock time when the current utterance was captured by the VAD.
+    private var currentUtteranceTimestamp: Date?
 
     // MARK: - Enrollment State
 
@@ -427,7 +429,8 @@ actor PipelineCoordinator {
         let segment = SpeechSegment(
             samples: samples,
             sampleRate: sr,
-            durationSeconds: Double(samples.count) / Double(sr)
+            durationSeconds: Double(samples.count) / Double(sr),
+            capturedAt: Date()
         )
         await handleSpeechSegment(segment)
     }
@@ -583,6 +586,9 @@ actor PipelineCoordinator {
         let rms = VoiceActivityDetector.computeRMS(segment.samples)
         let durationSecs = Float(segment.samples.count) / Float(segment.sampleRate)
 
+        // Capture wall-clock time from VAD onset for memory timestamps.
+        currentUtteranceTimestamp = segment.capturedAt
+
         // Echo suppression check.
         guard echoSuppressor.shouldAccept(
             durationSecs: durationSecs,
@@ -606,8 +612,8 @@ actor PipelineCoordinator {
         currentSpeakerRole = nil
         currentSpeakerIsOwner = false
         currentSpeakerIsKnownNonOwner = false
-        if config.speaker.enabled,
-           let encoder = speakerEncoder, await encoder.isLoaded,
+        // Speaker recognition is always on — no config gate.
+        if let encoder = speakerEncoder, await encoder.isLoaded,
            let store = speakerProfileStore
         {
             do {
@@ -616,29 +622,8 @@ actor PipelineCoordinator {
                     sampleRate: segment.sampleRate
                 )
 
-                // First-launch enrollment: first voice becomes the owner.
-                // Fires whenever there is no owner profile — regardless of onboarded flag.
                 let hasOwner = await store.hasOwnerProfile()
-                if !hasOwner {
-                    let ownerName = config.userName ?? "Owner"
-                    await store.enroll(
-                        label: "owner", embedding: embedding,
-                        role: .owner, displayName: ownerName
-                    )
-                    currentSpeakerLabel = "owner"
-                    currentSpeakerDisplayName = ownerName
-                    currentSpeakerRole = .owner
-                    currentSpeakerIsOwner = true
-                    NSLog("PipelineCoordinator: owner voice enrolled from first speech")
-                    NotificationCenter.default.post(
-                        name: .faePipelineState,
-                        object: nil,
-                        userInfo: [
-                            "event": "pipeline.enrollment_complete",
-                            "payload": [:] as [String: Any],
-                        ]
-                    )
-                } else if let match = await store.match(
+                if hasOwner, let match = await store.match(
                     embedding: embedding,
                     threshold: config.speaker.threshold
                 ) {
@@ -660,6 +645,9 @@ actor PipelineCoordinator {
                     NSLog("PipelineCoordinator: speaker matched: %@ (%@), similarity: %.3f",
                           match.displayName, match.label, match.similarity)
                     debugLog(debugConsole, .speaker, "Matched: \(match.displayName) (\(match.label)) sim=\(String(format: "%.3f", match.similarity)) owner=\(currentSpeakerIsOwner)")
+                } else if !hasOwner {
+                    NSLog("PipelineCoordinator: no owner voice enrolled yet — awaiting voice_identity enrollment")
+                    debugLog(debugConsole, .speaker, "Owner not enrolled yet; speaker left as unknown")
                 } else {
                     NSLog("PipelineCoordinator: speaker not recognized")
                     debugLog(debugConsole, .speaker, "Not recognized (no match above threshold \(String(format: "%.2f", config.speaker.threshold)))")
@@ -669,12 +657,7 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .speaker, "Embed failed: \(error.localizedDescription)")
             }
         } else {
-            // Speaker verification not available — log why.
-            if !config.speaker.enabled {
-                debugLog(debugConsole, .speaker, "Speaker ID disabled in config")
-            } else {
-                debugLog(debugConsole, .speaker, "Speaker encoder not loaded — owner verification skipped")
-            }
+            debugLog(debugConsole, .speaker, "Speaker encoder not loaded — owner verification skipped")
         }
 
         // Self-echo rejection: if the segment matches Fae's own voice AND we are
@@ -896,7 +879,7 @@ actor PipelineCoordinator {
             await playback.playThinkingTone()
 
             // Add user message to history.
-            await conversationState.addUserMessage(userText, speakerDisplayName: currentSpeakerDisplayName)
+            await conversationState.addUserMessage(userText, speakerDisplayName: currentSpeakerDisplayName, speakerId: currentSpeakerLabel)
 
             // Issue a short-lived capability ticket for this turn.
             let toolMode = effectiveToolMode()
@@ -915,7 +898,6 @@ actor PipelineCoordinator {
             // Build system prompt with tool schemas.
             let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
-                && config.speaker.enabled
                 && !ownerProfileExists
             let includeTools = toolMode != "off"
                 && !(config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner)
@@ -1295,7 +1277,6 @@ actor PipelineCoordinator {
             {
                 let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
                 let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
-                    && config.speaker.enabled
                     && !ownerProfileExists
 
                 let fallback: String
@@ -1328,7 +1309,8 @@ actor PipelineCoordinator {
                     turnId: turnId,
                     userText: userText,
                     assistantText: spokenText,
-                    speakerId: currentSpeakerLabel
+                    speakerId: currentSpeakerLabel,
+                    utteranceTimestamp: currentUtteranceTimestamp
                 )
 
                 // Sentiment → orb feeling.
@@ -1509,19 +1491,9 @@ actor PipelineCoordinator {
         }
         debugLog(debugConsole, .pipeline, "TTS: \"\(String(text.prefix(80)))\"\(text.count > 80 ? "…" : "") (final=\(isFinal))")
 
-        // Emotional prosody: when enabled and no explicit voiceInstruct (i.e. not roleplay),
-        // classify sentiment and use instruct mode with emotion description.
-        let effectiveVoiceInstruct: String?
-        if voiceInstruct != nil {
-            effectiveVoiceInstruct = voiceInstruct
-        } else if config.tts.emotionalProsody {
-            let feeling = SentimentClassifier.classify(text) ?? .neutral
-            effectiveVoiceInstruct = SentimentClassifier.ttsInstruct(
-                for: feeling, warmth: config.tts.warmth
-            )
-        } else {
-            effectiveVoiceInstruct = nil
-        }
+        // Voice instruct: pass through only when explicitly set (e.g. roleplay character voices).
+        // Normal speech always uses ICL mode (voice cloning via fae.wav reference audio).
+        let effectiveVoiceInstruct = voiceInstruct
 
         do {
             let ttsStartedAt = Date()

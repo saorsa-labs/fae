@@ -105,8 +105,6 @@ enum PersonalityManager {
           - "Think step by step" → adjust llm.thinking_enabled = true
           - "Let me interrupt you" → adjust barge_in.enabled = true
           - "Only respond when I say your name" → adjust conversation.require_direct_address = true
-          - "Sound warmer" → adjust tts.warmth (1=neutral, 5=warm)
-          - "Be more expressive" → adjust tts.emotional_prosody = true
           - Use get_settings to see all current values before making changes.
           - These changes are reflected in Settings and persist across restarts.
         - Use directive actions for standing orders that affect your behavior:
@@ -127,6 +125,25 @@ enum PersonalityManager {
         """
 
     // MARK: - Proactive Behavior Prompt Fragment
+
+    static let multiSpeakerPrompt = """
+        Multi-speaker awareness:
+        - User messages may be prefixed with [SpeakerName] when voice identity is active.
+        - Address each identified speaker by name naturally in your responses.
+        - Track who said what — attribute memories, preferences, and commitments to the correct speaker.
+        - When an unrecognized voice speaks, you may ask who they are and offer to learn their voice.
+        - In group conversations, keep responses concise and acknowledge all participants.
+        """
+
+    static let voiceIdentityPrompt = """
+        Voice identity:
+        - You have a voice_identity tool for managing speaker profiles (enrollment, verification, listing).
+        - Speaker recognition is always active — you can identify enrolled speakers by voice.
+        - When someone says "meet X" or "introduce X", use the voice-identity skill to guide enrollment.
+        - When confidence in speaker identity drops, proactively offer to collect fresh voice samples.
+        - The voice_identity collect_sample action plays a beep then captures audio — tell the user \
+        to speak naturally after they hear the beep.
+        """
 
     static let proactiveBehaviorPrompt = """
         Proactive intelligence:
@@ -335,11 +352,13 @@ enum PersonalityManager {
                 """)
         }
 
-        // 10. Python / uv capability + self-modification + proactive behavior + roleplay (only when tools are available).
+        // 10. Python / uv capability + self-modification + proactive behavior + roleplay + multi-speaker (only when tools are available).
         if toolSchemas != nil {
             parts.append(pythonCapabilityPrompt)
             parts.append(selfModificationPrompt)
             parts.append(proactiveBehaviorPrompt)
+            parts.append(multiSpeakerPrompt)
+            parts.append(voiceIdentityPrompt)
             parts.append(roleplayPrompt)
 
             // 10b. Skill inventory with progressive disclosure.

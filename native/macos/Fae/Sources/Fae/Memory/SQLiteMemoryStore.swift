@@ -292,7 +292,8 @@ actor SQLiteMemoryStore {
         importanceScore: Float? = nil,
         staleAfterSecs: UInt64? = nil,
         embedding: [Float]? = nil,
-        speakerId: String? = nil
+        speakerId: String? = nil,
+        metadata: String? = nil
     ) throws -> MemoryRecord {
         let now = UInt64(Date().timeIntervalSince1970)
         var record = MemoryRecord(
@@ -309,6 +310,7 @@ actor SQLiteMemoryStore {
             staleAfterSecs: staleAfterSecs
         )
         record.speakerId = speakerId
+        record.metadata = metadata
 
         let embeddingData: Data? = embedding.map { floats in
             floats.withUnsafeBufferPointer { Data(buffer: $0) }

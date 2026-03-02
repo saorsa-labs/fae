@@ -109,9 +109,21 @@ actor MemoryOrchestrator {
         turnId: String,
         userText: String,
         assistantText: String,
-        speakerId: String? = nil
+        speakerId: String? = nil,
+        utteranceTimestamp: Date? = nil
     ) async -> MemoryCaptureReport {
         guard config.enabled else { return MemoryCaptureReport() }
+
+        // Encode utterance timestamp into metadata JSON for all records in this turn.
+        let timestampMetadata: String?
+        if let ts = utteranceTimestamp {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let json = "{\"utterance_at\":\"\(iso.string(from: ts))\"}"
+            timestampMetadata = json
+        } else {
+            timestampMetadata = nil
+        }
 
         var report = MemoryCaptureReport()
 
@@ -131,7 +143,8 @@ actor MemoryOrchestrator {
                 tags: ["turn"],
                 importanceScore: 0.30,
                 staleAfterSecs: 7_776_000,  // 90 days
-                speakerId: speakerId
+                speakerId: speakerId,
+                metadata: timestampMetadata
             )
             report.episodeId = episode.id
 
@@ -165,7 +178,9 @@ actor MemoryOrchestrator {
                         confidence: MemoryConstants.factRememberConfidence,
                         sourceTurnId: turnId,
                         tags: ["remembered"],
-                        importanceScore: 0.80
+                        importanceScore: 0.80,
+                        speakerId: speakerId,
+                        metadata: timestampMetadata
                     )
                     report.extractedCount += 1
                 }
@@ -179,7 +194,9 @@ actor MemoryOrchestrator {
                     confidence: MemoryConstants.profileNameConfidence,
                     sourceTurnId: turnId,
                     allTags: ["name", "identity"],
-                    report: &report
+                    report: &report,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
                 )
             }
 
@@ -195,7 +212,9 @@ actor MemoryOrchestrator {
                     confidence: MemoryConstants.profilePreferenceConfidence,
                     sourceTurnId: turnId,
                     tags: ["preference"],
-                    importanceScore: 0.85
+                    importanceScore: 0.85,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
                 )
                 report.extractedCount += 1
             }
@@ -208,7 +227,9 @@ actor MemoryOrchestrator {
                     confidence: MemoryConstants.profilePreferenceConfidence,
                     sourceTurnId: turnId,
                     tags: ["interest"],
-                    importanceScore: 0.70
+                    importanceScore: 0.70,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
                 )
                 report.extractedCount += 1
             }
@@ -222,7 +243,9 @@ actor MemoryOrchestrator {
                     sourceTurnId: turnId,
                     tags: ["commitment"],
                     importanceScore: 0.90,
-                    staleAfterSecs: 2_592_000  // 30 days
+                    staleAfterSecs: 2_592_000,  // 30 days
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
                 )
                 report.extractedCount += 1
             }
@@ -236,7 +259,9 @@ actor MemoryOrchestrator {
                     sourceTurnId: turnId,
                     tags: ["event"],
                     importanceScore: 0.85,
-                    staleAfterSecs: 604_800  // 7 days
+                    staleAfterSecs: 604_800,  // 7 days
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
                 )
                 report.extractedCount += 1
             }
@@ -249,7 +274,9 @@ actor MemoryOrchestrator {
                     confidence: MemoryConstants.factConversationalConfidence,
                     sourceTurnId: turnId,
                     tags: ["person"],
-                    importanceScore: 0.75
+                    importanceScore: 0.75,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
                 )
                 report.extractedCount += 1
 
@@ -406,7 +433,9 @@ actor MemoryOrchestrator {
         sourceTurnId: String,
         allTags: [String],
         report: inout MemoryCaptureReport,
-        importanceScore: Float = 1.0
+        importanceScore: Float = 1.0,
+        speakerId: String? = nil,
+        metadata: String? = nil
     ) async throws {
         let existing = try await store.findActiveByTag(tag)
 
@@ -427,7 +456,9 @@ actor MemoryOrchestrator {
                 confidence: confidence,
                 sourceTurnId: sourceTurnId,
                 tags: allTags,
-                importanceScore: importanceScore
+                importanceScore: importanceScore,
+                speakerId: speakerId,
+                metadata: metadata
             )
             report.extractedCount += 1
         }

@@ -34,6 +34,8 @@ struct VoiceActivityDetector {
     private var minSpeechSamples: Int = 0
     private var maxSpeechSamples: Int = 0
     private var sampleRate: Int = 16_000
+    /// Wall-clock time when current speech began (set on speech onset).
+    private var currentOnsetAt: Date?
 
     /// Sustained threshold = threshold * hysteresisRatio.
     private var sustainThreshold: Float { threshold * hysteresisRatio }
@@ -77,6 +79,7 @@ struct VoiceActivityDetector {
                 // Speech onset — prepend pre-roll.
                 inSpeech = true
                 output.speechStarted = true
+                currentOnsetAt = Date()
                 speechBuffer.append(contentsOf: preRoll)
             }
             silenceSamples = 0
@@ -94,10 +97,12 @@ struct VoiceActivityDetector {
                     output.segment = SpeechSegment(
                         samples: speechBuffer,
                         sampleRate: sampleRate,
-                        durationSeconds: Double(speechBuffer.count) / Double(sampleRate)
+                        durationSeconds: Double(speechBuffer.count) / Double(sampleRate),
+                        capturedAt: currentOnsetAt ?? Date()
                     )
                 }
                 speechBuffer.removeAll(keepingCapacity: true)
+                currentOnsetAt = nil
             }
         }
 
@@ -109,10 +114,12 @@ struct VoiceActivityDetector {
                 output.segment = SpeechSegment(
                     samples: speechBuffer,
                     sampleRate: sampleRate,
-                    durationSeconds: Double(speechBuffer.count) / Double(sampleRate)
+                    durationSeconds: Double(speechBuffer.count) / Double(sampleRate),
+                    capturedAt: currentOnsetAt ?? Date()
                 )
             }
             speechBuffer.removeAll(keepingCapacity: true)
+            currentOnsetAt = nil
         }
 
         return output
@@ -124,6 +131,7 @@ struct VoiceActivityDetector {
         speechBuffer.removeAll(keepingCapacity: true)
         inSpeech = false
         silenceSamples = 0
+        currentOnsetAt = nil
     }
 
     /// Dynamically adjust silence threshold for barge-in responsiveness.

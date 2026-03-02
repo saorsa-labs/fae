@@ -89,6 +89,8 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         // Vision & computer use tools.
         "screenshot", "camera", "read_screen",
         "click", "type_text", "scroll", "find_element",
+        // Voice identity.
+        "voice_identity",
     ]
 
     /// Medium-risk tools that should still confirm when user intent is ambiguous.

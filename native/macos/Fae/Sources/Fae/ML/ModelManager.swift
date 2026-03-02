@@ -181,8 +181,8 @@ actor ModelManager {
             }
         }
 
-        // Speaker encoder — loads with mel-spectral fallback if no Core ML model.
-        if let speaker, config.speaker.enabled {
+        // Speaker encoder — always loaded when available (speaker recognition is always on).
+        if let speaker {
             eventBus.send(.runtimeProgress(stage: "speaker", progress: 0.86))
             do {
                 try await speaker.load()

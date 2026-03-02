@@ -11,8 +11,6 @@ struct SettingsModelsTab: View {
     @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
     @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
     @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = false
-    @AppStorage("emotionalProsody") private var emotionalProsody: Bool = false
-    @AppStorage("voiceWarmth") private var voiceWarmth: Double = 3.0
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1
     @State private var hydratingFromConfig: Bool = false
     @State private var hasLoadedConfig: Bool = false
@@ -130,43 +128,6 @@ struct SettingsModelsTab: View {
     @ViewBuilder
     private var voiceProsodySection: some View {
         Section("Voice Style") {
-            Toggle("Emotional Prosody", isOn: $emotionalProsody)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .onChange(of: emotionalProsody) {
-                    guard !hydratingFromConfig else { return }
-                    commandSender?.sendCommand(
-                        name: "config.patch",
-                        payload: ["key": "tts.emotional_prosody", "value": emotionalProsody]
-                    )
-                }
-
-            Text(emotionalProsody
-                 ? "Instruct mode: Fae adjusts tone to match content (warm, caring, excited). Uses a different voice timbre."
-                 : "ICL mode: Fae speaks with her cloned voice — natural but emotionally neutral.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-            if emotionalProsody {
-                HStack {
-                    Text("Voice Warmth")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    Slider(value: $voiceWarmth, in: 1...5, step: 0.5) {
-                        Text("Warmth")
-                    }
-                    Text(String(format: "%.1f", voiceWarmth))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, alignment: .trailing)
-                }
-                .onChange(of: voiceWarmth) {
-                    guard !hydratingFromConfig else { return }
-                    commandSender?.sendCommand(
-                        name: "config.patch",
-                        payload: ["key": "tts.warmth", "value": Float(voiceWarmth)]
-                    )
-                }
-            }
-
             HStack {
                 Text("Speaking Speed")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -423,12 +384,6 @@ struct SettingsModelsTab: View {
             }
             if let refText = tts["custom_reference_text"] as? String {
                 customReferenceText = refText
-            }
-            if let prosody = tts["emotional_prosody"] as? Bool {
-                emotionalProsody = prosody
-            }
-            if let warmth = tts["warmth"] as? Double {
-                voiceWarmth = warmth
             }
             if let speed = tts["speed"] as? Double {
                 voiceSpeed = speed

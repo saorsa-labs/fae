@@ -15,13 +15,31 @@ final class ToolRegistry: Sendable {
     }
 
     /// Build a registry with all built-in tools.
-    static func buildDefault(skillManager: SkillManager? = nil) -> ToolRegistry {
-        let allTools: [any Tool] = Self.allBuiltinTools(skillManager: skillManager)
+    static func buildDefault(
+        skillManager: SkillManager? = nil,
+        speakerEncoder: CoreMLSpeakerEncoder? = nil,
+        speakerProfileStore: SpeakerProfileStore? = nil,
+        audioCaptureManager: AudioCaptureManager? = nil,
+        audioPlaybackManager: AudioPlaybackManager? = nil
+    ) -> ToolRegistry {
+        let allTools: [any Tool] = Self.allBuiltinTools(
+            skillManager: skillManager,
+            speakerEncoder: speakerEncoder,
+            speakerProfileStore: speakerProfileStore,
+            audioCaptureManager: audioCaptureManager,
+            audioPlaybackManager: audioPlaybackManager
+        )
         return ToolRegistry(tools: allTools)
     }
 
-    /// All built-in tools (core + Apple + scheduler + skills).
-    private static func allBuiltinTools(skillManager: SkillManager?) -> [any Tool] {
+    /// All built-in tools (core + Apple + scheduler + skills + voice identity).
+    private static func allBuiltinTools(
+        skillManager: SkillManager?,
+        speakerEncoder: CoreMLSpeakerEncoder? = nil,
+        speakerProfileStore: SpeakerProfileStore? = nil,
+        audioCaptureManager: AudioCaptureManager? = nil,
+        audioPlaybackManager: AudioPlaybackManager? = nil
+    ) -> [any Tool] {
         let sm = skillManager ?? SkillManager()
         let tools: [any Tool] = [
             // Core tools
@@ -61,6 +79,13 @@ final class ToolRegistry: Sendable {
             TypeTextTool(),
             ScrollTool(),
             FindElementTool(),
+            // Voice identity
+            VoiceIdentityTool(
+                speakerEncoder: speakerEncoder,
+                speakerProfileStore: speakerProfileStore,
+                audioCaptureManager: audioCaptureManager,
+                audioPlaybackManager: audioPlaybackManager
+            ),
         ]
         return tools
     }
@@ -134,6 +159,7 @@ final class ToolRegistry: Sendable {
         "activate_skill",
         "input_request",
         "find_element",
+        "voice_identity",
     ]
 
     /// Additional tools available in "read_write" mode.

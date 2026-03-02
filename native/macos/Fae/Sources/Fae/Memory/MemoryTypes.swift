@@ -50,6 +50,18 @@ struct MemoryRecord: Sendable {
     var metadata: String?
     var cachedEmbedding: [Float]?
     var speakerId: String?
+
+    /// Wall-clock time when the utterance was captured, parsed from metadata JSON `utterance_at` key.
+    var utteranceTimestamp: Date? {
+        guard let json = metadata,
+              let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let isoString = dict["utterance_at"] as? String
+        else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: isoString)
+    }
 }
 
 struct MemoryAuditEntry: Sendable {

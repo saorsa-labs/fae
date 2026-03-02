@@ -282,14 +282,6 @@ struct SelfConfigTool: Tool {
             valueType: .float(min: 0.8, max: 1.4),
             description: "Speaking speed (0.8=slow, 1.0=normal, 1.4=fast)"
         ),
-        "tts.warmth": SettingSpec(
-            valueType: .float(min: 1.0, max: 5.0),
-            description: "Voice warmth (1=neutral, 5=warm)"
-        ),
-        "tts.emotional_prosody": SettingSpec(
-            valueType: .bool,
-            description: "Expressive voice (trades voice fidelity for emotion)"
-        ),
         "llm.temperature": SettingSpec(
             valueType: .float(min: 0.3, max: 1.0),
             description: "Creativity (0.3=precise, 0.7=balanced, 1.0=creative)"
@@ -455,8 +447,6 @@ struct SelfConfigTool: Tool {
     private static func formatCurrentSettings(_ config: FaeConfig) -> String {
         var lines: [String] = ["Current settings:"]
         lines.append("  tts.speed = \(config.tts.speed) — Speaking speed (0.8=slow, 1.0=normal, 1.4=fast)")
-        lines.append("  tts.warmth = \(config.tts.warmth) — Voice warmth (1=neutral, 5=warm)")
-        lines.append("  tts.emotional_prosody = \(config.tts.emotionalProsody) — Expressive voice")
         lines.append("  llm.temperature = \(config.llm.temperature) — Creativity (0.3=precise, 1.0=creative)")
         lines.append("  llm.thinking_enabled = \(config.llm.thinkingEnabled) — Extended reasoning")
         lines.append("  barge_in.enabled = \(config.bargeIn.enabled) — Allow interruption")
