@@ -282,6 +282,10 @@ struct SelfConfigTool: Tool {
             valueType: .float(min: 0.8, max: 1.4),
             description: "Speaking speed (0.8=slow, 1.0=normal, 1.4=fast)"
         ),
+        "tts.voice_identity_lock": SettingSpec(
+            valueType: .bool,
+            description: "Force canonical bundled fae.wav voice"
+        ),
         "llm.temperature": SettingSpec(
             valueType: .float(min: 0.3, max: 1.0),
             description: "Creativity (0.3=precise, 0.7=balanced, 1.0=creative)"
@@ -451,6 +455,7 @@ struct SelfConfigTool: Tool {
     private static func formatCurrentSettings(_ config: FaeConfig) -> String {
         var lines: [String] = ["Current settings:"]
         lines.append("  tts.speed = \(config.tts.speed) — Speaking speed (0.8=slow, 1.0=normal, 1.4=fast)")
+        lines.append("  tts.voice_identity_lock = \(config.tts.voiceIdentityLock) — Force canonical bundled fae.wav")
         lines.append("  llm.temperature = \(config.llm.temperature) — Creativity (0.3=precise, 1.0=creative)")
         lines.append("  llm.thinking_enabled = \(config.llm.thinkingEnabled) — Extended reasoning")
         lines.append("  barge_in.enabled = \(config.bargeIn.enabled) — Allow interruption")
@@ -667,15 +672,18 @@ struct InputRequestTool: Tool {
         information you need but shouldn't store. The user will see a secure input card \
         near the orb. Returns the entered text, or a cancellation notice if dismissed.
         """
-    let parametersSchema = #"{"prompt": "string (required) — what you need and why", "placeholder": "string (optional)", "secure": "boolean (optional) — true for passwords/keys"}"#
+    let parametersSchema = #"{"prompt": "string (required) — what you need and why", "placeholder": "string (optional)", "secure": "boolean (optional) — true for passwords/keys", "min_length": "integer (optional)", "regex": "string (optional)", "store_key": "string (optional) — persist secure input to keychain under this key"}"#
     let requiresApproval = false
     let riskLevel: ToolRiskLevel = .low
-    let example = #"<tool_call>{"name":"input_request","arguments":{"prompt":"Enter your OpenAI API key to continue","placeholder":"sk-...","secure":true}}</tool_call>"#
+    let example = #"<tool_call>{"name":"input_request","arguments":{"prompt":"Enter your OpenAI API key to continue","placeholder":"sk-...","secure":true,"store_key":"channels.discord.bot_token"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         let prompt = input["prompt"] as? String ?? "Please enter a value"
         let placeholder = input["placeholder"] as? String ?? ""
         let secure = input["secure"] as? Bool ?? false
+        let minLength = input["min_length"] as? Int ?? 0
+        let regexPattern = input["regex"] as? String
+        let storeKey = input["store_key"] as? String
 
         let text = await InputRequestBridge.shared.request(
             prompt: prompt,
@@ -683,11 +691,43 @@ struct InputRequestTool: Tool {
             isSecure: secure
         )
 
-        if let value = text, !value.isEmpty {
-            return .success(value)
-        } else {
+        guard let value = text, !value.isEmpty else {
             return .success("[user cancelled input]")
         }
+
+        if value.count < minLength {
+            return .error("Input is shorter than required minimum length (\(minLength)).")
+        }
+
+        if let regexPattern, !regexPattern.isEmpty,
+           let regex = try? NSRegularExpression(pattern: regexPattern)
+        {
+            let range = NSRange(value.startIndex..., in: value)
+            if regex.firstMatch(in: value, options: [], range: range) == nil {
+                return .error("Input did not match required format.")
+            }
+        }
+
+        if let storeKey, !storeKey.isEmpty {
+            guard Self.isSafeKeychainKey(storeKey) else {
+                return .error("store_key contains invalid characters.")
+            }
+            do {
+                try CredentialManager.store(key: storeKey, value: value)
+                return .success("[input stored securely in keychain: \(storeKey)]")
+            } catch {
+                return .error("Failed to store secure input: \(error.localizedDescription)")
+            }
+        }
+
+        return .success(value)
+    }
+
+    private static func isSafeKeychainKey(_ key: String) -> Bool {
+        let pattern = "^[A-Za-z0-9._-]{3,128}$"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(key.startIndex..., in: key)
+        return regex.firstMatch(in: key, options: [], range: range) != nil
     }
 }
 
@@ -709,6 +749,11 @@ actor InputRequestBridge {
         let placeholder: String
         let isSecure: Bool
         let required: Bool
+        let minLength: Int?
+        let maxLength: Int?
+        let regex: String?
+        let allowedValues: [String]?
+        let mustBeHttps: Bool
     }
 
     static let shared = InputRequestBridge()
@@ -775,13 +820,21 @@ actor InputRequestBridge {
 
         let requestId = UUID().uuidString
         let fieldPayload: [[String: Any]] = fields.map {
-            [
+            var payload: [String: Any] = [
                 "id": $0.id,
                 "label": $0.label,
                 "placeholder": $0.placeholder,
                 "is_secure": $0.isSecure,
                 "required": $0.required,
+                "must_be_https": $0.mustBeHttps,
             ]
+            if let minLength = $0.minLength { payload["min_length"] = minLength }
+            if let maxLength = $0.maxLength { payload["max_length"] = maxLength }
+            if let regex = $0.regex, !regex.isEmpty { payload["regex"] = regex }
+            if let allowedValues = $0.allowedValues, !allowedValues.isEmpty {
+                payload["allowed_values"] = allowedValues
+            }
+            return payload
         }
 
         return await withCheckedContinuation { continuation in

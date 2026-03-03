@@ -93,7 +93,18 @@ private struct InputCard: View {
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
 
     private var field: ApprovalOverlayController.InputField {
-        request.fields.first ?? .init(id: "text", label: "Value", placeholder: "", isSecure: false, required: true)
+        request.fields.first ?? .init(
+            id: "text",
+            label: "Value",
+            placeholder: "",
+            isSecure: false,
+            required: true,
+            minLength: nil,
+            maxLength: nil,
+            regex: nil,
+            allowedValues: nil,
+            mustBeHttps: false
+        )
     }
 
     var body: some View {
@@ -188,6 +199,7 @@ private struct FormInputCard: View {
     let controller: ApprovalOverlayController
 
     @State private var values: [String: String] = [:]
+    @State private var validationMessage: String?
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
@@ -244,6 +256,13 @@ private struct FormInputCard: View {
                 }
             }
 
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             HStack(spacing: 10) {
                 Button(action: { controller.cancelInput() }) {
                     Text("Cancel")
@@ -263,7 +282,6 @@ private struct FormInputCard: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Self.heather)
-                .disabled(!isValid)
                 .keyboardShortcut(.return, modifiers: [])
             }
         }
@@ -274,24 +292,60 @@ private struct FormInputCard: View {
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
 
-    private var isValid: Bool {
-        request.fields
-            .filter(\.required)
-            .allSatisfy { field in
-                let value = values[field.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                return !value.isEmpty
+    private var firstValidationError: String? {
+        for field in request.fields {
+            let value = values[field.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+            if field.required && value.isEmpty {
+                return "\(field.label) is required."
             }
+            if let minLength = field.minLength, !value.isEmpty, value.count < minLength {
+                return "\(field.label) must be at least \(minLength) characters."
+            }
+            if let maxLength = field.maxLength, value.count > maxLength {
+                return "\(field.label) must be at most \(maxLength) characters."
+            }
+            if let allowed = field.allowedValues, !allowed.isEmpty,
+               !value.isEmpty,
+               !allowed.contains(value)
+            {
+                return "\(field.label) must be one of: \(allowed.joined(separator: ", "))."
+            }
+            if field.mustBeHttps,
+               !value.isEmpty,
+               !value.lowercased().hasPrefix("https://")
+            {
+                return "\(field.label) must start with https://"
+            }
+            if let pattern = field.regex,
+               !pattern.isEmpty,
+               !value.isEmpty,
+               let regex = try? NSRegularExpression(pattern: pattern)
+            {
+                let range = NSRange(value.startIndex..., in: value)
+                if regex.firstMatch(in: value, options: [], range: range) == nil {
+                    return "\(field.label) has an invalid format."
+                }
+            }
+        }
+        return nil
     }
 
     private func binding(for id: String) -> Binding<String> {
         Binding(
             get: { values[id, default: ""] },
-            set: { values[id] = $0 }
+            set: {
+                values[id] = $0
+                validationMessage = nil
+            }
         )
     }
 
     private func submitIfValid() {
-        guard isValid else { return }
+        if let firstValidationError {
+            validationMessage = firstValidationError
+            return
+        }
+
         var sanitized: [String: String] = [:]
         for field in request.fields {
             let value = values[field.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)

@@ -91,7 +91,7 @@ struct SettingsToolsTab: View {
                         Text("\(snapshot.deniedTools.count)")
                             .foregroundStyle(.secondary)
                     }
-                    Text("Mode \(snapshot.toolMode) · Owner gate \(snapshot.ownerGateEnabled ? "on" : "off")")
+                    Text("Mode \(snapshot.toolMode) · Policy \(snapshot.policyProfile) · Owner gate \(snapshot.ownerGateEnabled ? "on" : "off")")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -235,13 +235,18 @@ struct SettingsToolsTab: View {
     private func refreshToolSnapshot() {
         let config = FaeConfig.load()
         let registry = ToolRegistry.buildDefault()
-        toolSnapshot = ToolPermissionSnapshot.build(
+        toolSnapshot = CapabilitySnapshotService.buildSnapshot(
             triggerText: "settings.tools",
             toolMode: toolMode,
             speakerState: "Speaker unknown",
             ownerGateEnabled: config.speaker.requireOwnerForTools,
             ownerProfileExists: false,
             permissions: permissionSnapshot,
+            thinkingEnabled: config.llm.thinkingEnabled,
+            bargeInEnabled: config.bargeIn.enabled,
+            requireDirectAddress: config.conversation.requireDirectAddress,
+            visionEnabled: config.vision.enabled,
+            voiceIdentityLock: config.tts.voiceIdentityLock,
             registry: registry
         )
     }

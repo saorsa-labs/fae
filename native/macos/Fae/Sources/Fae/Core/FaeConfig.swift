@@ -72,10 +72,12 @@ struct FaeConfig: Codable {
         /// Transcript of the reference audio for voice cloning.
         /// Must match the first ~3 seconds of speech in fae.wav.
         var referenceText: String? = "Hello, I'm Fae, your personal voice assistant."
-        /// Path to a custom voice WAV file (overrides bundled fae.wav).
+        /// Path to a custom voice WAV file (overrides bundled fae.wav when voiceIdentityLock=false).
         var customVoicePath: String?
         /// Reference text for the custom voice WAV.
         var customReferenceText: String?
+        /// When true, force canonical bundled fae.wav at runtime.
+        var voiceIdentityLock: Bool = true
     }
 
     // MARK: - STT
@@ -564,6 +566,9 @@ struct FaeConfig: Codable {
                     config.tts.customVoicePath = rawValue == "nil" ? nil : parseString(rawValue)
                 case "customReferenceText":
                     config.tts.customReferenceText = rawValue == "nil" ? nil : parseString(rawValue)
+                case "voiceIdentityLock", "voice_identity_lock":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.tts.voiceIdentityLock = v
                 case "emotionalProsody", "warmth":
                     break // Legacy keys — silently ignored (emotional prosody removed in v2.0).
                 default: break
@@ -767,6 +772,7 @@ struct FaeConfig: Codable {
         lines.append("referenceText = \(encodeStringOrNil(tts.referenceText))")
         lines.append("customVoicePath = \(encodeStringOrNil(tts.customVoicePath))")
         lines.append("customReferenceText = \(encodeStringOrNil(tts.customReferenceText))")
+        lines.append("voiceIdentityLock = \(tts.voiceIdentityLock ? "true" : "false")")
         lines.append("")
 
         lines.append("[stt]")

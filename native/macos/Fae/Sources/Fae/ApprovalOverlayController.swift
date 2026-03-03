@@ -41,6 +41,11 @@ final class ApprovalOverlayController: ObservableObject {
         let placeholder: String
         let isSecure: Bool
         let required: Bool
+        let minLength: Int?
+        let maxLength: Int?
+        let regex: String?
+        let allowedValues: [String]?
+        let mustBeHttps: Bool
     }
 
     /// A pending input request from the LLM.
@@ -201,12 +206,22 @@ final class ApprovalOverlayController: ObservableObject {
                 let placeholder = field["placeholder"] as? String ?? ""
                 let isSecure = field["is_secure"] as? Bool ?? false
                 let required = field["required"] as? Bool ?? true
+                let minLength = field["min_length"] as? Int
+                let maxLength = field["max_length"] as? Int
+                let regex = field["regex"] as? String
+                let allowedValues = field["allowed_values"] as? [String]
+                let mustBeHttps = field["must_be_https"] as? Bool ?? false
                 return InputField(
                     id: id,
                     label: label,
                     placeholder: placeholder,
                     isSecure: isSecure,
-                    required: required
+                    required: required,
+                    minLength: minLength,
+                    maxLength: maxLength,
+                    regex: regex,
+                    allowedValues: allowedValues,
+                    mustBeHttps: mustBeHttps
                 )
             }
         } else {
@@ -218,7 +233,12 @@ final class ApprovalOverlayController: ObservableObject {
                     label: "Value",
                     placeholder: placeholder,
                     isSecure: isSecure,
-                    required: true
+                    required: true,
+                    minLength: nil,
+                    maxLength: nil,
+                    regex: nil,
+                    allowedValues: nil,
+                    mustBeHttps: false
                 )
             ]
         }

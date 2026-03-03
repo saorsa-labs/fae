@@ -18,6 +18,7 @@ actor SkillManager {
         let placeholder: String?
         let type: SkillSettingsFieldType
         let sensitive: Bool
+        let validation: SkillSettingsValidation?
     }
 
     struct ConfigurableSkillDescriptor: Sendable {
@@ -155,7 +156,8 @@ actor SkillManager {
                     prompt: $0.prompt,
                     placeholder: $0.placeholder,
                     type: $0.type,
-                    sensitive: $0.sensitive ?? ($0.type == .secret)
+                    sensitive: $0.sensitive ?? ($0.type == .secret),
+                    validation: $0.validation
                 )
             }
 

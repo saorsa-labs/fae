@@ -12,6 +12,7 @@ enum FaeEvent: Sendable {
     case audioLevel(Float)
     case transcription(text: String, isFinal: Bool)
     case assistantText(text: String, isFinal: Bool)
+    case degradedModeChanged(mode: String, context: String)
 
     // MARK: Runtime
 

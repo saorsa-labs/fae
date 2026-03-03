@@ -407,6 +407,10 @@ final class PipelineAuxBridgeController: ObservableObject {
             let primary = payload["primary"] as? String ?? "unknown"
             status = "Fallback from \(primary)"
 
+        case "pipeline.degraded_mode":
+            let mode = payload["mode"] as? String ?? "unknown"
+            status = "Degraded mode: \(mode)"
+
         case "pipeline.permissions_changed":
             let granted = payload["granted"] as? [String] ?? []
             status = "Permissions: \(granted.joined(separator: ", "))"

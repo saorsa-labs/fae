@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Protocol for sending host commands to the Rust backend.
@@ -182,15 +183,31 @@ final class HostCommandBridge: ObservableObject {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                guard let action = notification.userInfo?["action"] as? String,
-                      let value = notification.userInfo?["value"] as? String
-                else { return }
+                guard let action = notification.userInfo?["action"] as? String else { return }
                 let source = notification.userInfo?["source"] as? String ?? "unknown"
+
                 Task { @MainActor in
+                    guard let self else { return }
+                    Self.incrementAuditCounter("fae.governance.total")
+
                     switch action {
                     case "set_tool_mode":
+                        guard let value = notification.userInfo?["value"] as? String else {
+                            Self.incrementAuditCounter("fae.governance.invalid")
+                            return
+                        }
+                        if value == "full_no_approval",
+                           source.contains("canvas"),
+                           !self.confirmHighRiskAction(
+                               title: "Allow full autonomy without approvals?",
+                               message: "Fae will be able to run high-risk tool actions without confirmation prompts."
+                           )
+                        {
+                            Self.incrementAuditCounter("fae.governance.cancelled")
+                            return
+                        }
                         NSLog("HostCommandBridge: governance action set_tool_mode=%@ source=%@", value, source)
-                        self?.dispatch(
+                        self.dispatch(
                             "config.patch",
                             payload: [
                                 "key": "tool_mode",
@@ -198,8 +215,65 @@ final class HostCommandBridge: ObservableObject {
                                 "source": source,
                             ]
                         )
+                        Self.incrementAuditCounter("fae.governance.set_tool_mode")
+
+                    case "set_setting":
+                        guard let key = notification.userInfo?["key"] as? String,
+                              let rawValue = notification.userInfo?["value"]
+                        else {
+                            Self.incrementAuditCounter("fae.governance.invalid")
+                            return
+                        }
+
+                        if self.shouldConfirmSettingMutation(key: key, value: rawValue, source: source),
+                           !self.confirmHighRiskAction(
+                               title: "Confirm high-impact setting change",
+                               message: "Apply \(key) now? This changes Fae’s authority or identity safeguards."
+                           )
+                        {
+                            Self.incrementAuditCounter("fae.governance.cancelled")
+                            return
+                        }
+
+                        NSLog("HostCommandBridge: governance action set_setting key=%@ source=%@", key, source)
+                        self.dispatch(
+                            "config.patch",
+                            payload: [
+                                "key": key,
+                                "value": rawValue,
+                                "source": source,
+                            ]
+                        )
+                        Self.incrementAuditCounter("fae.governance.set_setting")
+
+                    case "request_permission":
+                        let capability = (notification.userInfo?["capability"] as? String)
+                            ?? (notification.userInfo?["value"] as? String)
+                            ?? ""
+                        guard !capability.isEmpty else {
+                            Self.incrementAuditCounter("fae.governance.invalid")
+                            return
+                        }
+                        NSLog("HostCommandBridge: governance action request_permission capability=%@ source=%@", capability, source)
+                        NotificationCenter.default.post(
+                            name: .faeCapabilityRequested,
+                            object: nil,
+                            userInfo: ["capability": capability, "reason": "governance_\(source)", "jit": true]
+                        )
+                        Self.incrementAuditCounter("fae.governance.request_permission")
+
+                    case "open_settings":
+                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                        NSApp.activate(ignoringOtherApps: true)
+                        Self.incrementAuditCounter("fae.governance.open_settings")
+
+                    case "start_owner_enrollment":
+                        self.dispatch("speaker.start_enrollment", payload: [:])
+                        Self.incrementAuditCounter("fae.governance.start_owner_enrollment")
+
                     default:
                         NSLog("HostCommandBridge: unknown governance action '%@'", action)
+                        Self.incrementAuditCounter("fae.governance.unknown")
                     }
                 }
             }
@@ -227,5 +301,33 @@ final class HostCommandBridge: ObservableObject {
         if let sender {
             sender.sendCommand(name: name, payload: payload)
         }
+    }
+
+    private func shouldConfirmSettingMutation(key: String, value: Any, source: String) -> Bool {
+        guard source.contains("canvas") else { return false }
+        switch key {
+        case "vision.enabled":
+            return (value as? Bool) == true
+        case "tts.voice_identity_lock":
+            return (value as? Bool) == false
+        default:
+            return false
+        }
+    }
+
+    private func confirmHighRiskAction(title: String, message: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "Confirm")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private static func incrementAuditCounter(_ key: String) {
+        let defaults = UserDefaults.standard
+        let current = defaults.integer(forKey: key)
+        defaults.set(current + 1, forKey: key)
     }
 }

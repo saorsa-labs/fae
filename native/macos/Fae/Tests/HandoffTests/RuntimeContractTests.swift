@@ -215,4 +215,45 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(vision?["enabled"] as? Bool, true)
         XCTAssertEqual(vision?["model_preset"] as? String, "qwen3_vl_4b_4bit")
     }
+
+    @MainActor
+    func testFaeCorePersistsVoiceIdentityLockAndExposesTTSRuntimeFields() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        let defaults = UserDefaults.standard
+        let originalRuntimeSource = defaults.object(forKey: "fae.tts.runtime_voice_source")
+        let originalRuntimeLockApplied = defaults.object(forKey: "fae.tts.runtime_voice_lock_applied")
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+            defaults.set(originalRuntimeSource, forKey: "fae.tts.runtime_voice_source")
+            defaults.set(originalRuntimeLockApplied, forKey: "fae.tts.runtime_voice_lock_applied")
+        }
+
+        defaults.set("locked_bundled_fae_wav", forKey: "fae.tts.runtime_voice_source")
+        defaults.set(true, forKey: "fae.tts.runtime_voice_lock_applied")
+
+        let core = FaeCore()
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "tts.voice_identity_lock", "value": false]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertFalse(reloaded.tts.voiceIdentityLock)
+
+        let response = await core.queryCommand(name: "config.get", payload: ["key": "tts"])
+        let payload = response?["payload"] as? [String: Any]
+        let tts = payload?["tts"] as? [String: Any]
+        XCTAssertEqual(tts?["voice_identity_lock"] as? Bool, false)
+        XCTAssertEqual(tts?["runtime_voice_source"] as? String, "locked_bundled_fae_wav")
+        XCTAssertEqual(tts?["runtime_voice_lock_applied"] as? Bool, true)
+    }
 }

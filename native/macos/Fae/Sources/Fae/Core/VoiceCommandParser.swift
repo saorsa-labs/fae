@@ -6,7 +6,7 @@ import Foundation
 enum VoiceCommandParser {
 
     /// Voice command types that Fae recognizes.
-    enum VoiceCommand: Sendable {
+    enum VoiceCommand: Sendable, Equatable {
         case showConversation
         case hideConversation
         case showCanvas
@@ -14,6 +14,12 @@ enum VoiceCommandParser {
         case showSettings
         case showPermissionsCanvas
         case setToolMode(String)
+        case setThinking(Bool)
+        case setBargeIn(Bool)
+        case setDirectAddress(Bool)
+        case setVision(Bool)
+        case setVoiceIdentityLock(Bool)
+        case requestPermission(String)
         case switchModel(String)
         case approvalResponse(Bool)
         case none
@@ -58,6 +64,31 @@ enum VoiceCommandParser {
             return .showPermissionsCanvas
         }
 
+        // Permission requests.
+        if lower.contains("request") || lower.contains("grant") || lower.contains("enable") {
+            if lower.contains("screen recording") {
+                return .requestPermission("screen_recording")
+            }
+            if lower.contains("camera") {
+                return .requestPermission("camera")
+            }
+            if lower.contains("microphone") || lower.contains("mic") {
+                return .requestPermission("microphone")
+            }
+            if lower.contains("contacts") {
+                return .requestPermission("contacts")
+            }
+            if lower.contains("calendar") {
+                return .requestPermission("calendar")
+            }
+            if lower.contains("reminders") {
+                return .requestPermission("reminders")
+            }
+            if lower.contains("accessibility") || lower.contains("automation") {
+                return .requestPermission("desktop_automation")
+            }
+        }
+
         // Tool mode changes.
         if lower.contains("set tool mode") || lower.contains("tool mode") || lower.contains("tools mode")
             || lower.contains("set tools to") || lower.contains("use tool mode")
@@ -76,6 +107,51 @@ enum VoiceCommandParser {
             }
             if lower.contains("off") || lower.contains("disable tools") {
                 return .setToolMode("off")
+            }
+        }
+
+        if lower.contains("thinking") {
+            if lower.contains("enable") || lower.contains("turn on") || lower.contains("with thinking") {
+                return .setThinking(true)
+            }
+            if lower.contains("disable") || lower.contains("turn off") || lower.contains("without thinking") {
+                return .setThinking(false)
+            }
+        }
+
+        if lower.contains("barge") || lower.contains("interrupt") {
+            if lower.contains("enable") || lower.contains("turn on") || lower.contains("let me") {
+                return .setBargeIn(true)
+            }
+            if lower.contains("disable") || lower.contains("turn off") || lower.contains("don't let me") {
+                return .setBargeIn(false)
+            }
+        }
+
+        if lower.contains("direct address") || lower.contains("say your name") || lower.contains("say fae") {
+            if lower.contains("require") || lower.contains("enable") || lower.contains("turn on") || lower.contains("only respond") {
+                return .setDirectAddress(true)
+            }
+            if lower.contains("disable") || lower.contains("turn off") || lower.contains("don't require") {
+                return .setDirectAddress(false)
+            }
+        }
+
+        if lower.contains("vision") {
+            if lower.contains("enable") || lower.contains("turn on") {
+                return .setVision(true)
+            }
+            if lower.contains("disable") || lower.contains("turn off") {
+                return .setVision(false)
+            }
+        }
+
+        if lower.contains("voice lock") || lower.contains("canonical voice") || lower.contains("lock your voice") {
+            if lower.contains("disable") || lower.contains("turn off") || lower.contains("allow custom") || lower.contains("unlock") {
+                return .setVoiceIdentityLock(false)
+            }
+            if lower.contains("enable") || lower.contains("turn on") || lower.contains("lock") {
+                return .setVoiceIdentityLock(true)
             }
         }
 

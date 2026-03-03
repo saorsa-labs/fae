@@ -141,4 +141,20 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertTrue(config.vision.enabled)
         XCTAssertEqual(config.vision.modelPreset, "qwen3_vl_4b_4bit")
     }
+
+    func testTTSVoiceIdentityLockParsesSnakeCaseKey() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [tts]
+        voice_identity_lock = false
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertFalse(config.tts.voiceIdentityLock)
+    }
 }

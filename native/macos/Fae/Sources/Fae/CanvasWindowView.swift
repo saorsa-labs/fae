@@ -436,17 +436,32 @@ struct CanvasHTMLView: NSViewRepresentable {
             if url.scheme?.lowercased() == "fae-action" {
                 let action = url.host ?? ""
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                let value = components?.queryItems?.first(where: { $0.name == "value" })?.value ?? ""
-                let source = components?.queryItems?.first(where: { $0.name == "source" })?.value ?? "canvas"
+                let queryItems = components?.queryItems ?? []
+
+                var userInfo: [String: Any] = [
+                    "action": action,
+                    "source": "canvas",
+                ]
+
+                for item in queryItems {
+                    guard let value = item.value else { continue }
+                    if item.name == "value" {
+                        if value.lowercased() == "true" {
+                            userInfo[item.name] = true
+                        } else if value.lowercased() == "false" {
+                            userInfo[item.name] = false
+                        } else {
+                            userInfo[item.name] = value
+                        }
+                        continue
+                    }
+                    userInfo[item.name] = value
+                }
 
                 NotificationCenter.default.post(
                     name: .faeGovernanceActionRequested,
                     object: nil,
-                    userInfo: [
-                        "action": action,
-                        "value": value,
-                        "source": source,
-                    ]
+                    userInfo: userInfo
                 )
                 decisionHandler(.cancel)
                 return

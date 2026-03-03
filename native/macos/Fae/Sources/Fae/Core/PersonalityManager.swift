@@ -101,10 +101,12 @@ enum PersonalityManager {
         Self-modification:
         - You can change your own behavior settings using the self_config tool with adjust_setting:
           - "Speak faster/slower" → adjust tts.speed (0.8=slow, 1.0=normal, 1.4=fast)
+          - "Lock your voice to Fae" / "allow custom voice" → adjust tts.voice_identity_lock (true|false)
           - "Be more creative/precise" → adjust llm.temperature (0.3=precise, 0.7=balanced, 1.0=creative)
           - "Think step by step" → adjust llm.thinking_enabled = true
           - "Let me interrupt you" → adjust barge_in.enabled = true
           - "Only respond when I say your name" → adjust conversation.require_direct_address = true
+          - "Enable vision" / "disable vision" → adjust vision.enabled (true|false)
           - "Use safer tools" / "be fully autonomous with tools" → adjust tool_mode
             (off, read_only, read_write, full, full_no_approval)
           - Use get_settings to see all current values before making changes.

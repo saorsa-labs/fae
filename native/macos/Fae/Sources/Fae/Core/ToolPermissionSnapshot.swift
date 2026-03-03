@@ -5,44 +5,48 @@ import Foundation
 /// Used by pipeline voice commands, canvas rendering, and settings diagnostics to
 /// present one coherent view of Fae's current authority envelope.
 struct ToolPermissionSnapshot: Sendable {
+    struct PermissionAction: Sendable {
+        let label: String
+        let capability: String
+    }
+
     let generatedAt: Date
     let triggerText: String
     let toolMode: String
+    let policyProfile: String
     let speakerState: String
     let ownerGateEnabled: Bool
     let ownerProfileExists: Bool
     let permissions: PermissionStatusProvider.Snapshot
+    let thinkingEnabled: Bool
+    let bargeInEnabled: Bool
+    let requireDirectAddress: Bool
+    let visionEnabled: Bool
+    let voiceIdentityLock: Bool
     let allowedTools: [String]
     let deniedTools: [String]
 
-    static func build(
-        triggerText: String,
-        toolMode: String,
-        speakerState: String,
-        ownerGateEnabled: Bool,
-        ownerProfileExists: Bool,
-        permissions: PermissionStatusProvider.Snapshot,
-        registry: ToolRegistry
-    ) -> ToolPermissionSnapshot {
-        let allowedTools = registry.toolNames
-            .filter { registry.isToolAllowed($0, mode: toolMode) }
-            .sorted()
-
-        let deniedTools = registry.toolNames
-            .filter { !registry.isToolAllowed($0, mode: toolMode) }
-            .sorted()
-
-        return ToolPermissionSnapshot(
-            generatedAt: Date(),
-            triggerText: triggerText,
-            toolMode: toolMode,
-            speakerState: speakerState,
-            ownerGateEnabled: ownerGateEnabled,
-            ownerProfileExists: ownerProfileExists,
-            permissions: permissions,
-            allowedTools: allowedTools,
-            deniedTools: deniedTools
-        )
+    var missingPermissionActions: [PermissionAction] {
+        var actions: [PermissionAction] = []
+        if !permissions.microphone {
+            actions.append(.init(label: "Microphone", capability: "microphone"))
+        }
+        if !permissions.contacts {
+            actions.append(.init(label: "Contacts", capability: "contacts"))
+        }
+        if !permissions.calendar {
+            actions.append(.init(label: "Calendar", capability: "calendar"))
+        }
+        if !permissions.reminders {
+            actions.append(.init(label: "Reminders", capability: "reminders"))
+        }
+        if !permissions.camera {
+            actions.append(.init(label: "Camera", capability: "camera"))
+        }
+        if !permissions.screenRecording {
+            actions.append(.init(label: "Screen Recording", capability: "screen_recording"))
+        }
+        return actions
     }
 
     func toCanvasHTML() -> String {
@@ -57,7 +61,7 @@ struct ToolPermissionSnapshot: Sendable {
             return values.map { "<li><code>\($0)</code></li>" }.joined()
         }
 
-        let quickActions = """
+        let modeActions = """
         <div class='panel'>
           <p><strong>Tool mode quick actions</strong></p>
           <p class='hint'>Click to apply immediately:</p>
@@ -70,6 +74,29 @@ struct ToolPermissionSnapshot: Sendable {
           </div>
         </div>
         """
+
+        let behaviorActions = """
+        <div class='panel'>
+          <p><strong>Behavior quick actions</strong></p>
+          <div class='chips'>
+            <a class='chip' href='fae-action://set_setting?key=llm.thinking_enabled&value=\(thinkingEnabled ? "false" : "true")&source=canvas'>Thinking \(thinkingEnabled ? "ON" : "OFF")</a>
+            <a class='chip' href='fae-action://set_setting?key=barge_in.enabled&value=\(bargeInEnabled ? "false" : "true")&source=canvas'>Barge-in \(bargeInEnabled ? "ON" : "OFF")</a>
+            <a class='chip' href='fae-action://set_setting?key=conversation.require_direct_address&value=\(requireDirectAddress ? "false" : "true")&source=canvas'>Direct address \(requireDirectAddress ? "ON" : "OFF")</a>
+            <a class='chip' href='fae-action://set_setting?key=vision.enabled&value=\(visionEnabled ? "false" : "true")&source=canvas'>Vision \(visionEnabled ? "ON" : "OFF")</a>
+            <a class='chip danger' href='fae-action://set_setting?key=tts.voice_identity_lock&value=\(voiceIdentityLock ? "false" : "true")&source=canvas'>Voice lock \(voiceIdentityLock ? "ON" : "OFF")</a>
+          </div>
+        </div>
+        """
+
+        let permissionActions: String = {
+            guard !missingPermissionActions.isEmpty else {
+                return "<p class='hint'>All tracked permissions are currently granted.</p>"
+            }
+            let chips = missingPermissionActions.map { action in
+                "<a class='chip' href='fae-action://request_permission?capability=\(action.capability)&source=canvas'>Grant \(action.label)</a>"
+            }.joined(separator: "")
+            return "<div class='chips'>\(chips)</div>"
+        }()
 
         return """
         <html>
@@ -96,12 +123,14 @@ struct ToolPermissionSnapshot: Sendable {
           <h1>Tools & Permission Snapshot</h1>
           <div class='panel'>
             <p><strong>Trigger:</strong> \(triggerText)</p>
-            <p><strong>Tool mode:</strong> <code>\(toolMode)</code></p>
+            <p><strong>Tool mode:</strong> <code>\(toolMode)</code> · <strong>Policy:</strong> <code>\(policyProfile)</code></p>
             <p><strong>Speaker trust:</strong> \(speakerState)</p>
             <p><strong>Owner gate:</strong> \(ownerGateEnabled ? "enabled" : "disabled") · owner profile \(ownerProfileExists ? "present" : "missing")</p>
+            <p><strong>Behavior:</strong> thinking \(thinkingEnabled ? "on" : "off") · barge-in \(bargeInEnabled ? "on" : "off") · direct-address \(requireDirectAddress ? "on" : "off") · vision \(visionEnabled ? "on" : "off") · voice lock \(voiceIdentityLock ? "on" : "off")</p>
           </div>
 
-          \(quickActions)
+          \(modeActions)
+          \(behaviorActions)
 
           <h2>System permissions</h2>
           <div class='panel'>
@@ -111,6 +140,7 @@ struct ToolPermissionSnapshot: Sendable {
             <p>Reminders: \(badge(permissions.reminders))</p>
             <p>Camera: \(badge(permissions.camera))</p>
             <p>Screen Recording: \(badge(permissions.screenRecording))</p>
+            \(permissionActions)
           </div>
 
           <h2>Allowed tools (\(allowedTools.count))</h2>
@@ -123,7 +153,7 @@ struct ToolPermissionSnapshot: Sendable {
             <ul>\(listItems(deniedTools))</ul>
           </div>
 
-          <p class='hint'>Voice commands: “set tool mode to read only”, “set tool mode to full”, “open settings”.</p>
+          <p class='hint'>Voice commands: “set tool mode to read only”, “enable thinking mode”, “request camera permission”, “lock your voice”.</p>
         </body>
         </html>
         """

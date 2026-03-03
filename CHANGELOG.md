@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.74] - 2026-03-03
+
+### Added
+
+- **Canonical voice lock runtime surfacing** completed end-to-end:
+  - `tts.voice_identity_lock` exposed in config patch/get contract.
+  - Runtime voice provenance fields surfaced in `config.get("tts")`:
+    `runtime_voice_source`, `runtime_voice_lock_applied`.
+  - Settings > Models now hydrates and displays canonical/custom/default runtime voice source state.
+- **Unified capability snapshot service** (`CapabilitySnapshotService`) shared by pipeline + settings + canvas.
+- **Expanded governance voice commands** for high-value runtime controls:
+  - thinking mode, barge-in, direct-address policy, vision toggle, voice identity lock,
+  - JIT permission requests (camera, screen recording, microphone, contacts, calendar, reminders, accessibility).
+- **Governance routing tests and parser tests** for the new voice/canvas control paths.
+
+### Changed
+
+- **Interactive governance canvas** now includes:
+  - tool mode chips,
+  - behavior chips (thinking/barge-in/direct-address/vision/voice-lock),
+  - missing-permission grant chips.
+- **Governance mutation bridge** now routes generic `set_setting`, `request_permission`, `open_settings`, and `start_owner_enrollment` actions through `.faeGovernanceActionRequested`.
+- **High-risk governance handling** tightened:
+  - voice confirmation flow generalized for risky settings,
+  - canvas high-risk actions require explicit confirmation dialog.
+- **Tool effectiveness UX hardening**:
+  - when tools are hidden/blocked or a tool-backed lookup fails to execute tools, canvas now shows actionable fix cards instead of silent fallback.
+- **Input orchestration** upgraded with form-field validation metadata (min/max/regex/allowed values/https constraints) and optional secure keychain persistence for `input_request`.
+
+### Improved
+
+- **Voice command observability**:
+  - per-command trace log with handled flag + latency,
+  - local counters for governance and voice command flows.
+- **Degraded mode surfacing**:
+  - degraded-mode changes emitted onto pipeline event bus and reflected in pipeline status UI.
+- **FaeApp enrollment wait warning fix**:
+  - removed non-Sendable observer capture pattern in onboarding enrollment wait path.
+
 ## [v0.8.73] - 2026-03-03
 
 ### Added

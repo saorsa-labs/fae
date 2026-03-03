@@ -12,11 +12,14 @@ struct SettingsModelsTab: View {
     @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
     @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = false
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1
+    @AppStorage("ttsVoiceIdentityLock") private var voiceIdentityLock: Bool = true
     @State private var hydratingFromConfig: Bool = false
     @State private var hasLoadedConfig: Bool = false
     @State private var showRestartNotice: Bool = false
     @State private var customVoiceSource: String = "Default (fae.wav)"
     @State private var customReferenceText: String = ""
+    @State private var runtimeVoiceSource: String = "unknown"
+    @State private var runtimeVoiceLockApplied: Bool = false
     @State private var showFilePicker: Bool = false
 
     private let voiceModelOptions: [(label: String, value: String, description: String)] = [
@@ -87,11 +90,23 @@ struct SettingsModelsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Toggle("Lock to canonical Fae voice (fae.wav)", isOn: $voiceIdentityLock)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .onChange(of: voiceIdentityLock) {
+                    guard !hydratingFromConfig else { return }
+                    commandSender?.sendCommand(
+                        name: "config.patch",
+                        payload: ["key": "tts.voice_identity_lock", "value": voiceIdentityLock]
+                    )
+                    showRestartNotice = true
+                }
+
             HStack(spacing: 8) {
                 Button("Choose Reference Audio") {
                     showFilePicker = true
                 }
                 .font(.system(size: 11, weight: .medium, design: .rounded))
+                .disabled(voiceIdentityLock)
 
                 Button("Reset to Default") {
                     commandSender?.sendCommand(
@@ -104,9 +119,10 @@ struct SettingsModelsTab: View {
                 }
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
+                .disabled(voiceIdentityLock)
             }
 
-            if customVoiceSource != "Default (fae.wav)" {
+            if customVoiceSource != "Default (fae.wav)", !voiceIdentityLock {
                 TextField("Reference text (what's spoken in the WAV)", text: $customReferenceText)
                     .font(.system(size: 11, design: .rounded))
                     .textFieldStyle(.roundedBorder)
@@ -118,6 +134,10 @@ struct SettingsModelsTab: View {
                         )
                     }
             }
+
+            Text(runtimeVoiceStatusText)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
             Text("WAV must be mono PCM 16-bit, 2-8 seconds of clear speech. Restart to apply.")
                 .font(.footnote)
@@ -312,6 +332,26 @@ struct SettingsModelsTab: View {
         }
     }
 
+    private var runtimeVoiceStatusText: String {
+        let sourceLabel: String
+        switch runtimeVoiceSource {
+        case "locked_bundled_fae_wav":
+            sourceLabel = "Canonical bundled fae.wav"
+        case "custom_config_path":
+            sourceLabel = "Custom voice (configured path)"
+        case "custom_default_path":
+            sourceLabel = "Custom voice (default custom_voice.wav)"
+        case "bundled_fae_wav_fallback":
+            sourceLabel = "Bundled fae.wav fallback"
+        case "model_default":
+            sourceLabel = "Model default voice"
+        default:
+            sourceLabel = "Unknown"
+        }
+
+        return "Runtime voice source: \(sourceLabel). Voice lock \(runtimeVoiceLockApplied ? "applied" : "not applied")."
+    }
+
     @ViewBuilder
     private var referenceSection: some View {
         Section("Reference") {
@@ -387,6 +427,15 @@ struct SettingsModelsTab: View {
             }
             if let speed = tts["speed"] as? Double {
                 voiceSpeed = speed
+            }
+            if let lock = tts["voice_identity_lock"] as? Bool {
+                voiceIdentityLock = lock
+            }
+            if let source = tts["runtime_voice_source"] as? String, !source.isEmpty {
+                runtimeVoiceSource = source
+            }
+            if let lockApplied = tts["runtime_voice_lock_applied"] as? Bool {
+                runtimeVoiceLockApplied = lockApplied
             }
         }
 

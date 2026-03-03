@@ -177,7 +177,12 @@ struct ChannelSetupTool: Tool {
                 label: $0.label,
                 placeholder: $0.placeholder ?? "",
                 isSecure: $0.sensitive,
-                required: true
+                required: true,
+                minLength: $0.validation?.minLength,
+                maxLength: $0.validation?.maxLength,
+                regex: $0.validation?.regex,
+                allowedValues: $0.validation?.allowedValues,
+                mustBeHttps: $0.validation?.mustBeHttps ?? ($0.type == .url)
             )
         }
 

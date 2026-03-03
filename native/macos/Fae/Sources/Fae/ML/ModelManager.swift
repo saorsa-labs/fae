@@ -117,66 +117,119 @@ actor ModelManager {
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.85))
         }
 
-        // Load voice for CustomVoice TTS models. Priority:
-        // 1. Config-specified custom voice path
-        // 2. Default custom voice at ~/Library/Application Support/fae/custom_voice.wav
-        // 3. Bundled fae.wav
+        // Load voice for CustomVoice TTS models.
+        // Canonical lock path (voiceIdentityLock=true):
+        //   1) bundled fae.wav (required identity source)
+        //   2) if unavailable/failed, fall back to model default voice
+        // Unlock path (voiceIdentityLock=false):
+        //   1) config custom voice path
+        //   2) default custom voice path
+        //   3) bundled fae.wav
         if failedEngines.contains("TTS") == false, config.tts.modelId.contains("CustomVoice") {
             var voiceLoaded = false
+            let lockEnabled = config.tts.voiceIdentityLock
 
-            // Try config-specified custom voice.
-            if let customPath = config.tts.customVoicePath {
-                let customURL = URL(fileURLWithPath: customPath)
-                if FileManager.default.fileExists(atPath: customPath) {
-                    do {
-                        try await tts.loadCustomVoice(
-                            url: customURL,
-                            referenceText: config.tts.customReferenceText
-                        )
-                        NSLog("ModelManager: custom voice loaded from config path")
-                        voiceLoaded = true
-                    } catch {
-                        NSLog("ModelManager: custom voice at config path failed: %@", error.localizedDescription)
-                    }
-                }
-            }
-
-            // Try default custom voice location.
-            if !voiceLoaded {
-                let appSupport = FileManager.default.urls(
-                    for: .applicationSupportDirectory, in: .userDomainMask
-                ).first
-                let defaultCustom = appSupport?.appendingPathComponent("fae/custom_voice.wav")
-                if let url = defaultCustom, FileManager.default.fileExists(atPath: url.path) {
-                    do {
-                        try await tts.loadCustomVoice(
-                            url: url,
-                            referenceText: config.tts.customReferenceText ?? config.tts.referenceText
-                        )
-                        NSLog("ModelManager: custom voice loaded from default location")
-                        voiceLoaded = true
-                    } catch {
-                        NSLog("ModelManager: default custom voice failed: %@", error.localizedDescription)
-                    }
-                }
-            }
-
-            // Fall back to bundled fae.wav.
-            if !voiceLoaded {
-                if let voiceURL = Bundle.faeResources.url(
-                    forResource: "fae", withExtension: "wav"
-                ) {
+            if lockEnabled {
+                if let voiceURL = Bundle.faeResources.url(forResource: "fae", withExtension: "wav") {
                     do {
                         try await tts.loadVoice(
                             referenceAudioURL: voiceURL,
                             referenceText: config.tts.referenceText
                         )
-                        NSLog("ModelManager: Fae voice loaded from bundle")
+                        NSLog("ModelManager: canonical Fae voice lock active — bundled fae.wav loaded")
+                        voiceLoaded = true
+                        persistVoiceRuntimeStatus(
+                            source: "locked_bundled_fae_wav",
+                            lockApplied: true
+                        )
                     } catch {
-                        NSLog("ModelManager: voice load failed (using default): %@", error.localizedDescription)
+                        NSLog("ModelManager: canonical voice lock failed to load fae.wav: %@", error.localizedDescription)
                     }
                 } else {
-                    NSLog("ModelManager: fae.wav not found in bundle, using default voice")
+                    NSLog("ModelManager: canonical voice lock requested but fae.wav missing in bundle")
+                }
+
+                if !voiceLoaded {
+                    persistVoiceRuntimeStatus(
+                        source: "model_default",
+                        lockApplied: true
+                    )
+                }
+            } else {
+                // Try config-specified custom voice.
+                if let customPath = config.tts.customVoicePath {
+                    let customURL = URL(fileURLWithPath: customPath)
+                    if FileManager.default.fileExists(atPath: customPath) {
+                        do {
+                            try await tts.loadCustomVoice(
+                                url: customURL,
+                                referenceText: config.tts.customReferenceText
+                            )
+                            NSLog("ModelManager: custom voice loaded from config path")
+                            voiceLoaded = true
+                            persistVoiceRuntimeStatus(
+                                source: "custom_config_path",
+                                lockApplied: false
+                            )
+                        } catch {
+                            NSLog("ModelManager: custom voice at config path failed: %@", error.localizedDescription)
+                        }
+                    }
+                }
+
+                // Try default custom voice location.
+                if !voiceLoaded {
+                    let appSupport = FileManager.default.urls(
+                        for: .applicationSupportDirectory, in: .userDomainMask
+                    ).first
+                    let defaultCustom = appSupport?.appendingPathComponent("fae/custom_voice.wav")
+                    if let url = defaultCustom, FileManager.default.fileExists(atPath: url.path) {
+                        do {
+                            try await tts.loadCustomVoice(
+                                url: url,
+                                referenceText: config.tts.customReferenceText ?? config.tts.referenceText
+                            )
+                            NSLog("ModelManager: custom voice loaded from default location")
+                            voiceLoaded = true
+                            persistVoiceRuntimeStatus(
+                                source: "custom_default_path",
+                                lockApplied: false
+                            )
+                        } catch {
+                            NSLog("ModelManager: default custom voice failed: %@", error.localizedDescription)
+                        }
+                    }
+                }
+
+                // Fall back to bundled fae.wav.
+                if !voiceLoaded {
+                    if let voiceURL = Bundle.faeResources.url(
+                        forResource: "fae", withExtension: "wav"
+                    ) {
+                        do {
+                            try await tts.loadVoice(
+                                referenceAudioURL: voiceURL,
+                                referenceText: config.tts.referenceText
+                            )
+                            NSLog("ModelManager: Fae voice loaded from bundle (fallback)")
+                            voiceLoaded = true
+                            persistVoiceRuntimeStatus(
+                                source: "bundled_fae_wav_fallback",
+                                lockApplied: false
+                            )
+                        } catch {
+                            NSLog("ModelManager: voice load failed (using default): %@", error.localizedDescription)
+                        }
+                    } else {
+                        NSLog("ModelManager: fae.wav not found in bundle, using default voice")
+                    }
+                }
+
+                if !voiceLoaded {
+                    persistVoiceRuntimeStatus(
+                        source: "model_default",
+                        lockApplied: false
+                    )
                 }
             }
         }
@@ -223,5 +276,11 @@ actor ModelManager {
         } else {
             NSLog("ModelManager: loaded in degraded mode — failed engines: %@", failedEngines.joined(separator: ", "))
         }
+    }
+
+    private func persistVoiceRuntimeStatus(source: String, lockApplied: Bool) {
+        UserDefaults.standard.set(source, forKey: "fae.tts.runtime_voice_source")
+        UserDefaults.standard.set(lockApplied, forKey: "fae.tts.runtime_voice_lock_applied")
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "fae.tts.runtime_voice_status_ts")
     }
 }

@@ -107,6 +107,27 @@ actor PipelineCoordinator {
         toolModeLive = mode
     }
 
+    /// Live override for direct-address policy.
+    private var requireDirectAddressLive: Bool?
+
+    /// Live override for vision toggle.
+    private var visionEnabledLive: Bool?
+
+    /// Live override for voice identity lock status.
+    private var voiceIdentityLockLive: Bool?
+
+    func setRequireDirectAddress(_ enabled: Bool) {
+        requireDirectAddressLive = enabled
+    }
+
+    func setVisionEnabled(_ enabled: Bool) {
+        visionEnabledLive = enabled
+    }
+
+    func setVoiceIdentityLock(_ enabled: Bool) {
+        voiceIdentityLockLive = enabled
+    }
+
     /// Update playback speed live without restarting.
     func setPlaybackSpeed(_ speed: Float) async {
         await playback.setSpeed(speed)
@@ -124,11 +145,26 @@ actor PipelineCoordinator {
 
     // MARK: - Atomic-like Flags
 
+    private struct PendingGovernanceAction: Sendable {
+        let action: String
+        let value: AnySendableValue
+        let metadata: [String: String]
+        let source: String
+        let confirmationPrompt: String
+        let successSpeech: String
+        let cancelledSpeech: String
+    }
+
+    private enum AnySendableValue: Sendable {
+        case string(String)
+        case bool(Bool)
+    }
+
     private var assistantSpeaking: Bool = false
     private var assistantGenerating: Bool = false
     private var interrupted: Bool = false
     private var awaitingApproval: Bool = false
-    private var pendingGovernanceToolMode: String?
+    private var pendingGovernanceAction: PendingGovernanceAction?
 
     // MARK: - Speaker Identity State
 
@@ -299,7 +335,7 @@ actor PipelineCoordinator {
     /// loop checks `interrupted` at each step and exits cleanly.
     func cancel() {
         interrupted = true
-        pendingGovernanceToolMode = nil
+        pendingGovernanceAction = nil
         computerUseStepCount = 0
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
@@ -469,6 +505,18 @@ actor PipelineCoordinator {
         return toolModeLive ?? config.toolMode
     }
 
+    private func effectiveRequireDirectAddress() -> Bool {
+        requireDirectAddressLive ?? config.conversation.requireDirectAddress
+    }
+
+    private func effectiveVisionEnabled() -> Bool {
+        visionEnabledLive ?? config.vision.enabled
+    }
+
+    private func effectiveVoiceIdentityLock() -> Bool {
+        voiceIdentityLockLive ?? config.tts.voiceIdentityLock
+    }
+
     private static func normalizeForPhraseMatch(_ text: String) -> String {
         let lower = text.lowercased()
         let mapped = lower.map { ch -> Character in
@@ -514,7 +562,7 @@ actor PipelineCoordinator {
         lastAssistantResponseText = ""
         activeCapabilityTicket = nil
         awaitingApproval = false
-        pendingGovernanceToolMode = nil
+        pendingGovernanceAction = nil
         computerUseStepCount = 0
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
@@ -759,19 +807,24 @@ actor PipelineCoordinator {
                 return
             }
 
-            if let pendingMode = pendingGovernanceToolMode {
+            if let pendingAction = pendingGovernanceAction {
                 if let decision = VoiceCommandParser.parseApprovalResponse(text) {
-                    pendingGovernanceToolMode = nil
+                    pendingGovernanceAction = nil
                     if decision {
-                        applyToolModeChange(mode: pendingMode, source: "voice_confirm")
-                        await speakDirect("Done. Tool mode is now \(displayToolMode(pendingMode)).")
+                        applyGovernanceAction(
+                            action: pendingAction.action,
+                            value: pendingAction.value,
+                            source: "\(pendingAction.source)_confirm",
+                            metadata: pendingAction.metadata
+                        )
+                        await speakDirect(pendingAction.successSpeech)
                     } else {
-                        await speakDirect("Okay, I won't change tool mode.")
+                        await speakDirect(pendingAction.cancelledSpeech)
                     }
                 } else {
                     let words = text.split(whereSeparator: { $0.isWhitespace }).count
                     if words > 2 {
-                        await speakDirect("Please say yes or no to confirm the tool mode change.")
+                        await speakDirect(pendingAction.confirmationPrompt)
                     }
                 }
                 return
@@ -809,7 +862,15 @@ actor PipelineCoordinator {
             }
 
             let voiceCommand = VoiceCommandParser.parse(text)
-            if await handleVoiceCommandIfNeeded(voiceCommand, originalText: text) {
+            let voiceCommandStarted = Date()
+            let handledVoiceCommand = await handleVoiceCommandIfNeeded(voiceCommand, originalText: text)
+            let voiceCommandLatencyMs = Int(Date().timeIntervalSince(voiceCommandStarted) * 1000)
+            recordVoiceCommandMetrics(
+                command: String(describing: voiceCommand),
+                handled: handledVoiceCommand,
+                latencyMs: voiceCommandLatencyMs
+            )
+            if handledVoiceCommand {
                 return
             }
 
@@ -821,7 +882,7 @@ actor PipelineCoordinator {
             // Conversation gate — direct address check.
             let inFollowup = engagedUntil.map { Date() < $0 } ?? false
             let addressedToFae = isAddressedToFae(text)
-            if config.conversation.requireDirectAddress {
+            if effectiveRequireDirectAddress() {
                 if !addressedToFae && !inFollowup && !awaitingApproval {
                     return // Drop — not addressed to Fae.
                 }
@@ -917,32 +978,169 @@ actor PipelineCoordinator {
 
         case .setToolMode(let requestedMode):
             eventBus.send(.voiceCommandRecognized("set_tool_mode:\(requestedMode)"))
+            guard await canRunGovernanceVoiceTransaction(originalText) else { return true }
 
-            let inFollowup = engagedUntil.map { Date() < $0 } ?? false
-            let addressed = isAddressedToFae(originalText)
-            if !addressed && !inFollowup {
-                await speakDirect("Please say my name when changing tool authority settings.")
-                return true
-            }
-
+            let normalized = requestedMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let currentMode = effectiveToolMode()
-            if currentMode == requestedMode {
-                await speakDirect("Tool mode is already \(displayToolMode(requestedMode)).")
+            if currentMode == normalized {
+                await speakDirect("Tool mode is already \(displayToolMode(normalized)).")
                 return true
             }
 
-            if requestedMode == "full_no_approval" {
-                pendingGovernanceToolMode = requestedMode
+            if normalized == "full_no_approval" {
+                pendingGovernanceAction = PendingGovernanceAction(
+                    action: "set_tool_mode",
+                    value: .string(normalized),
+                    metadata: [:],
+                    source: "voice",
+                    confirmationPrompt: "Please say yes or no to confirm the tool mode change.",
+                    successSpeech: "Done. Tool mode is now \(displayToolMode(normalized)).",
+                    cancelledSpeech: "Okay, I won't change tool mode."
+                )
                 await speakDirect("This removes confirmation prompts for risky actions. Are you sure? Say yes or no.")
                 return true
             }
 
-            applyToolModeChange(mode: requestedMode, source: "voice")
-            await speakDirect("Done. Tool mode is now \(displayToolMode(requestedMode)).")
+            applyGovernanceAction(action: "set_tool_mode", value: .string(normalized), source: "voice")
+            await speakDirect("Done. Tool mode is now \(displayToolMode(normalized)).")
+            return true
+
+        case .setThinking(let enabled):
+            return await handleBooleanGovernanceCommand(
+                originalText: originalText,
+                key: "llm.thinking_enabled",
+                enabled: enabled,
+                currentValue: thinkingEnabledLive ?? config.llm.thinkingEnabled,
+                voiceTag: "set_thinking",
+                highRiskWhenEnabled: false,
+                onApplied: "Done. Thinking mode is now \(enabled ? "on" : "off")."
+            )
+
+        case .setBargeIn(let enabled):
+            return await handleBooleanGovernanceCommand(
+                originalText: originalText,
+                key: "barge_in.enabled",
+                enabled: enabled,
+                currentValue: bargeInEnabledLive ?? config.bargeIn.enabled,
+                voiceTag: "set_barge_in",
+                highRiskWhenEnabled: false,
+                onApplied: "Done. Barge-in is now \(enabled ? "enabled" : "disabled")."
+            )
+
+        case .setDirectAddress(let enabled):
+            return await handleBooleanGovernanceCommand(
+                originalText: originalText,
+                key: "conversation.require_direct_address",
+                enabled: enabled,
+                currentValue: effectiveRequireDirectAddress(),
+                voiceTag: "set_direct_address",
+                highRiskWhenEnabled: false,
+                onApplied: "Done. Direct-address requirement is now \(enabled ? "on" : "off")."
+            )
+
+        case .setVision(let enabled):
+            return await handleBooleanGovernanceCommand(
+                originalText: originalText,
+                key: "vision.enabled",
+                enabled: enabled,
+                currentValue: effectiveVisionEnabled(),
+                voiceTag: "set_vision",
+                highRiskWhenEnabled: enabled,
+                onApplied: "Done. Vision is now \(enabled ? "enabled" : "disabled")."
+            )
+
+        case .setVoiceIdentityLock(let enabled):
+            return await handleBooleanGovernanceCommand(
+                originalText: originalText,
+                key: "tts.voice_identity_lock",
+                enabled: enabled,
+                currentValue: effectiveVoiceIdentityLock(),
+                voiceTag: "set_voice_identity_lock",
+                highRiskWhenEnabled: !enabled,
+                onApplied: enabled
+                    ? "Done. Voice identity lock is now on."
+                    : "Done. Voice identity lock is now off."
+            )
+
+        case .requestPermission(let capability):
+            eventBus.send(.voiceCommandRecognized("request_permission:\(capability)"))
+            guard await canRunGovernanceVoiceTransaction(originalText) else { return true }
+            await requestPermissionFlow(capability: capability, source: "voice")
             return true
 
         case .switchModel, .approvalResponse, .none:
             return false
+        }
+    }
+
+    private func canRunGovernanceVoiceTransaction(_ originalText: String) async -> Bool {
+        let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+        let addressed = isAddressedToFae(originalText)
+        if !addressed && !inFollowup {
+            await speakDirect("Please say my name when changing governance or permission settings.")
+            return false
+        }
+        return true
+    }
+
+    private func handleBooleanGovernanceCommand(
+        originalText: String,
+        key: String,
+        enabled: Bool,
+        currentValue: Bool,
+        voiceTag: String,
+        highRiskWhenEnabled: Bool,
+        onApplied: String
+    ) async -> Bool {
+        eventBus.send(.voiceCommandRecognized("\(voiceTag):\(enabled ? "on" : "off")"))
+        guard await canRunGovernanceVoiceTransaction(originalText) else { return true }
+
+        if currentValue == enabled {
+            await speakDirect("\(displaySettingName(key)) is already \(enabled ? "on" : "off").")
+            return true
+        }
+
+        if highRiskWhenEnabled {
+            pendingGovernanceAction = PendingGovernanceAction(
+                action: "set_setting",
+                value: .bool(enabled),
+                metadata: ["key": key],
+                source: "voice",
+                confirmationPrompt: "Please say yes or no to confirm the setting change.",
+                successSpeech: onApplied,
+                cancelledSpeech: "Okay, I won't change that setting."
+            )
+            await speakDirect("This setting can reduce safeguards. Are you sure? Say yes or no.")
+            return true
+        }
+
+        applyGovernanceAction(
+            action: "set_setting",
+            value: .bool(enabled),
+            source: "voice",
+            metadata: ["key": key]
+        )
+        await speakDirect(onApplied)
+        return true
+    }
+
+    private func requestPermissionFlow(capability: String, source: String) async {
+        let label = capability.replacingOccurrences(of: "_", with: " ")
+        applyGovernanceAction(
+            action: "request_permission",
+            value: .string(capability),
+            source: source,
+            metadata: ["capability": capability]
+        )
+        await speakDirect("Okay. Requesting \(label) permission now.")
+
+        let trigger = "permission refresh: \(capability)"
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self else { return }
+            let html = await self.buildToolsAndPermissionsCanvasHTML(triggerText: trigger)
+            self.eventBus.send(.canvasContent(html: html, append: false))
+            self.eventBus.send(.canvasVisibility(true))
         }
     }
 
@@ -963,34 +1161,81 @@ actor PipelineCoordinator {
             return "Speaker unknown"
         }()
 
-        return ToolPermissionSnapshot.build(
+        return CapabilitySnapshotService.buildSnapshot(
             triggerText: triggerText,
             toolMode: mode,
             speakerState: speakerState,
             ownerGateEnabled: config.speaker.requireOwnerForTools,
             ownerProfileExists: ownerProfileExists,
             permissions: permissions,
+            thinkingEnabled: thinkingEnabledLive ?? config.llm.thinkingEnabled,
+            bargeInEnabled: bargeInEnabledLive ?? config.bargeIn.enabled,
+            requireDirectAddress: effectiveRequireDirectAddress(),
+            visionEnabled: effectiveVisionEnabled(),
+            voiceIdentityLock: effectiveVoiceIdentityLock(),
             registry: registry
         )
     }
 
-    private func applyToolModeChange(mode: String, source: String) {
-        let normalizedMode = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let allowed = ["off", "read_only", "read_write", "full", "full_no_approval"]
-        guard allowed.contains(normalizedMode) else { return }
+    private func applyGovernanceAction(
+        action: String,
+        value: AnySendableValue,
+        source: String,
+        metadata: [String: String] = [:]
+    ) {
+        var userInfo: [String: Any] = [
+            "action": action,
+            "source": source,
+        ]
 
-        eventBus.send(.voiceCommandRecognized("tool_mode_applied:\(normalizedMode):\(source)"))
+        switch value {
+        case .string(let text):
+            userInfo["value"] = text
+        case .bool(let bool):
+            userInfo["value"] = bool
+        }
+
+        for (key, val) in metadata {
+            userInfo[key] = val
+        }
+
+        eventBus.send(.voiceCommandRecognized("governance_applied:\(action):\(source)"))
+
         Task { @MainActor in
             NotificationCenter.default.post(
                 name: .faeGovernanceActionRequested,
                 object: nil,
-                userInfo: [
-                    "action": "set_tool_mode",
-                    "value": normalizedMode,
-                    "source": source,
-                ]
+                userInfo: userInfo
             )
         }
+    }
+
+    private func displaySettingName(_ key: String) -> String {
+        switch key {
+        case "llm.thinking_enabled":
+            return "Thinking mode"
+        case "barge_in.enabled":
+            return "Barge-in"
+        case "conversation.require_direct_address":
+            return "Direct-address requirement"
+        case "vision.enabled":
+            return "Vision"
+        case "tts.voice_identity_lock":
+            return "Voice identity lock"
+        default:
+            return key
+        }
+    }
+
+    private func recordVoiceCommandMetrics(command: String, handled: Bool, latencyMs: Int) {
+        let defaults = UserDefaults.standard
+        defaults.set(defaults.integer(forKey: "fae.voice.commands.total") + 1, forKey: "fae.voice.commands.total")
+        if handled {
+            defaults.set(defaults.integer(forKey: "fae.voice.commands.handled") + 1, forKey: "fae.voice.commands.handled")
+        }
+        defaults.set(latencyMs, forKey: "fae.voice.commands.last_latency_ms")
+        defaults.set(Date().timeIntervalSince1970, forKey: "fae.voice.commands.last_ts")
+        NSLog("phase1.voice_command trace command=%@ handled=%d latency_ms=%d", command, handled ? 1 : 0, latencyMs)
     }
 
     private func displayToolMode(_ mode: String) -> String {
@@ -1008,6 +1253,92 @@ actor PipelineCoordinator {
         default:
             return mode
         }
+    }
+
+    private func blockedToolsActionCard(reason: String, triggerText: String) async -> String {
+        let snapshot = await buildToolsAndPermissionsSnapshot(triggerText: triggerText)
+
+        let guidance: (title: String, message: String, actions: [String]) = {
+            if reason.contains("toolMode=off") {
+                return (
+                    "Tools are currently off",
+                    "I need tool access to complete this kind of request.",
+                    [
+                        "<a class='chip' href='fae-action://set_tool_mode?value=read_write&source=canvas'>Enable Read/Write</a>",
+                        "<a class='chip' href='fae-action://set_tool_mode?value=full&source=canvas'>Enable Full</a>",
+                    ]
+                )
+            }
+            if reason.contains("owner_enrollment_required") {
+                return (
+                    "Owner enrollment required",
+                    "Your policy requires an enrolled owner voice before tool execution.",
+                    [
+                        "<a class='chip' href='fae-action://start_owner_enrollment?source=canvas'>Start voice enrollment</a>",
+                        "<a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>",
+                    ]
+                )
+            }
+            if reason.contains("non-owner") {
+                return (
+                    "Current speaker is not owner-authorized",
+                    "Owner-gated tools are blocked for this speaker profile.",
+                    [
+                        "<a class='chip' href='fae-action://set_tool_mode?value=read_only&source=canvas'>Switch to Read Only</a>",
+                        "<a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>",
+                    ]
+                )
+            }
+            return (
+                "Tool execution did not run",
+                "I expected to use a tool but didn’t execute one this turn.",
+                [
+                    "<a class='chip' href='fae-action://set_tool_mode?value=full&source=canvas'>Use Full tool mode</a>",
+                    "<a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>",
+                ]
+            )
+        }()
+
+        let permissionChips: String = snapshot.missingPermissionActions.map { action in
+            "<a class='chip' href='fae-action://request_permission?capability=\(action.capability)&source=canvas'>Grant \(action.label)</a>"
+        }.joined(separator: "")
+
+        let permissionPanel: String = permissionChips.isEmpty
+            ? ""
+            : "<p class='hint'>Missing permissions:</p><div class='chips'>\(permissionChips)</div>"
+
+        let actionChips = guidance.actions.joined(separator: "")
+
+        return """
+        <html>
+        <head>
+          <meta name='viewport' content='width=device-width, initial-scale=1' />
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1015; color: #e9e9ef; padding: 18px; line-height: 1.45; }
+            .panel { border: 1px solid #2a2d38; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #171a23; }
+            .warn { border-color: #87545a; background: #23181d; }
+            .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+            .chip { font-size: 11px; text-decoration: none; color: #e9e9ef; border: 1px solid #3d4354; padding: 5px 9px; border-radius: 999px; background: #202533; }
+            .hint { color: #99a0b6; font-size: 12px; }
+            code { color: #d9c8ea; }
+          </style>
+        </head>
+        <body>
+          <div class='panel warn'>
+            <p><strong>\(guidance.title)</strong></p>
+            <p>\(guidance.message)</p>
+            <div class='chips'>\(actionChips)</div>
+            \(permissionPanel)
+          </div>
+          <div class='panel'>
+            <p><strong>Current mode:</strong> <code>\(snapshot.toolMode)</code> · <strong>Policy:</strong> <code>\(snapshot.policyProfile)</code></p>
+            <p><strong>Speaker:</strong> \(snapshot.speakerState)</p>
+            <p><strong>Owner gate:</strong> \(snapshot.ownerGateEnabled ? "enabled" : "disabled")</p>
+            <p class='hint'>Say: “show tools and permissions” for the full live snapshot.</p>
+          </div>
+        </body>
+        </html>
+        """
     }
 
     /// Unified LLM generation with inline tool execution.
@@ -1072,20 +1403,29 @@ actor PipelineCoordinator {
                 && !(config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner)
                 && !ownerEnrollmentRequired
 
-            // Diagnostic logging — critical for debugging tool use failures.
-            if !includeTools {
-                let reason: String
+            let hiddenToolsReason: String? = {
+                guard !includeTools else { return nil }
                 if toolMode == "off" {
-                    reason = "toolMode=off"
-                } else if ownerEnrollmentRequired {
-                    reason = "owner_enrollment_required"
-                } else if config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner {
-                    reason = "requireOwnerForTools=true and speaker matched as non-owner (\(currentSpeakerLabel ?? "unknown"))"
-                } else {
-                    reason = "unknown"
+                    return "toolMode=off"
                 }
-                debugLog(debugConsole, .pipeline, "⚠️ Tools HIDDEN from LLM: \(reason)")
-                NSLog("PipelineCoordinator: tools hidden — %@", reason)
+                if ownerEnrollmentRequired {
+                    return "owner_enrollment_required"
+                }
+                if config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner {
+                    return "requireOwnerForTools=true and speaker matched as non-owner (\(currentSpeakerLabel ?? "unknown"))"
+                }
+                return "unknown"
+            }()
+
+            // Diagnostic logging — critical for debugging tool use failures.
+            if let hiddenToolsReason {
+                debugLog(debugConsole, .pipeline, "⚠️ Tools HIDDEN from LLM: \(hiddenToolsReason)")
+                NSLog("PipelineCoordinator: tools hidden — %@", hiddenToolsReason)
+                if !isToolFollowUp {
+                    let card = await blockedToolsActionCard(reason: hiddenToolsReason, triggerText: userText)
+                    eventBus.send(.canvasContent(html: card, append: false))
+                    eventBus.send(.canvasVisibility(true))
+                }
             } else {
                 let ownerDetail: String
                 if currentSpeakerIsOwner {
@@ -1135,7 +1475,7 @@ actor PipelineCoordinator {
             let nativeToolsAvailable = self.currentNativeTools != nil
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
-                visionCapable: config.vision.enabled,
+                visionCapable: effectiveVisionEnabled(),
                 userName: config.userName,
                 speakerDisplayName: currentSpeakerDisplayName,
                 speakerRole: currentSpeakerRole,
@@ -1463,13 +1803,21 @@ actor PipelineCoordinator {
                     && !ownerProfileExists
 
                 let fallback: String
+                let reasonCode: String
                 if effectiveToolMode() == "off" {
+                    reasonCode = "toolMode=off"
                     fallback = "I can’t check that right now because tools are off. If you enable tools, I can fetch the real result."
                 } else if ownerEnrollmentRequired {
+                    reasonCode = "owner_enrollment_required"
                     fallback = "I need to enroll your primary voice before I can run tools for that. Please complete voice enrollment, then ask me again."
                 } else {
+                    reasonCode = "tool_not_called"
                     fallback = "I need to check that with a tool before I answer, and I couldn’t run one this turn. Please ask me to try again."
                 }
+
+                let card = await blockedToolsActionCard(reason: reasonCode, triggerText: userText)
+                eventBus.send(.canvasContent(html: card, append: false))
+                eventBus.send(.canvasVisibility(true))
 
                 eventBus.send(.assistantText(text: fallback, isFinal: true))
                 enqueueTTS(fallback, isFinal: true)
@@ -1787,6 +2135,7 @@ actor PipelineCoordinator {
         guard degradedMode != current else { return }
         degradedMode = current
         NSLog("phase1.degraded_mode=%@ context=%@", current.rawValue, context)
+        eventBus.send(.degradedModeChanged(mode: current.rawValue, context: context))
     }
 
     // MARK: - Tool Call Parsing

@@ -429,10 +429,24 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
 
         // Listen for enrollment_complete notification.
         return await withCheckedContinuation { continuation in
-            var observer: NSObjectProtocol?
-            var timerTask: Task<Void, Never>?
+            final class EnrollmentWaitState {
+                var observer: NSObjectProtocol?
+                var resolved = false
+            }
 
-            observer = NotificationCenter.default.addObserver(
+            let state = EnrollmentWaitState()
+
+            func finish(_ result: Bool) {
+                guard !state.resolved else { return }
+                state.resolved = true
+                if let token = state.observer {
+                    NotificationCenter.default.removeObserver(token)
+                    state.observer = nil
+                }
+                continuation.resume(returning: result)
+            }
+
+            state.observer = NotificationCenter.default.addObserver(
                 forName: .faePipelineState,
                 object: nil,
                 queue: .main
@@ -440,20 +454,12 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 if let event = notification.userInfo?["event"] as? String,
                    event == "pipeline.enrollment_complete"
                 {
-                    timerTask?.cancel()
-                    if let obs = observer {
-                        NotificationCenter.default.removeObserver(obs)
-                    }
-                    continuation.resume(returning: true)
+                    finish(true)
                 }
             }
 
-            timerTask = Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if let obs = observer {
-                    NotificationCenter.default.removeObserver(obs)
-                }
-                continuation.resume(returning: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                finish(false)
             }
         }
     }

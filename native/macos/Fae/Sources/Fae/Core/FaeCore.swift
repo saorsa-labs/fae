@@ -702,6 +702,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
             persistConfig(reason: "config.patch.tts.custom_reference_text")
 
+        case "tts.voice_identity_lock":
+            guard let lock = value as? Bool else { return }
+            config.tts.voiceIdentityLock = lock
+            persistConfig(reason: "config.patch.tts.voice_identity_lock")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setVoiceIdentityLock(lock) }
+            }
+
         case "onboarded":
             guard let value = value as? Bool else { return }
             isOnboarded = value
@@ -805,6 +813,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let value = value as? Bool else { return }
             config.conversation.requireDirectAddress = value
             persistConfig(reason: "config.patch.conversation.require_direct_address")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setRequireDirectAddress(value) }
+            }
 
         case "conversation.direct_address_followup_s":
             let parsedS: Int?
@@ -823,6 +834,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let enabled = value as? Bool else { return }
             config.vision.enabled = enabled
             persistConfig(reason: "config.patch.vision.enabled")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setVisionEnabled(enabled) }
+            }
 
         case "vision.model_preset", "vision.modelPreset":
             guard let preset = value as? String,
@@ -1181,12 +1195,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 ] as [String: Any],
             ]
         case "tts":
+            let runtimeSource = UserDefaults.standard.string(forKey: "fae.tts.runtime_voice_source")
+            let runtimeLockApplied = UserDefaults.standard.object(forKey: "fae.tts.runtime_voice_lock_applied") as? Bool
             return [
                 "payload": [
                     "tts": [
                         "speed": Double(config.tts.speed),
                         "custom_voice_path": config.tts.customVoicePath as Any,
                         "custom_reference_text": config.tts.customReferenceText as Any,
+                        "voice_identity_lock": config.tts.voiceIdentityLock,
+                        "runtime_voice_source": runtimeSource as Any,
+                        "runtime_voice_lock_applied": runtimeLockApplied as Any,
                     ] as [String: Any],
                 ] as [String: Any],
             ]
