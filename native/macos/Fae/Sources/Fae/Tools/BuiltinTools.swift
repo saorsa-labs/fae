@@ -302,6 +302,10 @@ struct SelfConfigTool: Tool {
             valueType: .int(min: 5, max: 60),
             description: "Seconds to keep listening after name-addressed (5-60)"
         ),
+        "tool_mode": SettingSpec(
+            valueType: .string(allowed: ["off", "read_only", "read_write", "full", "full_no_approval"]),
+            description: "Maximum tool authority level"
+        ),
         "vision.enabled": SettingSpec(
             valueType: .bool,
             description: "Enable vision tools (screenshot, camera, read_screen). Requires restart."
@@ -458,6 +462,7 @@ struct SelfConfigTool: Tool {
             "  conversation.direct_address_followup_s = \(config.conversation.directAddressFollowupS)"
                 + " — Follow-up window (seconds)"
         )
+        lines.append("  tool_mode = \(config.toolMode) — Maximum tool authority level")
         lines.append("  vision.enabled = \(config.vision.enabled) — Enable on-device vision tools")
         lines.append("  vision.model_preset = \(config.vision.modelPreset) — Vision model preset")
         return lines.joined(separator: "\n")

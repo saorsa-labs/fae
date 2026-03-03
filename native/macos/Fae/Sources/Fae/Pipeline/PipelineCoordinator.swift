@@ -787,6 +787,11 @@ actor PipelineCoordinator {
                 return
             }
 
+            let voiceCommand = VoiceCommandParser.parse(text)
+            if await handleVoiceCommandIfNeeded(voiceCommand, originalText: text) {
+                return
+            }
+
             if gateState != .active {
                 guard isAddressedToFae(text) else { return }
                 wake()
@@ -840,6 +845,145 @@ actor PipelineCoordinator {
 
         // Unified pipeline: LLM decides when to use tools via <tool_call> markup.
         await generateWithTools(userText: queryText, isToolFollowUp: false, turnCount: 0)
+    }
+
+    // MARK: - Voice Commands
+
+    private func handleVoiceCommandIfNeeded(
+        _ command: VoiceCommandParser.VoiceCommand,
+        originalText: String
+    ) async -> Bool {
+        switch command {
+        case .showConversation:
+            eventBus.send(.voiceCommandRecognized("show_conversation"))
+            eventBus.send(.conversationVisibility(true))
+            await speakDirect("Opening discussions.")
+            return true
+
+        case .hideConversation:
+            eventBus.send(.voiceCommandRecognized("hide_conversation"))
+            eventBus.send(.conversationVisibility(false))
+            await speakDirect("Hiding discussions.")
+            return true
+
+        case .showCanvas:
+            eventBus.send(.voiceCommandRecognized("show_canvas"))
+            eventBus.send(.canvasVisibility(true))
+            await speakDirect("Opening the canvas.")
+            return true
+
+        case .hideCanvas:
+            eventBus.send(.voiceCommandRecognized("hide_canvas"))
+            eventBus.send(.canvasVisibility(false))
+            await speakDirect("Hiding the canvas.")
+            return true
+
+        case .showSettings:
+            eventBus.send(.voiceCommandRecognized("show_settings"))
+            await MainActor.run {
+                NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
+            }
+            await speakDirect("Opening settings.")
+            return true
+
+        case .showPermissionsCanvas:
+            eventBus.send(.voiceCommandRecognized("show_permissions_canvas"))
+            let html = await buildToolsAndPermissionsCanvasHTML(triggerText: originalText)
+            eventBus.send(.canvasContent(html: html, append: false))
+            eventBus.send(.canvasVisibility(true))
+            await speakDirect("Here are your current tools and permission levels.")
+            return true
+
+        case .switchModel, .approvalResponse, .none:
+            return false
+        }
+    }
+
+    private func buildToolsAndPermissionsCanvasHTML(triggerText: String) async -> String {
+        let mode = effectiveToolMode()
+        let permissions = await MainActor.run { PermissionStatusProvider.current() }
+
+        let allowedTools = registry.toolNames
+            .filter { registry.isToolAllowed($0, mode: mode) }
+            .sorted()
+
+        let deniedTools = registry.toolNames
+            .filter { !registry.isToolAllowed($0, mode: mode) }
+            .sorted()
+
+        let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+        let ownerGate = config.speaker.requireOwnerForTools
+        let speakerState: String = {
+            if currentSpeakerIsOwner { return "Owner verified" }
+            if currentSpeakerIsKnownNonOwner { return "Known non-owner speaker" }
+            if currentSpeakerLabel != nil { return "Recognized speaker" }
+            return "Speaker unknown"
+        }()
+
+        func badge(_ granted: Bool) -> String {
+            granted
+                ? "<span class='ok'>granted</span>"
+                : "<span class='warn'>not granted</span>"
+        }
+
+        let listedAllowed = allowedTools.isEmpty
+            ? "<li>None</li>"
+            : allowedTools.map { "<li><code>\($0)</code></li>" }.joined()
+
+        let listedDenied = deniedTools.isEmpty
+            ? "<li>None</li>"
+            : deniedTools.map { "<li><code>\($0)</code></li>" }.joined()
+
+        return """
+        <html>
+        <head>
+          <meta name='viewport' content='width=device-width, initial-scale=1' />
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1015; color: #e9e9ef; padding: 18px; line-height: 1.45; }
+            h1 { font-size: 18px; margin: 0 0 8px 0; }
+            h2 { font-size: 14px; margin: 14px 0 6px 0; color: #c8b8db; }
+            p, li { font-size: 12px; }
+            ul { margin: 6px 0 0 0; padding-left: 18px; }
+            .panel { border: 1px solid #2a2d38; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #171a23; }
+            .ok { color: #53d18f; font-weight: 600; }
+            .warn { color: #f0b46e; font-weight: 600; }
+            code { color: #d9c8ea; }
+            .hint { color: #99a0b6; }
+          </style>
+        </head>
+        <body>
+          <h1>Tools & Permission Snapshot</h1>
+          <div class='panel'>
+            <p><strong>Trigger:</strong> \(triggerText)</p>
+            <p><strong>Tool mode:</strong> <code>\(mode)</code></p>
+            <p><strong>Speaker trust:</strong> \(speakerState)</p>
+            <p><strong>Owner gate:</strong> \(ownerGate ? "enabled" : "disabled") · owner profile \(ownerProfileExists ? "present" : "missing")</p>
+          </div>
+
+          <h2>System permissions</h2>
+          <div class='panel'>
+            <p>Microphone: \(badge(permissions.microphone))</p>
+            <p>Contacts: \(badge(permissions.contacts))</p>
+            <p>Calendar: \(badge(permissions.calendar))</p>
+            <p>Reminders: \(badge(permissions.reminders))</p>
+            <p>Camera: \(badge(permissions.camera))</p>
+            <p>Screen Recording: \(badge(permissions.screenRecording))</p>
+          </div>
+
+          <h2>Allowed tools (\(allowedTools.count))</h2>
+          <div class='panel'>
+            <ul>\(listedAllowed)</ul>
+          </div>
+
+          <h2>Not available in this mode (\(deniedTools.count))</h2>
+          <div class='panel'>
+            <ul>\(listedDenied)</ul>
+          </div>
+
+          <p class='hint'>Say: “set tool mode to read write” or “open settings” to change behavior.</p>
+        </body>
+        </html>
+        """
     }
 
     /// Unified LLM generation with inline tool execution.

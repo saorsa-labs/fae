@@ -38,6 +38,13 @@ enum FaeEvent: Sendable {
     case toolCall(id: String, name: String, inputJSON: String)
     case toolResult(id: String, name: String, success: Bool, output: String)
 
+    // MARK: Auxiliary UI
+
+    case canvasVisibility(Bool)
+    case conversationVisibility(Bool)
+    case canvasContent(html: String, append: Bool)
+    case voiceCommandRecognized(String)
+
     // MARK: Model
 
     case modelLoaded(engine: String, modelId: String)

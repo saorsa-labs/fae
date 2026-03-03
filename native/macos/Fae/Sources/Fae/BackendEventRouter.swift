@@ -263,6 +263,7 @@ final class BackendEventRouter: Sendable {
                 "pipeline.conversation_snapshot",
                 "pipeline.canvas_visibility",
                 "pipeline.conversation_visibility",
+                "pipeline.canvas_content",
                 "pipeline.voice_command",
                 "pipeline.viseme",
                 "pipeline.skill_proposal",

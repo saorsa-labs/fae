@@ -11,6 +11,8 @@ enum VoiceCommandParser {
         case hideConversation
         case showCanvas
         case hideCanvas
+        case showSettings
+        case showPermissionsCanvas
         case switchModel(String)
         case approvalResponse(Bool)
         case none
@@ -20,20 +22,39 @@ enum VoiceCommandParser {
     static func parse(_ text: String) -> VoiceCommand {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Conversation window commands
-        if lower.contains("show conversation") || lower.contains("open conversation") {
+        // Conversation/discussions window commands.
+        if lower.contains("show conversation") || lower.contains("open conversation")
+            || lower.contains("show discussions") || lower.contains("open discussions")
+        {
             return .showConversation
         }
-        if lower.contains("hide conversation") || lower.contains("close conversation") {
+        if lower.contains("hide conversation") || lower.contains("close conversation")
+            || lower.contains("hide discussions") || lower.contains("close discussions")
+        {
             return .hideConversation
         }
 
-        // Canvas commands
+        // Canvas commands.
         if lower.contains("show canvas") || lower.contains("open canvas") {
             return .showCanvas
         }
         if lower.contains("hide canvas") || lower.contains("close canvas") {
             return .hideCanvas
+        }
+
+        // Settings commands.
+        if lower.contains("show settings") || lower.contains("open settings")
+            || lower.contains("open preferences")
+        {
+            return .showSettings
+        }
+
+        // Tool + permission snapshot canvas commands.
+        if lower.contains("show permissions") || lower.contains("show tool permissions")
+            || lower.contains("show tools I can use") || lower.contains("show available tools")
+            || lower.contains("show tools and permissions")
+        {
+            return .showPermissionsCanvas
         }
 
         return .none

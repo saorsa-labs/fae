@@ -196,4 +196,6 @@ extension Notification.Name {
     static let faePrefillInput = Notification.Name("faePrefillInput")
     /// Posted by the stop button or Cmd+. menu item to cancel the current generation.
     static let faeCancelGeneration = Notification.Name("faeCancelGeneration")
+    /// Posted when voice-command routing asks the app to open the Settings window.
+    static let faeOpenSettingsRequested = Notification.Name("faeOpenSettingsRequested")
 }

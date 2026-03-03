@@ -105,6 +105,8 @@ enum PersonalityManager {
           - "Think step by step" → adjust llm.thinking_enabled = true
           - "Let me interrupt you" → adjust barge_in.enabled = true
           - "Only respond when I say your name" → adjust conversation.require_direct_address = true
+          - "Use safer tools" / "be fully autonomous with tools" → adjust tool_mode
+            (off, read_only, read_write, full, full_no_approval)
           - Use get_settings to see all current values before making changes.
           - These changes are reflected in Settings and persist across restarts.
         - Use directive actions for standing orders that affect your behavior:

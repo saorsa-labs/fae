@@ -121,6 +121,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let faeCore = FaeCore()
 
     var deviceTransferObserver: NSObjectProtocol?
+    var openSettingsObserver: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
 
     private static let backendEventRouter = BackendEventRouter()
@@ -312,6 +313,17 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.faeCore.cancel()
+            }
+        }
+
+        if openSettingsObserver == nil {
+            openSettingsObserver = NotificationCenter.default.addObserver(
+                forName: .faeOpenSettingsRequested,
+                object: nil,
+                queue: .main
+            ) { _ in
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                NSApp.activate(ignoringOtherApps: true)
             }
         }
 
