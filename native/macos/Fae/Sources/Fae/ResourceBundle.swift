@@ -6,6 +6,8 @@ private class _FaeBundleFinder {}
 extension Bundle {
     static let faeResources: Bundle = {
         let nestedBundleName = "Fae_Fae.bundle"
+        // Check for Skills directory or default.metallib — either confirms the Fae resource bundle.
+        let markers = [("Skills", nil as String?), ("default", "metallib"), ("SOUL", "md")]
         let candidates: [Bundle] = [
             .module,
             .main,
@@ -13,7 +15,7 @@ extension Bundle {
         ]
 
         for bundle in candidates {
-            if bundle.url(forResource: "Skills", withExtension: nil) != nil {
+            if hasAnyMarker(bundle, markers) {
                 return bundle
             }
 
@@ -21,7 +23,7 @@ extension Bundle {
             for root in roots.compactMap({ $0 }) {
                 let nestedURL = root.appendingPathComponent(nestedBundleName)
                 if let nestedBundle = Bundle(url: nestedURL),
-                   nestedBundle.url(forResource: "Skills", withExtension: nil) != nil
+                   hasAnyMarker(nestedBundle, markers)
                 {
                     return nestedBundle
                 }
@@ -31,4 +33,16 @@ extension Bundle {
         NSLog("Fae: WARNING — could not resolve resource bundle containing 'Skills'; falling back to main bundle")
         return Bundle.main
     }()
+
+    private static func hasAnyMarker(
+        _ bundle: Bundle,
+        _ markers: [(String, String?)]
+    ) -> Bool {
+        for (name, ext) in markers {
+            if bundle.url(forResource: name, withExtension: ext) != nil {
+                return true
+            }
+        }
+        return false
+    }
 }

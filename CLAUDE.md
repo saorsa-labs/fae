@@ -219,7 +219,7 @@ Even "off" mode keeps read tools available — Fae is local, she should always b
 Tool mode is enforced at two levels: schema filtering (LLM never sees blocked tools) and
 execution guard (rejected even if LLM hallucinates a tool call).
 
-The LLM decides when to use tools via `<tool_call>` markup inline — no separate routing or intent classification.
+The LLM uses **native MLX tool calling** — tool specs are passed via `UserInput.tools` so the Qwen3.5 chat template activates its built-in tool calling behavior. Native `.toolCall` events are serialized back to `<tool_call>` text for the existing pipeline parser. No separate routing or intent classification.
 
 ### Apple tool permission request flow
 
@@ -1118,3 +1118,13 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - Phase 3: Speaker recognition always on (remove config.speaker.enabled gate)
   - Phase 3: Voice identity awareness + multi-speaker awareness in system prompt
   - Total: 31 tools (was 30)
+- **v0.8.75** — Native Tool Calling: fix all 31 tools via MLX native tool calling integration
+  - Root cause: `UserInput.tools` was never set, so Qwen3.5 chat template never activated tool calling mode
+  - Tool.swift: `toolSpec` computed property converts string `parametersSchema` to native `ToolSpec` (JSON Schema format)
+  - ToolRegistry.swift: `nativeToolSpecs(for:)` returns filtered `[ToolSpec]` by tool mode
+  - GenerationOptions: new `tools` field carries native specs through to MLXLLMEngine
+  - MLXLLMEngine: sets `UserInput.tools`, serializes `.toolCall` events back to `<tool_call>` text for existing parser
+  - PipelineCoordinator: caches `currentNativeTools` for tool follow-up turns, wired alongside system prompt
+  - PersonalityManager: when native tools active, uses behavioral guidance only (no inline schemas — chat template handles it)
+  - Package.swift: fix resource bundle double-nesting (.copy("Resources") → individual entries)
+  - ResourceBundle.swift: multi-marker bundle detection (Skills, default.metallib, SOUL.md)

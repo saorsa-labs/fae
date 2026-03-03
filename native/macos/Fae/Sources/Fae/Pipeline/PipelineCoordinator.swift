@@ -507,6 +507,7 @@ actor PipelineCoordinator {
     private func resetConversationSession(trigger: String, source: String) async {
         sleep()
         currentSystemPrompt = nil
+        currentNativeTools = nil
         engagedUntil = nil
         lastAssistantResponseText = ""
         activeCapabilityTicket = nil
@@ -947,12 +948,23 @@ actor PipelineCoordinator {
                 return schemas.isEmpty ? nil : schemas
             }()
 
+            // Build native tool specs for MLX tool calling.
+            // Cached in currentNativeTools for tool follow-up turns.
+            self.currentNativeTools = includeTools
+                ? registry.nativeToolSpecs(for: toolMode)
+                : nil
+
+            if let specs = self.currentNativeTools {
+                debugLog(debugConsole, .pipeline, "Native tool specs: \(specs.count) tools")
+            }
+
             if let schemas = toolSchemas {
                 let schemaCount = schemas.components(separatedBy: "\"name\":").count - 1
                 debugLog(debugConsole, .pipeline, "Tool schemas: ~\(schemaCount) tools, \(schemas.count) chars")
             }
 
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
+            let nativeToolsAvailable = self.currentNativeTools != nil
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
                 visionCapable: config.vision.enabled,
@@ -961,6 +973,7 @@ actor PipelineCoordinator {
                 speakerRole: currentSpeakerRole,
                 soulContract: soul,
                 directiveOverride: isRescueMode ? "" : nil,
+                nativeToolsAvailable: nativeToolsAvailable,
                 toolSchemas: toolSchemas,
                 installedSkills: legacySkills,
                 skillDescriptions: skillDescs
@@ -989,12 +1002,14 @@ actor PipelineCoordinator {
         let history = await conversationState.history
 
         let suppressThinking = forceSuppressThinking || !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
+
         let options = GenerationOptions(
             temperature: config.llm.temperature,
             topP: config.llm.topP,
             maxTokens: config.llm.maxTokens,
             repetitionPenalty: config.llm.repeatPenalty,
-            suppressThinking: suppressThinking
+            suppressThinking: suppressThinking,
+            tools: currentNativeTools
         )
 
         // Stream tokens.
@@ -1441,6 +1456,9 @@ actor PipelineCoordinator {
 
     /// Cached system prompt for tool follow-up turns (avoids rebuilding each recursion).
     private var currentSystemPrompt: String?
+
+    /// Cached native tool specs for tool follow-up turns.
+    private var currentNativeTools: [[String: any Sendable]]?
 
     // MARK: - TTS
 

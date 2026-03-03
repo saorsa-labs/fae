@@ -65,4 +65,7 @@ struct GenerationOptions: Sendable {
     /// When true, pass `enable_thinking: false` to the model's chat template.
     /// Required for Qwen3.5-35B-A3B which does not support `/no_think` per-turn.
     var suppressThinking: Bool = true
+    /// Native tool specs for MLX tool calling (ToolSpec = `[String: any Sendable]`).
+    /// When set, passed to `UserInput.tools` so the chat template enables tool calling mode.
+    var tools: [[String: any Sendable]]?
 }

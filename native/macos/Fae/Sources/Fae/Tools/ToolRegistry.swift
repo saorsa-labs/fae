@@ -1,4 +1,5 @@
 import Foundation
+import Tokenizers
 
 /// Central registry of available tools, filtered by permission mode.
 ///
@@ -171,6 +172,17 @@ final class ToolRegistry: Sendable {
         "screenshot", "camera", "read_screen",
         "click", "type_text", "scroll",
     ]
+
+    /// Native tool specs for MLX tool calling, filtered by mode.
+    ///
+    /// Returns `nil` when tools are disabled (`off` mode) so the caller
+    /// can distinguish "no tools" from "empty tool list".
+    func nativeToolSpecs(for mode: String) -> [ToolSpec]? {
+        guard mode != "off" else { return nil }
+        let allowed = tools.values.filter { isToolAllowed($0.name, mode: mode) }
+        guard !allowed.isEmpty else { return nil }
+        return allowed.sorted { $0.name < $1.name }.map { $0.toolSpec }
+    }
 
     // MARK: - Private
 

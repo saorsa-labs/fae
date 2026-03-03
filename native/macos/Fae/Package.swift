@@ -55,9 +55,15 @@ let package = Package(
                 "NebulaOrb.metal",
             ],
             resources: [
-                // Copy to preserve directory hierarchy (required for multiple
-                // skill bundles each containing SKILL.md / MANIFEST.json).
-                .copy("Resources"),
+                // Individual resource entries avoid the double-nesting bug where
+                // .copy("Resources") creates Contents/Resources/Resources/ in
+                // xcodebuild bundles, making NSBundle.url(forResource:) fail.
+                .copy("Resources/Skills"),
+                .copy("Resources/Models"),
+                .copy("Resources/default.metallib"),
+                .copy("Resources/SOUL.md"),
+                .copy("Resources/Voices/fae.wav"),
+                .copy("Resources/App/AppIconFace.jpg"),
             ],
             linkerSettings: [
                 // System frameworks for native Swift pipeline.

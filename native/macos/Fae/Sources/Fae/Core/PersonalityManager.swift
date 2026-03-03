@@ -280,17 +280,19 @@ enum PersonalityManager {
         soulContract: String? = nil,
         directiveOverride: String? = nil,
         memoryContext: String? = nil,
+        nativeToolsAvailable: Bool = false,
         toolSchemas: String? = nil,
         installedSkills: [String] = [],
         skillDescriptions: [(name: String, description: String, type: SkillType)] = []
     ) -> String {
         var parts: [String] = []
+        let toolsActive = nativeToolsAvailable || (toolSchemas != nil && !toolSchemas!.isEmpty)
 
         // 1. Core prompt.
         parts.append(voiceCorePrompt)
 
-        // 2. Vision + computer use (only when tools are available in the schema).
-        if visionCapable, toolSchemas != nil {
+        // 2. Vision + computer use (only when tools are available).
+        if visionCapable, toolsActive {
             parts.append(visionPrompt)
             parts.append(computerUsePrompt)
         }
@@ -353,7 +355,7 @@ enum PersonalityManager {
         }
 
         // 10. Python / uv capability + self-modification + proactive behavior + roleplay + multi-speaker (only when tools are available).
-        if toolSchemas != nil {
+        if toolsActive {
             parts.append(pythonCapabilityPrompt)
             parts.append(selfModificationPrompt)
             parts.append(proactiveBehaviorPrompt)
@@ -382,8 +384,21 @@ enum PersonalityManager {
         // chat template level (enable_thinking=false in additionalContext).
         // No text-based directive needed — the template kwarg is authoritative.
 
-        // 11. Tool schemas (enables inline tool use via <tool_call> markup).
-        if let schemas = toolSchemas, !schemas.isEmpty {
+        // 11. Tool schemas.
+        if nativeToolsAvailable {
+            // Native tool calling: the chat template injects tool definitions from
+            // UserInput.tools. We only need behavioral guidance here — no schemas.
+            parts.append("""
+                Tool usage:
+                - You have tools available. Use them when the user's request genuinely needs one.
+                - After receiving a tool result, respond naturally in spoken language.
+                - Only use tools when the user's request genuinely needs one.
+                - For simple conversation, just respond directly without tools.
+                - Keep your spoken responses concise (1-4 sentences).
+                - NEVER expose raw tool call markup or JSON to the user.
+                """)
+        } else if let schemas = toolSchemas, !schemas.isEmpty {
+            // Legacy inline tool schemas — fallback for models without native tool support.
             parts.append("""
                 Tool usage:
                 - When a task requires a tool, output a tool call in this exact format:

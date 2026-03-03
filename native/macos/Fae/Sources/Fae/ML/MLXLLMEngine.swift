@@ -104,6 +104,14 @@ actor MLXLLMEngine: LLMEngine {
                     // via chat_template_kwargs — Swift equivalent is additionalContext.
                     var userInput = UserInput(chat: chatMessages)
                     userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
+
+                    // Pass native tool specs so the chat template enables tool calling mode.
+                    // Without this, Qwen3.5 thinks about tools in <think> but never emits
+                    // actual tool calls — the template needs `tools` to activate that behavior.
+                    if let toolSpecs = options.tools {
+                        userInput.tools = toolSpecs
+                    }
+
                     let lmInput = try await container.prepare(input: userInput)
 
                     let params = GenerateParameters(
@@ -124,8 +132,21 @@ actor MLXLLMEngine: LLMEngine {
                             continuation.yield(text)
                         case .info:
                             break
-                        case .toolCall:
-                            break
+                        case .toolCall(let call):
+                            // Serialize native ToolCall back to text so the existing
+                            // parseToolCalls() parser in PipelineCoordinator picks it up.
+                            let jsonObj: [String: Any] = [
+                                "name": call.function.name,
+                                "arguments": call.function.arguments.mapValues { $0.anyValue },
+                            ]
+                            if let data = try? JSONSerialization.data(
+                                withJSONObject: jsonObj, options: [.sortedKeys]),
+                                let jsonStr = String(data: data, encoding: .utf8)
+                            {
+                                NSLog(
+                                    "MLXLLMEngine: native .toolCall → %@", call.function.name)
+                                continuation.yield("<tool_call>\(jsonStr)</tool_call>")
+                            }
                         }
                     }
 
