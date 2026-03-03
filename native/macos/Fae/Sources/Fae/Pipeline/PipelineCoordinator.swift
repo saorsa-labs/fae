@@ -128,6 +128,7 @@ actor PipelineCoordinator {
     private var assistantGenerating: Bool = false
     private var interrupted: Bool = false
     private var awaitingApproval: Bool = false
+    private var pendingGovernanceToolMode: String?
 
     // MARK: - Speaker Identity State
 
@@ -298,6 +299,7 @@ actor PipelineCoordinator {
     /// loop checks `interrupted` at each step and exits cleanly.
     func cancel() {
         interrupted = true
+        pendingGovernanceToolMode = nil
         computerUseStepCount = 0
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
@@ -512,6 +514,7 @@ actor PipelineCoordinator {
         lastAssistantResponseText = ""
         activeCapabilityTicket = nil
         awaitingApproval = false
+        pendingGovernanceToolMode = nil
         computerUseStepCount = 0
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
@@ -756,6 +759,24 @@ actor PipelineCoordinator {
                 return
             }
 
+            if let pendingMode = pendingGovernanceToolMode {
+                if let decision = VoiceCommandParser.parseApprovalResponse(text) {
+                    pendingGovernanceToolMode = nil
+                    if decision {
+                        applyToolModeChange(mode: pendingMode, source: "voice_confirm")
+                        await speakDirect("Done. Tool mode is now \(displayToolMode(pendingMode)).")
+                    } else {
+                        await speakDirect("Okay, I won't change tool mode.")
+                    }
+                } else {
+                    let words = text.split(whereSeparator: { $0.isWhitespace }).count
+                    if words > 2 {
+                        await speakDirect("Please say yes or no to confirm the tool mode change.")
+                    }
+                }
+                return
+            }
+
             // Echo detection — if the transcribed text is a fragment of the last
             // assistant response, the mic picked up speaker output. Drop it.
             if !lastAssistantResponseText.isEmpty {
@@ -894,25 +915,47 @@ actor PipelineCoordinator {
             await speakDirect("Here are your current tools and permission levels.")
             return true
 
+        case .setToolMode(let requestedMode):
+            eventBus.send(.voiceCommandRecognized("set_tool_mode:\(requestedMode)"))
+
+            let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+            let addressed = isAddressedToFae(originalText)
+            if !addressed && !inFollowup {
+                await speakDirect("Please say my name when changing tool authority settings.")
+                return true
+            }
+
+            let currentMode = effectiveToolMode()
+            if currentMode == requestedMode {
+                await speakDirect("Tool mode is already \(displayToolMode(requestedMode)).")
+                return true
+            }
+
+            if requestedMode == "full_no_approval" {
+                pendingGovernanceToolMode = requestedMode
+                await speakDirect("This removes confirmation prompts for risky actions. Are you sure? Say yes or no.")
+                return true
+            }
+
+            applyToolModeChange(mode: requestedMode, source: "voice")
+            await speakDirect("Done. Tool mode is now \(displayToolMode(requestedMode)).")
+            return true
+
         case .switchModel, .approvalResponse, .none:
             return false
         }
     }
 
     private func buildToolsAndPermissionsCanvasHTML(triggerText: String) async -> String {
+        let snapshot = await buildToolsAndPermissionsSnapshot(triggerText: triggerText)
+        return snapshot.toCanvasHTML()
+    }
+
+    private func buildToolsAndPermissionsSnapshot(triggerText: String) async -> ToolPermissionSnapshot {
         let mode = effectiveToolMode()
         let permissions = await MainActor.run { PermissionStatusProvider.current() }
-
-        let allowedTools = registry.toolNames
-            .filter { registry.isToolAllowed($0, mode: mode) }
-            .sorted()
-
-        let deniedTools = registry.toolNames
-            .filter { !registry.isToolAllowed($0, mode: mode) }
-            .sorted()
-
         let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
-        let ownerGate = config.speaker.requireOwnerForTools
+
         let speakerState: String = {
             if currentSpeakerIsOwner { return "Owner verified" }
             if currentSpeakerIsKnownNonOwner { return "Known non-owner speaker" }
@@ -920,70 +963,51 @@ actor PipelineCoordinator {
             return "Speaker unknown"
         }()
 
-        func badge(_ granted: Bool) -> String {
-            granted
-                ? "<span class='ok'>granted</span>"
-                : "<span class='warn'>not granted</span>"
+        return ToolPermissionSnapshot.build(
+            triggerText: triggerText,
+            toolMode: mode,
+            speakerState: speakerState,
+            ownerGateEnabled: config.speaker.requireOwnerForTools,
+            ownerProfileExists: ownerProfileExists,
+            permissions: permissions,
+            registry: registry
+        )
+    }
+
+    private func applyToolModeChange(mode: String, source: String) {
+        let normalizedMode = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let allowed = ["off", "read_only", "read_write", "full", "full_no_approval"]
+        guard allowed.contains(normalizedMode) else { return }
+
+        eventBus.send(.voiceCommandRecognized("tool_mode_applied:\(normalizedMode):\(source)"))
+        Task { @MainActor in
+            NotificationCenter.default.post(
+                name: .faeGovernanceActionRequested,
+                object: nil,
+                userInfo: [
+                    "action": "set_tool_mode",
+                    "value": normalizedMode,
+                    "source": source,
+                ]
+            )
         }
+    }
 
-        let listedAllowed = allowedTools.isEmpty
-            ? "<li>None</li>"
-            : allowedTools.map { "<li><code>\($0)</code></li>" }.joined()
-
-        let listedDenied = deniedTools.isEmpty
-            ? "<li>None</li>"
-            : deniedTools.map { "<li><code>\($0)</code></li>" }.joined()
-
-        return """
-        <html>
-        <head>
-          <meta name='viewport' content='width=device-width, initial-scale=1' />
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1015; color: #e9e9ef; padding: 18px; line-height: 1.45; }
-            h1 { font-size: 18px; margin: 0 0 8px 0; }
-            h2 { font-size: 14px; margin: 14px 0 6px 0; color: #c8b8db; }
-            p, li { font-size: 12px; }
-            ul { margin: 6px 0 0 0; padding-left: 18px; }
-            .panel { border: 1px solid #2a2d38; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #171a23; }
-            .ok { color: #53d18f; font-weight: 600; }
-            .warn { color: #f0b46e; font-weight: 600; }
-            code { color: #d9c8ea; }
-            .hint { color: #99a0b6; }
-          </style>
-        </head>
-        <body>
-          <h1>Tools & Permission Snapshot</h1>
-          <div class='panel'>
-            <p><strong>Trigger:</strong> \(triggerText)</p>
-            <p><strong>Tool mode:</strong> <code>\(mode)</code></p>
-            <p><strong>Speaker trust:</strong> \(speakerState)</p>
-            <p><strong>Owner gate:</strong> \(ownerGate ? "enabled" : "disabled") · owner profile \(ownerProfileExists ? "present" : "missing")</p>
-          </div>
-
-          <h2>System permissions</h2>
-          <div class='panel'>
-            <p>Microphone: \(badge(permissions.microphone))</p>
-            <p>Contacts: \(badge(permissions.contacts))</p>
-            <p>Calendar: \(badge(permissions.calendar))</p>
-            <p>Reminders: \(badge(permissions.reminders))</p>
-            <p>Camera: \(badge(permissions.camera))</p>
-            <p>Screen Recording: \(badge(permissions.screenRecording))</p>
-          </div>
-
-          <h2>Allowed tools (\(allowedTools.count))</h2>
-          <div class='panel'>
-            <ul>\(listedAllowed)</ul>
-          </div>
-
-          <h2>Not available in this mode (\(deniedTools.count))</h2>
-          <div class='panel'>
-            <ul>\(listedDenied)</ul>
-          </div>
-
-          <p class='hint'>Say: “set tool mode to read write” or “open settings” to change behavior.</p>
-        </body>
-        </html>
-        """
+    private func displayToolMode(_ mode: String) -> String {
+        switch mode {
+        case "off":
+            return "off"
+        case "read_only":
+            return "read only"
+        case "read_write":
+            return "read write"
+        case "full":
+            return "full"
+        case "full_no_approval":
+            return "full no approval"
+        default:
+            return mode
+        }
     }
 
     /// Unified LLM generation with inline tool execution.

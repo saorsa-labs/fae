@@ -10,6 +10,7 @@ struct SettingsToolsTab: View {
     @State private var autonomyProfile: String = "balanced"
     @State private var showAdvanced = false
     @State private var permissionSnapshot = PermissionStatusProvider.current()
+    @State private var toolSnapshot: ToolPermissionSnapshot?
 
     private let toolModes: [(label: String, value: String, description: String)] = [
         ("Off", "off", "Tools disabled. LLM-only conversational mode."),
@@ -76,6 +77,36 @@ struct SettingsToolsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Current Tool Snapshot") {
+                if let snapshot = toolSnapshot {
+                    HStack {
+                        Text("Allowed tools")
+                        Spacer()
+                        Text("\(snapshot.allowedTools.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Blocked in mode")
+                        Spacer()
+                        Text("\(snapshot.deniedTools.count)")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Mode \(snapshot.toolMode) · Owner gate \(snapshot.ownerGateEnabled ? "on" : "off")")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button("Refresh Snapshot") {
+                    refreshToolSnapshot()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Text("Say “show tools and permissions” any time to open this snapshot in the canvas with quick mode actions.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Apple Tool Permissions") {
                 permissionRow(
                     icon: "calendar",
@@ -132,6 +163,10 @@ struct SettingsToolsTab: View {
         .onAppear {
             permissionSnapshot = PermissionStatusProvider.current()
             autonomyProfile = autonomyProfile(forToolMode: toolMode)
+            refreshToolSnapshot()
+        }
+        .onChange(of: toolMode) {
+            refreshToolSnapshot()
         }
     }
 
@@ -192,7 +227,22 @@ struct SettingsToolsTab: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             await MainActor.run {
                 permissionSnapshot = PermissionStatusProvider.current()
+                refreshToolSnapshot()
             }
         }
+    }
+
+    private func refreshToolSnapshot() {
+        let config = FaeConfig.load()
+        let registry = ToolRegistry.buildDefault()
+        toolSnapshot = ToolPermissionSnapshot.build(
+            triggerText: "settings.tools",
+            toolMode: toolMode,
+            speakerState: "Speaker unknown",
+            ownerGateEnabled: config.speaker.requireOwnerForTools,
+            ownerProfileExists: false,
+            permissions: permissionSnapshot,
+            registry: registry
+        )
     }
 }

@@ -178,6 +178,34 @@ final class HostCommandBridge: ObservableObject {
         )
         observations.append(
             center.addObserver(
+                forName: .faeGovernanceActionRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let action = notification.userInfo?["action"] as? String,
+                      let value = notification.userInfo?["value"] as? String
+                else { return }
+                let source = notification.userInfo?["source"] as? String ?? "unknown"
+                Task { @MainActor in
+                    switch action {
+                    case "set_tool_mode":
+                        NSLog("HostCommandBridge: governance action set_tool_mode=%@ source=%@", value, source)
+                        self?.dispatch(
+                            "config.patch",
+                            payload: [
+                                "key": "tool_mode",
+                                "value": value,
+                                "source": source,
+                            ]
+                        )
+                    default:
+                        NSLog("HostCommandBridge: unknown governance action '%@'", action)
+                    }
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
                 forName: .faeEmergencyStop,
                 object: nil,
                 queue: .main

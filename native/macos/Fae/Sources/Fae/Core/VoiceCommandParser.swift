@@ -13,6 +13,7 @@ enum VoiceCommandParser {
         case hideCanvas
         case showSettings
         case showPermissionsCanvas
+        case setToolMode(String)
         case switchModel(String)
         case approvalResponse(Bool)
         case none
@@ -51,10 +52,31 @@ enum VoiceCommandParser {
 
         // Tool + permission snapshot canvas commands.
         if lower.contains("show permissions") || lower.contains("show tool permissions")
-            || lower.contains("show tools I can use") || lower.contains("show available tools")
+            || lower.contains("show tools i can use") || lower.contains("show available tools")
             || lower.contains("show tools and permissions")
         {
             return .showPermissionsCanvas
+        }
+
+        // Tool mode changes.
+        if lower.contains("set tool mode") || lower.contains("tool mode") || lower.contains("tools mode")
+            || lower.contains("set tools to") || lower.contains("use tool mode")
+        {
+            if lower.contains("no approval") || lower.contains("without approval") || lower.contains("fully autonomous") {
+                return .setToolMode("full_no_approval")
+            }
+            if lower.contains("read write") || lower.contains("read and write") {
+                return .setToolMode("read_write")
+            }
+            if lower.contains("read only") || lower.contains("safe mode") {
+                return .setToolMode("read_only")
+            }
+            if lower.contains("full") {
+                return .setToolMode("full")
+            }
+            if lower.contains("off") || lower.contains("disable tools") {
+                return .setToolMode("off")
+            }
         }
 
         return .none

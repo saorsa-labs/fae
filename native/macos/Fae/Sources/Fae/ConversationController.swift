@@ -198,4 +198,7 @@ extension Notification.Name {
     static let faeCancelGeneration = Notification.Name("faeCancelGeneration")
     /// Posted when voice-command routing asks the app to open the Settings window.
     static let faeOpenSettingsRequested = Notification.Name("faeOpenSettingsRequested")
+    /// Posted by canvas interactions or voice authority flow to request a governed settings mutation.
+    /// userInfo: ["action": String, "value": String, "source": String]
+    static let faeGovernanceActionRequested = Notification.Name("faeGovernanceActionRequested")
 }

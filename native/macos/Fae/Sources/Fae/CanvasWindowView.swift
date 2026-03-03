@@ -355,11 +355,16 @@ private struct ArchivedTurnRow: View {
 struct CanvasHTMLView: NSViewRepresentable {
     var htmlContent: String
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
         let view = WKWebView(frame: .zero, configuration: config)
+        view.navigationDelegate = context.coordinator
         view.underPageBackgroundColor = .clear
         // Make WebView fully transparent so glassmorphic panel background shows through
         view.setValue(false, forKey: "drawsBackground")
@@ -369,6 +374,7 @@ struct CanvasHTMLView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.navigationDelegate = context.coordinator
         loadHTML(in: webView)
     }
 
@@ -414,5 +420,39 @@ struct CanvasHTMLView: NSViewRepresentable {
             </head><body>\(htmlContent)</body></html>
             """
         webView.loadHTMLString(wrapped, baseURL: nil)
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            guard let url = navigationAction.request.url else {
+                decisionHandler(.allow)
+                return
+            }
+
+            if url.scheme?.lowercased() == "fae-action" {
+                let action = url.host ?? ""
+                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                let value = components?.queryItems?.first(where: { $0.name == "value" })?.value ?? ""
+                let source = components?.queryItems?.first(where: { $0.name == "source" })?.value ?? "canvas"
+
+                NotificationCenter.default.post(
+                    name: .faeGovernanceActionRequested,
+                    object: nil,
+                    userInfo: [
+                        "action": action,
+                        "value": value,
+                        "source": source,
+                    ]
+                )
+                decisionHandler(.cancel)
+                return
+            }
+
+            decisionHandler(.allow)
+        }
     }
 }

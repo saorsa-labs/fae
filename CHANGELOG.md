@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.73] - 2026-03-03
+
+### Added
+
+- **Voice governance commands** for auxiliary UX and authority controls:
+  - "show/open discussions", "hide/close discussions"
+  - "show/open canvas", "hide/close canvas"
+  - "open settings"
+  - "show tools and permissions" (renders a live governance snapshot on canvas)
+- **Unified ToolPermissionSnapshot model** (`Core/ToolPermissionSnapshot.swift`) shared by pipeline canvas rendering and Settings > Tools diagnostics.
+- **Canvas quick actions for tool mode** (Off / Read Only / Read/Write / Full / Full No Approval) via `fae-action://` links routed through the governed command path.
+- **Governance action bridge**: new `.faeGovernanceActionRequested` notification routed by `HostCommandBridge` into `config.patch` for a single mutation pathway.
+
+### Changed
+
+- **Voice authority flow for tool mode changes**: direct voice command parsing now supports tool mode changes and requires explicit yes/no confirmation for `full_no_approval`.
+- **Pipeline event surface expanded** with native events for `canvas_content`, `canvas_visibility`, `conversation_visibility`, and `voice_command` from `FaeEventBus`.
+- **Self-config parity**: `self_config adjust_setting` now supports `tool_mode` in addition to prior speech/thinking/vision settings.
+
+### Improved
+
+- **Settings > Tools snapshot panel** now shows allowed/blocked tool counts for the active mode and points users to the voice-first governance flow.
+- **Governance logging**: bridge-level logs now capture tool-mode mutations and source metadata (`voice`, `canvas`, etc.) for easier manual audit.
+
 ## [v0.8.72] - 2026-03-02
 
 ### Added
