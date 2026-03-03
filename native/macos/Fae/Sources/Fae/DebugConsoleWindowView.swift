@@ -83,7 +83,7 @@ private struct DebugEventRow: View {
             Text(event.kind.rawValue)
                 .font(.system(.caption2, design: .monospaced, weight: .bold))
                 .foregroundStyle(event.kind.color)
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 62, alignment: .leading)
 
             Text(event.text)
                 .foregroundStyle(.primary)

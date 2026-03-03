@@ -295,6 +295,7 @@ actor PipelineCoordinator {
     func start() async throws {
         guard pipelineTask == nil else { return }
 
+        debugLog(debugConsole, .qa, "Pipeline start requested")
         eventBus.send(.pipelineStateChanged(.starting))
 
         // Set up playback event handler and voice speed.
@@ -309,6 +310,7 @@ actor PipelineCoordinator {
         eventBus.send(.pipelineStateChanged(.running))
         pipelineStartedAt = Date()
         await refreshDegradedModeIfNeeded(context: "startup")
+        debugLog(debugConsole, .qa, "Pipeline running mode=\(mode.rawValue) toolMode=\(effectiveToolMode())")
         NSLog("PipelineCoordinator: pipeline started in %@ mode", mode.rawValue)
 
         // Main pipeline loop.
@@ -320,6 +322,7 @@ actor PipelineCoordinator {
 
     /// Stop the pipeline.
     func stop() async {
+        debugLog(debugConsole, .qa, "Pipeline stop requested")
         pipelineTask?.cancel()
         pipelineTask = nil
         cancelDeferredToolJobs()
@@ -793,6 +796,7 @@ actor PipelineCoordinator {
                    let manager = approvalManager,
                    await manager.resolveMostRecent(approved: decision, source: "voice")
                 {
+                    debugLog(debugConsole, .approval, "Tool approval decision via voice: \(decision)")
                     awaitingApproval = false
                     let ack = decision
                         ? PersonalityManager.nextApprovalGranted()
@@ -801,6 +805,7 @@ actor PipelineCoordinator {
                 } else {
                     let words = text.split(whereSeparator: { $0.isWhitespace }).count
                     if words > 2 {
+                        debugLog(debugConsole, .approval, "Ambiguous tool approval response: \(text)")
                         await speakDirect(PersonalityManager.nextApprovalAmbiguous())
                     }
                 }
@@ -810,6 +815,7 @@ actor PipelineCoordinator {
             if let pendingAction = pendingGovernanceAction {
                 if let decision = VoiceCommandParser.parseApprovalResponse(text) {
                     pendingGovernanceAction = nil
+                    debugLog(debugConsole, .approval, "Governance confirmation decision=\(decision) action=\(pendingAction.action)")
                     if decision {
                         applyGovernanceAction(
                             action: pendingAction.action,
@@ -824,6 +830,7 @@ actor PipelineCoordinator {
                 } else {
                     let words = text.split(whereSeparator: { $0.isWhitespace }).count
                     if words > 2 {
+                        debugLog(debugConsole, .approval, "Ambiguous governance confirmation response: \(text)")
                         await speakDirect(pendingAction.confirmationPrompt)
                     }
                 }
@@ -862,6 +869,7 @@ actor PipelineCoordinator {
             }
 
             let voiceCommand = VoiceCommandParser.parse(text)
+            debugLog(debugConsole, .command, "Parsed voice command: \(String(describing: voiceCommand))")
             let voiceCommandStarted = Date()
             let handledVoiceCommand = await handleVoiceCommandIfNeeded(voiceCommand, originalText: text)
             let voiceCommandLatencyMs = Int(Date().timeIntervalSince(voiceCommandStarted) * 1000)
@@ -871,6 +879,7 @@ actor PipelineCoordinator {
                 latencyMs: voiceCommandLatencyMs
             )
             if handledVoiceCommand {
+                debugLog(debugConsole, .command, "Handled voice command in \(voiceCommandLatencyMs)ms")
                 return
             }
 
@@ -884,6 +893,7 @@ actor PipelineCoordinator {
             let addressedToFae = isAddressedToFae(text)
             if effectiveRequireDirectAddress() {
                 if !addressedToFae && !inFollowup && !awaitingApproval {
+                    debugLog(debugConsole, .command, "Dropped (direct-address required): \(text)")
                     return // Drop — not addressed to Fae.
                 }
             }
@@ -907,10 +917,13 @@ actor PipelineCoordinator {
     // MARK: - LLM Processing
 
     private func processTranscription(text: String, rms: Float?, durationSecs: Float?) async {
+        debugLog(debugConsole, .qa, "Process transcription: \(text)")
+
         // Extract query if name-addressed.
         var queryText = text
         if let (nameRange, _) = TextProcessing.findNameMention(in: text) {
             queryText = TextProcessing.extractQueryAroundName(in: text, nameRange: nameRange)
+            debugLog(debugConsole, .command, "Direct-address extraction: \(queryText)")
             // Refresh follow-up window.
             engagedUntil = Date().addingTimeInterval(
                 Double(config.conversation.directAddressFollowupS)
@@ -935,6 +948,7 @@ actor PipelineCoordinator {
         _ command: VoiceCommandParser.VoiceCommand,
         originalText: String
     ) async -> Bool {
+        debugLog(debugConsole, .command, "Evaluate command: \(String(describing: command))")
         switch command {
         case .showConversation:
             eventBus.send(.voiceCommandRecognized("show_conversation"))
@@ -1077,9 +1091,11 @@ actor PipelineCoordinator {
         let inFollowup = engagedUntil.map { Date() < $0 } ?? false
         let addressed = isAddressedToFae(originalText)
         if !addressed && !inFollowup {
+            debugLog(debugConsole, .governance, "Rejected governance command (not addressed): \(originalText)")
             await speakDirect("Please say my name when changing governance or permission settings.")
             return false
         }
+        debugLog(debugConsole, .governance, "Accepted governance command (addressed=\(addressed), followup=\(inFollowup))")
         return true
     }
 
@@ -1096,11 +1112,13 @@ actor PipelineCoordinator {
         guard await canRunGovernanceVoiceTransaction(originalText) else { return true }
 
         if currentValue == enabled {
+            debugLog(debugConsole, .governance, "No-op setting change: \(key)=\(enabled)")
             await speakDirect("\(displaySettingName(key)) is already \(enabled ? "on" : "off").")
             return true
         }
 
         if highRiskWhenEnabled {
+            debugLog(debugConsole, .approval, "Queued confirmation for high-risk setting: \(key)=\(enabled)")
             pendingGovernanceAction = PendingGovernanceAction(
                 action: "set_setting",
                 value: .bool(enabled),
@@ -1114,6 +1132,7 @@ actor PipelineCoordinator {
             return true
         }
 
+        debugLog(debugConsole, .governance, "Apply setting via voice: \(key)=\(enabled)")
         applyGovernanceAction(
             action: "set_setting",
             value: .bool(enabled),
@@ -1126,6 +1145,7 @@ actor PipelineCoordinator {
 
     private func requestPermissionFlow(capability: String, source: String) async {
         let label = capability.replacingOccurrences(of: "_", with: " ")
+        debugLog(debugConsole, .governance, "Permission request via \(source): \(capability)")
         applyGovernanceAction(
             action: "request_permission",
             value: .string(capability),
@@ -1138,6 +1158,7 @@ actor PipelineCoordinator {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self else { return }
+            await self.logGovernanceDebug("Refreshing permissions snapshot after request: \(capability)")
             let html = await self.buildToolsAndPermissionsCanvasHTML(triggerText: trigger)
             self.eventBus.send(.canvasContent(html: html, append: false))
             self.eventBus.send(.canvasVisibility(true))
@@ -1199,6 +1220,11 @@ actor PipelineCoordinator {
             userInfo[key] = val
         }
 
+        let metadataSummary = metadata.sorted(by: { $0.key < $1.key })
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ",")
+        debugLog(debugConsole, .governance, "Apply governance action=\(action) source=\(source) value=\(String(describing: userInfo["value"])) meta=[\(metadataSummary)]")
+
         eventBus.send(.voiceCommandRecognized("governance_applied:\(action):\(source)"))
 
         Task { @MainActor in
@@ -1238,6 +1264,10 @@ actor PipelineCoordinator {
         NSLog("phase1.voice_command trace command=%@ handled=%d latency_ms=%d", command, handled ? 1 : 0, latencyMs)
     }
 
+    private func logGovernanceDebug(_ text: String) {
+        debugLog(debugConsole, .governance, text)
+    }
+
     private func displayToolMode(_ mode: String) -> String {
         switch mode {
         case "off":
@@ -1256,6 +1286,7 @@ actor PipelineCoordinator {
     }
 
     private func blockedToolsActionCard(reason: String, triggerText: String) async -> String {
+        debugLog(debugConsole, .qa, "Building blocked-tools remediation card reason=\(reason)")
         let snapshot = await buildToolsAndPermissionsSnapshot(triggerText: triggerText)
 
         let guidance: (title: String, message: String, actions: [String]) = {
@@ -1367,6 +1398,7 @@ actor PipelineCoordinator {
         }
 
         if !isToolFollowUp {
+            debugLog(debugConsole, .qa, "=== TURN START user=\(userText.prefix(160)) ===")
             interrupted = false
             // Ensure no stale TTS tasks from a previous turn can block this one.
             pendingTTSTask?.cancel()
@@ -1725,11 +1757,17 @@ actor PipelineCoordinator {
         // Flush remaining text.
         let remaining = thinkTagStripper.flush()
         fullResponse += remaining
+        let responsePreview = fullResponse
+            .replacingOccurrences(of: "\n", with: " ")
+            .prefix(180)
+        debugLog(debugConsole, .qa, "Model raw response preview: \(responsePreview)")
 
         // Parse tool calls from the full response.
         let toolCalls = Self.parseToolCalls(from: fullResponse)
         if !toolCalls.isEmpty {
             debugLog(debugConsole, .pipeline, "Found \(toolCalls.count) tool call(s): \(toolCalls.map(\.name).joined(separator: ", "))")
+        } else if fullResponse.contains("<tool_call>") {
+            debugLog(debugConsole, .qa, "⚠️ Model emitted tool_call markup but no valid calls parsed")
         }
 
         if toolCalls.isEmpty {
@@ -1815,6 +1853,7 @@ actor PipelineCoordinator {
                     fallback = "I need to check that with a tool before I answer, and I couldn’t run one this turn. Please ask me to try again."
                 }
 
+                debugLog(debugConsole, .qa, "Tool-backed lookup fallback reason=\(reasonCode)")
                 let card = await blockedToolsActionCard(reason: reasonCode, triggerText: userText)
                 eventBus.send(.canvasContent(html: card, append: false))
                 eventBus.send(.canvasVisibility(true))
@@ -1828,6 +1867,7 @@ actor PipelineCoordinator {
                     Double(config.conversation.directAddressFollowupS)
                 )
                 activeCapabilityTicket = nil
+                debugLog(debugConsole, .qa, "=== TURN END fallback reason=\(reasonCode) ===")
                 return
             }
 
@@ -1860,6 +1900,7 @@ actor PipelineCoordinator {
                 Double(config.conversation.directAddressFollowupS)
             )
             activeCapabilityTicket = nil
+            debugLog(debugConsole, .qa, "=== TURN END spoken_chars=\(spokenText.count) tool_calls=0 ===")
             return
         }
 
@@ -1886,10 +1927,12 @@ actor PipelineCoordinator {
                 Double(config.conversation.directAddressFollowupS)
             )
             activeCapabilityTicket = nil
+            debugLog(debugConsole, .qa, "=== TURN END deferred_tools count=\(toolCalls.count) ===")
             return
         }
 
         guard turnCount < maxToolTurns else {
+            debugLog(debugConsole, .qa, "Exceeded max tool turns (\(maxToolTurns))")
             let msg = "I've used several tools but couldn't complete that. Could you try rephrasing?"
             eventBus.send(.assistantText(text: msg, isFinal: true))
             await speakText(msg, isFinal: true)
@@ -1912,10 +1955,12 @@ actor PipelineCoordinator {
 
             eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))
             NSLog("PipelineCoordinator: executing tool '%@'", call.name)
-            debugLog(debugConsole, .toolCall, "\(call.name)(\(inputJSON.prefix(80)))")
+            let inputPreview = String(inputJSON.prefix(220))
+            debugLog(debugConsole, .toolCall, "id=\(callId.prefix(8)) name=\(call.name) args=\(inputPreview)")
 
             let result = await executeTool(call)
-            debugLog(debugConsole, .toolResult, "\(call.name) → \(result.isError ? "error" : "ok") \(String(result.output.prefix(100)))")
+            let outputPreview = result.output.replacingOccurrences(of: "\n", with: " ").prefix(220)
+            debugLog(debugConsole, .toolResult, "id=\(callId.prefix(8)) name=\(call.name) status=\(result.isError ? "error" : "ok") output=\(outputPreview)")
             if result.isError {
                 toolFailureCount += 1
                 if firstToolError == nil {
@@ -1949,6 +1994,8 @@ actor PipelineCoordinator {
                 content: result.output
             )
         }
+
+        debugLog(debugConsole, .qa, "Tool execution summary: success=\(toolSuccessCount) failure=\(toolFailureCount)")
 
         if toolFailureCount > 0 && toolSuccessCount == 0 {
             let reason = firstToolError ?? "the tool call was denied or failed"
@@ -2076,6 +2123,7 @@ actor PipelineCoordinator {
 
         interrupted = true
         Task { await playback.stop() }
+        debugLog(debugConsole, .command, "Barge-in triggered rms=\(String(format: "%.4f", rms))")
         NSLog("PipelineCoordinator: barge-in triggered (rms=%.4f)", rms)
     }
 
@@ -2135,6 +2183,7 @@ actor PipelineCoordinator {
         guard degradedMode != current else { return }
         degradedMode = current
         NSLog("phase1.degraded_mode=%@ context=%@", current.rawValue, context)
+        debugLog(debugConsole, .qa, "Degraded mode -> \(current.rawValue) (context=\(context))")
         eventBus.send(.degradedModeChanged(mode: current.rawValue, context: context))
     }
 
@@ -2417,6 +2466,8 @@ actor PipelineCoordinator {
 
         guard !Task.isCancelled else { return }
 
+        debugLog(debugConsole, .qa, "Deferred tool summary: success=\(toolSuccessCount) failure=\(toolFailureCount)")
+
         if toolFailureCount > 0 && toolSuccessCount == 0 {
             let reason = firstToolError ?? "the tool call was denied or failed"
             let msg = "I couldn't complete that background check because the required tool didn't run: \(reason)"
@@ -2449,7 +2500,9 @@ actor PipelineCoordinator {
     private func executeTool(_ call: ToolCall) async -> ToolResult {
         // Tool mode enforcement — reject tools not allowed in current mode.
         let toolMode = effectiveToolMode()
+        debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(toolMode)")
         guard registry.isToolAllowed(call.name, mode: toolMode) else {
+            debugLog(debugConsole, .toolResult, "Blocked by mode: \(call.name) mode=\(toolMode)")
             return .error("Tool '\(call.name)' is not available in current mode (\(toolMode))")
         }
 
@@ -2480,6 +2533,7 @@ actor PipelineCoordinator {
             riskLevel: tool.riskLevel,
             profile: policyProfile
         ) {
+            debugLog(debugConsole, .toolResult, "Rate limited: \(call.name) reason=\(limitError)")
             return .error(limitError)
         }
 
@@ -2545,6 +2599,8 @@ actor PipelineCoordinator {
             brokerReasonCode = reason.code.rawValue
         }
 
+        debugLog(debugConsole, .approval, "Broker decision for \(call.name): \(brokerDecisionString) reason=\(brokerReasonCode ?? "none")")
+
         await securityLogger.log(
             event: "broker_decision",
             toolName: call.name,
@@ -2589,6 +2645,7 @@ actor PipelineCoordinator {
 
         case .confirm(let prompt, _):
             if let manager = approvalManager {
+                debugLog(debugConsole, .approval, "Requesting approval for \(call.name): \(prompt.message)")
                 awaitingApproval = true
                 await speakDirect(prompt.message)
                 let approved = await manager.requestApproval(
@@ -2597,6 +2654,7 @@ actor PipelineCoordinator {
                 )
                 awaitingApproval = false
                 approvedByUser = approved
+                debugLog(debugConsole, .approval, "Approval result for \(call.name): \(approved)")
                 if !approved {
                     if let analytics = toolAnalytics {
                         let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
@@ -2645,6 +2703,7 @@ actor PipelineCoordinator {
             }
 
         case .deny(let reason):
+            debugLog(debugConsole, .toolResult, "Denied by broker: \(call.name) reason=\(reason.code.rawValue)")
             if let analytics = toolAnalytics {
                 let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
                 await analytics.record(
@@ -2694,6 +2753,7 @@ actor PipelineCoordinator {
             }
         } catch {
             let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            debugLog(debugConsole, .toolResult, "Tool threw error: \(call.name) latency=\(latencyMs)ms error=\(error.localizedDescription)")
             if let analytics = toolAnalytics {
                 await analytics.record(
                     toolName: call.name,
@@ -2717,6 +2777,7 @@ actor PipelineCoordinator {
         }
 
         let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
         if let analytics = toolAnalytics {
             await analytics.record(
                 toolName: call.name,

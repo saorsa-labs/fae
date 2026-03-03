@@ -12,6 +12,10 @@ enum DebugEventKind: String, CaseIterable {
     case toolCall = "Tool→"
     case toolResult = "Tool←"
     case memory = "Memory"
+    case command = "Command"
+    case governance = "Govern"
+    case approval = "Approve"
+    case qa = "QA"
     case pipeline = "Pipeline"
 
     var color: Color {
@@ -23,6 +27,10 @@ enum DebugEventKind: String, CaseIterable {
         case .toolCall:   return .orange
         case .toolResult: return Color(red: 0.9, green: 0.7, blue: 0)
         case .memory:     return .green
+        case .command:    return .mint
+        case .governance: return .pink
+        case .approval:   return .yellow
+        case .qa:         return .cyan
         case .pipeline:   return .gray
         }
     }

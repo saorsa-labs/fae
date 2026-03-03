@@ -225,6 +225,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         relayServer.audioSender = faeCore
         relayServer.start()
         hostBridge.sender = faeCore
+        hostBridge.debugConsole = debugConsole
 
         // Direct Combine observation for pipeline readiness.
         // Bypasses the NotificationCenter event chain (FaeEventBus → GCD →

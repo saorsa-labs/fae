@@ -14,6 +14,7 @@ protocol HostCommandSender: AnyObject {
 @MainActor
 final class HostCommandBridge: ObservableObject {
     weak var sender: HostCommandSender?
+    weak var debugConsole: DebugConsoleController?
 
     private var observations: [NSObjectProtocol] = []
 
@@ -189,6 +190,7 @@ final class HostCommandBridge: ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     Self.incrementAuditCounter("fae.governance.total")
+                    debugLog(self.debugConsole, .governance, "Inbound action=\(action) source=\(source)")
 
                     switch action {
                     case "set_tool_mode":
@@ -203,6 +205,7 @@ final class HostCommandBridge: ObservableObject {
                                message: "Fae will be able to run high-risk tool actions without confirmation prompts."
                            )
                         {
+                            debugLog(self.debugConsole, .approval, "Governance prompt rejected: set_tool_mode full_no_approval")
                             Self.incrementAuditCounter("fae.governance.cancelled")
                             return
                         }
@@ -231,6 +234,7 @@ final class HostCommandBridge: ObservableObject {
                                message: "Apply \(key) now? This changes Fae’s authority or identity safeguards."
                            )
                         {
+                            debugLog(self.debugConsole, .approval, "Governance prompt rejected: set_setting \(key)")
                             Self.incrementAuditCounter("fae.governance.cancelled")
                             return
                         }
@@ -298,8 +302,11 @@ final class HostCommandBridge: ObservableObject {
     }
 
     private func dispatch(_ name: String, payload: [String: Any]) {
+        debugLog(debugConsole, .command, "Dispatch \(name) payload=\(summarizePayload(payload))")
         if let sender {
             sender.sendCommand(name: name, payload: payload)
+        } else {
+            debugLog(debugConsole, .pipeline, "No sender attached for command \(name)")
         }
     }
 
@@ -323,6 +330,13 @@ final class HostCommandBridge: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func summarizePayload(_ payload: [String: Any]) -> String {
+        payload
+            .sorted(by: { $0.key < $1.key })
+            .map { key, value in "\(key)=\(String(describing: value))" }
+            .joined(separator: ",")
     }
 
     private static func incrementAuditCounter(_ key: String) {

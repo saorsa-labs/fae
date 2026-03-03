@@ -171,6 +171,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 self.entityLinker = entityLinker
                 self.memoryOrchestrator = orchestrator
 
+                await self.auditSetupConsistency(memoryStore: memoryStore)
+
                 // One-time background backfill of existing person records → entities.
                 EntityBackfillRunner.backfillIfNeeded(
                     memoryStore: memoryStore,
@@ -925,6 +927,54 @@ final class FaeCore: ObservableObject, HostCommandSender {
         } else {
             CredentialManager.delete(key: key)
         }
+    }
+
+    private func auditSetupConsistency(memoryStore: SQLiteMemoryStore) async {
+        do {
+            let profiles = try await memoryStore.findActiveByKind(.profile, limit: 100)
+            let extractedNames = profiles.compactMap { record in
+                Self.extractPrimaryName(from: record.text)
+            }
+
+            let uniqueNames = Array(Set(extractedNames)).sorted()
+            debugLog(debugConsoleRef, .qa, "Setup audit: active_profile_names=\(uniqueNames)")
+            if uniqueNames.count > 1 {
+                debugLog(debugConsoleRef, .qa, "⚠️ Setup audit conflict: multiple active profile names")
+                NSLog("FaeCore: setup audit warning — conflicting active profile names: %@", uniqueNames.joined(separator: ", "))
+            }
+
+            if config.userName == nil, uniqueNames.count == 1, let recovered = uniqueNames.first {
+                config.userName = recovered
+                userName = recovered
+                persistConfig(reason: "setup.audit.recover_user_name")
+                debugLog(debugConsoleRef, .qa, "Setup audit repaired config.userName from memory: \(recovered)")
+                NSLog("FaeCore: setup audit recovered userName from memory profile: %@", recovered)
+            }
+
+            let hasOwner = await speakerProfileStore.hasOwnerProfile()
+            if config.speaker.requireOwnerForTools && !hasOwner {
+                debugLog(debugConsoleRef, .qa, "⚠️ Setup audit: owner required for tools but no owner profile enrolled")
+                NSLog("FaeCore: setup audit warning — requireOwnerForTools=true but no owner voice profile is enrolled")
+            }
+
+            if config.voiceIdentity.approvalRequiresMatch && !config.voiceIdentity.enabled {
+                debugLog(debugConsoleRef, .qa, "Setup audit note: approvalRequiresMatch=true while voiceIdentity.enabled=false")
+                NSLog("FaeCore: setup audit note — approvalRequiresMatch=true while voiceIdentity.enabled=false")
+            }
+        } catch {
+            debugLog(debugConsoleRef, .qa, "⚠️ Setup audit failed: \(error.localizedDescription)")
+            NSLog("FaeCore: setup audit failed: %@", error.localizedDescription)
+        }
+    }
+
+    private static func extractPrimaryName(from text: String) -> String? {
+        let prefix = "Primary user name is "
+        guard text.hasPrefix(prefix) else { return nil }
+        let raw = text.dropFirst(prefix.count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard !raw.isEmpty else { return nil }
+        return raw
     }
 
     private static func migrateChannelSecretsToKeychain(_ config: inout FaeConfig) -> Bool {
