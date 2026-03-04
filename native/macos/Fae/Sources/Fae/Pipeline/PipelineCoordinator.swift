@@ -2888,10 +2888,27 @@ actor PipelineCoordinator {
             }
         }
 
+        // Auto-enable vision when a vision tool executes after passing the approval gate.
+        // The user already gave explicit consent, so don't let a hidden config toggle block it.
+        let visionTools: Set<String> = ["screenshot", "camera", "read_screen",
+                                         "click", "type_text", "scroll", "find_element"]
+        if visionTools.contains(call.name) && !effectiveVisionEnabled() {
+            visionEnabledLive = true
+            debugLog(debugConsole, .pipeline, "Vision auto-enabled: user approved a vision tool")
+            Task { @MainActor in
+                SelfConfigTool.configPatcher?("vision.enabled", true)
+            }
+        }
+
         // Build VLM provider closure for vision tools.
-        let vlmProvider: VLMProvider? = { [weak self] in
-            guard let self, let mm = self.modelManager else { return nil }
-            return try await mm.loadVLMIfNeeded(config: self.config)
+        // Capture an effective config with vision enabled so loadVLMIfNeeded succeeds.
+        var vlmConfigMut = config
+        vlmConfigMut.vision.enabled = effectiveVisionEnabled()
+        let vlmConfig = vlmConfigMut
+        let capturedMM = modelManager
+        let vlmProvider: VLMProvider? = {
+            guard let mm = capturedMM else { return nil }
+            return try await mm.loadVLMIfNeeded(config: vlmConfig)
         }
 
         guard let tool = registry.tool(named: call.name, vlmProvider: vlmProvider) else {

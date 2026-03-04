@@ -157,13 +157,8 @@ enum VoiceCommandParser {
     static func parseApprovalResponse(_ text: String) -> ApprovalDecision? {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Check escalation phrases first (most-specific to least-specific).
-        let approveAllPhrases = ["approve all", "trust everything", "approve everything",
-                                 "allow everything"]
-        for phrase in approveAllPhrases {
-            if lower.contains(phrase) { return .approveAll }
-        }
-
+        // Check escalation phrases most-specific first so "approve all reads"
+        // isn't swallowed by the shorter "approve all" substring.
         let approveAllReadOnlyPhrases = ["approve all reads", "trust all read tools",
                                          "approve all read only", "trust read tools",
                                          "approve read only"]
@@ -171,14 +166,24 @@ enum VoiceCommandParser {
             if lower.contains(phrase) { return .approveAllReadOnly }
         }
 
+        let approveAllPhrases = ["approve all", "trust everything", "approve everything",
+                                 "allow everything"]
+        for phrase in approveAllPhrases {
+            if lower.contains(phrase) { return .approveAll }
+        }
+
         let alwaysPhrases = ["always allow", "always approve", "trust this tool",
                              "always trust"]
         for phrase in alwaysPhrases {
             if lower.contains(phrase) { return .always }
         }
-        // Bare "always" — check it doesn't overlap with phrases already matched above.
-        if lower == "always" || (lower.contains("always") && !lower.contains("not always")) {
-            return .always
+        // Bare "always" — match only when no deny indicators are present.
+        // Prevents "always deny" or "not always" from returning .always.
+        if lower.contains("always") {
+            let denyIndicators = ["not", "don't", "deny", "denied", "cancel",
+                                  "stop", "never", "nah", "nope", "abort"]
+            let hasDenyContext = denyIndicators.contains { lower.contains($0) }
+            if !hasDenyContext { return .always }
         }
 
         let denyWords = ["no", "nah", "nope", "don't", "stop", "cancel",
