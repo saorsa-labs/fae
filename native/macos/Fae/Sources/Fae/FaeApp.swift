@@ -200,6 +200,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         auxiliaryWindows.approvalController = approvalOverlay
         auxiliaryWindows.observeApprovalController()
         auxiliaryWindows.debugConsoleController = debugConsole
+        auxiliaryWindows.observeThinkingState()
         faeCore.setDebugConsole(debugConsole)
         debugLog(debugConsole, .qa, "Build marker: speech-prosody-v8")
         onboarding.onPermissionResult = { capability, state in
@@ -286,7 +287,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 faeCore.acceptLicense()
                 startPipelineIfReady()
-                if !faeCore.isOnboarded {
+                if !faeCore.hasOwnerSetUp {
                     showIntroCanvas()
                     requestPermissionsForFirstLaunch()
                 }
@@ -403,9 +404,18 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // Start pipeline if license already accepted.
         if faeCore.isLicenseAccepted {
             startPipelineIfReady()
-            if !faeCore.isOnboarded {
+            if !faeCore.hasOwnerSetUp {
                 showIntroCanvas()
                 requestPermissionsForFirstLaunch()
+            }
+        }
+
+        // Read Me Card on every startup (if contacts permission already granted).
+        Task { [weak self] in
+            guard let self else { return }
+            self.onboarding.readMeCardIfAuthorized()
+            if let name = self.onboarding.userName, !name.isEmpty, name != self.faeCore.userName {
+                self.faeCore.userName = name
             }
         }
     }
@@ -601,62 +611,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("Fae: contacts access not granted or Me Card not found")
             }
 
-            // Wait for the voice enrollment flow to complete (owner voiceprint enrolled)
-            // before marking onboarding as done. If enrollment is already done or not
-            // needed, this returns immediately. Timeout after 120s to avoid blocking forever.
-            let enrollmentDone = await self.waitForOwnerEnrollment(timeout: 120)
-            if enrollmentDone {
-                NSLog("Fae: owner voice enrolled — completing onboarding")
-            } else {
-                NSLog("Fae: enrollment timeout — completing onboarding anyway")
-            }
-
-            self.faeCore.completeOnboarding()
+            // Enrollment completion is now handled by FaeCore's enrollment_complete
+            // observer — no need to wait here. hasOwnerSetUp updates reactively.
             self.onboarding.isComplete = true
-        }
-    }
-
-    /// Wait until an owner voiceprint is enrolled (or already exists).
-    /// Returns `true` if enrolled, `false` if timed out.
-    private func waitForOwnerEnrollment(timeout: TimeInterval) async -> Bool {
-        // Check if owner already enrolled.
-        let hasOwner = await faeCore.hasOwnerVoiceprint()
-        if hasOwner { return true }
-
-        // Listen for enrollment_complete notification.
-        return await withCheckedContinuation { continuation in
-            final class EnrollmentWaitState {
-                var observer: NSObjectProtocol?
-                var resolved = false
-            }
-
-            let state = EnrollmentWaitState()
-
-            func finish(_ result: Bool) {
-                guard !state.resolved else { return }
-                state.resolved = true
-                if let token = state.observer {
-                    NotificationCenter.default.removeObserver(token)
-                    state.observer = nil
-                }
-                continuation.resume(returning: result)
-            }
-
-            state.observer = NotificationCenter.default.addObserver(
-                forName: .faePipelineState,
-                object: nil,
-                queue: .main
-            ) { notification in
-                if let event = notification.userInfo?["event"] as? String,
-                   event == "pipeline.enrollment_complete"
-                {
-                    finish(true)
-                }
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
-                finish(false)
-            }
         }
     }
 

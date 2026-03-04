@@ -103,8 +103,45 @@ enum TextProcessing {
             "their statement",
             "the statement",
             "responding to something",
+            // UI self-narration — model describing its own interface
+            "the speech bubble",
+            "the thought bubble",
+            "the text bubble",
+            "what's in the bubble",
+            "in the bubble",
+            "the orb is",
+            "my orb is",
+            "the status bar",
+            "the subtitle",
+            "on screen it shows",
+            "on the screen it",
+            "the display shows",
+            "i can see my",
+            "looking at my interface",
         ]
         return patterns.contains { lower.hasPrefix($0) || lower.contains($0) }
+    }
+
+    /// Returns true if the text contains UI self-narration — the model describing
+    /// its own interface elements. Always suppressed regardless of sentence position.
+    static func isUISelfNarration(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let patterns = [
+            "the speech bubble",
+            "the thought bubble",
+            "the text bubble",
+            "what's in the bubble",
+            "in the bubble",
+            "the orb is",
+            "my orb is",
+            "the status bar shows",
+            "the subtitle shows",
+            "on screen it shows",
+            "on the screen it",
+            "the display shows",
+            "looking at my interface",
+        ]
+        return patterns.contains { lower.contains($0) }
     }
 
     // MARK: - Non-Prose Detection
@@ -159,11 +196,53 @@ enum TextProcessing {
         return false
     }
 
+    // MARK: - Self-Introduction Stripping
+
+    /// Patterns that look like the model (or TTS refText bleed) self-introducing.
+    /// These should never be spoken — the SOUL.md says "never opens with a self-introduction".
+    /// Regex patterns matched case-insensitively against the text. Order matters: longest first.
+    private static let selfIntroRegexes: [(pattern: String, regex: NSRegularExpression?)] = [
+        // Full self-intro with optional commas: "Hello, I'm Fae, your personal voice assistant"
+        (pattern: "(?:hello|hi|hey)[,.]?\\s+i(?:'m| am) fae[,.]?\\s+(?:your |a )?personal voice assistant",
+         regex: try? NSRegularExpression(pattern: "(?:hello|hi|hey)[,.]?\\s+i(?:'m| am) fae[,.]?\\s+(?:your |a )?personal voice assistant", options: .caseInsensitive)),
+        // "I'm Fae, your personal voice assistant" without greeting
+        (pattern: "i(?:'m| am) fae[,.]?\\s+(?:your |a )?personal voice assistant",
+         regex: try? NSRegularExpression(pattern: "i(?:'m| am) fae[,.]?\\s+(?:your |a )?personal voice assistant", options: .caseInsensitive)),
+        // "Fae, your personal voice assistant" or "Fae personal voice assistant"
+        (pattern: "fae[,.]?\\s+(?:your |a )?personal voice assistant",
+         regex: try? NSRegularExpression(pattern: "fae[,.]?\\s+(?:your |a )?personal voice assistant", options: .caseInsensitive)),
+        // Standalone "your personal voice assistant" or "personal voice assistant"
+        (pattern: "(?:your )?personal voice assistant",
+         regex: try? NSRegularExpression(pattern: "(?:your )?personal voice assistant", options: .caseInsensitive)),
+        // "Hello, I'm Fae." or "Hi, I am Fae." as a standalone opener (with period/comma after)
+        (pattern: "^(?:hello|hi|hey)[,.]?\\s+i(?:'m| am) fae[.,!]?\\s*",
+         regex: try? NSRegularExpression(pattern: "^(?:hello|hi|hey)[,.]?\\s+i(?:'m| am) fae[.,!]?\\s*", options: .caseInsensitive)),
+    ]
+
+    /// Strip self-introduction prefixes from text before TTS.
+    /// Catches both LLM-generated self-introductions and TTS refText bleed.
+    static func stripSelfIntroductions(_ text: String) -> String {
+        var result = text
+        for (_, regex) in selfIntroRegexes {
+            guard let regex = regex else { continue }
+            let range = NSRange(result.startIndex..., in: result)
+            let stripped = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+            if stripped != result {
+                result = stripped
+                break  // Only strip the first match.
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Non-Speech Character Stripping
 
     /// Remove characters that shouldn't be spoken by TTS and normalize for clean speech.
     static func stripNonSpeechChars(_ text: String) -> String {
         var result = text
+
+        // Strip self-introductions (TTS refText bleed or LLM-generated).
+        result = stripSelfIntroductions(result)
 
         // Strip any leaked XML-style tags (voice, think, tool_call, etc.).
         if let regex = try? NSRegularExpression(pattern: "</?[a-zA-Z_][a-zA-Z0-9_]*[^>]*>") {
@@ -500,6 +579,8 @@ enum TextProcessing {
         ("fah", "Fae"),
         ("feh", "Fae"),
         ("fei", "Fae"),
+        ("ivy", "Fae"),
+        ("ivie", "Fae"),
         ("fay.", "Fae."),
         ("fey.", "Fae."),
     ]

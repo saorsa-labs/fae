@@ -284,6 +284,12 @@ actor SpeakerProfileStore {
         persist()
     }
 
+    /// Remove all owner profiles (for onboarding reset).
+    func clearOwnerProfile() {
+        profiles.removeAll { $0.role == .owner }
+        persist()
+    }
+
     /// Prune embeddings older than `maxAgeDays` from all profiles.
     ///
     /// Prevents centroid drift as a speaker's voice changes over time.

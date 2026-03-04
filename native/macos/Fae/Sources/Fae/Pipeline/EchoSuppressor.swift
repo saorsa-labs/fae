@@ -71,14 +71,17 @@ struct EchoSuppressor {
     ///
     /// - Parameter speechDurationSecs: How long the assistant spoke. Longer TTS
     ///   responses produce more room echo and speaker bleedthrough, so the echo
-    ///   tail and guard windows scale proportionally.
+    ///   tail and guard windows scale proportionally — but capped conservatively
+    ///   to avoid blocking real speech for too long ("goes to sleep" effect).
     mutating func onAssistantSpeechEnd(speechDurationSecs: Double = 0) {
         assistantSpeaking = false
         let now = Date()
 
-        // Scale echo windows based on speech duration: +500ms per second of speech,
-        // capped at 5s bonus.  A 8s TTS response adds ~4s of extra tail.
-        let durationBonusMs = Int(min(speechDurationSecs, 10) * 500)
+        // Scale echo windows based on speech duration: +200ms per second of speech,
+        // capped at 1.5s bonus. Previous 500ms/s was too aggressive — an 8s response
+        // added 4s of extra tail (total 7.5s), causing Fae to ignore the user for
+        // too long after speaking. Now an 8s response adds ~1.5s (total 5s).
+        let durationBonusMs = Int(min(speechDurationSecs * 200, 1500))
         let tailMs = echoTailMs + durationBonusMs
         let guardMs = shortUtteranceGuardMs + durationBonusMs
 

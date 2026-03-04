@@ -195,6 +195,11 @@ actor PipelineCoordinator {
 
     // MARK: - Enrollment State
 
+    /// True while first-owner enrollment is actively running.
+    /// Set by FaeCore when enrollment starts, cleared on enrollment_complete.
+    /// Bypasses direct-address gating and allows barge-in from anyone (no owner yet).
+    private var firstOwnerEnrollmentActive: Bool = false
+
     /// One-shot system prompt addition for the LLM's first response after owner enrollment.
     /// Set by FaeCore during the voice enrollment flow; cleared after first use.
     private var firstOwnerEnrollmentContext: String?
@@ -227,7 +232,12 @@ actor PipelineCoordinator {
         var capturedAt: Date
         var speechSamples: Int = 0
         var lastRms: Float = 0
+        var audioSamples: [Float] = []
     }
+
+    /// Cooldown after non-owner barge-in denial — prevents repeated embedding churn from TV/noise.
+    private var bargeInDenyCooldownUntil: Date?
+    private static let bargeInDenyCooldownSeconds: TimeInterval = 5.0
 
     // MARK: - Pipeline Tasks
 
@@ -521,6 +531,11 @@ actor PipelineCoordinator {
         bargeInSuppressed = true
         defer { bargeInSuppressed = false }
         await speakText(text, isFinal: true, voiceInstruct: voiceInstruct)
+    }
+
+    /// Set/clear the first-owner enrollment active flag.
+    func setFirstOwnerEnrollmentActive(_ active: Bool) {
+        firstOwnerEnrollmentActive = active
     }
 
     /// Register a callback fired on each user-initiated turn.
@@ -869,17 +884,24 @@ actor PipelineCoordinator {
             // This avoids false interruptions during long LLM decode gaps where
             // assistantGenerating may be true but no speech is playing.
             if Self.shouldTrackBargeIn(assistantSpeaking: assistantSpeaking) {
+                // Check deny cooldown — skip creating new barge-in candidates during cooldown.
+                let inDenyCooldown = bargeInDenyCooldownUntil.map { Date() < $0 } ?? false
+
                 // Skip when echo suppressor is active or barge-in is suppressed
                 // (non-interruptible speakDirect) to prevent false triggers.
-                if vadOutput.speechStarted && !echoSuppressor.isInSuppression && !bargeInSuppressed {
+                if vadOutput.speechStarted && !echoSuppressor.isInSuppression && !bargeInSuppressed && !inDenyCooldown {
                     pendingBargeIn = PendingBargeIn(capturedAt: Date(), lastRms: vadOutput.rms)
-                } else if vadOutput.speechStarted && (echoSuppressor.isInSuppression || bargeInSuppressed) {
-                    // Don't create barge-in candidate during echo suppression or non-interruptible speech.
+                } else if vadOutput.speechStarted && (echoSuppressor.isInSuppression || bargeInSuppressed || inDenyCooldown) {
+                    // Don't create barge-in candidate during echo suppression, non-interruptible speech, or deny cooldown.
                     pendingBargeIn = nil
                 }
                 if vadOutput.isSpeech, pendingBargeIn != nil {
                     pendingBargeIn?.speechSamples += chunk.samples.count
                     pendingBargeIn?.lastRms = vadOutput.rms
+                    // Accumulate audio for speaker verification (cap at 1s = 16000 samples).
+                    if (pendingBargeIn?.audioSamples.count ?? 0) < 16000 {
+                        pendingBargeIn?.audioSamples.append(contentsOf: chunk.samples)
+                    }
 
                     // Check barge-in confirmation.
                     let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
@@ -888,8 +910,8 @@ actor PipelineCoordinator {
                        barge.speechSamples >= confirmSamples,
                        bargeInEnabled
                     {
-                        handleBargeIn(rms: barge.lastRms)
                         pendingBargeIn = nil
+                        await handleBargeInWithVerification(barge: barge)
                     }
                 }
             } else {
@@ -921,6 +943,12 @@ actor PipelineCoordinator {
 
             // Process completed speech segment via bounded queue.
             if let segment = vadOutput.segment {
+                // Avoid stale-segment backlog during assistant generation/speech.
+                // Barge-in is already handled in-chunk before segment completion.
+                if assistantGenerating || assistantSpeaking {
+                    debugLog(debugConsole, .pipeline, "Discarded segment while assistant busy dur=\(String(format: "%.2f", segment.durationSeconds))s")
+                    continue
+                }
                 lastUserTurnEndedAt = Date()
                 enqueueSpeechSegment(segment)
             }
@@ -1170,6 +1198,25 @@ actor PipelineCoordinator {
                 }
             }
 
+            // Post-speech ghost filter — short single-word transcriptions within
+            // 8 seconds of assistant speech are almost always mic bleed or ambient noise
+            // ("Oh.", "Come.", "Okay.") that shouldn't trigger a new LLM turn.
+            // Exception: during the follow-up window (Fae just asked a question), accept
+            // short responses like "David", "yes", "no" — these are conversational answers.
+            let ghostWords = text.split(whereSeparator: { $0.isWhitespace }).count
+            let ghostInFollowup = engagedUntil.map { Date() < $0 } ?? false
+            if ghostWords <= 2,
+               let lastStart = lastAssistantStart,
+               Date().timeIntervalSince(lastStart) < 8.0,
+               !text.lowercased().contains("fae"),
+               !ghostInFollowup
+            {
+                NSLog("PipelineCoordinator: dropping post-speech ghost \"%@\" (%d words, %.1fs after speech start)",
+                      text, ghostWords, Date().timeIntervalSince(lastStart))
+                debugLog(debugConsole, .pipeline, "Ghost filtered: \"\(text)\" (\(ghostWords) words, recent speech)")
+                return
+            }
+
             eventBus.send(.transcription(text: text, isFinal: true))
 
             if isConversationStopTrigger(text) {
@@ -1219,7 +1266,7 @@ actor PipelineCoordinator {
             // Conversation gate — direct address check.
             let inFollowup = engagedUntil.map { Date() < $0 } ?? false
             if effectiveRequireDirectAddress() {
-                if !addressedToFae && !inFollowup && !awaitingApproval {
+                if !addressedToFae && !inFollowup && !awaitingApproval && !firstOwnerEnrollmentActive {
                     debugLog(debugConsole, .command, "Dropped (direct-address required): \(text)")
                     return // Drop — not addressed to Fae.
                 }
@@ -1277,12 +1324,23 @@ actor PipelineCoordinator {
             )
         }
 
-        // If assistant is still active, interrupt.
+        // If assistant is still active, handle based on barge-in setting.
         if assistantSpeaking || assistantGenerating {
-            interrupted = true
-            pendingTTSTask?.cancel()
-            pendingTTSTask = nil
-            await playback.stop()
+            let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
+            if bargeInEnabled {
+                // Barge-in: interrupt speech and process the new transcription.
+                interrupted = true
+                pendingTTSTask?.cancel()
+                pendingTTSTask = nil
+                await playback.stop()
+            } else {
+                // Barge-in disabled: drop the transcription entirely — do NOT
+                // interrupt active speech. Stray noise / echo that slipped through
+                // the echo suppressor should never cut off the assistant mid-sentence.
+                NSLog("PipelineCoordinator: dropping transcription while assistant active (barge-in disabled): \"%@\"", text)
+                debugLog(debugConsole, .pipeline, "Dropped transcription (barge-in off, assistant active): \"\(text.prefix(60))\"")
+                return
+            }
         }
 
         let forceFastCommandPath = shouldForceThinkingSuppression(for: queryText)
@@ -2011,15 +2069,26 @@ actor PipelineCoordinator {
         var detectedToolCall = false
         // Qwen3 emits <think> as a special token (decoded to empty string by mlx-swift-lm)
         // but </think> as regular literal text. Suppress all TTS until </think> is seen.
-        // When thinking is disabled OR this is a tool follow-up (no think block expected),
-        // mark think as already seen so tokens route directly to TTS.
-        var thinkEndSeen = options.suppressThinking || isToolFollowUp
+        // When thinking is disabled, mark think as already seen so tokens route to TTS.
+        // NOTE: tool follow-up turns DO produce think blocks (model reasons about tool
+        // results before responding), so we must NOT skip the buffer for them.
+        var thinkEndSeen = options.suppressThinking
         var thinkAccum = ""
+        // Clear any previous thinking bubble when a new generation starts.
+        if !thinkEndSeen {
+            eventBus.send(.thinkingText(text: "", isActive: true))
+        }
         var firstTtsSent = false
+        let suppressProvisionalSpeechForLikelyToolTurn = !isToolFollowUp && Self.isToolBackedLookupRequest(userText)
         let llmStartedAt = Date()
         var llmTokenCount = 0
         var firstTokenAt: Date?
         var spokenTextThisTurn = ""
+        // Stability-first speech mode: keep live text streaming, but defer TTS
+        // until the turn completes so Qwen3-TTS sees larger coherent text spans.
+        // This avoids audible interleaving/hallucinated fragments from tiny chunks.
+        let preferFinalOnlySpeech = true
+        var deferredStreamingSpeech = ""
 
         if turnCount == 0 {
             // Keep echo matching aligned with what we actually speak this turn.
@@ -2043,10 +2112,10 @@ actor PipelineCoordinator {
 
         // Streaming chunk smoothing: prioritize sentence-sized chunks, and only use
         // clause fallback when enough text has accumulated and cadence allows it.
-        let minSentenceChunkChars = 18
-        let minSentenceFlushIntervalSec: TimeInterval = 0.18
-        let minClauseChunkChars = 45
-        let minClauseFlushIntervalSec: TimeInterval = 0.45
+        let minSentenceChunkChars = 28
+        let minSentenceFlushIntervalSec: TimeInterval = 0.24
+        let minClauseChunkChars = 55
+        let minClauseFlushIntervalSec: TimeInterval = 0.55
         let maxCharsBeforeClauseFlush = 280
         var lastStreamingFlushAt: Date?
         var streamingChunkCount = 0
@@ -2062,6 +2131,33 @@ actor PipelineCoordinator {
                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                 return
             }
+            // Suppress UI self-narration at any position (model describing its own interface).
+            if TextProcessing.isUISelfNarration(cleaned) {
+                debugLog(debugConsole, .pipeline, "[suppressed UI self-narration] \(String(cleaned.prefix(80)))")
+                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                return
+            }
+
+            // Tool-backed lookup turns often emit provisional wording before tool calls.
+            // Keep UI text live, but avoid speaking provisional chunks to prevent
+            // rambling/contradictory audio while tools are still pending.
+            if suppressProvisionalSpeechForLikelyToolTurn {
+                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                return
+            }
+
+            // Conservative mode: keep text streaming to UI, but defer audio until
+            // turn completion so TTS receives larger coherent text context.
+            if preferFinalOnlySpeech {
+                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                if deferredStreamingSpeech.isEmpty {
+                    deferredStreamingSpeech = cleaned
+                } else {
+                    deferredStreamingSpeech += " " + cleaned
+                }
+                return
+            }
+
             let now = Date()
             let intervalMs = Int((lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? 0) * 1000)
             firstTtsSent = true
@@ -2072,6 +2168,7 @@ actor PipelineCoordinator {
                 streamingShortChunkCount += 1
             }
             debugLog(debugConsole, .pipeline, "Stream chunk #\(streamingChunkCount) chars=\(cleaned.count) interval_ms=\(intervalMs)")
+            NSLog("PipelineCoordinator: TTS chunk → \"%@\"", String(cleaned.prefix(120)))
             recordSpokenText(cleaned)
             eventBus.send(.assistantText(text: cleaned, isFinal: false))
             enqueueTTS(cleaned, isFinal: false)
@@ -2116,8 +2213,9 @@ actor PipelineCoordinator {
                 // consumes it natively. When it exits the think block, signal thinkEndSeen
                 // so the pipeline doesn't wait for </think> in thinkAccum (which never arrives
                 // because ThinkTagStripper already consumed it).
-                if thinkTagStripper.hasExitedThinkBlock {
+                if thinkTagStripper.hasExitedThinkBlock && !thinkEndSeen {
                     thinkEndSeen = true
+                    eventBus.send(.thinkingText(text: "", isActive: false))
                 }
                 guard !visible.isEmpty else { continue }
 
@@ -2131,6 +2229,10 @@ actor PipelineCoordinator {
                         let beforeTag = String(sentenceBuffer[..<tagRange.lowerBound])
                         let cleaned = TextProcessing.stripNonSpeechChars(beforeTag)
                         emitStreamingChunk(cleaned)
+                    }
+                    if preferFinalOnlySpeech {
+                        // Drop any deferred provisional speech once a tool call appears.
+                        deferredStreamingSpeech = ""
                     }
                     sentenceBuffer = ""
                     continue
@@ -2147,11 +2249,15 @@ actor PipelineCoordinator {
                 if !thinkEndSeen {
                     debugLog(debugConsole, .llmThink, visible)
                     thinkAccum += visible
+                    // Stream thinking text to the thought bubble UI.
+                    eventBus.send(.thinkingText(text: visible, isActive: true))
                     if let endRange = thinkAccum.range(of: "</think>") {
                         let afterThink = String(thinkAccum[endRange.upperBound...])
                             .trimmingCharacters(in: .whitespacesAndNewlines)
                         thinkAccum = ""
                         thinkEndSeen = true
+                        // Signal thinking complete — bubble will fade out.
+                        eventBus.send(.thinkingText(text: "", isActive: false))
                         // Seed sentenceBuffer with any content following </think>.
                         if !afterThink.isEmpty && !roleplayActive {
                             sentenceBuffer = afterThink
@@ -2163,6 +2269,7 @@ actor PipelineCoordinator {
                     if thinkAccum.count > 80_000 {
                         thinkAccum = ""
                         thinkEndSeen = true
+                        eventBus.send(.thinkingText(text: "", isActive: false))
                         // Fall through to normal routing.
                     } else {
                         continue
@@ -2211,7 +2318,7 @@ actor PipelineCoordinator {
                             let now = Date()
                             let interval = lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
                             let shouldHoldForCoalesce = cleaned.count < minSentenceChunkChars
-                                && interval < minSentenceFlushIntervalSec
+                                && (interval < minSentenceFlushIntervalSec || !firstTtsSent)
 
                             if shouldHoldForCoalesce {
                                 // Keep buffering until we have a bigger chunk or enough cadence spacing.
@@ -2346,13 +2453,19 @@ actor PipelineCoordinator {
             } else {
                 sentenceBuffer += remaining
                 let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
-                let shouldSpeak = !finalText.isEmpty && !TextProcessing.looksLikeNonProse(finalText)
+                let spokenTextCandidate: String = {
+                    if deferredStreamingSpeech.isEmpty { return finalText }
+                    if finalText.isEmpty { return deferredStreamingSpeech }
+                    return deferredStreamingSpeech + " " + finalText
+                }()
+                let shouldSpeak = !spokenTextCandidate.isEmpty && !TextProcessing.looksLikeNonProse(spokenTextCandidate)
                 if !finalText.isEmpty {
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
                 }
                 if shouldSpeak {
-                    recordSpokenText(finalText)
-                    enqueueTTS(finalText, isFinal: true)
+                    NSLog("PipelineCoordinator: TTS final → \"%@\"", String(spokenTextCandidate.prefix(120)))
+                    recordSpokenText(spokenTextCandidate)
+                    enqueueTTS(spokenTextCandidate, isFinal: true)
                 }
                 // Wait for all TTS (streaming + final) to complete.
                 await awaitPendingTTS()
@@ -2666,7 +2779,9 @@ actor PipelineCoordinator {
             eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
         }
 
-        await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
+        // Use cleaned text for TTS — stripping self-introductions, markup, etc.
+        let ttsText = cleaned.isEmpty ? text : cleaned
+        await synthesizeSentence(ttsText, isFinal: isFinal, voiceInstruct: voiceInstruct)
     }
 
     /// Maximum time a single TTS synthesis call can take before we force-cancel.
@@ -2691,7 +2806,7 @@ actor PipelineCoordinator {
         }
         debugLog(debugConsole, .pipeline, "TTS: \"\(String(text.prefix(80)))\"\(text.count > 80 ? "…" : "") (final=\(isFinal))")
 
-        let effectiveVoiceInstruct = voiceInstruct
+        let effectiveVoiceInstruct = voiceInstruct ?? config.tts.defaultVoiceInstruct
         var didProduceAudio = false
 
         do {
@@ -2777,15 +2892,16 @@ actor PipelineCoordinator {
         assistantSpeaking
     }
 
-    private func handleBargeIn(rms: Float) {
+    /// Owner-verified barge-in: only the owner's voice can interrupt Fae mid-speech.
+    /// Fail-closed after enrollment: if owner exists but verification fails, barge-in is DENIED.
+    private func handleBargeInWithVerification(barge: PendingBargeIn) async {
         guard bargeInEnabledLive ?? config.bargeIn.enabled else { return }
-        // Non-interruptible utterances (speakDirect) suppress barge-in entirely.
         guard !bargeInSuppressed else { return }
         guard Self.shouldAllowBargeInInterrupt(
             assistantSpeaking: assistantSpeaking,
             assistantGenerating: assistantGenerating
         ) else { return }
-        guard rms >= config.bargeIn.minRms else { return }
+        guard barge.lastRms >= config.bargeIn.minRms else { return }
 
         // Check holdoff — don't interrupt immediately after playback starts.
         if let start = lastAssistantStart {
@@ -2795,12 +2911,52 @@ actor PipelineCoordinator {
             }
         }
 
+        // Speaker verification (fail-closed when owner exists).
+        let isOwner = await verifyBargeInSpeaker(audio: barge.audioSamples)
+        guard isOwner else {
+            debugLog(debugConsole, .command, "Barge-in blocked (not owner)")
+            bargeInDenyCooldownUntil = Date().addingTimeInterval(Self.bargeInDenyCooldownSeconds)
+            return
+        }
+
         interrupted = true
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
         Task { await playback.stop() }
-        debugLog(debugConsole, .command, "Barge-in triggered rms=\(String(format: "%.4f", rms))")
-        NSLog("PipelineCoordinator: barge-in triggered (rms=%.4f)", rms)
+        debugLog(debugConsole, .command, "Barge-in (owner verified) rms=\(String(format: "%.4f", barge.lastRms))")
+        NSLog("PipelineCoordinator: barge-in triggered (owner verified, rms=%.4f)", barge.lastRms)
+    }
+
+    /// Verify the barge-in speaker is the owner. Fail-closed: if owner exists but
+    /// verification is unavailable or errors, barge-in is DENIED. Fail-open ONLY
+    /// during enrollment (no owner profile yet).
+    private func verifyBargeInSpeaker(audio: [Float]) async -> Bool {
+        // During enrollment (no owner yet) — allow all barge-in.
+        guard let store = speakerProfileStore else { return firstOwnerEnrollmentActive }
+        let hasOwner = await store.hasOwnerProfile()
+        guard hasOwner else { return true }  // No owner enrolled yet — allow
+
+        // Owner exists — fail closed if encoder unavailable.
+        guard let encoder = speakerEncoder, await encoder.isLoaded else {
+            return false  // Encoder unavailable but owner exists — DENY
+        }
+
+        // Need minimum audio for a meaningful embedding (~350ms at 16kHz = 5600 samples).
+        guard audio.count >= 5600 else {
+            return false  // Too little audio for reliable verification — DENY
+        }
+
+        do {
+            let embedding = try await encoder.embed(
+                audio: audio,
+                sampleRate: AudioCaptureManager.targetSampleRate
+            )
+            // Relaxed threshold compensates for shorter/noisier barge-in audio.
+            let relaxed = max(config.speaker.ownerThreshold - 0.10, 0.50)
+            return await store.isOwner(embedding: embedding, threshold: relaxed)
+        } catch {
+            return false  // Embed failed but owner exists — DENY
+        }
     }
 
     // MARK: - Playback Events

@@ -15,6 +15,15 @@ actor AudioCaptureManager {
     /// Chunk size in samples at target rate (32ms per chunk).
     static let chunkSize: Int = 512
 
+    // MARK: - Software Noise Gate
+
+    /// RMS threshold below which audio chunks are zeroed out before reaching VAD.
+    /// This acts as a software substitute for macOS Voice Isolation when the system
+    /// keeps reverting to "standard" mic mode. Chunks quieter than this floor are
+    /// treated as silence, preventing ambient noise from triggering false speech
+    /// detections. Default 0.005 is just below the VAD threshold (0.008).
+    var noiseGateThreshold: Float = 0.005
+
     // MARK: - Public API
 
     /// Returns an AsyncStream of 512-sample mono Float32 chunks at 16kHz.
@@ -251,6 +260,23 @@ actor AudioCaptureManager {
     }
 
     private func emitChunk(_ chunk: AudioChunk) {
+        // Software noise gate: zero out chunks below the noise floor.
+        // This prevents low-level ambient noise from reaching VAD when macOS
+        // Voice Isolation is not active (system keeps reverting to "standard").
+        if noiseGateThreshold > 0, !chunk.samples.isEmpty {
+            var sumSquares: Float = 0
+            for s in chunk.samples { sumSquares += s * s }
+            let rms = (sumSquares / Float(chunk.samples.count)).squareRoot()
+            if rms < noiseGateThreshold {
+                // Below noise floor — emit silent chunk to keep timing intact.
+                let silent = AudioChunk(
+                    samples: [Float](repeating: 0, count: chunk.samples.count),
+                    sampleRate: chunk.sampleRate
+                )
+                continuation?.yield(silent)
+                return
+            }
+        }
         continuation?.yield(chunk)
     }
 

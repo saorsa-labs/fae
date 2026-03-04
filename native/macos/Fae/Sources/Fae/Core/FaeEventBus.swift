@@ -54,6 +54,11 @@ final class FaeEventBus: @unchecked Sendable {
             payload["text"] = text
             payload["is_final"] = isFinal
 
+        case .thinkingText(let text, let isActive):
+            eventName = "pipeline.thinking_text"
+            payload["text"] = text
+            payload["is_active"] = isActive
+
         case .degradedModeChanged(let mode, let context):
             eventName = "pipeline.degraded_mode"
             payload["mode"] = mode

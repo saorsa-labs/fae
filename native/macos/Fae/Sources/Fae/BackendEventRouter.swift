@@ -78,6 +78,14 @@ final class BackendEventRouter: Sendable {
                 userInfo: ["active": active]
             )
 
+        case "pipeline.thinking_text":
+            let text = payload["text"] as? String ?? ""
+            let isActive = payload["is_active"] as? Bool ?? true
+            NotificationCenter.default.post(
+                name: .faeThinkingText, object: nil,
+                userInfo: ["text": text, "is_active": isActive]
+            )
+
         // MARK: - Tool Execution
 
         case "pipeline.tool_executing":
@@ -327,6 +335,13 @@ extension Notification.Name {
     /// userInfo keys:
     /// - `active: Bool` — `true` when generation is in progress
     static let faeAssistantGenerating = Notification.Name("faeAssistantGenerating")
+
+    /// Posted when the LLM emits thinking text (inside `<think>` blocks).
+    ///
+    /// userInfo keys:
+    /// - `text: String` — accumulated thinking text (or empty when clearing)
+    /// - `is_active: Bool` — `true` while thinking, `false` when thinking ends
+    static let faeThinkingText = Notification.Name("faeThinkingText")
 
     // MARK: Tool Execution
 

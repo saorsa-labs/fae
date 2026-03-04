@@ -115,8 +115,8 @@ struct SettingsAboutTab: View {
 
     private func resetOnboarding() {
         commandSender?.sendCommand(
-            name: "config.patch",
-            payload: ["key": "onboarded", "value": false]
+            name: "onboarding.reset",
+            payload: [:]
         )
         onboarding.isComplete = false
         // Toggle isStateRestored off then back on so SwiftUI's

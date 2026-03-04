@@ -12,7 +12,6 @@ final class FaeConfigTests: XCTestCase {
         let config = FaeConfig.load(from: fileURL)
 
         XCTAssertNil(config.userName)
-        XCTAssertFalse(config.onboarded)
         XCTAssertEqual(config.audio.inputSampleRate, 16_000)
         XCTAssertEqual(config.llm.voiceModelPreset, "auto")
         XCTAssertTrue(config.memory.enabled)
@@ -37,7 +36,6 @@ final class FaeConfigTests: XCTestCase {
         let config = FaeConfig.load(from: fileURL)
 
         XCTAssertNil(config.userName)
-        XCTAssertFalse(config.onboarded)
         XCTAssertEqual(config.audio.inputSampleRate, 16_000)
         XCTAssertEqual(config.llm.temperature, 0.7, accuracy: 0.0001)
         XCTAssertEqual(config.conversation.sleepPhrases.count, 9)
@@ -50,7 +48,6 @@ final class FaeConfigTests: XCTestCase {
 
         var original = FaeConfig()
         original.userName = "Ada"
-        original.onboarded = true
 
         original.audio.inputSampleRate = 22_050
         original.audio.bufferSize = 256
@@ -82,7 +79,6 @@ final class FaeConfigTests: XCTestCase {
         let loaded = FaeConfig.load(from: fileURL)
 
         XCTAssertEqual(loaded.userName, "Ada")
-        XCTAssertTrue(loaded.onboarded)
 
         XCTAssertEqual(loaded.audio.inputSampleRate, 22_050)
         XCTAssertEqual(loaded.audio.bufferSize, 256)

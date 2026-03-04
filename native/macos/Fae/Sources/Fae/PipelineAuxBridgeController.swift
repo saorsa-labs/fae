@@ -152,6 +152,23 @@ final class PipelineAuxBridgeController: ObservableObject {
                 }
             }
         )
+
+        // Thinking text → thought bubble
+        observations.append(
+            center.addObserver(
+                forName: .faeThinkingText, object: nil, queue: .main
+            ) { [weak self] notification in
+                let text = notification.userInfo?["text"] as? String ?? ""
+                let isActive = notification.userInfo?["is_active"] as? Bool ?? true
+                Task { @MainActor [weak self] in
+                    if isActive {
+                        self?.subtitleState?.appendThinkingText(text)
+                    } else {
+                        self?.subtitleState?.finalizeThinking()
+                    }
+                }
+            }
+        )
     }
 
     // MARK: - Runtime Lifecycle
@@ -313,10 +330,25 @@ final class PipelineAuxBridgeController: ObservableObject {
     // MARK: - Canvas Activity Cards
 
     private func handleToolExecutionForCanvas(userInfo: [AnyHashable: Any]) {
-        guard let canvas = canvasController else { return }
         let type = userInfo["type"] as? String ?? ""
         let name = userInfo["name"] as? String ?? "tool"
         let cardId = userInfo["id"] as? String ?? name
+        let detail = formatToolInput(userInfo)
+
+        // Show tool activity in the thought bubble so users see what Fae is doing.
+        switch type {
+        case "executing", "call":
+            let label = detail.isEmpty ? name : "\(name): \(String(detail.prefix(60)))"
+            subtitleState?.appendToolActivity("\u{1F527} \(label)")
+        case "result":
+            let success = userInfo["success"] as? Bool ?? true
+            subtitleState?.appendToolActivity(success ? "\u{2705} \(name) done" : "\u{274C} \(name) failed")
+        default:
+            break
+        }
+
+        // Canvas activity cards.
+        guard let canvas = canvasController else { return }
 
         switch type {
         case "executing", "call":
@@ -324,7 +356,7 @@ final class PipelineAuxBridgeController: ObservableObject {
                 id: cardId,
                 kind: .toolCall(name: name),
                 status: .running,
-                detail: formatToolInput(userInfo)
+                detail: detail
             )
             canvas.addCard(card)
 

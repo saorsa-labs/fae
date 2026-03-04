@@ -310,9 +310,16 @@ final class OnboardingController: ObservableObject {
 
     // MARK: - Contacts "Me" Card
 
+    /// Read the Me Card if contacts permission is already granted (for startup use).
+    func readMeCardIfAuthorized() {
+        let status = CNContactStore.authorizationStatus(for: .contacts)
+        guard status == .authorized else { return }
+        readMeCard(store: CNContactStore())
+    }
+
     /// Attempt to read the user's own contact card and extract their name,
     /// email, phone, and family relationships for personalisation.
-    private func readMeCard(store: CNContactStore) {
+    func readMeCard(store: CNContactStore) {
         let keysToFetch: [CNKeyDescriptor] = [
             CNContactGivenNameKey as CNKeyDescriptor,
             CNContactFamilyNameKey as CNKeyDescriptor,

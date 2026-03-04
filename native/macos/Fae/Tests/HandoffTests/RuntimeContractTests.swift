@@ -104,7 +104,6 @@ final class RuntimeContractTests: XCTestCase {
         let reloaded = FaeConfig.load()
         XCTAssertEqual(reloaded.userName, "Aileen")
         XCTAssertEqual(reloaded.llm.voiceModelPreset, "qwen3_8b")
-        XCTAssertTrue(reloaded.onboarded)
     }
 
     @MainActor

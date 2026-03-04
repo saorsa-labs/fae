@@ -13,7 +13,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     let eventBus = FaeEventBus()
 
     @Published var pipelineState: FaePipelineState = .stopped
-    @Published var isOnboarded: Bool
+    @Published var hasOwnerSetUp: Bool = false
     @Published var isLicenseAccepted: Bool
     @Published var userName: String?
     @Published var toolMode: String = "full"
@@ -54,7 +54,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
 
         self.config = loaded
-        self.isOnboarded = loaded.onboarded
         self.isLicenseAccepted = loaded.licenseAccepted
         self.userName = loaded.userName
         self.toolMode = loaded.toolMode
@@ -267,6 +266,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
 
+                // Sync barge-in setting from AppStorage on startup.
+                // bargeInEnabledLive defaults to nil, so we must explicitly
+                // set it from the persisted preference.
+                let bargeInPref = UserDefaults.standard.object(forKey: "bargeInEnabled") as? Bool
+                    ?? config.bargeIn.enabled
+                await coordinator.setBargeInEnabled(bargeInPref)
+
                 // Wire SelfConfigTool's configPatcher to this FaeCore instance.
                 SelfConfigTool.configPatcher = { [weak self] key, value in
                     self?.patchConfig(key: key, payload: ["value": value])
@@ -341,22 +347,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 eventBus.send(.runtimeState(.started))
                 NSLog("FaeCore: pipeline started")
 
-                // Owner enrollment check — if no owner voiceprint is enrolled,
-                // auto-activate the voice-identity skill so Fae guides enrollment
-                // conversationally via the voice_identity tool.
+                // Owner enrollment check — hydrate hasOwnerSetUp from the speaker
+                // profile store (the single source of truth for owner status).
                 let hasOwner = await speakerProfileStore.hasOwnerProfile()
+                await MainActor.run { self.hasOwnerSetUp = hasOwner }
                 if !hasOwner {
                     await runSkillDrivenEnrollment(coordinator: coordinator, skillManager: skillManager)
-                } else if !config.onboarded {
-                    // First-launch greeting for returning users who already have a voiceprint.
-                    let greeting: String
-                    if let name = config.userName, !name.isEmpty {
-                        greeting = "Hello \(name). I'm Fae, your personal AI companion."
-                    } else {
-                        greeting = "Hello. I'm Fae, your personal AI companion."
-                    }
-                    await coordinator.speakDirect(greeting)
                 }
+
+                // Listen for enrollment_complete to update hasOwnerSetUp.
+                self.observeEnrollmentComplete()
             } catch {
                 NSLog("FaeCore: failed to start pipeline: %@", error.localizedDescription)
                 pipelineState = .error
@@ -510,9 +510,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Activate the voice-identity skill so its full instructions load into context.
         _ = await skillManager.activate(skillName: "voice-identity")
 
+        // Mark enrollment active — bypasses direct-address and allows barge-in from anyone.
+        await coordinator.setFirstOwnerEnrollmentActive(true)
+
         // Brief spoken intro — Fae then takes over via the skill.
         let intro = "Hi, I'm Fae. I'd love to learn your voice so I can recognise you. Just talk to me naturally and I'll guide you through it."
         await coordinator.speakDirect(intro)
+
+        // Open follow-up window so user can respond without "Fae" prefix.
+        await coordinator.wake()
 
         // Prime the LLM with one-shot enrollment context (discarded after first turn).
         let enrollmentContext = """
@@ -576,7 +582,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
             handleOnboardingGetState(commandName: name)
 
         case "onboarding.complete":
-            completeOnboarding()
+            hasOwnerSetUp = true
+            NSLog("FaeCore: onboarding complete")
+
+        case "onboarding.reset":
+            Task {
+                await speakerProfileStore.clearOwnerProfile()
+                hasOwnerSetUp = false
+                NSLog("FaeCore: onboarding reset — owner profile cleared")
+            }
 
         case "onboarding.advance":
             eventBus.send(.runtimeProgress(stage: "onboarding.advance", progress: 0.0))
@@ -736,7 +750,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "onboarding.get_state":
             return [
                 "payload": [
-                    "onboarded": isOnboarded,
+                    "onboarded": hasOwnerSetUp,
                 ] as [String: Any],
             ]
 
@@ -903,11 +917,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 Task { await coordinator.setVoiceIdentityLock(lock) }
             }
 
+        case "tts.default_voice_instruct":
+            if let raw = value as? String, raw.lowercased() == "nil" || raw.isEmpty {
+                config.tts.defaultVoiceInstruct = nil
+            } else {
+                config.tts.defaultVoiceInstruct = sanitizedString(value)
+            }
+            persistConfig(reason: "config.patch.tts.default_voice_instruct")
+
         case "onboarded":
-            guard let value = value as? Bool else { return }
-            isOnboarded = value
-            config.onboarded = value
-            persistConfig(reason: "config.patch.onboarded")
+            break  // Legacy — owner profile presence is now the voice gate
 
         case "voice_identity.enabled":
             guard let value = value as? Bool else { return }
@@ -1127,11 +1146,26 @@ final class FaeCore: ObservableObject, HostCommandSender {
         NSLog("FaeCore: AGPL-3.0 license accepted")
     }
 
-    func completeOnboarding() {
-        isOnboarded = true
-        config.onboarded = true
-        persistConfig(reason: "onboarding.complete")
-        NSLog("FaeCore: onboarding complete")
+    /// Listen for voice enrollment completion to update hasOwnerSetUp.
+    private var enrollmentCompleteObserver: NSObjectProtocol?
+
+    private func observeEnrollmentComplete() {
+        guard enrollmentCompleteObserver == nil else { return }
+        enrollmentCompleteObserver = NotificationCenter.default.addObserver(
+            forName: .faePipelineState,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let event = notification.userInfo?["event"] as? String,
+                  event == "pipeline.enrollment_complete"
+            else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.hasOwnerSetUp = true
+                Task { await self.pipelineCoordinator?.setFirstOwnerEnrollmentActive(false) }
+                NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true")
+            }
+        }
     }
 
     /// Check if an owner voiceprint is enrolled in the speaker profile store.
@@ -1214,8 +1248,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
             if config.voiceIdentity.approvalRequiresMatch && !config.voiceIdentity.enabled {
-                debugLog(debugConsoleRef, .qa, "Setup audit note: approvalRequiresMatch=true while voiceIdentity.enabled=false")
-                NSLog("FaeCore: setup audit note — approvalRequiresMatch=true while voiceIdentity.enabled=false")
+                debugLog(debugConsoleRef, .qa, "Setup audit repair: approvalRequiresMatch=true while voiceIdentity.enabled=false — disabling approvalRequiresMatch")
+                NSLog("FaeCore: setup audit repair — disabling approvalRequiresMatch because voiceIdentity is disabled")
+                config.voiceIdentity.approvalRequiresMatch = false
+                persistConfig(reason: "setup.audit.voice_identity.approval_requires_match")
             }
         } catch {
             debugLog(debugConsoleRef, .qa, "⚠️ Setup audit failed: \(error.localizedDescription)")
@@ -1344,7 +1380,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             UserDefaults.standard.removeObject(forKey: "fae.hasShownStartupCanvas")
 
             config = FaeConfig()
-            isOnboarded = false
+            hasOwnerSetUp = false
             isLicenseAccepted = false
             userName = nil
             toolMode = config.toolMode
@@ -1358,7 +1394,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private func handleOnboardingGetState(commandName: String) {
         if let continuation = pendingQueries.removeValue(forKey: commandName) {
             continuation.resume(returning: [
-                "payload": ["onboarded": isOnboarded] as [String: Any],
+                "payload": ["onboarded": hasOwnerSetUp] as [String: Any],
             ])
         }
     }

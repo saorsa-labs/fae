@@ -21,7 +21,6 @@ struct FaeConfig: Codable {
     var vision: VisionConfig = VisionConfig()
     var awareness: AwarenessConfig = AwarenessConfig()
     var userName: String?
-    var onboarded: Bool = false
     var licenseAccepted: Bool = false
     var toolMode: String = "full"
 
@@ -72,14 +71,20 @@ struct FaeConfig: Codable {
         var speed: Float = 1.1
         var sampleRate: Int = 24_000
         /// Transcript of the reference audio for voice cloning.
-        /// Must match the first ~3 seconds of speech in fae.wav.
-        var referenceText: String? = "Hello, I'm Fae, your personal voice assistant."
+        /// Keep SHORT — Qwen3-TTS can bleed refText into generated audio.
+        /// Must roughly match the first ~1.5 seconds of speech in fae.wav.
+        var referenceText: String? = "Hello, I'm Fae."
         /// Path to a custom voice WAV file (overrides bundled fae.wav when voiceIdentityLock=false).
         var customVoicePath: String?
         /// Reference text for the custom voice WAV.
         var customReferenceText: String?
         /// When true, force canonical bundled fae.wav at runtime.
         var voiceIdentityLock: Bool = true
+        /// When set, use instruct mode instead of voice cloning.
+        /// Pass a text description like "A warm, calm female voice" and the TTS
+        /// model will generate speech matching that description (no reference audio needed).
+        /// Set to nil to revert to voice cloning from fae.wav.
+        var defaultVoiceInstruct: String? = "A softly spoken young Scottish woman with a very warm, gentle, and friendly tone. She speaks with a clear Scottish accent and natural warmth in every word."
     }
 
     // MARK: - STT
@@ -94,7 +99,7 @@ struct FaeConfig: Codable {
         var wakeWord: String = "hi fae"
         var enabled: Bool = true
         var idleTimeoutS: Int = 0
-        var requireDirectAddress: Bool = false
+        var requireDirectAddress: Bool = true
         var directAddressFollowupS: Int = 20
         var sleepPhrases: [String] = [
             "shut up", "stop fae", "go to sleep",
@@ -106,7 +111,7 @@ struct FaeConfig: Codable {
     // MARK: - Barge-In
 
     struct BargeInConfig: Codable {
-        var enabled: Bool = true
+        var enabled: Bool = false
         /// Minimum RMS energy for barge-in candidate. Raised from 0.05 to 0.08
         /// to filter background noise while still accepting conversational speech.
         var minRms: Float = 0.08
@@ -483,10 +488,7 @@ struct FaeConfig: Codable {
                         throw ParseError.malformedValue(key: key, value: rawValue)
                     }
                 case "onboarded":
-                    guard let v = parseBool(rawValue) else {
-                        throw ParseError.malformedValue(key: key, value: rawValue)
-                    }
-                    config.onboarded = v
+                    break  // Legacy field — ignored gracefully
                 case "licenseAccepted":
                     guard let v = parseBool(rawValue) else {
                         throw ParseError.malformedValue(key: key, value: rawValue)
@@ -794,7 +796,6 @@ struct FaeConfig: Codable {
         var lines: [String] = []
 
         lines.append("userName = \(encodeStringOrNil(userName))")
-        lines.append("onboarded = \(onboarded ? "true" : "false")")
         lines.append("licenseAccepted = \(licenseAccepted ? "true" : "false")")
         lines.append("toolMode = \(encodeString(toolMode))")
         lines.append("")

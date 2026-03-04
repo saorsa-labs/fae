@@ -138,8 +138,10 @@ actor MLXTTSEngine: TTSEngine {
             }
         }
 
-        // Take 3 seconds of speech at 24kHz = 72000 samples.
-        let clipEnd = min(speechStart + 72_000, samples.count)
+        // Take 1.5 seconds of speech at 24kHz = 36000 samples.
+        // Shorter clips reduce the chance of refText bleeding into generated audio
+        // while still providing enough voice characteristic for cloning.
+        let clipEnd = min(speechStart + 36_000, samples.count)
         let clipSamples = Array(samples[speechStart ..< clipEnd])
 
         refAudio = MLXArray(clipSamples)

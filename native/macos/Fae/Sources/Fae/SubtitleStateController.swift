@@ -40,6 +40,12 @@ final class SubtitleStateController: ObservableObject {
     /// Progress bar label text.
     @Published var progressLabel: String = ""
 
+    /// The currently visible thinking text (empty = hidden).
+    @Published var thinkingText: String = ""
+
+    /// Whether the LLM is actively in a thinking block.
+    @Published var isThinking: Bool = false
+
     // MARK: - Private Timers
 
     private var assistantHideTask: Task<Void, Never>?
@@ -126,11 +132,64 @@ final class SubtitleStateController: ObservableObject {
         assistantHideTask?.cancel()
         userHideTask?.cancel()
         toolHideTask?.cancel()
+        thinkHideTask?.cancel()
         assistantText = ""
         userText = ""
         toolText = ""
+        thinkingText = ""
         isAssistantStreaming = false
         isUserPartial = false
+        isThinking = false
+    }
+
+    // MARK: - Thinking Bubble
+
+    private var thinkHideTask: Task<Void, Never>?
+
+    /// Append streaming thinking text to the thought bubble.
+    func appendThinkingText(_ text: String) {
+        thinkHideTask?.cancel()
+        isThinking = true
+        thinkingText += text
+        // Keep only the last ~400 characters for readability.
+        if thinkingText.count > 400 {
+            let start = thinkingText.index(thinkingText.endIndex, offsetBy: -350)
+            thinkingText = "\u{2026}" + String(thinkingText[start...])
+        }
+    }
+
+    /// Signal that thinking is complete — start fade-out timer.
+    func finalizeThinking() {
+        isThinking = false
+        thinkHideTask?.cancel()
+        thinkHideTask = Task {
+            try? await Task.sleep(for: .seconds(4.0))
+            guard !Task.isCancelled else { return }
+            thinkingText = ""
+        }
+    }
+
+    /// Append tool call activity to the thinking bubble so users see what Fae is doing.
+    func appendToolActivity(_ text: String) {
+        thinkHideTask?.cancel()
+        isThinking = true
+        if !thinkingText.isEmpty {
+            thinkingText += "\n"
+        }
+        thinkingText += text
+        // Keep only the last ~400 characters for readability.
+        if thinkingText.count > 400 {
+            let start = thinkingText.index(thinkingText.endIndex, offsetBy: -350)
+            thinkingText = "\u{2026}" + String(thinkingText[start...])
+        }
+    }
+
+    /// Clear thinking text immediately (e.g. on new turn).
+    func clearThinking() {
+        thinkHideTask?.cancel()
+        thinkHideTask = nil
+        thinkingText = ""
+        isThinking = false
     }
 
     // MARK: - Progress Bar
