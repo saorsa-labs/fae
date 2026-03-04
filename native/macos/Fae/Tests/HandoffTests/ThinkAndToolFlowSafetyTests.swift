@@ -73,6 +73,26 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         XCTAssertEqual(calls[0].arguments["path"] as? String, "/tmp/x.txt")
     }
 
+    func testLooksLikeNonProseDetectsToolPayloadJSON() {
+        let payload = #"{"name":"web_search","arguments":{"query":"weather"}}"#
+        XCTAssertTrue(TextProcessing.looksLikeNonProse(payload))
+    }
+
+    func testLooksLikeNonProseAllowsTechnicalProseSentence() {
+        let sentence = "I'll inspect the config path and explain each setting before we change anything."
+        XCTAssertFalse(TextProcessing.looksLikeNonProse(sentence))
+    }
+
+    func testLooksLikeNonProseDetectsToolXMLMarkup() {
+        let xml = "<tool_call><function=read><parameter=path>/tmp/a.txt</parameter></function></tool_call>"
+        XCTAssertTrue(TextProcessing.looksLikeNonProse(xml))
+    }
+
+    func testLooksLikeNonProseAllowsStructuredButConversationalText() {
+        let sentence = "First, open Settings. Next, choose Audio. Finally, enable Voice Isolation."
+        XCTAssertFalse(TextProcessing.looksLikeNonProse(sentence))
+    }
+
     func testWakeAddressMatchDetectsFuzzyNearMissAtGreeting() {
         let match = TextProcessing.findWakeAddressMatch(
             in: "Hey faeye open settings",

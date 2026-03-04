@@ -107,6 +107,58 @@ enum TextProcessing {
         return patterns.contains { lower.hasPrefix($0) || lower.contains($0) }
     }
 
+    // MARK: - Non-Prose Detection
+
+    /// Returns true if the text looks like tool payload markup or machine-oriented
+    /// blobs (JSON envelopes, XML tool tags) that should not be sent to TTS.
+    static func looksLikeNonProse(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 10 else { return false }
+
+        let lower = trimmed.lowercased()
+
+        // Explicit tool-call / tool-result markers.
+        if lower.contains("<tool_call>") || lower.contains("</tool_call>")
+            || lower.contains("<function=") || lower.contains("<parameter=")
+            || lower.contains("\"tool_call\"") || lower.contains("\"tool_result\"")
+        {
+            return true
+        }
+
+        // Parseable JSON wrappers are non-prose if they look like machine payloads.
+        if (trimmed.hasPrefix("{") && trimmed.hasSuffix("}"))
+            || (trimmed.hasPrefix("[") && trimmed.hasSuffix("]"))
+        {
+            if let data = trimmed.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data)
+            {
+                if let dict = json as? [String: Any] {
+                    let keys = Set(dict.keys.map { $0.lowercased() })
+                    let toolish: Set<String> = [
+                        "name", "arguments", "result", "tool", "tool_call", "tool_result", "function",
+                    ]
+                    if !keys.intersection(toolish).isEmpty {
+                        return true
+                    }
+                } else {
+                    // Arrays / scalar-only JSON blobs are usually not conversational prose.
+                    return true
+                }
+            }
+        }
+
+        // High density of symbols plus very low lexical content indicates code-like output.
+        let specialChars = CharacterSet(charactersIn: "{}[]<>=;|\\&%$@#~^")
+        let specialCount = trimmed.unicodeScalars.filter { specialChars.contains($0) }.count
+        let ratio = Double(specialCount) / Double(trimmed.count)
+        let wordCount = trimmed.split(whereSeparator: { $0.isWhitespace }).count
+        if ratio > 0.18 && wordCount < 5 && trimmed.count > 24 {
+            return true
+        }
+
+        return false
+    }
+
     // MARK: - Non-Speech Character Stripping
 
     /// Remove characters that shouldn't be spoken by TTS and normalize for clean speech.
@@ -117,6 +169,20 @@ enum TextProcessing {
         if let regex = try? NSRegularExpression(pattern: "</?[a-zA-Z_][a-zA-Z0-9_]*[^>]*>") {
             let range = NSRange(result.startIndex..., in: result)
             result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        // Strip JSON-like fragments that may leak from tool call/result content.
+        // Matches {...} blocks containing colons (JSON key-value syntax).
+        if let jsonRegex = try? NSRegularExpression(pattern: "\\{[^}]*:[^}]*\\}") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = jsonRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        // Strip inline code patterns: variable_names, function_calls(), file.paths.
+        // Camelcase/snake_case identifiers with 2+ underscores or dots (not normal prose).
+        if let codeIdRegex = try? NSRegularExpression(pattern: "\\b\\w+(?:[_.]{1}\\w+){2,}\\b") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = codeIdRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
         }
 
         // Remove markdown-style formatting.

@@ -22,7 +22,9 @@ struct EchoSuppressor {
     /// Echo tail after assistant stops speaking.
     var echoTailMs: Int { aecEnabled ? 1500 : 3500 }
     /// Short-utterance guard window after assistant stops.
-    var shortUtteranceGuardMs: Int { aecEnabled ? 3000 : 6000 }
+    /// Reduced from 6000ms to 4000ms — 6s was too aggressive and silently
+    /// dropped short real user utterances like "yes", "no", "hey Fae".
+    var shortUtteranceGuardMs: Int { aecEnabled ? 2500 : 4000 }
     /// Echo tail for scheduling listening tone after approval.
     var echoTailForToneMs: Int { aecEnabled ? 1500 : 3500 }
 

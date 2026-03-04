@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 /// Plays synthesized audio through the system output device.
@@ -21,6 +21,9 @@ actor AudioPlaybackManager {
 
     /// Playback speed multiplier (0.8-1.4). Adjusts resample ratio.
     private var speed: Float = 1.0
+
+    /// Cache AVAudioConverters by source/destination sample-rate pair.
+    private var converterCache: [String: AVAudioConverter] = [:]
 
     /// Set the playback speed multiplier. Clamped to [0.8, 1.4].
     func setSpeed(_ newSpeed: Float) {
@@ -70,7 +73,7 @@ actor AudioPlaybackManager {
         // Resample if effective source rate differs from output device rate.
         let resampled: [Float]
         if effectiveSourceRate != outputRate {
-            resampled = Self.linearResample(samples, from: effectiveSourceRate, to: outputRate)
+            resampled = avAudioConvertResample(samples, from: effectiveSourceRate, to: outputRate)
         } else {
             resampled = samples
         }
@@ -183,8 +186,84 @@ actor AudioPlaybackManager {
         }
     }
 
-    /// Linear interpolation resampling.
-    static func linearResample(_ input: [Float], from srcRate: Double, to dstRate: Double) -> [Float] {
+    private func converterKey(srcRate: Double, dstRate: Double) -> String {
+        "\(Int(srcRate.rounded()))->\(Int(dstRate.rounded()))"
+    }
+
+    private func avAudioConvertResample(_ input: [Float], from srcRate: Double, to dstRate: Double) -> [Float] {
+        guard !input.isEmpty, srcRate > 0, dstRate > 0 else { return input }
+
+        guard let inputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: srcRate,
+            channels: 1,
+            interleaved: false
+        ), let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: dstRate,
+            channels: 1,
+            interleaved: false
+        ) else {
+            return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
+        }
+
+        let key = converterKey(srcRate: srcRate, dstRate: dstRate)
+        let converter: AVAudioConverter
+        if let cached = converterCache[key] {
+            converter = cached
+        } else if let created = AVAudioConverter(from: inputFormat, to: outputFormat) {
+            converter = created
+            converterCache[key] = created
+        } else {
+            return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
+        }
+
+        guard let inputBuffer = AVAudioPCMBuffer(
+            pcmFormat: inputFormat,
+            frameCapacity: AVAudioFrameCount(input.count)
+        ) else {
+            return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
+        }
+        inputBuffer.frameLength = AVAudioFrameCount(input.count)
+        if let channelData = inputBuffer.floatChannelData?[0] {
+            input.withUnsafeBufferPointer { src in
+                channelData.update(from: src.baseAddress!, count: input.count)
+            }
+        }
+
+        let ratio = dstRate / srcRate
+        let estimatedOutFrames = max(1, Int(Double(input.count) * ratio) + 32)
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: AVAudioFrameCount(estimatedOutFrames)
+        ) else {
+            return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
+        }
+
+        var consumedInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
+            if consumedInput {
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            consumedInput = true
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        guard conversionError == nil,
+              status == .haveData || status == .endOfStream || status == .inputRanDry,
+              let outData = outputBuffer.floatChannelData?[0]
+        else {
+            return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
+        }
+
+        return Array(UnsafeBufferPointer(start: outData, count: Int(outputBuffer.frameLength)))
+    }
+
+    /// Legacy linear interpolation fallback if AVAudioConverter is unavailable.
+    static func linearResampleFallback(_ input: [Float], from srcRate: Double, to dstRate: Double) -> [Float] {
         guard !input.isEmpty, srcRate > 0, dstRate > 0 else { return input }
         let ratio = srcRate / dstRate
         let outputCount = Int(Double(input.count) / ratio)

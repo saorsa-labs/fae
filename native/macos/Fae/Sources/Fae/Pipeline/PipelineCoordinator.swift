@@ -234,9 +234,22 @@ actor PipelineCoordinator {
     private var pipelineTask: Task<Void, Never>?
     private var captureStream: AsyncStream<AudioChunk>?
 
+    /// Speech-segment processing runs on a dedicated bounded queue so capture/VAD
+    /// stay responsive even while STT/LLM/TTS are busy.
+    private var speechSegmentTask: Task<Void, Never>?
+    private var speechSegmentContinuation: AsyncStream<SpeechSegment>.Continuation?
+    private static let speechSegmentQueueDepth = 6
+    private var speechSegmentsDroppedForBackpressure: Int = 0
+
     /// Chained TTS task — each sentence enqueues onto this so TTS runs in order
     /// without blocking the LLM token stream.
     private var pendingTTSTask: Task<Void, Never>?
+
+    /// Timestamp captured when the user turn ended (post-VAD segment close).
+    /// Used for TTFA (time-to-first-audio) telemetry.
+    private var lastUserTurnEndedAt: Date?
+    private var ttfaEmittedForCurrentTurn: Bool = false
+    private var currentTurnID: String?
 
     // MARK: - Deferred Tool Jobs
 
@@ -353,6 +366,8 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .command, "Wake aliases loaded: \(wakeAliases.joined(separator: ", "))")
         }
 
+        startSpeechSegmentProcessingLoop()
+
         // Start audio capture.
         let stream = try await capture.startCapture()
         captureStream = stream
@@ -387,6 +402,7 @@ actor PipelineCoordinator {
         pipelineTask?.cancel()
         pipelineTask = nil
         cancelDeferredToolJobs()
+        await stopSpeechSegmentProcessingLoop()
         await capture.stopCapture()
         await playback.stop()
         eventBus.send(.pipelineStateChanged(.stopped))
@@ -774,6 +790,49 @@ actor PipelineCoordinator {
         debugLog(debugConsole, .pipeline, "Conversation reset (\(source)): \(trigger)")
     }
 
+    // MARK: - Speech Segment Queue
+
+    private func startSpeechSegmentProcessingLoop() {
+        guard speechSegmentTask == nil else { return }
+
+        let stream = AsyncStream<SpeechSegment>(bufferingPolicy: .bufferingNewest(Self.speechSegmentQueueDepth)) {
+            continuation in
+            self.speechSegmentContinuation = continuation
+        }
+
+        speechSegmentTask = Task { [weak self] in
+            guard let self else { return }
+            for await segment in stream {
+                guard !Task.isCancelled else { break }
+                await self.handleSpeechSegment(segment)
+            }
+        }
+    }
+
+    private func stopSpeechSegmentProcessingLoop() async {
+        speechSegmentContinuation?.finish()
+        speechSegmentContinuation = nil
+        speechSegmentTask?.cancel()
+        await speechSegmentTask?.value
+        speechSegmentTask = nil
+    }
+
+    private func enqueueSpeechSegment(_ segment: SpeechSegment) {
+        guard let continuation = speechSegmentContinuation else {
+            // Queue not initialized — process synchronously as a safe fallback.
+            Task { await self.handleSpeechSegment(segment) }
+            return
+        }
+
+        let result = continuation.yield(segment)
+        if case .dropped = result {
+            speechSegmentsDroppedForBackpressure += 1
+            NSLog("PipelineCoordinator: dropped speech segment due to backpressure (count=%d)", speechSegmentsDroppedForBackpressure)
+            NSLog("phase1.audio_backpressure_drop_count=%d", speechSegmentsDroppedForBackpressure)
+            debugLog(debugConsole, .pipeline, "⚠️ Speech segment dropped (backpressure) count=\(speechSegmentsDroppedForBackpressure)")
+        }
+    }
+
     // MARK: - Main Pipeline Loop
 
     private func runPipelineLoop(stream: AsyncStream<AudioChunk>) async {
@@ -830,13 +889,29 @@ actor PipelineCoordinator {
             if assistantSpeaking {
                 vad.setSilenceThresholdMs(config.bargeIn.bargeInSilenceMs)
                 pendingBargeIn = nil  // Clear any pending barge-in during active speech
+
+                // Watchdog: if assistantSpeaking has been true for an unreasonably
+                // long time (>60s), the TTS pipeline is stuck. Force-clear so the
+                // mic isn't permanently dead. No single TTS utterance should take
+                // more than 60 seconds.
+                if let start = lastAssistantStart,
+                   Date().timeIntervalSince(start) > 60
+                {
+                    NSLog("PipelineCoordinator: assistantSpeaking watchdog — stuck for >60s, force-clearing")
+                    debugLog(debugConsole, .pipeline, "⚠️ assistantSpeaking watchdog fired (>60s) — force-clearing")
+                    pendingTTSTask?.cancel()
+                    pendingTTSTask = nil
+                    markAssistantSpeechEnded(reason: "watchdog_timeout")
+                    await playback.stop()
+                }
             } else {
                 vad.setSilenceThresholdMs(config.vad.minSilenceDurationMs)
             }
 
-            // Process completed speech segment.
+            // Process completed speech segment via bounded queue.
             if let segment = vadOutput.segment {
-                await handleSpeechSegment(segment)
+                lastUserTurnEndedAt = Date()
+                enqueueSpeechSegment(segment)
             }
         }
     }
@@ -927,7 +1002,10 @@ actor PipelineCoordinator {
         // is nearly identical to the owner profile and would false-positive on real
         // speech if we rejected unconditionally.
         if currentSpeakerLabel == "fae_self" {
-            let recentlySpoke = lastAssistantStart.map { Date().timeIntervalSince($0) < 10 } ?? false
+            // Use echo tail duration (3.5s) plus a small margin rather than an
+            // aggressive 10s window. The echo suppressor already handles the first
+            // 3.5s; this catches the voice-identity false-positive tail.
+            let recentlySpoke = lastAssistantStart.map { Date().timeIntervalSince($0) < 5 } ?? false
             if recentlySpoke {
                 NSLog("PipelineCoordinator: dropping %.1fs segment (matched Fae's own voice, near echo window)", durationSecs)
                 debugLog(debugConsole, .pipeline, "Echo rejected (voice match fae_self, recent speech)")
@@ -1162,7 +1240,16 @@ actor PipelineCoordinator {
         durationSecs: Float?,
         proactiveContext: ProactiveRequestContext? = nil
     ) async {
-        debugLog(debugConsole, .qa, "Process transcription: \(text)")
+        currentTurnID = UUID().uuidString
+        ttfaEmittedForCurrentTurn = false
+        if proactiveContext != nil {
+            lastUserTurnEndedAt = nil
+        } else if lastUserTurnEndedAt == nil {
+            // Text injection path has no VAD segment-close marker.
+            lastUserTurnEndedAt = Date()
+        }
+
+        debugLog(debugConsole, .qa, "Process transcription [turn=\(currentTurnID?.prefix(8) ?? "none")]: \(text)")
 
         // Extract query if name-addressed.
         var queryText = text
@@ -1953,6 +2040,13 @@ actor PipelineCoordinator {
 
         func emitStreamingChunk(_ cleaned: String) {
             guard !cleaned.isEmpty else { return }
+            // Safety gate: suppress content that looks like code/JSON/tool output.
+            if TextProcessing.looksLikeNonProse(cleaned) {
+                debugLog(debugConsole, .pipeline, "[suppressed non-prose TTS] \(String(cleaned.prefix(80)))")
+                // Still show in conversation UI, just don't speak it.
+                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                return
+            }
             let now = Date()
             let intervalMs = Int((lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? 0) * 1000)
             firstTtsSent = true
@@ -2237,14 +2331,19 @@ actor PipelineCoordinator {
             } else {
                 sentenceBuffer += remaining
                 let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
+                let shouldSpeak = !finalText.isEmpty && !TextProcessing.looksLikeNonProse(finalText)
                 if !finalText.isEmpty {
-                    recordSpokenText(finalText)
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
+                }
+                if shouldSpeak {
+                    recordSpokenText(finalText)
                     enqueueTTS(finalText, isFinal: true)
                 }
                 // Wait for all TTS (streaming + final) to complete.
                 await awaitPendingTTS()
-                if finalText.isEmpty && assistantSpeaking {
+                if !shouldSpeak && assistantSpeaking {
+                    // No TTS was enqueued for the final chunk (empty or non-prose).
+                    // Mark playback end so .finished fires and clears assistantSpeaking.
                     await playback.markEnd()
                 }
             }
@@ -2377,6 +2476,21 @@ actor PipelineCoordinator {
             return
         }
 
+        // Fallback filler: if the model emitted a bare tool call with no natural
+        // preamble, speak a short acknowledgement so users don't hear dead air
+        // while tools execute.
+        if turnCount == 0,
+           !isToolFollowUp,
+           spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            let filler = Self.toolCallAcknowledgement(for: toolCalls)
+            if !filler.isEmpty {
+                recordSpokenText(filler)
+                eventBus.send(.assistantText(text: filler, isFinal: false))
+                enqueueTTS(filler, isFinal: false)
+            }
+        }
+
         // Add the assistant's tool-calling message to history (strip think content).
         await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse), tag: proactiveContext?.conversationTag)
 
@@ -2471,6 +2585,26 @@ actor PipelineCoordinator {
     /// Cached native tool specs for tool follow-up turns.
     private var currentNativeTools: [[String: any Sendable]]?
 
+    // MARK: - Speech State
+
+    private func markAssistantSpeechStarted() {
+        guard !assistantSpeaking else { return }
+        assistantSpeaking = true
+        lastAssistantStart = Date()
+        echoSuppressor.onAssistantSpeechStart()
+    }
+
+    private func markAssistantSpeechEnded(reason: String, resetVAD: Bool = false) {
+        if assistantSpeaking {
+            debugLog(debugConsole, .pipeline, "Speech state → idle (\(reason))")
+            assistantSpeaking = false
+            echoSuppressor.onAssistantSpeechEnd()
+        }
+        if resetVAD {
+            vad.reset()
+        }
+    }
+
     // MARK: - TTS
 
     /// Non-blocking TTS enqueue — chains onto `pendingTTSTask` so sentences synthesize
@@ -2480,16 +2614,22 @@ actor PipelineCoordinator {
     /// while TTS runs concurrently on the actor (re-entrant at `await` points).
     private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) {
         // Set speaking state immediately so echo suppressor and barge-in work correctly.
-        if !assistantSpeaking {
-            assistantSpeaking = true
-            lastAssistantStart = Date()
-            echoSuppressor.onAssistantSpeechStart()
-        }
+        markAssistantSpeechStarted()
 
         let previous = pendingTTSTask
         pendingTTSTask = Task {
             await previous?.value  // Ensure sentence ordering
-            guard !interrupted else { return }
+            guard !interrupted else {
+                // If this was the final chunk and we're interrupted, ensure speaking
+                // state is cleared. The barge-in path calls playback.stop() which
+                // fires .stopped → clears assistantSpeaking, but there's a race
+                // window where that hasn't fired yet. Belt-and-suspenders.
+                if isFinal && assistantSpeaking {
+                    NSLog("PipelineCoordinator: interrupted final TTS chunk — clearing speaking state")
+                    markAssistantSpeechEnded(reason: "interrupted_final_chunk")
+                }
+                return
+            }
             await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
         }
     }
@@ -2503,11 +2643,7 @@ actor PipelineCoordinator {
     /// Blocking TTS — used by `speakDirect`, `speakWithVoice`, and other non-streaming paths
     /// where we want to wait for speech to finish before continuing.
     private func speakText(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
-        if !assistantSpeaking {
-            assistantSpeaking = true
-            lastAssistantStart = Date()
-            echoSuppressor.onAssistantSpeechStart()
-        }
+        markAssistantSpeechStarted()
 
         let cleaned = TextProcessing.stripNonSpeechChars(text)
         if !cleaned.isEmpty {
@@ -2517,46 +2653,98 @@ actor PipelineCoordinator {
         await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
     }
 
+    /// Maximum time a single TTS synthesis call can take before we force-cancel.
+    /// Prevents `assistantSpeaking` from getting stuck if the TTS model hangs.
+    /// This covers both the "stream never yields" and "stream yields slowly" cases
+    /// because we wrap the entire stream consumption in a cancellable task group.
+    private static let ttsSynthesisTimeoutSeconds: UInt64 = 30
+
     /// Core TTS synthesis — shared by both `enqueueTTS` and `speakText`.
+    ///
+    /// Uses a task group with a timeout child so that if the TTS async stream
+    /// blocks before yielding its first buffer (model hang), the timeout task
+    /// cancels the stream consumer and we fall through to cleanup.
     private func synthesizeSentence(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
         guard await ttsEngine.isLoaded else {
             NSLog("PipelineCoordinator: TTS not loaded, skipping speech")
             debugLog(debugConsole, .pipeline, "⚠️ TTS not loaded — skipping speech")
+            if isFinal {
+                markAssistantSpeechEnded(reason: "tts_not_loaded")
+            }
             return
         }
         debugLog(debugConsole, .pipeline, "TTS: \"\(String(text.prefix(80)))\"\(text.count > 80 ? "…" : "") (final=\(isFinal))")
 
-        // Voice instruct: pass through only when explicitly set (e.g. roleplay character voices).
-        // Normal speech always uses ICL mode (voice cloning via fae.wav reference audio).
         let effectiveVoiceInstruct = voiceInstruct
+        var didProduceAudio = false
 
         do {
-            let ttsStartedAt = Date()
-            var ttsFirstChunkEmitted = false
-            let audioStream = await ttsEngine.synthesize(text: text, voiceInstruct: effectiveVoiceInstruct)
-            for try await buffer in audioStream {
-                if !ttsFirstChunkEmitted {
-                    let latencyMs = Date().timeIntervalSince(ttsStartedAt) * 1000
-                    ttsFirstChunkEmitted = true
-                    NSLog("phase1.tts_first_chunk_latency_ms=%.2f", latencyMs)
+            didProduceAudio = try await withThrowingTaskGroup(of: Bool.self) { group in
+                // Child 1: consume the TTS stream.
+                // Uses Task.checkCancellation() for interruption — the timeout
+                // child or external cancellation (barge-in) cancels this task.
+                group.addTask { [ttsEngine, playback] in
+                    let ttsStartedAt = Date()
+                    var firstChunkEmitted = false
+                    var produced = false
+                    let audioStream = await ttsEngine.synthesize(
+                        text: text, voiceInstruct: effectiveVoiceInstruct
+                    )
+                    for try await buffer in audioStream {
+                        try Task.checkCancellation()
+                        if !firstChunkEmitted {
+                            let latencyMs = Date().timeIntervalSince(ttsStartedAt) * 1000
+                            firstChunkEmitted = true
+                            NSLog("phase1.tts_first_chunk_latency_ms=%.2f", latencyMs)
+                        }
+                        produced = true
+                        let samples = Self.extractSamples(from: buffer)
+                        await playback.enqueue(
+                            samples: samples,
+                            sampleRate: Int(buffer.format.sampleRate),
+                            isFinal: isFinal
+                        )
+                    }
+                    return produced
                 }
-                guard !interrupted else { break }
-                // Convert AVAudioPCMBuffer to Float array and enqueue.
-                let samples = Self.extractSamples(from: buffer)
-                await playback.enqueue(
-                    samples: samples,
-                    sampleRate: Int(buffer.format.sampleRate),
-                    isFinal: isFinal
-                )
+
+                // Child 2: timeout watchdog — cancels the group if TTS hangs.
+                group.addTask {
+                    try await Task.sleep(nanoseconds: Self.ttsSynthesisTimeoutSeconds * 1_000_000_000)
+                    // If we reach here, the timeout expired before the stream finished.
+                    return false
+                }
+
+                // Wait for whichever finishes first.
+                if let produced = try await group.next() {
+                    // Cancel the remaining child (either the timeout or the stalled stream).
+                    group.cancelAll()
+                    if !produced {
+                        NSLog("PipelineCoordinator: TTS synthesis timeout or produced no audio")
+                        debugLog(debugConsole, .pipeline, "⚠️ TTS timeout/no-audio — forcing completion")
+                    }
+                    return produced
+                }
+                return false
             }
+
             if isFinal {
                 await playback.markEnd()
             }
+            if isFinal && !didProduceAudio && assistantSpeaking {
+                NSLog("PipelineCoordinator: TTS produced no audio for final chunk — clearing speaking state")
+                debugLog(debugConsole, .pipeline, "⚠️ TTS final chunk produced no audio — force-clearing assistantSpeaking")
+                markAssistantSpeechEnded(reason: "tts_final_no_audio")
+            }
+        } catch is CancellationError {
+            NSLog("PipelineCoordinator: TTS cancelled")
+            if isFinal {
+                markAssistantSpeechEnded(reason: "tts_cancelled")
+            }
         } catch {
             NSLog("PipelineCoordinator: TTS error: %@", error.localizedDescription)
-            // Ensure assistantSpeaking is cleared on TTS failure.
-            assistantSpeaking = false
-            echoSuppressor.onAssistantSpeechEnd()
+            markAssistantSpeechEnded(reason: "tts_error")
+            await playback.stop()
         }
     }
 
@@ -2592,6 +2780,8 @@ actor PipelineCoordinator {
         }
 
         interrupted = true
+        pendingTTSTask?.cancel()
+        pendingTTSTask = nil
         Task { await playback.stop() }
         debugLog(debugConsole, .command, "Barge-in triggered rms=\(String(format: "%.4f", rms))")
         NSLog("PipelineCoordinator: barge-in triggered (rms=%.4f)", rms)
@@ -2608,17 +2798,23 @@ actor PipelineCoordinator {
     private func handlePlaybackEvent(_ event: AudioPlaybackManager.PlaybackEvent) {
         switch event {
         case .finished:
-            assistantSpeaking = false
-            echoSuppressor.onAssistantSpeechEnd()
-            vad.reset()
+            markAssistantSpeechEnded(reason: "playback_finished", resetVAD: true)
             NSLog("PipelineCoordinator: playback finished")
 
         case .stopped:
-            assistantSpeaking = false
-            echoSuppressor.onAssistantSpeechEnd()
-            vad.reset()
+            markAssistantSpeechEnded(reason: "playback_stopped", resetVAD: true)
 
         case .level(let rms):
+            if assistantSpeaking,
+               !ttfaEmittedForCurrentTurn,
+               rms > 0.0005,
+               let turnEndedAt = lastUserTurnEndedAt
+            {
+                let ttfaMs = Date().timeIntervalSince(turnEndedAt) * 1000
+                ttfaEmittedForCurrentTurn = true
+                NSLog("phase1.ttfa_ms=%.2f turn_id=%@", ttfaMs, currentTurnID ?? "none")
+                debugLog(debugConsole, .pipeline, "TTFA=\(String(format: "%.1f", ttfaMs))ms turn=\(currentTurnID?.prefix(8) ?? "none")")
+            }
             eventBus.send(.audioLevel(rms))
         }
     }
@@ -2732,6 +2928,24 @@ actor PipelineCoordinator {
         }
 
         return ToolCall(name: name, arguments: args)
+    }
+
+    private static func toolCallAcknowledgement(for calls: [ToolCall]) -> String {
+        guard let first = calls.first?.name.lowercased() else {
+            return ""
+        }
+        switch first {
+        case "web_search", "fetch_url":
+            return "Let me check that quickly."
+        case "calendar", "reminders":
+            return "Checking that now."
+        case "contacts", "mail", "notes":
+            return "One moment, I’m pulling that up."
+        case "read", "write", "edit", "bash":
+            return "Got it, working on that now."
+        default:
+            return "Let me check that for you."
+        }
     }
 
     /// Strip tool call markup from response text, leaving only human-readable content.

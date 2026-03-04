@@ -109,6 +109,11 @@ actor ModelManager {
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.68))
         do {
             try await tts.load(modelID: config.tts.modelId)
+            if config.tts.modelId.localizedCaseInsensitiveContains("12Hz") {
+                NSLog("ModelManager: TTS streaming profile = 12Hz codec")
+            } else {
+                NSLog("ModelManager: TTS streaming profile = non-12Hz (%@)", config.tts.modelId)
+            }
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.85))
             eventBus.send(.runtimeProgress(stage: "tts", progress: 0.85))
         } catch {
