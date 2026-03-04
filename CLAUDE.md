@@ -580,6 +580,76 @@ Implementation files:
 | `Tools/SkillTools.swift` | `ActivateSkillTool`, `RunSkillTool`, `ManageSkillTool` (with `update` action) |
 | `Core/PersonalityManager.swift` | Python/uv capability prompt + self-modification prompt + awareness self-adaptation |
 
+### Built-in skills inventory
+
+| Skill | Type | Scripts | Purpose |
+|-------|------|---------|---------|
+| `voice-identity` | Instruction | — | Speaker enrollment choreography, introduction flow, re-verification |
+| `voice-tools` | Executable | 4 (normalize, prepare, compare, quality) | Audio file processing and voice quality tools |
+| `channel-discord` | Executable | 1 (channel_discord) | Discord channel integration |
+| `forge` | Executable | 4 (init, build, test, release) | Tool creation workshop — scaffold, compile, test, and release Zig/Python tools |
+| `toolbox` | Executable | 5 (list, install, search, verify, uninstall) | Local tool registry — manage installed forge-built tools |
+| `mesh` | Executable | 5 (discover, serve, publish, fetch, trust) | Peer discovery and tool sharing — Fae-to-Fae tool exchange |
+
+### Forge skill (tool creation)
+
+The Forge turns ideas into working tools. Scaffolds projects, compiles binaries, runs tests, and packages everything into installable Fae skills.
+
+**Supported languages:**
+- **Zig** — compiles to native ARM64 macOS binaries and optionally WebAssembly (WASM)
+- **Python** — scripts executed via `uv run --script` with inline dependency declarations
+- **Both** — hybrid projects with Zig for performance + Python for glue
+
+**Directory layout:**
+```
+~/.fae-forge/
+  workspace/{tool-name}/     # Active development projects (git repos)
+  tools/{tool-name}/         # Released, installable skill packages
+  bundles/                   # Git bundle archives for sharing
+  registry.json              # Index of all released tools
+```
+
+**Scripts:** `init` (scaffold project), `build` (compile), `test` (run tests), `release` (build + package + git tag + bundle + registry update).
+
+**Prerequisites:** Zig via `zb install zig`, wasmtime via `zb install wasmtime` (optional for WASM), git (pre-installed), uv (pre-installed with Fae).
+
+Implementation: `Resources/Skills/forge/` (SKILL.md + MANIFEST.json + scripts/)
+
+### Toolbox skill (local registry)
+
+Manages Fae's local tool registry at `~/.fae-forge/`. Every installed tool is a skill directory containing SKILL.md, optional bin/scripts, and MANIFEST.json for integrity verification.
+
+**Scripts:** `list` (show installed tools, detect orphans), `install` (from git bundle or directory with SHA-256 verification), `search` (local + peer catalog search), `verify` (3-layer integrity: manifest validity + file checksums + git signatures), `uninstall` (remove with optional bundle preservation).
+
+Implementation: `Resources/Skills/toolbox/` (SKILL.md + MANIFEST.json + scripts/)
+
+### Mesh skill (peer sharing)
+
+Enables Fae instances to discover each other and share forge-built tools over the local network or beyond.
+
+**Discovery methods:**
+- **Bonjour/mDNS** — automatic LAN discovery via `_fae-tools._tcp` service type
+- **Manual** — add peers by IP address or hostname
+- **x0x network** — global discovery via x0x DHT (future)
+
+**Trust model:** Trust-On-First-Use (TOFU). First connection stores SSH public key fingerprint; subsequent connections verify against stored key. Key changes trigger warnings.
+
+**Catalog server:** HTTP server exposes `GET /catalog`, `/tools/{name}/metadata`, `/tools/{name}/bundle`, `/health`. Forks into background daemon. Registers Bonjour service for auto-discovery.
+
+**Scripts:** `discover` (find peers via Bonjour/manual), `serve` (HTTP catalog server with Bonjour), `publish` (announce tool to mesh), `fetch` (download + TOFU verify + install from peer), `trust` (manage peer trust store).
+
+Implementation: `Resources/Skills/mesh/` (SKILL.md + MANIFEST.json + scripts/)
+
+### Forge → Toolbox → Mesh workflow
+
+The three skills form a complete tool lifecycle:
+
+1. **Create**: `forge init` → `forge build` → `forge test` → `forge release`
+2. **Manage**: `toolbox list` / `toolbox verify` / `toolbox uninstall`
+3. **Share**: `mesh serve start` → `mesh publish` → peers run `mesh discover` → `mesh fetch`
+
+All three are built-in skills using Python scripts executed via `uv run --script`. Zero Swift code changes — they leverage Fae's existing tool system (bash, read, write, run_skill).
+
 ## Rescue mode
 
 Safe boot that bypasses all user customizations without deleting data.
@@ -1353,3 +1423,13 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - FaeCore: `refreshAwarenessRuntime()` consolidates config changes → scheduler restart → skill sync
   - Legacy morning briefing suppressed when enhanced briefing active
   - Total: 17 scheduler tasks (was 13), 31 tools (unchanged)
+- **v1.2.0** — Fae Forge, Toolbox & Mesh: tool creation, registry, and peer sharing
+  - Forge skill: scaffold Zig/Python/hybrid projects, compile ARM64 + WASM, test, release with git tags and bundles
+  - Toolbox skill: local registry at `~/.fae-forge/`, install from git bundles, SHA-256 integrity verification, search local + peers
+  - Mesh skill: Bonjour/mDNS discovery via `_fae-tools._tcp`, HTTP catalog server, TOFU trust model, peer-to-peer tool fetch
+  - All implemented as built-in skills (Python scripts via `uv run`) — zero Swift code changes
+  - Directory structure: `~/.fae-forge/` with workspace/, tools/, bundles/, registry.json, peers.json, trust-store.json
+  - 14 new Python scripts across 3 skills (forge: 4, toolbox: 5, mesh: 5)
+  - MANIFEST.json with SHA-256 per-file integrity checksums for all three skills
+  - Generated `run.py` wrapper in released tools auto-selects native → WASM → Python execution
+  - Total: 14 built-in skills (was 11)

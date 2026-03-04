@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "bash",
+    "read"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files"
+  ],
+  "riskTier": "low",
+  "timeoutSeconds": 30,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "d3ff3b85baa15aa182f1f2bbceb0b92e1ef3b7926cae5067f5b81c3cb14e6bd6",
+      "scripts/list.py": "2c06a8d15b65aee545759079a9d9325124eeadae56bb3046dd2b05c0cb2ef4f7",
+      "scripts/uninstall.py": "7cb78e7020d67e4a8db51bbe4ed7bd900270388e7752fa1157f8f0d1c7ddfbeb",
+      "scripts/search.py": "e807faf4445e46425d70da6d80e62950dbb90a872b9ca9f8d265901000c1721f",
+      "scripts/install.py": "e2af4c5fd0b65781c07c074906b44e140a8465498b9037a9a4372040826a769a",
+      "scripts/verify.py": "862e90b8cc4a2ff151771fb17928dbae159cb08259ce9efd9c6d6e5a2e2e4037"
+    },
+    "signature": null
+  }
+}

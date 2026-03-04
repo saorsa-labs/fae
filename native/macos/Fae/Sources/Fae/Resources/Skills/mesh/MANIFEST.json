@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "bash",
+    "read",
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files",
+    "network"
+  ],
+  "riskTier": "medium",
+  "timeoutSeconds": 60,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "f9a420ed305707b5045726be57111c0926c7357b64b60bec13c08618487dc372",
+      "scripts/fetch.py": "ec4ed3ef013c0d4229954796754e69a68519dda04f80a99326688d7d78eee38d",
+      "scripts/discover.py": "d971488379dfaea4cdce78783e94a8ef02a12c8177274bfdee4c9a8344fa1154",
+      "scripts/serve.py": "3dcbab4ef8342785916b294b968613b91d3fa01bcfd7dfd66cdea7d09efa9ee9",
+      "scripts/trust.py": "78f2046e8d163fe612187f0260731b830f3eee0a63a29b9022424acc59cc6533",
+      "scripts/publish.py": "ef9630654c97462ad0e07f856c2dde2bae8f5bb8adc0a09ef8c606b76607b189"
+    },
+    "signature": null
+  }
+}
