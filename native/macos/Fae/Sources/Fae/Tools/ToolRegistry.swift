@@ -21,14 +21,18 @@ final class ToolRegistry: Sendable {
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
         audioCaptureManager: AudioCaptureManager? = nil,
-        audioPlaybackManager: AudioPlaybackManager? = nil
+        audioPlaybackManager: AudioPlaybackManager? = nil,
+        sttEngine: MLXSTTEngine? = nil,
+        wakeWordProfileStore: WakeWordProfileStore? = nil
     ) -> ToolRegistry {
         let allTools: [any Tool] = Self.allBuiltinTools(
             skillManager: skillManager,
             speakerEncoder: speakerEncoder,
             speakerProfileStore: speakerProfileStore,
             audioCaptureManager: audioCaptureManager,
-            audioPlaybackManager: audioPlaybackManager
+            audioPlaybackManager: audioPlaybackManager,
+            sttEngine: sttEngine,
+            wakeWordProfileStore: wakeWordProfileStore
         )
         return ToolRegistry(tools: allTools)
     }
@@ -39,7 +43,9 @@ final class ToolRegistry: Sendable {
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
         audioCaptureManager: AudioCaptureManager? = nil,
-        audioPlaybackManager: AudioPlaybackManager? = nil
+        audioPlaybackManager: AudioPlaybackManager? = nil,
+        sttEngine: MLXSTTEngine? = nil,
+        wakeWordProfileStore: WakeWordProfileStore? = nil
     ) -> [any Tool] {
         let sm = skillManager ?? SkillManager()
         let tools: [any Tool] = [
@@ -50,6 +56,7 @@ final class ToolRegistry: Sendable {
             BashTool(),
             SelfConfigTool(),
             ChannelSetupTool(),
+            WindowControlTool(),
             WebSearchTool(),
             FetchURLTool(),
             // Skill tools
@@ -85,7 +92,9 @@ final class ToolRegistry: Sendable {
                 speakerEncoder: speakerEncoder,
                 speakerProfileStore: speakerProfileStore,
                 audioCaptureManager: audioCaptureManager,
-                audioPlaybackManager: audioPlaybackManager
+                audioPlaybackManager: audioPlaybackManager,
+                sttEngine: sttEngine,
+                wakeWordProfileStore: wakeWordProfileStore
             ),
         ]
         return tools
@@ -132,6 +141,22 @@ final class ToolRegistry: Sendable {
         return schemaString(for: allowed)
     }
 
+    /// Compact tool summary for prompt context when native tool specs are also supplied.
+    ///
+    /// Keeps prompt tokens low while still exposing high-level capability surface.
+    func compactToolSummary(for mode: String) -> String {
+        let allowed = tools.values
+            .filter { isToolAllowed($0.name, mode: mode) }
+            .sorted { $0.name < $1.name }
+
+        guard !allowed.isEmpty else { return "" }
+
+        let lines = allowed.map { tool in
+            "- \(tool.name): \(tool.riskLevel.rawValue)"
+        }
+        return "Available tools (name: risk):\n" + lines.joined(separator: "\n")
+    }
+
     /// Check whether a tool is allowed in the given mode.
     func isToolAllowed(_ name: String, mode: String) -> Bool {
         switch mode {
@@ -154,7 +179,7 @@ final class ToolRegistry: Sendable {
     /// Tools available in "off" and "read_only" modes.
     /// Reads are always safe — Fae is local.
     private static let readOnlyTools: Set<String> = [
-        "read", "web_search", "fetch_url",
+        "read", "window_control", "web_search", "fetch_url",
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "roleplay",
         "activate_skill",

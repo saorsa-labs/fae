@@ -1,0 +1,260 @@
+phase: "08-voice-commands"
+name: "Voice Commands"
+description: "Validates VoiceCommandParser handling of UI and config voice commands"
+tests:
+  - id: "vc-001"
+    name: "Show conversation panel"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, show conversation"
+      - "Fae, open the conversation"
+      - "Fae, show the conversation window"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'voice_command']) or events_contain_any(['conversation', 'show'])"
+    pass_threshold: 1.0
+
+  - id: "vc-002"
+    name: "Hide conversation panel"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, hide conversation"
+      - "Fae, close the conversation"
+      - "Fae, hide the conversation window"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'voice_command']) or events_contain_any(['conversation', 'hide'])"
+    pass_threshold: 1.0
+
+  - id: "vc-003"
+    name: "Show canvas panel"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, show canvas"
+      - "Fae, open the canvas"
+      - "Fae, show the canvas window"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'voice_command']) or events_contain_any(['canvas', 'show'])"
+    pass_threshold: 1.0
+
+  - id: "vc-004"
+    name: "Hide canvas panel"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, hide canvas"
+      - "Fae, close the canvas"
+      - "Fae, hide the canvas window"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'voice_command']) or events_contain_any(['canvas', 'hide'])"
+    pass_threshold: 1.0
+
+  - id: "vc-005"
+    name: "Open settings"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, open settings"
+      - "Fae, show settings"
+      - "Fae, go to settings"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'voice_command']) or events_contain_any(['settings'])"
+    pass_threshold: 1.0
+
+  - id: "vc-006"
+    name: "Set tool mode via voice"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+    phrasings:
+      - "Fae, set tool mode to read only"
+      - "Fae, change tool mode to read only"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "mode_changed"
+        check: "body.toolMode == 'read_only'"
+    pass_threshold: 1.0
+
+  - id: "vc-007"
+    name: "Enable thinking via voice"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.thinking_enabled", "value": "false"}
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.thinking_enabled", "value": "false"}
+    phrasings:
+      - "Fae, enable thinking"
+      - "Fae, turn on thinking mode"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "llm.thinking_enabled"
+        check: "body.thinkingEnabled == true"
+    pass_threshold: 1.0
+
+  - id: "vc-008"
+    name: "Disable thinking via voice"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.thinking_enabled", "value": "true"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, disable thinking"
+      - "Fae, turn off thinking mode"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "thinking_disabled"
+        check: "body.thinkingEnabled == false"
+    pass_threshold: 1.0
+
+  - id: "vc-009"
+    name: "Enable barge-in via voice"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "barge_in.enabled", "value": "false"}
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "barge_in.enabled", "value": "true"}
+    phrasings:
+      - "Fae, enable barge in"
+      - "Fae, turn on barge in"
+      - "Fae, let me interrupt you"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'voice_command']) or events_contain_any(['barge', 'enabled'])"
+    pass_threshold: 1.0
+
+  - id: "vc-010"
+    name: "Disable barge-in via voice"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "barge_in.enabled", "value": "true"}
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "barge_in.enabled", "value": "true"}
+    phrasings:
+      - "Fae, disable barge in"
+      - "Fae, turn off barge in"
+      - "Fae, don't let me interrupt"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'voice_command']) or events_contain_any(['barge', 'disabled'])"
+    pass_threshold: 1.0

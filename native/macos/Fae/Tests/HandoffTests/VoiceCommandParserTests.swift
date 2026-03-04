@@ -11,6 +11,9 @@ final class VoiceCommandParserTests: XCTestCase {
         XCTAssertEqual(VoiceCommandParser.parse("turn off barge in"), .setBargeIn(false))
         XCTAssertEqual(VoiceCommandParser.parse("require direct address"), .setDirectAddress(true))
         XCTAssertEqual(VoiceCommandParser.parse("unlock your voice"), .setVoiceIdentityLock(false))
+        // Settings/window control is now skill-driven (window-control skill + tool).
+        XCTAssertEqual(VoiceCommandParser.parse("close settings"), .none)
+        XCTAssertEqual(VoiceCommandParser.parse("of our settings"), .none)
     }
 
     func testParsesPermissionRequests() {

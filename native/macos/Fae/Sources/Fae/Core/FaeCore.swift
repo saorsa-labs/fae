@@ -19,6 +19,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var toolMode: String = "full"
     @Published var thinkingEnabled: Bool = false
 
+    /// Whether Fae is currently speaking (TTS playback in progress).
+    /// Exposed for the test harness to wait until speech completes.
+    func isSpeaking() async -> Bool {
+        await pipelineCoordinator?.isSpeaking ?? false
+    }
+
     /// Rescue mode reference — set by FaeAppDelegate before start().
     weak var rescueMode: RescueMode?
 
@@ -63,6 +69,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         self.speakerProfileStore = SpeakerProfileStore(
             storePath: faeDir.appendingPathComponent("speakers.json")
         )
+        self.wakeWordProfileStore = WakeWordProfileStore(
+            storePath: faeDir.appendingPathComponent("wake_lexicon.json")
+        )
     }
     private let sttEngine = MLXSTTEngine()
     private let llmEngine = MLXLLMEngine()
@@ -81,6 +90,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var neuralEmbedder: NeuralEmbeddingEngine?
     private var vectorStore: VectorStore?
     private let speakerProfileStore: SpeakerProfileStore
+    private let wakeWordProfileStore: WakeWordProfileStore
     private var skillManagerRef: SkillManager?
     private var scheduler: FaeScheduler?
     private var debugConsoleRef: DebugConsoleController?
@@ -190,8 +200,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 // Wire context-aware history limits from model selection + user cap.
                 let recommendedContext = await modelManager.recommendedContextSize
-                let configuredContext = max(config.llm.contextSizeTokens, 1_024)
-                let contextSize = min(recommendedContext, configuredContext)
+                // contextSizeTokens == 0 means "auto" — use model-recommended size.
+                // Non-zero = user override (capped at recommended to prevent OOM).
+                let configuredContext = config.llm.contextSizeTokens
+                let contextSize = configuredContext > 0
+                    ? min(recommendedContext, configuredContext)
+                    : recommendedContext
                 // Cap maxTokens to half the context — prevents tiny context tiers
                 // (2K/4K) from having a generation budget larger than context itself.
                 let effectiveMaxTokens = min(config.llm.maxTokens, contextSize / 2)
@@ -219,12 +233,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 let skillManager = SkillManager()
                 self.skillManagerRef = skillManager
+                await activateAlwaysOnSkills(skillManager: skillManager)
                 let registry = ToolRegistry.buildDefault(
                     skillManager: skillManager,
                     speakerEncoder: speakerEncoder,
                     speakerProfileStore: speakerProfileStore,
                     audioCaptureManager: captureManager,
-                    audioPlaybackManager: playbackManager
+                    audioPlaybackManager: playbackManager,
+                    sttEngine: sttEngine,
+                    wakeWordProfileStore: wakeWordProfileStore
                 )
                 let toolAnalytics = try? Self.createToolAnalyticsStore()
                 let coordinator = PipelineCoordinator(
@@ -241,6 +258,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     registry: registry,
                     speakerEncoder: speakerEncoder,
                     speakerProfileStore: speakerProfileStore,
+                    wakeWordProfileStore: wakeWordProfileStore,
                     skillManager: skillManager,
                     toolAnalytics: toolAnalytics,
                     modelManager: modelManager,
@@ -326,9 +344,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     func stop() {
+        guard pipelineState == .running || pipelineState == .starting || pipelineState == .stopping else {
+            NSLog("FaeCore: stop() ignored — state=%@", String(describing: pipelineState))
+            return
+        }
+
         pipelineState = .stopping
 
         Task {
+            // Ensure active generation is interrupted before teardown.
+            await pipelineCoordinator?.cancel()
+
             // Pre-shutdown vault backup.
             if let vault = vaultManager {
                 _ = await vault.backup(reason: "pre-shutdown")
@@ -348,9 +374,37 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
+    /// Stop the pipeline and wait up to `timeoutSeconds` for a clean stopped state.
+    @discardableResult
+    func stopAndWait(timeoutSeconds: TimeInterval = 8.0) async -> Bool {
+        cancel()
+        stop()
+
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while pipelineState != .stopped && pipelineState != .error && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        let drained = (pipelineState == .stopped || pipelineState == .error)
+        if !drained {
+            NSLog("FaeCore: stopAndWait timed out in state=%@", String(describing: pipelineState))
+        }
+        return drained
+    }
+
     /// Cancel the current generation immediately without stopping the pipeline.
     func cancel() {
         Task { await pipelineCoordinator?.cancel() }
+    }
+
+    /// Clear pipeline conversation history (for test harness use).
+    func resetConversation() {
+        Task { await pipelineCoordinator?.resetConversation() }
+    }
+
+    /// Clear pipeline conversation history and await completion (for test harness use).
+    func resetConversationAsync() async {
+        await pipelineCoordinator?.resetConversation()
     }
 
     /// Toggle barge-in on/off, persist to config, and update the live pipeline.
@@ -385,6 +439,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
+    // MARK: - Always-On Skills
+
+    /// Activate built-in skills that should always be available without explicit activation.
+    ///
+    /// Keeps control-plane behaviors skill.md-driven while preserving low-latency UX.
+    private func activateAlwaysOnSkills(skillManager: SkillManager) async {
+        _ = await skillManager.activate(skillName: "window-control")
+    }
+
     // MARK: - Skill-Driven Voice Enrollment
 
     /// Activate the voice-identity skill and prime the LLM to guide enrollment
@@ -406,6 +469,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             No primary user is enrolled. The voice-identity skill is now active. \
             Follow the skill's first-launch enrollment instructions. \
             Use the voice_identity tool to collect voice samples and enroll the user as owner. \
+            Include wake-name tuning by asking for a few "Hey Fae" samples via collect_wake_samples. \
             Be warm and conversational — this is their very first interaction with Fae.
             """
         await coordinator.setFirstOwnerEnrollmentContext(enrollmentContext)
@@ -499,10 +563,22 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         case "approval.respond":
-            if let requestId = payload["request_id"] as? UInt64,
-               let approved = payload["approved"] as? Bool
-            {
-                respondToApproval(requestID: requestId, approved: approved)
+            // Accept request_id as UInt64, Int, or String (UI button sends String).
+            let requestId: UInt64?
+            if let id = payload["request_id"] as? UInt64 {
+                requestId = id
+            } else if let id = payload["request_id"] as? Int {
+                requestId = UInt64(id)
+            } else if let idStr = payload["request_id"] as? String, let id = UInt64(idStr) {
+                requestId = id
+            } else {
+                requestId = nil
+            }
+            if let requestId {
+                // Check for progressive approval decision (always, approveAllReadOnly, approveAll).
+                let decisionStr = payload["decision"] as? String
+                let toolName = payload["tool_name"] as? String
+                respondToApproval(requestID: requestId, decisionStr: decisionStr, toolName: toolName, payload: payload)
             }
 
         case "speaker.rename":
@@ -634,8 +710,41 @@ final class FaeCore: ObservableObject, HostCommandSender {
         Task { await pipelineCoordinator?.injectText(text) }
     }
 
+    /// Speak text directly via TTS without going through the LLM.
+    /// Used for system acknowledgments (e.g., "tools enabled").
+    func speakDirect(_ text: String) {
+        Task { await pipelineCoordinator?.speakDirect(text) }
+    }
+
+    func respondToApproval(requestID: UInt64, decisionStr: String?, toolName: String?, payload: [String: Any]) {
+        let approved = payload["approved"] as? Bool ?? true
+        guard let decision = mapDecision(decisionStr, approved: approved) else { return }
+
+        Task {
+            await approvalManager.resolve(requestId: requestID, decision: decision, source: "button")
+        }
+    }
+
+    /// Legacy method for simple approved/denied resolution.
     func respondToApproval(requestID: UInt64, approved: Bool) {
-        Task { await approvalManager.resolve(requestId: requestID, approved: approved, source: "button") }
+        Task {
+            let decision: VoiceCommandParser.ApprovalDecision = approved ? .yes : .no
+            await approvalManager.resolve(requestId: requestID, decision: decision, source: "button")
+        }
+    }
+
+    private func mapDecision(_ decisionStr: String?, approved: Bool) -> VoiceCommandParser.ApprovalDecision? {
+        guard let decisionStr else {
+            return approved ? .yes : .no
+        }
+        switch decisionStr {
+        case "yes": return .yes
+        case "no": return .no
+        case "always": return .always
+        case "approveAllReadOnly": return .approveAllReadOnly
+        case "approveAll": return .approveAll
+        default: return approved ? .yes : .no
+        }
     }
 
     func patchConfig(key: String, payload: [String: Any]) {

@@ -120,8 +120,15 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
 
+    // Test harness (only active with --test-server or FAE_TEST_SERVER=1)
+    var testServer: TestServer?
+    var debugFileLogger: DebugFileLogger?
+
     var deviceTransferObserver: NSObjectProtocol?
     var openSettingsObserver: NSObjectProtocol?
+    var closeSettingsObserver: NSObjectProtocol?
+    var settingsWindow: NSWindow?
+    private var terminationInFlight: Bool = false
     private var cancellables: Set<AnyCancellable> = []
 
     private static let backendEventRouter = BackendEventRouter()
@@ -147,6 +154,30 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    nonisolated func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task { @MainActor [weak self] in
+            guard let self else {
+                sender.reply(toApplicationShouldTerminate: true)
+                return
+            }
+
+            guard !terminationInFlight else { return }
+            terminationInFlight = true
+            debugLog(debugConsole, .qa, "Application termination requested — draining pipeline")
+
+            let drained = await faeCore.stopAndWait(timeoutSeconds: 8.0)
+
+            terminationInFlight = false
+            if drained {
+                sender.reply(toApplicationShouldTerminate: true)
+            } else {
+                debugLog(debugConsole, .qa, "Termination aborted: pipeline did not quiesce before timeout")
+                sender.reply(toApplicationShouldTerminate: false)
+            }
+        }
+        return .terminateLater
+    }
+
     // MARK: - Window Creation
 
     private func setupControllersAndCreateWindow() {
@@ -163,7 +194,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         pipelineAux.subtitleState = subtitles
         windowState.onCollapse = { [weak subtitles] in subtitles?.clearAll() }
         auxiliaryWindows.windowState = windowState
-        auxiliaryWindows.conversationController = conversation
         auxiliaryWindows.canvasController = canvasController
         auxiliaryWindows.subtitleState = subtitles
         auxiliaryWindows.observeWindowState()
@@ -171,6 +201,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         auxiliaryWindows.observeApprovalController()
         auxiliaryWindows.debugConsoleController = debugConsole
         faeCore.setDebugConsole(debugConsole)
+        debugLog(debugConsole, .qa, "Build marker: speech-prosody-v8")
         onboarding.onPermissionResult = { capability, state in
             guard state == "granted" else { return }
             NotificationCenter.default.post(
@@ -226,6 +257,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         relayServer.start()
         hostBridge.sender = faeCore
         hostBridge.debugConsole = debugConsole
+        hostBridge.faeCore = faeCore
 
         // Direct Combine observation for pipeline readiness.
         // Bypasses the NotificationCenter event chain (FaeEventBus → GCD →
@@ -272,6 +304,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         .environmentObject(auxiliaryWindows)
         .environmentObject(rescueMode)
         .environmentObject(faeCore)
+        .environmentObject(canvasController)
 
         let hostingController = NSHostingController(rootView: rootView)
 
@@ -280,7 +313,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // upfront prevents a constraint-update loop when NSHostingView reacts
         // to a style-mask change (titled → borderless) mid-layout.
         let window = FaeWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 740),
             styleMask: [.borderless, .fullSizeContentView, .resizable],
             backing: .buffered,
             defer: false
@@ -322,9 +355,24 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 forName: .faeOpenSettingsRequested,
                 object: nil,
                 queue: .main
-            ) { _ in
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                NSApp.activate(ignoringOtherApps: true)
+            ) { [weak self] _ in
+                debugLog(self?.debugConsole, .command, "Received faeOpenSettingsRequested notification")
+                Task { @MainActor [weak self] in
+                    self?.openSettingsWindow(reason: "notification")
+                }
+            }
+        }
+
+        if closeSettingsObserver == nil {
+            closeSettingsObserver = NotificationCenter.default.addObserver(
+                forName: .faeCloseSettingsRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                debugLog(self?.debugConsole, .command, "Received faeCloseSettingsRequested notification")
+                Task { @MainActor [weak self] in
+                    self?.closeSettingsWindows(reason: "notification")
+                }
             }
         }
 
@@ -334,6 +382,22 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             self.windowState.transitionToCompact()
             NSApp.activate(ignoringOtherApps: true)
             self.mainWindow?.makeKeyAndOrderFront(nil)
+        }
+
+        // Test harness: start localhost HTTP server for programmatic control.
+        if CommandLine.arguments.contains("--test-server")
+            || ProcessInfo.processInfo.environment["FAE_TEST_SERVER"] == "1"
+        {
+            let logger = DebugFileLogger()
+            debugFileLogger = logger
+            debugConsole.fileLoggerCallback = { event, seq in
+                logger.log(event: event, seq: seq)
+            }
+
+            let server = TestServer(faeCore: faeCore, debugConsole: debugConsole, conversation: conversation, approvalOverlay: approvalOverlay)
+            testServer = server
+            server.start()
+            debugLog(debugConsole, .qa, "Test server started on 127.0.0.1:7433")
         }
 
         // Start pipeline if license already accepted.
@@ -347,6 +411,137 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Pipeline Startup
+
+    private func openSettingsWindow(reason: String) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let primarySelector = Selector(("showSettingsWindow:"))
+        let fallbackSelector = Selector(("showPreferencesWindow:"))
+
+        let openedPrimary = NSApp.sendAction(primarySelector, to: nil, from: nil)
+        debugLog(debugConsole, .governance, "Open settings requested (\(reason)) primary=\(openedPrimary)")
+
+        let openedFallback = !openedPrimary
+            ? NSApp.sendAction(fallbackSelector, to: nil, from: nil)
+            : false
+        if !openedPrimary {
+            debugLog(debugConsole, .governance, "Open settings fallback result=\(openedFallback)")
+        }
+
+        if openedPrimary || openedFallback {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.ensureSettingsWindowVisible(reason: "post-action")
+            }
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            let retry = NSApp.sendAction(primarySelector, to: nil, from: nil)
+            debugLog(self.debugConsole, .governance, "Open settings retry result=\(retry)")
+            if retry {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    self?.ensureSettingsWindowVisible(reason: "post-retry")
+                }
+            } else {
+                self.presentManagedSettingsWindow(reason: "manual-fallback")
+            }
+        }
+    }
+
+    private func closeSettingsWindows(reason: String) {
+        var closedCount = 0
+
+        if let settingsWindow, settingsWindow.isVisible {
+            settingsWindow.performClose(nil)
+            settingsWindow.orderOut(nil)
+            closedCount += 1
+        }
+
+        for window in NSApp.windows {
+            guard window.isVisible else { continue }
+            if let settingsWindow, window === settingsWindow { continue }
+            let title = window.title.lowercased()
+            guard title.contains("settings") || title.contains("preferences") else { continue }
+            window.performClose(nil)
+            window.orderOut(nil)
+            closedCount += 1
+        }
+
+        debugLog(debugConsole, .governance, "Close settings requested (\(reason)) closed=\(closedCount) windows=[\(visibleWindowSummary())]")
+    }
+
+    private func ensureSettingsWindowVisible(reason: String) {
+        guard !hasVisibleSettingsWindow() else {
+            debugLog(debugConsole, .governance, "Settings visible (\(reason)) windows=[\(visibleWindowSummary())]")
+            return
+        }
+
+        debugLog(debugConsole, .governance, "No visible settings window (\(reason)) windows=[\(visibleWindowSummary())] — forcing managed fallback")
+        presentManagedSettingsWindow(reason: "visibility-fallback")
+    }
+
+    private func hasVisibleSettingsWindow() -> Bool {
+        if let settingsWindow, settingsWindow.isVisible, !settingsWindow.isMiniaturized {
+            return true
+        }
+
+        return NSApp.windows.contains { window in
+            guard window.isVisible, !window.isMiniaturized else { return false }
+            let title = window.title.lowercased()
+            return title.contains("settings") || title.contains("preferences")
+        }
+    }
+
+    private func visibleWindowSummary() -> String {
+        let titles = NSApp.windows
+            .filter { $0.isVisible && !$0.isMiniaturized }
+            .map { $0.title.isEmpty ? "<untitled>" : $0.title }
+
+        if titles.isEmpty {
+            return "none"
+        }
+        return titles.prefix(6).joined(separator: ", ")
+    }
+
+    private func presentManagedSettingsWindow(reason: String) {
+        if let settingsWindow {
+            settingsWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            debugLog(debugConsole, .governance, "Open settings managed reuse (\(reason))")
+            return
+        }
+
+        let rootView = SettingsView(
+            commandSender: faeCore,
+            personalityEditor: personalityEditor,
+            onToggleRescue: { [weak self] in self?.toggleRescueMode() }
+        )
+        .environmentObject(orbState)
+        .environmentObject(handoff)
+        .environmentObject(auxiliaryWindows)
+        .environmentObject(onboarding)
+        .environmentObject(conversation)
+        .environmentObject(rescueMode)
+        .environmentObject(faeCore)
+
+        let hostingController = NSHostingController(rootView: rootView)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Settings"
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.contentViewController = hostingController
+
+        settingsWindow = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        debugLog(debugConsole, .governance, "Open settings managed created (\(reason))")
+    }
 
     func startPipelineIfReady() {
         try? faeCore.start()
@@ -598,13 +793,6 @@ struct FaeApp: App {
                 }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
 
-                Button("Toggle Discussions") {
-                    appDelegate.auxiliaryWindows.toggleConversation()
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-
-                Divider()
-
                 Button(appDelegate.auxiliaryWindows.isDebugConsoleVisible ? "Hide Debug Console" : "Debug Console") {
                     appDelegate.auxiliaryWindows.toggleDebugConsole()
                 }
@@ -612,7 +800,7 @@ struct FaeApp: App {
             }
             CommandGroup(replacing: .help) {
                 Button("Ask Fae\u{2026}") {
-                    appDelegate.auxiliaryWindows.showConversation()
+                    appDelegate.windowState.showWindow()
                     NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
                 }
                 .keyboardShortcut("/", modifiers: [.command, .shift])
@@ -651,9 +839,9 @@ struct FaeApp: App {
 
     // MARK: - Ask Fae Helper
 
-    /// Show the conversation panel and pre-fill the input bar with a topic question.
+    /// Bring the main window to front and pre-fill the input bar with a topic question.
     private func askFae(_ question: String) {
-        appDelegate.auxiliaryWindows.showConversation()
+        appDelegate.windowState.showWindow()
         NotificationCenter.default.post(
             name: .faePrefillInput,
             object: nil,

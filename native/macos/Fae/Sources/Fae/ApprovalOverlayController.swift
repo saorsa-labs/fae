@@ -7,10 +7,10 @@ import Foundation
 /// notification and exposes the active request as a published property so the
 /// SwiftUI overlay can display Yes/No buttons.
 ///
-/// Approval can be resolved three ways:
-/// 1. **Voice** — the coordinator parses "yes"/"no" and emits `"approval.resolved"`.
-/// 2. **Button** — the user taps Yes/No in the overlay, which posts `.faeApprovalRespond`.
-/// 3. **Timeout** — the coordinator auto-denies after 58s and emits `"approval.resolved"`.
+/// Approval can be resolved via:
+/// 1. **Voice** — the coordinator parses "yes"/"no"/"always" and emits `"approval.resolved"`.
+/// 2. **Button** — the user taps No/Yes/Always/Approve All Read-Only/Approve All, which posts `.faeApprovalRespond`.
+/// 3. **Timeout** — the coordinator auto-denies after 20s and emits `"approval.resolved"`.
 ///
 /// In all cases, `.faeApprovalResolved` dismisses the overlay.
 ///
@@ -139,7 +139,11 @@ final class ApprovalOverlayController: ObservableObject {
         NotificationCenter.default.post(
             name: .faeApprovalRespond,
             object: nil,
-            userInfo: ["request_id": String(request.id), "approved": true]
+            userInfo: [
+                "request_id": String(request.id),
+                "approved": true,
+                "decision": "yes",
+            ]
         )
         activeApproval = nil
     }
@@ -150,7 +154,57 @@ final class ApprovalOverlayController: ObservableObject {
         NotificationCenter.default.post(
             name: .faeApprovalRespond,
             object: nil,
-            userInfo: ["request_id": String(request.id), "approved": false]
+            userInfo: [
+                "request_id": String(request.id),
+                "approved": false,
+                "decision": "no",
+            ]
+        )
+        activeApproval = nil
+    }
+
+    /// Approve and remember: auto-approve this tool name forever.
+    func approveAlways() {
+        guard let request = activeApproval else { return }
+        NotificationCenter.default.post(
+            name: .faeApprovalRespond,
+            object: nil,
+            userInfo: [
+                "request_id": String(request.id),
+                "approved": true,
+                "decision": "always",
+                "tool_name": request.toolName,
+            ]
+        )
+        activeApproval = nil
+    }
+
+    /// Approve all low-risk (read-only) tools permanently.
+    func approveAllReadOnly() {
+        guard let request = activeApproval else { return }
+        NotificationCenter.default.post(
+            name: .faeApprovalRespond,
+            object: nil,
+            userInfo: [
+                "request_id": String(request.id),
+                "approved": true,
+                "decision": "approveAllReadOnly",
+            ]
+        )
+        activeApproval = nil
+    }
+
+    /// Approve all tools permanently (autonomous mode).
+    func approveAll() {
+        guard let request = activeApproval else { return }
+        NotificationCenter.default.post(
+            name: .faeApprovalRespond,
+            object: nil,
+            userInfo: [
+                "request_id": String(request.id),
+                "approved": true,
+                "decision": "approveAll",
+            ]
         )
         activeApproval = nil
     }

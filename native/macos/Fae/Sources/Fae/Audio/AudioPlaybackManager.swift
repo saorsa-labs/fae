@@ -13,6 +13,8 @@ actor AudioPlaybackManager {
     private let playerNode = AVAudioPlayerNode()
     private var isPlaying = false
     private var pendingFinal = false
+    /// Number of scheduled buffers that have not yet fired completion callbacks.
+    private var pendingBufferCompletions = 0
 
     /// Default TTS output sample rate.
     static let ttsSampleRate: Double = 24_000
@@ -97,6 +99,7 @@ actor AudioPlaybackManager {
             pendingFinal = true
         }
 
+        pendingBufferCompletions += 1
         playerNode.scheduleBuffer(buffer) { [weak self] in
             Task { await self?.bufferCompleted() }
         }
@@ -112,10 +115,10 @@ actor AudioPlaybackManager {
     /// If no buffers are currently playing, fires `.finished` immediately.
     /// Otherwise sets `pendingFinal` so the next buffer completion fires it.
     func markEnd() {
-        if isPlaying {
-            pendingFinal = true
-        } else {
-            // No audio in the queue — fire finished immediately.
+        pendingFinal = true
+        // No queued buffers left — finish immediately.
+        if !isPlaying && pendingBufferCompletions == 0 {
+            pendingFinal = false
             onEvent?(.finished)
         }
     }
@@ -124,6 +127,7 @@ actor AudioPlaybackManager {
     func stop() {
         playerNode.stop()
         pendingFinal = false
+        pendingBufferCompletions = 0
         isPlaying = false
         onEvent?(.stopped)
     }
@@ -168,7 +172,11 @@ actor AudioPlaybackManager {
     // MARK: - Private
 
     private func bufferCompleted() {
-        if pendingFinal {
+        if pendingBufferCompletions > 0 {
+            pendingBufferCompletions -= 1
+        }
+
+        if pendingFinal && pendingBufferCompletions == 0 {
             pendingFinal = false
             isPlaying = false
             onEvent?(.finished)

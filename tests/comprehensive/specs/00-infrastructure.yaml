@@ -1,0 +1,191 @@
+phase: "00-infrastructure"
+name: "Infrastructure"
+description: "Validates test server HTTP endpoints respond correctly"
+tests:
+  - id: "infra-001"
+    name: "Health endpoint responds"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/health"
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "has_status_field"
+        check: "body.status in ['ok', 'not_ready']"
+    pass_threshold: 1.0
+
+  - id: "infra-002"
+    name: "Status endpoint returns pipeline info"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "has_pipeline"
+        check: "body.pipeline != null"
+      - name: "has_toolMode"
+        check: "body.toolMode != null"
+      - name: "has_modelLabel"
+        check: "body.modelLabel != null"
+      - name: "has_thinkingEnabled"
+        check: "body.thinkingEnabled != null"
+      - name: "has_isOnboarded"
+        check: "body.isOnboarded != null"
+    pass_threshold: 1.0
+
+  - id: "infra-003"
+    name: "Events endpoint returns event array"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/events"
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "has_events_array"
+        check: "body.events is list"
+      - name: "has_total"
+        check: "body.total is int"
+    pass_threshold: 1.0
+
+  - id: "infra-004"
+    name: "Conversation endpoint returns messages"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/conversation"
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "has_messages_array"
+        check: "body.messages is list"
+      - name: "has_isGenerating"
+        check: "body.isGenerating != null"
+      - name: "has_count"
+        check: "body.count is int"
+    pass_threshold: 1.0
+
+  - id: "infra-005"
+    name: "Cancel endpoint returns ok"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_post"
+        url: "/cancel"
+        body: {}
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "ok_true"
+        check: "body.ok == true"
+    pass_threshold: 1.0
+
+  - id: "infra-006"
+    name: "Config endpoint changes tool mode"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "read_only"}
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "ok_true"
+        check: "body.ok == true"
+      - name: "has_previous"
+        check: "body.previous != null"
+      - name: "has_current"
+        check: "body.current == 'read_only'"
+    pass_threshold: 1.0
+
+  - id: "infra-007"
+    name: "Approve with no pending returns 404"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_post"
+        url: "/approve"
+        body: {"approved": true}
+    criteria:
+      - name: "returns_404"
+        check: "status_code == 404"
+    pass_threshold: 1.0
+
+  - id: "infra-008"
+    name: "Approvals endpoint returns pending array"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/approvals"
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "has_pending_array"
+        check: "body.pending is list"
+    pass_threshold: 1.0
+
+  - id: "infra-009"
+    name: "Reset endpoint clears state"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_post"
+        url: "/reset"
+        body: {}
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "ok_true"
+        check: "body.ok == true"
+    pass_threshold: 1.0
+
+  - id: "infra-010"
+    name: "Unknown endpoint returns 404"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/nonexistent"
+    criteria:
+      - name: "returns_404"
+        check: "status_code == 404"
+    pass_threshold: 1.0

@@ -1,0 +1,151 @@
+phase: "05-skills"
+name: "Skills"
+description: "Validates skill listing, activation, creation, execution, and deletion"
+tests:
+  - id: "skill-001"
+    name: "List skills"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what skills do you have?"
+      - "Fae, list your available skills"
+      - "Fae, show me your skills"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "lists_builtin_skills"
+        check: "assistant_response_contains_any(['voice-identity', 'voice-tools'])"
+    pass_threshold: 1.0
+
+  - id: "skill-002"
+    name: "Activate instruction skill"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, activate voice-identity"
+      - "Fae, load the voice-identity skill"
+      - "Fae, use the voice-identity skill"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'activate_skill')"
+    pass_threshold: 1.0
+
+  - id: "skill-003"
+    name: "Create executable skill"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, create a new skill called fae-test-skill with description 'test skill for validation'"
+      - "Fae, make a skill named fae-test-skill that is described as 'test skill for validation'"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'manage_skill')"
+      - name: "response_confirms"
+        check: "assistant_response_contains_any(['created', 'fae-test-skill', 'skill'])"
+    pass_threshold: 1.0
+
+  - id: "skill-004"
+    name: "Run created skill"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["skill-003"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, run fae-test-skill"
+      - "Fae, execute the fae-test-skill"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'run_skill')"
+    pass_threshold: 1.0
+
+  - id: "skill-005"
+    name: "List shows new skill"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["skill-003"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, list your skills"
+      - "Fae, what skills do you have now?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "shows_test_skill"
+        check: "assistant_response_contains('fae-test-skill')"
+    pass_threshold: 1.0
+
+  - id: "skill-006"
+    name: "Delete test skill"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["skill-003"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, delete fae-test-skill"
+      - "Fae, remove the fae-test-skill"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'manage_skill')"
+      - name: "response_confirms"
+        check: "assistant_response_contains_any(['deleted', 'removed', 'fae-test-skill'])"
+    pass_threshold: 1.0

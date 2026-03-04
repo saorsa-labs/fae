@@ -45,6 +45,7 @@ enum DecisionReasonCode: String, Sendable {
     case allowAutonomousMediumRisk
     case outboundRecipientNovelty
     case outboundPayloadRisk
+    case approvedByUserGrant
 }
 
 struct DecisionReason: Sendable {
@@ -150,6 +151,15 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
 
         case .allow:
             break
+        }
+
+        // Check user-granted progressive approvals before prompting for confirmation.
+        let approvedToolsStore = ApprovedToolsStore.shared
+        if await approvedToolsStore.shouldAutoApprove(toolName: intent.toolName, riskLevel: intent.riskLevel) {
+            return .allow(reason: DecisionReason(
+                code: .approvedByUserGrant,
+                message: "Auto-approved by user grant"
+            ))
         }
 
         // Tool risk policy drives confirmation behavior.

@@ -51,6 +51,14 @@ enum PathPolicy {
                     reason: "Cannot write to Fae's config.toml directly. Use the self_config tool or Settings."
                 )
             }
+
+            // Block the approved tools store (managed only via UI/voice approval flow).
+            let approvedToolsSuffix = "/library/application support/fae/approved_tools.json"
+            if lowered.hasSuffix(approvedToolsSuffix) {
+                return .blocked(
+                    reason: "Cannot write to approved_tools.json directly. Use the approval overlay or Settings."
+                )
+            }
         }
 
         return .allowed(canonicalPath: resolved)

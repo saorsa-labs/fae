@@ -1,0 +1,782 @@
+phase: "02-core-tools"
+name: "Core Tools"
+description: "Validates all 32 tools can be invoked via natural language injection"
+tests:
+  # --- 1. read ---
+  - id: "tool-001"
+    name: "read tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, read /etc/hosts"
+      - "Fae, show me the contents of /etc/hosts"
+      - "Fae, what's in /etc/hosts?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'read')"
+      - name: "response_mentions_localhost"
+        check: "assistant_response_contains('127.0.0.1')"
+    pass_threshold: 1.0
+
+  # --- 2. write ---
+  - id: "tool-002"
+    name: "write tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "bash"
+        command: "rm -f /tmp/fae-test-write.txt"
+    phrasings:
+      - "Fae, write 'hello fae test' to /tmp/fae-test-write.txt"
+      - "Fae, create a file at /tmp/fae-test-write.txt with the text 'hello fae test'"
+      - "Fae, save the text 'hello fae test' to /tmp/fae-test-write.txt"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'write')"
+      - name: "file_exists"
+        check: "file_exists('/tmp/fae-test-write.txt')"
+    pass_threshold: 1.0
+
+  # --- 3. edit ---
+  - id: "tool-003"
+    name: "edit tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "bash"
+        command: "echo 'hello fae test' > /tmp/fae-test-edit.txt"
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "bash"
+        command: "rm -f /tmp/fae-test-edit.txt"
+    phrasings:
+      - "Fae, edit /tmp/fae-test-edit.txt and replace 'hello' with 'goodbye'"
+      - "Fae, in the file /tmp/fae-test-edit.txt, change 'hello' to 'goodbye'"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'edit')"
+      - name: "file_modified"
+        check: "file_contains('/tmp/fae-test-edit.txt', 'goodbye')"
+    pass_threshold: 1.0
+
+  # --- 4. bash ---
+  - id: "tool-004"
+    name: "bash tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, run the command echo fae-test-ok"
+      - "Fae, execute this bash command: echo fae-test-ok"
+      - "Fae, in the terminal, run echo fae-test-ok"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'bash')"
+      - name: "response_has_output"
+        check: "assistant_response_contains('fae-test-ok')"
+    pass_threshold: 1.0
+
+  # --- 5. self_config ---
+  - id: "tool-005"
+    name: "self_config tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, show me your current settings"
+      - "Fae, what are your configuration settings?"
+      - "Fae, list your adjustable settings"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'self_config')"
+    pass_threshold: 1.0
+
+  # --- 6. web_search ---
+  - id: "tool-006"
+    name: "web_search tool invocation"
+    class: live_network
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, search the web for Rust programming language"
+      - "Fae, look up Rust programming language online"
+      - "Fae, do a web search for Rust programming"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'web_search')"
+    pass_threshold: 1.0
+
+  # --- 7. fetch_url ---
+  - id: "tool-007"
+    name: "fetch_url tool invocation"
+    class: live_network
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, fetch https://example.com"
+      - "Fae, get the contents of https://example.com"
+      - "Fae, download the page at https://example.com"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'fetch_url')"
+    pass_threshold: 1.0
+
+  # --- 8. calendar ---
+  - id: "tool-008"
+    name: "calendar tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what events do I have today?"
+      - "Fae, show my calendar for today"
+      - "Fae, check my calendar"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'calendar')"
+    pass_threshold: 1.0
+
+  # --- 9. reminders ---
+  - id: "tool-009"
+    name: "reminders tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, show my reminders"
+      - "Fae, what reminders do I have?"
+      - "Fae, list my reminders"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'reminders')"
+    pass_threshold: 1.0
+
+  # --- 10. contacts ---
+  - id: "tool-010"
+    name: "contacts tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, search contacts for David"
+      - "Fae, find David in my contacts"
+      - "Fae, look up David in contacts"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'contacts')"
+    pass_threshold: 1.0
+
+  # --- 11. mail ---
+  - id: "tool-011"
+    name: "mail tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, check my recent emails"
+      - "Fae, show my latest emails"
+      - "Fae, do I have any new mail?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'mail')"
+    pass_threshold: 1.0
+
+  # --- 12. notes ---
+  - id: "tool-012"
+    name: "notes tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, show my recent notes"
+      - "Fae, what notes do I have?"
+      - "Fae, list my Apple Notes"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'notes')"
+    pass_threshold: 1.0
+
+  # --- 13. scheduler_list ---
+  - id: "tool-013"
+    name: "scheduler_list tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, list all scheduled tasks"
+      - "Fae, show me the scheduler"
+      - "Fae, what tasks are scheduled?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'scheduler_list')"
+    pass_threshold: 1.0
+
+  # --- 14. scheduler_create ---
+  - id: "tool-014"
+    name: "scheduler_create tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, create a task called fae-test-task that runs every 5 minutes"
+      - "Fae, schedule a new task named fae-test-task to run every 5 minutes"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'scheduler_create')"
+    pass_threshold: 1.0
+
+  # --- 15. scheduler_update ---
+  - id: "tool-015"
+    name: "scheduler_update tool invocation"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["tool-014"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, change fae-test-task to run every 10 minutes"
+      - "Fae, update fae-test-task schedule to every 10 minutes"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'scheduler_update')"
+    pass_threshold: 1.0
+
+  # --- 16. scheduler_trigger ---
+  - id: "tool-016"
+    name: "scheduler_trigger tool invocation"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["tool-014"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, trigger fae-test-task now"
+      - "Fae, run fae-test-task immediately"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'scheduler_trigger')"
+    pass_threshold: 1.0
+
+  # --- 17. scheduler_delete ---
+  - id: "tool-017"
+    name: "scheduler_delete tool invocation"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["tool-014"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, delete the fae-test-task"
+      - "Fae, remove fae-test-task from the scheduler"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'scheduler_delete')"
+    pass_threshold: 1.0
+
+  # --- 18. activate_skill ---
+  - id: "tool-018"
+    name: "activate_skill tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, activate the voice-identity skill"
+      - "Fae, load the voice-identity skill"
+      - "Fae, use the voice-identity skill"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'activate_skill')"
+    pass_threshold: 1.0
+
+  # --- 19. manage_skill (create) ---
+  - id: "tool-019"
+    name: "manage_skill create invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, create a new skill called fae-test-skill with description 'test skill for validation'"
+      - "Fae, make a skill named fae-test-skill that is a test skill for validation"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'manage_skill')"
+    pass_threshold: 1.0
+
+  # --- 20. run_skill ---
+  - id: "tool-020"
+    name: "run_skill tool invocation"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["tool-019"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, run the fae-test-skill"
+      - "Fae, execute fae-test-skill"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'run_skill')"
+    pass_threshold: 1.0
+
+  # --- 21. manage_skill (delete) ---
+  - id: "tool-021"
+    name: "manage_skill delete invocation"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["tool-019"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, delete the fae-test-skill"
+      - "Fae, remove fae-test-skill"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'manage_skill')"
+    pass_threshold: 1.0
+
+  # --- 22. roleplay ---
+  - id: "tool-022"
+    name: "roleplay tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, start a roleplay reading session"
+      - "Fae, let's do a roleplay"
+      - "Fae, begin a dramatic reading"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'roleplay')"
+    pass_threshold: 1.0
+
+  # --- 23. voice_identity ---
+  - id: "tool-023"
+    name: "voice_identity tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, check voice identity status"
+      - "Fae, what's the voice identity status?"
+      - "Fae, who am I speaking as?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'voice_identity')"
+    pass_threshold: 1.0
+
+  # --- 24. input_request ---
+  - id: "tool-024"
+    name: "input_request tool invocation"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, ask me for my API key"
+      - "Fae, I need to give you a secret, prompt me for it"
+      - "Fae, request my password securely"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'input_request')"
+    pass_threshold: 1.0
+
+  # --- 25. find_element ---
+  - id: "tool-025"
+    name: "find_element tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, find the Settings menu item"
+      - "Fae, look for a button labeled Settings"
+      - "Fae, search for the Settings element on screen"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'find_element')"
+    pass_threshold: 1.0
+
+  # --- 26. window_control ---
+  - id: "tool-026"
+    name: "window_control via voice command or tool"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, open settings"
+      - "Fae, show settings"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 3000
+      - action: "collect_events"
+    criteria:
+      - name: "command_handled"
+        check: "events_contain_any_kind(['VoiceCmd', 'Tool'])"
+    pass_threshold: 1.0
+
+  # --- 27. screenshot ---
+  - id: "tool-027"
+    name: "screenshot tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, take a screenshot of the screen"
+      - "Fae, capture my screen"
+      - "Fae, screenshot what's on my display"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'screenshot')"
+    pass_threshold: 1.0
+
+  # --- 28. camera ---
+  - id: "tool-028"
+    name: "camera tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, take a photo with the camera"
+      - "Fae, capture from the webcam"
+      - "Fae, snap a picture"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'camera')"
+    pass_threshold: 1.0
+
+  # --- 29. read_screen ---
+  - id: "tool-029"
+    name: "read_screen tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, read what's on the screen right now"
+      - "Fae, describe what you see on my screen"
+      - "Fae, what's currently displayed on the screen?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'read_screen')"
+    pass_threshold: 1.0
+
+  # --- 30. click ---
+  - id: "tool-030"
+    name: "click tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, click on the Fae menu bar icon"
+      - "Fae, click on element 1"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'click')"
+    pass_threshold: 1.0
+
+  # --- 31. type_text ---
+  - id: "tool-031"
+    name: "type_text tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, type hello into the focused text field"
+      - "Fae, type 'hello world' in the current text box"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'type_text')"
+    pass_threshold: 1.0
+
+  # --- 32. scroll ---
+  - id: "tool-032"
+    name: "scroll tool invocation"
+    class: permission_dependent
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, scroll down in the current window"
+      - "Fae, scroll down"
+      - "Fae, scroll the page down"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_invoked"
+        check: "events_contain_kind('Tool', 'scroll')"
+    pass_threshold: 1.0

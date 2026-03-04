@@ -133,7 +133,9 @@ enum TextProcessing {
         }
 
         // Remove markdown list markers at line starts (- item, * item, 1. item).
-        if let listRegex = try? NSRegularExpression(pattern: "(?m)^\\s*(?:[-*•]|\\d+\\.)\\s+") {
+        // Only match 1-2 digit numbers (e.g. "1." "99.") — not 3+ digit numbers like "579."
+        // which are actual numeric answers, not list markers.
+        if let listRegex = try? NSRegularExpression(pattern: "(?m)^\\s*(?:[-*•]|\\d{1,2}\\.)\\s+") {
             let range = NSRange(result.startIndex..., in: result)
             result = listRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
         }
@@ -151,6 +153,10 @@ enum TextProcessing {
         // Remove parentheses (markdown link remnants, citations).
         result = result.replacingOccurrences(of: "(", with: "")
         result = result.replacingOccurrences(of: ")", with: "")
+
+        // Normalize keyboard shortcut notation to spoken-friendly text.
+        // Example: "Command+W" -> "Command plus W".
+        result = result.replacingOccurrences(of: "+", with: " plus ")
 
         // Normalize punctuation that confuses TTS.
         // Replace ellipsis character and multi-dot with single period.
@@ -177,6 +183,12 @@ enum TextProcessing {
         result = result.replacingOccurrences(of: "\u{2018}", with: "") // left single
         result = result.replacingOccurrences(of: "\u{2019}", with: "'") // right single → apostrophe
 
+        // Remove spaces before punctuation that often appear in token-stream joins.
+        if let spaceBeforePunct = try? NSRegularExpression(pattern: "\\s+([,.;:!?])") {
+            let range = NSRange(result.startIndex..., in: result)
+            result = spaceBeforePunct.stringByReplacingMatches(in: result, range: range, withTemplate: "$1")
+        }
+
         // Collapse all whitespace (spaces, tabs, newlines) into single spaces.
         if let wsRegex = try? NSRegularExpression(pattern: "\\s+") {
             let range = NSRange(result.startIndex..., in: result)
@@ -185,6 +197,142 @@ enum TextProcessing {
 
         // Trim leading/trailing whitespace.
         result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Final pass: normalize token-stream artifacts for natural speech.
+        result = normalizeForSpeechOutput(result)
+
+        return result
+    }
+
+    /// Normalize common token-stream artifacts into more natural spoken text.
+    private static func normalizeForSpeechOutput(_ text: String) -> String {
+        var result = text
+
+        // Historical-token merge fixes observed in streamed generations.
+        result = result.replacingOccurrences(of: "Mes opot amia", with: "Mesopotamia")
+        result = result.replacingOccurrences(of: "mes opot amia", with: "mesopotamia")
+        result = result.replacingOccurrences(of: "ab acus", with: "abacus")
+        result = result.replacingOccurrences(of: "be ads", with: "beads")
+        result = result.replacingOccurrences(of: "gro oves", with: "grooves")
+
+        // Collapse digit sequences that arrive as spaced tokens: "3 0 0 0" -> "3000".
+        if let spacedDigits = try? NSRegularExpression(pattern: "(?<!\\d)(\\d(?:\\s+\\d){1,})(?!\\d)") {
+            while true {
+                let fullRange = NSRange(result.startIndex..., in: result)
+                guard let match = spacedDigits.firstMatch(in: result, range: fullRange),
+                      let digitsRange = Range(match.range(at: 1), in: result)
+                else { break }
+
+                let collapsed = result[digitsRange].replacingOccurrences(of: " ", with: "")
+                result.replaceSubrange(digitsRange, with: collapsed)
+            }
+        }
+
+        // Convert compact date forms to spoken-friendly month/day/year.
+        result = verbalizeDates(result)
+
+        // Speak numeric ranges naturally: "3000-2500" -> "3000 to 2500".
+        if let numericRange = try? NSRegularExpression(pattern: "(?<=\\d)\\s*[-–—]\\s*(?=\\d)") {
+            let fullRange = NSRange(result.startIndex..., in: result)
+            result = numericRange.stringByReplacingMatches(in: result, range: fullRange, withTemplate: " to ")
+        }
+
+        // Convert historical era abbreviations to letter-by-letter pronunciation.
+        result = replaceRegexMatches(
+            in: result,
+            pattern: "\\b(BCE|BC|CE|AD)\\b"
+        ) { match, source in
+            guard let range = Range(match.range(at: 1), in: source) else { return nil }
+            let token = String(source[range])
+            return token.map { String($0) }.joined(separator: " ")
+        }
+
+        // Convert semicolons and non-time colons to commas for softer pauses.
+        result = result.replacingOccurrences(of: ";", with: ",")
+        if let colonPause = try? NSRegularExpression(pattern: "(?<!\\d):(?!\\d)") {
+            let fullRange = NSRange(result.startIndex..., in: result)
+            result = colonPause.stringByReplacingMatches(in: result, range: fullRange, withTemplate: ",")
+        }
+
+        // Re-collapse whitespace after normalization passes.
+        if let wsRegex = try? NSRegularExpression(pattern: "\\s+") {
+            let fullRange = NSRange(result.startIndex..., in: result)
+            result = wsRegex.stringByReplacingMatches(in: result, range: fullRange, withTemplate: " ")
+        }
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func verbalizeDates(_ text: String) -> String {
+        var result = text
+
+        // US style dates: MM/DD/YYYY
+        result = replaceRegexMatches(
+            in: result,
+            pattern: "\\b(0?[1-9]|1[0-2])/(0?[1-9]|[12]\\d|3[01])/(\\d{2,4})\\b"
+        ) { match, source in
+            guard let monthRange = Range(match.range(at: 1), in: source),
+                  let dayRange = Range(match.range(at: 2), in: source),
+                  let yearRange = Range(match.range(at: 3), in: source),
+                  let month = Int(source[monthRange]),
+                  let day = Int(source[dayRange]),
+                  let year = Int(source[yearRange]),
+                  (1...12).contains(month),
+                  (1...31).contains(day)
+            else { return nil }
+
+            let spokenYear = year < 100 ? 2000 + year : year
+            return "\(monthName(month)) \(day), \(spokenYear)"
+        }
+
+        // ISO style dates: YYYY-MM-DD
+        result = replaceRegexMatches(
+            in: result,
+            pattern: "\\b(\\d{4})-(0?[1-9]|1[0-2])-(0?[1-9]|[12]\\d|3[01])\\b"
+        ) { match, source in
+            guard let yearRange = Range(match.range(at: 1), in: source),
+                  let monthRange = Range(match.range(at: 2), in: source),
+                  let dayRange = Range(match.range(at: 3), in: source),
+                  let year = Int(source[yearRange]),
+                  let month = Int(source[monthRange]),
+                  let day = Int(source[dayRange]),
+                  (1...12).contains(month),
+                  (1...31).contains(day)
+            else { return nil }
+
+            return "\(monthName(month)) \(day), \(year)"
+        }
+
+        return result
+    }
+
+    private static func monthName(_ month: Int) -> String {
+        let months = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        ]
+        if (1...12).contains(month) {
+            return months[month - 1]
+        }
+        return "month \(month)"
+    }
+
+    private static func replaceRegexMatches(
+        in text: String,
+        pattern: String,
+        transform: (NSTextCheckingResult, String) -> String?
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        guard !matches.isEmpty else { return text }
+
+        var result = text
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: result),
+                  let replacement = transform(match, result)
+            else { continue }
+            result.replaceSubrange(range, with: replacement)
+        }
 
         return result
     }
@@ -329,32 +477,153 @@ enum TextProcessing {
     /// Ordered longest-first for greedy matching.
     static let nameVariants = ["faye", "fae", "fea", "fee", "fay", "fey", "fah", "feh"]
 
+    struct WakeAddressMatch {
+        enum MatchKind: String {
+            case exact
+            case fuzzy
+        }
+
+        let range: Range<String.Index>
+        let matchedAlias: String
+        let matchedToken: String
+        let confidence: Float
+        let kind: MatchKind
+    }
+
+    private struct WordToken {
+        let text: String
+        let range: Range<String.Index>
+        let index: Int
+    }
+
     /// Find the first mention of a Fae name variant in lowercased text.
     ///
     /// Returns `(range, matchedVariant)` or nil if not found.
     /// Only matches at word boundaries (not mid-word).
-    static func findNameMention(in text: String) -> (Range<String.Index>, String)? {
+    static func findNameMention(in text: String, aliases: [String]? = nil) -> (Range<String.Index>, String)? {
         let lower = text.lowercased()
+        let variants = (aliases ?? nameVariants)
+            .map { normalizeWakeAlias($0) }
+            .filter { !$0.isEmpty }
+            .sorted { $0.count > $1.count }
 
-        for variant in nameVariants {
-            guard let range = lower.range(of: variant) else { continue }
-
-            // Check word boundary before.
-            if range.lowerBound != lower.startIndex {
-                let before = lower[lower.index(before: range.lowerBound)]
-                if before.isLetter || before.isNumber { continue }
+        for variant in variants {
+            var searchStart = lower.startIndex
+            while searchStart < lower.endIndex,
+                  let range = lower.range(of: variant, range: searchStart..<lower.endIndex)
+            {
+                if isBoundary(range.lowerBound, in: lower, before: true),
+                   isBoundary(range.upperBound, in: lower, before: false)
+                {
+                    return (range, variant)
+                }
+                searchStart = range.upperBound
             }
-
-            // Check word boundary after.
-            if range.upperBound != lower.endIndex {
-                let after = lower[range.upperBound]
-                if after.isLetter || after.isNumber { continue }
-            }
-
-            return (range, variant)
         }
 
         return nil
+    }
+
+    /// Find the best direct-address wake match (exact first, then fuzzy near-match).
+    static func findWakeAddressMatch(
+        in text: String,
+        aliases: [String],
+        wakeWord: String?
+    ) -> WakeAddressMatch? {
+        var mergedAliases = aliases
+        if let wakeWord {
+            let normalizedWakeWord = normalizeWakeAlias(wakeWord)
+            if !normalizedWakeWord.isEmpty {
+                mergedAliases.append(normalizedWakeWord)
+                if let trailing = normalizedWakeWord.split(separator: " ").last {
+                    mergedAliases.append(String(trailing))
+                }
+            }
+        }
+
+        let dedupedAliases = Array(Set(mergedAliases.map { normalizeWakeAlias($0) })).filter { !$0.isEmpty }
+
+        if let (range, variant) = findNameMention(in: text, aliases: dedupedAliases) {
+            let token = String(text[range]).lowercased()
+            return WakeAddressMatch(
+                range: range,
+                matchedAlias: variant,
+                matchedToken: token,
+                confidence: 0.98,
+                kind: .exact
+            )
+        }
+
+        // Fuzzy match: short near-miss spellings in early/greeting context.
+        let lower = text.lowercased()
+        let tokens = tokenizeWords(in: lower)
+        guard !tokens.isEmpty else { return nil }
+
+        let greetingTokens: Set<String> = ["hey", "hi", "hello", "yo", "ok", "okay"]
+        let singleWordAliases = dedupedAliases.filter { !$0.contains(" ") }
+
+        var best: WakeAddressMatch?
+        for token in tokens {
+            for alias in singleWordAliases {
+                let maxDist = alias.count <= 4 ? 1 : 2
+                let distance = editDistance(token.text, alias)
+                guard distance <= maxDist else { continue }
+
+                var score = 1.0 - (Float(distance) / Float(max(alias.count, token.text.count)))
+                if token.text.first == alias.first {
+                    score += 0.12
+                }
+                if token.index <= 1 {
+                    score += 0.08
+                }
+                if token.text.hasPrefix("fa") || token.text.hasPrefix("fe") {
+                    score += 0.05
+                }
+
+                let hasGreetingPrefix = token.index > 0 && greetingTokens.contains(tokens[token.index - 1].text)
+                if hasGreetingPrefix {
+                    score += 0.16
+                }
+
+                let threshold: Float = (hasGreetingPrefix || token.index <= 1) ? 0.62 : 0.82
+                guard score >= threshold else { continue }
+
+                if best == nil || score > (best?.confidence ?? 0) {
+                    best = WakeAddressMatch(
+                        range: token.range,
+                        matchedAlias: alias,
+                        matchedToken: token.text,
+                        confidence: score,
+                        kind: .fuzzy
+                    )
+                }
+            }
+        }
+
+        return best
+    }
+
+    /// Extract a likely wake-name alias from transcript text.
+    ///
+    /// Examples:
+    /// - "Hey Faeye can you..." -> "faeye"
+    /// - "Faye, open settings" -> "faye"
+    static func extractWakeAliasCandidate(from text: String) -> String? {
+        let lower = text.lowercased()
+        let tokens = tokenizeWords(in: lower)
+        guard !tokens.isEmpty else { return nil }
+
+        let greetings: Set<String> = ["hey", "hi", "hello", "yo", "ok", "okay"]
+        let candidate: String
+
+        if greetings.contains(tokens[0].text), tokens.count > 1 {
+            candidate = tokens[1].text
+        } else {
+            candidate = tokens[0].text
+        }
+
+        guard isAliasCandidate(candidate) else { return nil }
+        return candidate
     }
 
     /// Extract the query portion after/before the name mention.
@@ -370,5 +639,93 @@ enum TextProcessing {
         if !before.isEmpty { return before }
 
         return "Hello"
+    }
+
+    private static func normalizeWakeAlias(_ text: String) -> String {
+        let lower = text.lowercased()
+        let mapped = lower.map { ch -> Character in
+            if ch.isLetter || ch.isNumber {
+                return ch
+            }
+            return " "
+        }
+        return String(mapped)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    private static func isBoundary(_ index: String.Index, in text: String, before: Bool) -> Bool {
+        if before {
+            guard index != text.startIndex else { return true }
+            let ch = text[text.index(before: index)]
+            return !(ch.isLetter || ch.isNumber)
+        }
+
+        guard index != text.endIndex else { return true }
+        let ch = text[index]
+        return !(ch.isLetter || ch.isNumber)
+    }
+
+    private static func tokenizeWords(in text: String) -> [WordToken] {
+        var tokens: [WordToken] = []
+        var index = text.startIndex
+        var currentStart: String.Index?
+        var tokenIndex = 0
+
+        while index < text.endIndex {
+            let ch = text[index]
+            if ch.isLetter || ch.isNumber {
+                if currentStart == nil {
+                    currentStart = index
+                }
+            } else if let start = currentStart {
+                let range = start..<index
+                tokens.append(WordToken(text: String(text[range]), range: range, index: tokenIndex))
+                tokenIndex += 1
+                currentStart = nil
+            }
+            index = text.index(after: index)
+        }
+
+        if let start = currentStart {
+            let range = start..<text.endIndex
+            tokens.append(WordToken(text: String(text[range]), range: range, index: tokenIndex))
+        }
+
+        return tokens
+    }
+
+    private static func editDistance(_ lhs: String, _ rhs: String) -> Int {
+        let a = Array(lhs)
+        let b = Array(rhs)
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+
+        var previous = Array(0...b.count)
+        var current = Array(repeating: 0, count: b.count + 1)
+
+        for i in 1...a.count {
+            current[0] = i
+            for j in 1...b.count {
+                let cost = a[i - 1] == b[j - 1] ? 0 : 1
+                current[j] = min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + cost
+                )
+            }
+            swap(&previous, &current)
+        }
+
+        return previous[b.count]
+    }
+
+    private static func isAliasCandidate(_ candidate: String) -> Bool {
+        let normalized = normalizeWakeAlias(candidate)
+        guard normalized.count >= 2, normalized.count <= 8, !normalized.contains(" ") else {
+            return false
+        }
+        guard normalized.first == "f" else { return false }
+        return true
     }
 }

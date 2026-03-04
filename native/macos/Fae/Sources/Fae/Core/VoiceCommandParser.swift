@@ -5,13 +5,21 @@ import Foundation
 /// Replaces: `src/voice_command.rs`
 enum VoiceCommandParser {
 
+    /// Progressive approval decisions from voice or button UI.
+    enum ApprovalDecision: String, Sendable, Equatable {
+        case yes                  // Approve this request only
+        case no                   // Deny this request
+        case always               // Auto-approve this tool name forever
+        case approveAllReadOnly   // Auto-approve all low-risk tools
+        case approveAll           // Full autonomous mode
+    }
+
     /// Voice command types that Fae recognizes.
     enum VoiceCommand: Sendable, Equatable {
-        case showConversation
-        case hideConversation
         case showCanvas
         case hideCanvas
         case showSettings
+        case hideSettings
         case showPermissionsCanvas
         case setToolMode(String)
         case setThinking(Bool)
@@ -29,18 +37,6 @@ enum VoiceCommandParser {
     static func parse(_ text: String) -> VoiceCommand {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Conversation/discussions window commands.
-        if lower.contains("show conversation") || lower.contains("open conversation")
-            || lower.contains("show discussions") || lower.contains("open discussions")
-        {
-            return .showConversation
-        }
-        if lower.contains("hide conversation") || lower.contains("close conversation")
-            || lower.contains("hide discussions") || lower.contains("close discussions")
-        {
-            return .hideConversation
-        }
-
         // Canvas commands.
         if lower.contains("show canvas") || lower.contains("open canvas") {
             return .showCanvas
@@ -49,12 +45,8 @@ enum VoiceCommandParser {
             return .hideCanvas
         }
 
-        // Settings commands.
-        if lower.contains("show settings") || lower.contains("open settings")
-            || lower.contains("open preferences")
-        {
-            return .showSettings
-        }
+        // Settings/window control is skill-driven via the window-control skill/tool.
+        // Keep parser deterministic routing focused on governance and safety-critical toggles.
 
         // Tool + permission snapshot canvas commands.
         if lower.contains("show permissions") || lower.contains("show tool permissions")
@@ -160,20 +152,45 @@ enum VoiceCommandParser {
 
     /// Parse an approval response from a transcription.
     ///
-    /// Returns `true` for approval, `false` for denial, `nil` for ambiguous.
-    static func parseApprovalResponse(_ text: String) -> Bool? {
+    /// Returns an `ApprovalDecision` or `nil` for ambiguous input.
+    /// Checks escalation phrases first (most-specific wins).
+    static func parseApprovalResponse(_ text: String) -> ApprovalDecision? {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Check escalation phrases first (most-specific to least-specific).
+        let approveAllPhrases = ["approve all", "trust everything", "approve everything",
+                                 "allow everything"]
+        for phrase in approveAllPhrases {
+            if lower.contains(phrase) { return .approveAll }
+        }
+
+        let approveAllReadOnlyPhrases = ["approve all reads", "trust all read tools",
+                                         "approve all read only", "trust read tools",
+                                         "approve read only"]
+        for phrase in approveAllReadOnlyPhrases {
+            if lower.contains(phrase) { return .approveAllReadOnly }
+        }
+
+        let alwaysPhrases = ["always allow", "always approve", "trust this tool",
+                             "always trust"]
+        for phrase in alwaysPhrases {
+            if lower.contains(phrase) { return .always }
+        }
+        // Bare "always" — check it doesn't overlap with phrases already matched above.
+        if lower == "always" || (lower.contains("always") && !lower.contains("not always")) {
+            return .always
+        }
+
+        let denyWords = ["no", "nah", "nope", "don't", "stop", "cancel",
+                         "deny", "denied", "negative", "abort"]
+        for word in denyWords {
+            if lower.contains(word) { return .no }
+        }
 
         let approveWords = ["yes", "yeah", "yep", "yup", "sure", "okay", "ok",
                             "go ahead", "do it", "approve", "confirmed", "affirmative"]
-        let denyWords = ["no", "nah", "nope", "don't", "stop", "cancel",
-                         "deny", "denied", "negative", "abort"]
-
         for word in approveWords {
-            if lower.contains(word) { return true }
-        }
-        for word in denyWords {
-            if lower.contains(word) { return false }
+            if lower.contains(word) { return .yes }
         }
 
         return nil // Ambiguous

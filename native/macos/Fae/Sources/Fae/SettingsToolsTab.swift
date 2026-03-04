@@ -11,6 +11,9 @@ struct SettingsToolsTab: View {
     @State private var showAdvanced = false
     @State private var permissionSnapshot = PermissionStatusProvider.current()
     @State private var toolSnapshot: ToolPermissionSnapshot?
+    @State private var approvedTools: [String] = []
+    @State private var approveAllReadonly: Bool = false
+    @State private var approveAllEnabled: Bool = false
 
     private let toolModes: [(label: String, value: String, description: String)] = [
         ("Off", "off", "Tools disabled. LLM-only conversational mode."),
@@ -153,6 +156,60 @@ struct SettingsToolsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Tool Approvals") {
+                Toggle("Approve All Read-Only", isOn: $approveAllReadonly)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .onChange(of: approveAllReadonly) {
+                        Task { await ApprovedToolsStore.shared.setApproveAllReadonly(approveAllReadonly) }
+                    }
+                Text("Auto-approve all low-risk tools (read, search, list).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Approve All", isOn: $approveAllEnabled)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .onChange(of: approveAllEnabled) {
+                        Task { await ApprovedToolsStore.shared.setApproveAll(approveAllEnabled) }
+                    }
+                Text("Auto-approve all tools. File checkpoints still apply.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if !approvedTools.isEmpty {
+                    ForEach(approvedTools, id: \.self) { tool in
+                        HStack {
+                            Text(tool)
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            Spacer()
+                            Button("Revoke") {
+                                Task {
+                                    await ApprovedToolsStore.shared.revokeTool(tool)
+                                    await refreshApprovalState()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .tint(.red)
+                        }
+                    }
+                }
+
+                Button("Revoke All") {
+                    Task {
+                        await ApprovedToolsStore.shared.revokeAll()
+                        await refreshApprovalState()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.red)
+                .disabled(approvedTools.isEmpty && !approveAllReadonly && !approveAllEnabled)
+
+                Text("Tools approved via the \"Always\" button appear here. Revoke any time.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("About Tools") {
                 Text("Tools give Fae the ability to interact with your system — reading files, managing calendar events, sending emails, and more. The tool mode controls the maximum capability level.")
                     .font(.footnote)
@@ -164,6 +221,7 @@ struct SettingsToolsTab: View {
             permissionSnapshot = PermissionStatusProvider.current()
             autonomyProfile = autonomyProfile(forToolMode: toolMode)
             refreshToolSnapshot()
+            Task { await refreshApprovalState() }
         }
         .onChange(of: toolMode) {
             refreshToolSnapshot()
@@ -230,6 +288,14 @@ struct SettingsToolsTab: View {
                 refreshToolSnapshot()
             }
         }
+    }
+
+    @MainActor
+    private func refreshApprovalState() async {
+        let store = ApprovedToolsStore.shared
+        approvedTools = await store.approvedToolNames()
+        approveAllReadonly = await store.isApproveAllReadonly()
+        approveAllEnabled = await store.isApproveAll()
     }
 
     private func refreshToolSnapshot() {

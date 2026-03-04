@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import Foundation
 
 /// Central voice pipeline: AudioCapture → VAD → STT → LLM → TTS → Playback.
@@ -54,6 +55,7 @@ actor PipelineCoordinator {
     private let outboundGuard = OutboundExfiltrationGuard.shared
     private let speakerEncoder: CoreMLSpeakerEncoder?
     private let speakerProfileStore: SpeakerProfileStore?
+    private let wakeWordProfileStore: WakeWordProfileStore?
     private let skillManager: SkillManager?
     private let toolAnalytics: ToolAnalytics?
     private let modelManager: ModelManager?
@@ -162,6 +164,14 @@ actor PipelineCoordinator {
 
     private var assistantSpeaking: Bool = false
     private var assistantGenerating: Bool = false
+    /// Whether the current turn includes explicit user authorization language.
+    private var explicitUserAuthorizationForTurn: Bool = false
+
+    /// Whether the assistant is currently speaking (TTS playback in progress).
+    /// Exposed for the test harness to wait until speech completes.
+    var isSpeaking: Bool { assistantSpeaking }
+    /// Active generation scope for streaming-token isolation across interrupted turns.
+    private var activeGenerationID: UUID?
     private var interrupted: Bool = false
     private var awaitingApproval: Bool = false
     private var pendingGovernanceAction: PendingGovernanceAction?
@@ -172,6 +182,7 @@ actor PipelineCoordinator {
     private var currentSpeakerDisplayName: String?
     private var currentSpeakerRole: SpeakerRole?
     private var currentSpeakerIsOwner: Bool = false
+    private var wakeAliases: [String] = TextProcessing.nameVariants
     /// True when speaker verification ran and matched a non-owner profile.
     /// Distinguished from "not matched at all" (unknown/degraded) — only this
     /// flag should hard-block tools when `requireOwnerForTools` is enabled.
@@ -191,12 +202,19 @@ actor PipelineCoordinator {
 
     private var lastAssistantStart: Date?
     private var engagedUntil: Date?
+    /// Throttle for “currently sleeping” hints so we do not spam spoken nudges.
+    private var lastSleepHintAt: Date?
     /// Last assistant response text — used to detect echo (mic picking up speaker output).
     private var lastAssistantResponseText: String = ""
 
     // MARK: - Barge-In
 
     private var pendingBargeIn: PendingBargeIn?
+
+    /// When true, barge-in is suppressed. Set during short non-interruptible
+    /// utterances (speakDirect) to prevent background noise from interrupting
+    /// command acknowledgments and approval responses.
+    private var bargeInSuppressed: Bool = false
 
     // MARK: - Phase 1 Observability
 
@@ -227,6 +245,8 @@ actor PipelineCoordinator {
         let toolCalls: [ToolCall]
         let assistantToolMessage: String
         let forceSuppressThinking: Bool
+        let capabilityTicket: CapabilityTicket?
+        let explicitUserAuthorization: Bool
     }
 
     /// In-flight deferred tool tasks keyed by job ID.
@@ -253,6 +273,7 @@ actor PipelineCoordinator {
         registry: ToolRegistry,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
+        wakeWordProfileStore: WakeWordProfileStore? = nil,
         skillManager: SkillManager? = nil,
         toolAnalytics: ToolAnalytics? = nil,
         modelManager: ModelManager? = nil,
@@ -275,6 +296,7 @@ actor PipelineCoordinator {
         )
         self.speakerEncoder = speakerEncoder
         self.speakerProfileStore = speakerProfileStore
+        self.wakeWordProfileStore = wakeWordProfileStore
         self.skillManager = skillManager
         self.toolAnalytics = toolAnalytics
         self.modelManager = modelManager
@@ -303,6 +325,11 @@ actor PipelineCoordinator {
         await playback.setSpeed(config.tts.speed)
         await setPlaybackEventHandler()
 
+        if let wakeStore = wakeWordProfileStore {
+            wakeAliases = await wakeStore.allAliases()
+            debugLog(debugConsole, .command, "Wake aliases loaded: \(wakeAliases.joined(separator: ", "))")
+        }
+
         // Start audio capture.
         let stream = try await capture.startCapture()
         captureStream = stream
@@ -323,6 +350,17 @@ actor PipelineCoordinator {
     /// Stop the pipeline.
     func stop() async {
         debugLog(debugConsole, .qa, "Pipeline stop requested")
+        interrupted = true
+        pendingGovernanceAction = nil
+        awaitingApproval = false
+        computerUseStepCount = 0
+
+        // Ensure any in-flight TTS synthesis task fully exits before teardown.
+        let activeTTSTask = pendingTTSTask
+        pendingTTSTask = nil
+        activeTTSTask?.cancel()
+        await activeTTSTask?.value
+
         pipelineTask?.cancel()
         pipelineTask = nil
         cancelDeferredToolJobs()
@@ -340,8 +378,14 @@ actor PipelineCoordinator {
         interrupted = true
         pendingGovernanceAction = nil
         computerUseStepCount = 0
-        pendingTTSTask?.cancel()
+
+        let activeTTSTask = pendingTTSTask
         pendingTTSTask = nil
+        activeTTSTask?.cancel()
+        if let activeTTSTask {
+            Task { await activeTTSTask.value }
+        }
+
         Task { await playback.stop() }
         NSLog("PipelineCoordinator: cancelled by user")
     }
@@ -411,20 +455,32 @@ actor PipelineCoordinator {
             await playback.stop()
         }
 
-        await processTranscription(text: trimmed, rms: nil, durationSecs: nil)
+        await processTranscription(
+            text: trimmed,
+            wakeMatch: wakeAddressMatch(in: trimmed),
+            rms: nil,
+            durationSecs: nil
+        )
     }
 
     /// Speak text directly via TTS without going through the LLM.
     ///
-    /// Used for system messages like the first-launch greeting.
+    /// Used for system messages like the first-launch greeting, command
+    /// acknowledgments, and approval responses. Non-interruptible — barge-in
+    /// is suppressed for the duration to prevent background noise from cutting
+    /// off short utterances.
     func speakDirect(_ text: String) async {
+        bargeInSuppressed = true
+        defer { bargeInSuppressed = false }
         await speakText(text, isFinal: true)
     }
 
     /// Speak text with a specific voice description, bypassing the LLM.
     ///
-    /// Used for voice preview in roleplay and settings.
+    /// Used for voice preview in roleplay and settings. Non-interruptible.
     func speakWithVoice(_ text: String, voiceInstruct: String) async {
+        bargeInSuppressed = true
+        defer { bargeInSuppressed = false }
         await speakText(text, isFinal: true, voiceInstruct: voiceInstruct)
     }
 
@@ -474,6 +530,14 @@ actor PipelineCoordinator {
             capturedAt: Date()
         )
         await handleSpeechSegment(segment)
+    }
+
+    /// Reset conversation history (for test harness use).
+    func resetConversation() async {
+        await conversationState.clear()
+        currentSystemPrompt = nil
+        currentNativeTools = nil
+        NSLog("PipelineCoordinator: conversation history cleared (test reset)")
     }
 
     // MARK: - Gate Control
@@ -548,13 +612,48 @@ actor PipelineCoordinator {
         return false
     }
 
-    private func isAddressedToFae(_ text: String) -> Bool {
-        if TextProcessing.findNameMention(in: text) != nil {
-            return true
+    private func wakeAddressMatch(in text: String, logDecision: Bool = false) -> TextProcessing.WakeAddressMatch? {
+        let match = TextProcessing.findWakeAddressMatch(
+            in: text,
+            aliases: wakeAliases,
+            wakeWord: config.conversation.wakeWord
+        )
+
+        if logDecision {
+            if let match {
+                let confidence = String(format: "%.2f", match.confidence)
+                debugLog(
+                    debugConsole,
+                    .command,
+                    "Wake match kind=\(match.kind.rawValue) alias=\(match.matchedAlias) token=\(match.matchedToken) conf=\(confidence)"
+                )
+            } else if let candidate = TextProcessing.extractWakeAliasCandidate(from: text) {
+                debugLog(debugConsole, .command, "Wake miss candidate=\(candidate)")
+            }
         }
-        let normalizedText = Self.normalizeForPhraseMatch(text)
-        let wakeWord = Self.normalizeForPhraseMatch(config.conversation.wakeWord)
-        return !wakeWord.isEmpty && normalizedText.contains(wakeWord)
+
+        return match
+    }
+
+    private func isAddressedToFae(_ text: String, logDecision: Bool = false) -> Bool {
+        wakeAddressMatch(in: text, logDecision: logDecision) != nil
+    }
+
+    private func learnWakeAliasIfNeeded(rawText: String) async {
+        guard currentSpeakerIsOwner,
+              let wakeStore = wakeWordProfileStore,
+              let alias = TextProcessing.extractWakeAliasCandidate(from: rawText)
+        else {
+            return
+        }
+
+        if WakeWordProfileStore.baselineAliases.contains(alias) {
+            return
+        }
+
+        await wakeStore.recordAliasCandidate(alias, source: "owner_runtime")
+        wakeAliases = await wakeStore.allAliases()
+        debugLog(debugConsole, .command, "Wake alias learned: \(alias)")
     }
 
     private func resetConversationSession(trigger: String, source: String) async {
@@ -596,28 +695,35 @@ actor PipelineCoordinator {
                 NSLog("phase1.first_audio_latency_ms=%.2f", latencyMs)
             }
 
-            // Track barge-in — skip when echo suppressor is active to prevent
-            // Fae's own voice from triggering barge-in.
-            if vadOutput.speechStarted && !echoSuppressor.isInSuppression {
-                pendingBargeIn = PendingBargeIn(capturedAt: Date(), lastRms: vadOutput.rms)
-            } else if vadOutput.speechStarted && echoSuppressor.isInSuppression {
-                // Don't create barge-in candidate during echo suppression.
-                pendingBargeIn = nil
-            }
-            if vadOutput.isSpeech, pendingBargeIn != nil {
-                pendingBargeIn?.speechSamples += chunk.samples.count
-                pendingBargeIn?.lastRms = vadOutput.rms
-
-                // Check barge-in confirmation.
-                let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
-                let confirmSamples = (config.bargeIn.confirmMs * config.audio.inputSampleRate) / 1000
-                if let barge = pendingBargeIn,
-                   barge.speechSamples >= confirmSamples,
-                   bargeInEnabled
-                {
-                    handleBargeIn(rms: barge.lastRms)
+            // Track barge-in only while the assistant is audibly speaking.
+            // This avoids false interruptions during long LLM decode gaps where
+            // assistantGenerating may be true but no speech is playing.
+            if Self.shouldTrackBargeIn(assistantSpeaking: assistantSpeaking) {
+                // Skip when echo suppressor is active or barge-in is suppressed
+                // (non-interruptible speakDirect) to prevent false triggers.
+                if vadOutput.speechStarted && !echoSuppressor.isInSuppression && !bargeInSuppressed {
+                    pendingBargeIn = PendingBargeIn(capturedAt: Date(), lastRms: vadOutput.rms)
+                } else if vadOutput.speechStarted && (echoSuppressor.isInSuppression || bargeInSuppressed) {
+                    // Don't create barge-in candidate during echo suppression or non-interruptible speech.
                     pendingBargeIn = nil
                 }
+                if vadOutput.isSpeech, pendingBargeIn != nil {
+                    pendingBargeIn?.speechSamples += chunk.samples.count
+                    pendingBargeIn?.lastRms = vadOutput.rms
+
+                    // Check barge-in confirmation.
+                    let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
+                    let confirmSamples = (config.bargeIn.confirmMs * config.audio.inputSampleRate) / 1000
+                    if let barge = pendingBargeIn,
+                       barge.speechSamples >= confirmSamples,
+                       bargeInEnabled
+                    {
+                        handleBargeIn(rms: barge.lastRms)
+                        pendingBargeIn = nil
+                    }
+                }
+            } else {
+                pendingBargeIn = nil
             }
 
             // Adjust VAD silence threshold based on assistant state.
@@ -789,18 +895,28 @@ actor PipelineCoordinator {
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
 
-            // Approval gate — while a tool approval is pending, only yes/no responses
+            // Approval gate — while a tool approval is pending, only approval responses
             // are accepted. This prevents unrelated chatter/noise from being routed to the LLM.
             if awaitingApproval {
                 if let decision = VoiceCommandParser.parseApprovalResponse(text),
                    let manager = approvalManager,
-                   await manager.resolveMostRecent(approved: decision, source: "voice")
+                   await manager.resolveMostRecent(decision: decision, source: "voice")
                 {
-                    debugLog(debugConsole, .approval, "Tool approval decision via voice: \(decision)")
+                    debugLog(debugConsole, .approval, "Tool approval decision via voice: \(decision.rawValue)")
                     awaitingApproval = false
-                    let ack = decision
-                        ? PersonalityManager.nextApprovalGranted()
-                        : PersonalityManager.nextApprovalDenied()
+                    let ack: String
+                    switch decision {
+                    case .yes:
+                        ack = PersonalityManager.nextApprovalGranted()
+                    case .no:
+                        ack = PersonalityManager.nextApprovalDenied()
+                    case .always:
+                        ack = "Got it, I'll always allow that tool."
+                    case .approveAllReadOnly:
+                        ack = "Okay, all read-only tools are now approved."
+                    case .approveAll:
+                        ack = "Understood, all tools are now approved."
+                    }
                     await speakDirect(ack)
                 } else {
                     let words = text.split(whereSeparator: { $0.isWhitespace }).count
@@ -815,8 +931,8 @@ actor PipelineCoordinator {
             if let pendingAction = pendingGovernanceAction {
                 if let decision = VoiceCommandParser.parseApprovalResponse(text) {
                     pendingGovernanceAction = nil
-                    debugLog(debugConsole, .approval, "Governance confirmation decision=\(decision) action=\(pendingAction.action)")
-                    if decision {
+                    debugLog(debugConsole, .approval, "Governance confirmation decision=\(decision.rawValue) action=\(pendingAction.action)")
+                    if decision != .no {
                         applyGovernanceAction(
                             action: pendingAction.action,
                             value: pendingAction.value,
@@ -883,14 +999,32 @@ actor PipelineCoordinator {
                 return
             }
 
+            if let wakeStore = wakeWordProfileStore {
+                wakeAliases = await wakeStore.allAliases()
+            }
+            let wakeMatch = wakeAddressMatch(in: text, logDecision: true)
+            let addressedToFae = wakeMatch != nil
+            if addressedToFae {
+                await learnWakeAliasIfNeeded(rawText: rawText)
+            }
+
             if gateState != .active {
-                guard isAddressedToFae(text) else { return }
+                guard addressedToFae else {
+                    debugLog(debugConsole, .command, "Ignored while sleeping (not addressed): \(text)")
+                    let words = text.split(whereSeparator: { $0.isWhitespace }).count
+                    if words >= 4,
+                       (lastSleepHintAt == nil || Date().timeIntervalSince(lastSleepHintAt!) > 20)
+                    {
+                        lastSleepHintAt = Date()
+                        await speakDirect("I’m resting right now—say hey Fae to wake me.")
+                    }
+                    return
+                }
                 wake()
             }
 
             // Conversation gate — direct address check.
             let inFollowup = engagedUntil.map { Date() < $0 } ?? false
-            let addressedToFae = isAddressedToFae(text)
             if effectiveRequireDirectAddress() {
                 if !addressedToFae && !inFollowup && !awaitingApproval {
                     debugLog(debugConsole, .command, "Dropped (direct-address required): \(text)")
@@ -907,7 +1041,12 @@ actor PipelineCoordinator {
             }
 
             // Process through LLM.
-            await processTranscription(text: text, rms: rms, durationSecs: durationSecs)
+            await processTranscription(
+                text: text,
+                wakeMatch: wakeMatch,
+                rms: rms,
+                durationSecs: durationSecs
+            )
 
         } catch {
             NSLog("PipelineCoordinator: STT error: %@", error.localizedDescription)
@@ -916,13 +1055,18 @@ actor PipelineCoordinator {
 
     // MARK: - LLM Processing
 
-    private func processTranscription(text: String, rms: Float?, durationSecs: Float?) async {
+    private func processTranscription(
+        text: String,
+        wakeMatch: TextProcessing.WakeAddressMatch? = nil,
+        rms: Float?,
+        durationSecs: Float?
+    ) async {
         debugLog(debugConsole, .qa, "Process transcription: \(text)")
 
         // Extract query if name-addressed.
         var queryText = text
-        if let (nameRange, _) = TextProcessing.findNameMention(in: text) {
-            queryText = TextProcessing.extractQueryAroundName(in: text, nameRange: nameRange)
+        if let match = wakeMatch ?? wakeAddressMatch(in: text) {
+            queryText = TextProcessing.extractQueryAroundName(in: text, nameRange: match.range)
             debugLog(debugConsole, .command, "Direct-address extraction: \(queryText)")
             // Refresh follow-up window.
             engagedUntil = Date().addingTimeInterval(
@@ -938,8 +1082,75 @@ actor PipelineCoordinator {
             await playback.stop()
         }
 
+        let forceFastCommandPath = shouldForceThinkingSuppression(for: queryText)
+        if forceFastCommandPath {
+            debugLog(debugConsole, .command, "Force thinking suppression for short control-style utterance: \(queryText)")
+        }
+
+        explicitUserAuthorizationForTurn = Self.detectExplicitUserAuthorization(in: queryText)
+        if explicitUserAuthorizationForTurn {
+            debugLog(debugConsole, .approval, "Explicit user authorization detected for turn")
+        }
+
         // Unified pipeline: LLM decides when to use tools via <tool_call> markup.
-        await generateWithTools(userText: queryText, isToolFollowUp: false, turnCount: 0)
+        await generateWithTools(
+            userText: queryText,
+            isToolFollowUp: false,
+            turnCount: 0,
+            forceSuppressThinking: forceFastCommandPath
+        )
+    }
+
+    private func shouldForceThinkingSuppression(for text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lower.isEmpty else { return false }
+
+        let words = lower.split(whereSeparator: { $0.isWhitespace }).count
+        if words <= 4 && lower.contains("settings") {
+            return true
+        }
+        guard words <= 10 else { return false }
+
+        let controlTargets = [
+            "settings", "preferences", "canvas", "conversation", "discussions",
+            "permissions", "tool mode", "tools", "vision", "thinking", "barge", "direct address",
+        ]
+        guard controlTargets.contains(where: { lower.contains($0) }) else {
+            return false
+        }
+
+        let controlVerbs = [
+            "open", "close", "hide", "show", "enable", "disable", "turn on", "turn off",
+            "set", "switch", "bring up", "pull up", "dismiss",
+        ]
+        return controlVerbs.contains(where: { lower.contains($0) })
+            || lower.hasPrefix("can you")
+            || lower.hasPrefix("could you")
+            || lower.hasPrefix("please")
+    }
+
+    private static func detectExplicitUserAuthorization(in text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !lower.isEmpty else { return false }
+
+        let directPhrases = [
+            "go ahead", "do it", "please do", "please run", "run it", "yes do", "you can",
+            "i approve", "approved", "confirm this", "proceed", "that is fine",
+        ]
+        if directPhrases.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        // Compact imperative requests are usually explicit enough.
+        let tokens = lower.split(whereSeparator: { $0.isWhitespace })
+        if tokens.count <= 4 {
+            let starts = ["read", "write", "edit", "search", "fetch", "open", "close", "list", "show", "run"]
+            if let first = tokens.first, starts.contains(String(first)) {
+                return true
+            }
+        }
+
+        return false
     }
 
     // MARK: - Voice Commands
@@ -950,18 +1161,6 @@ actor PipelineCoordinator {
     ) async -> Bool {
         debugLog(debugConsole, .command, "Evaluate command: \(String(describing: command))")
         switch command {
-        case .showConversation:
-            eventBus.send(.voiceCommandRecognized("show_conversation"))
-            eventBus.send(.conversationVisibility(true))
-            await speakDirect("Opening discussions.")
-            return true
-
-        case .hideConversation:
-            eventBus.send(.voiceCommandRecognized("hide_conversation"))
-            eventBus.send(.conversationVisibility(false))
-            await speakDirect("Hiding discussions.")
-            return true
-
         case .showCanvas:
             eventBus.send(.voiceCommandRecognized("show_canvas"))
             eventBus.send(.canvasVisibility(true))
@@ -976,10 +1175,28 @@ actor PipelineCoordinator {
 
         case .showSettings:
             eventBus.send(.voiceCommandRecognized("show_settings"))
-            await MainActor.run {
+            let openResult: (primary: Bool, fallback: Bool) = await MainActor.run {
+                let primary = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                let fallback = !primary
+                    ? NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+                    : false
                 NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
+                return (primary: primary, fallback: fallback)
             }
+            debugLog(
+                debugConsole,
+                .command,
+                "Show settings direct open primary=\(openResult.primary) fallback=\(openResult.fallback)"
+            )
             await speakDirect("Opening settings.")
+            return true
+
+        case .hideSettings:
+            eventBus.send(.voiceCommandRecognized("hide_settings"))
+            await MainActor.run {
+                NotificationCenter.default.post(name: .faeCloseSettingsRequested, object: nil)
+            }
+            await speakDirect("Closing settings.")
             return true
 
         case .showPermissionsCanvas:
@@ -1380,9 +1597,24 @@ actor PipelineCoordinator {
         userText: String,
         isToolFollowUp: Bool,
         turnCount: Int,
-        forceSuppressThinking: Bool = false
+        forceSuppressThinking: Bool = false,
+        generationID providedGenerationID: UUID? = nil
     ) async {
         let maxToolTurns = 5
+
+        let generationID: UUID
+        if let providedGenerationID {
+            generationID = providedGenerationID
+            // If this recursion belongs to an old turn, drop it immediately.
+            if activeGenerationID != generationID {
+                debugLog(debugConsole, .pipeline, "Drop stale generation recursion id=\(generationID.uuidString.prefix(8))")
+                return
+            }
+        } else {
+            generationID = UUID()
+            activeGenerationID = generationID
+            debugLog(debugConsole, .pipeline, "Generation started id=\(generationID.uuidString.prefix(8))")
+        }
 
         // Reset computer-use step counter at the start of each user turn.
         if !isToolFollowUp {
@@ -1482,25 +1714,29 @@ actor PipelineCoordinator {
                 skillDescs = []
                 legacySkills = []
             }
-            let toolSchemas: String? = {
-                guard includeTools else { return nil }
-                let schemas = registry.toolSchemas(for: toolMode)
-                return schemas.isEmpty ? nil : schemas
-            }()
-
             // Build native tool specs for MLX tool calling.
             // Cached in currentNativeTools for tool follow-up turns.
             self.currentNativeTools = includeTools
                 ? registry.nativeToolSpecs(for: toolMode)
                 : nil
 
+            let toolSchemas: String? = {
+                guard includeTools else { return nil }
+                if self.currentNativeTools != nil {
+                    let compact = registry.compactToolSummary(for: toolMode)
+                    return compact.isEmpty ? nil : compact
+                }
+                let full = registry.toolSchemas(for: toolMode)
+                return full.isEmpty ? nil : full
+            }()
+
             if let specs = self.currentNativeTools {
                 debugLog(debugConsole, .pipeline, "Native tool specs: \(specs.count) tools")
             }
 
             if let schemas = toolSchemas {
-                let schemaCount = schemas.components(separatedBy: "\"name\":").count - 1
-                debugLog(debugConsole, .pipeline, "Tool schemas: ~\(schemaCount) tools, \(schemas.count) chars")
+                let lineCount = schemas.split(separator: "\n").count
+                debugLog(debugConsole, .pipeline, "Tool prompt summary: lines=\(lineCount) chars=\(schemas.count)")
             }
 
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
@@ -1568,6 +1804,7 @@ actor PipelineCoordinator {
         var firstTtsSent = false
         let llmStartedAt = Date()
         var llmTokenCount = 0
+        var firstTokenAt: Date?
         var spokenTextThisTurn = ""
 
         if turnCount == 0 {
@@ -1590,6 +1827,35 @@ actor PipelineCoordinator {
             }
         }
 
+        // Streaming chunk smoothing: prioritize sentence-sized chunks, and only use
+        // clause fallback when enough text has accumulated and cadence allows it.
+        let minSentenceChunkChars = 18
+        let minSentenceFlushIntervalSec: TimeInterval = 0.18
+        let minClauseChunkChars = 45
+        let minClauseFlushIntervalSec: TimeInterval = 0.45
+        let maxCharsBeforeClauseFlush = 280
+        var lastStreamingFlushAt: Date?
+        var streamingChunkCount = 0
+        var streamingChunkCharsTotal = 0
+        var streamingShortChunkCount = 0
+
+        func emitStreamingChunk(_ cleaned: String) {
+            guard !cleaned.isEmpty else { return }
+            let now = Date()
+            let intervalMs = Int((lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? 0) * 1000)
+            firstTtsSent = true
+            lastStreamingFlushAt = now
+            streamingChunkCount += 1
+            streamingChunkCharsTotal += cleaned.count
+            if cleaned.count < 30 {
+                streamingShortChunkCount += 1
+            }
+            debugLog(debugConsole, .pipeline, "Stream chunk #\(streamingChunkCount) chars=\(cleaned.count) interval_ms=\(intervalMs)")
+            recordSpokenText(cleaned)
+            eventBus.send(.assistantText(text: cleaned, isFinal: false))
+            enqueueTTS(cleaned, isFinal: false)
+        }
+
         let systemPromptTokens = Self.estimateTokenCount(for: systemPrompt)
         if forceSuppressThinking {
             debugLog(debugConsole, .pipeline, "Retrying turn with thinking suppression forced")
@@ -1605,9 +1871,20 @@ actor PipelineCoordinator {
             options: options
         )
 
+        var staleGenerationDetected = false
+
         do {
             for try await token in tokenStream {
+                if activeGenerationID != generationID {
+                    staleGenerationDetected = true
+                    debugLog(debugConsole, .pipeline, "Drop stale token stream id=\(generationID.uuidString.prefix(8))")
+                    break
+                }
+
                 llmTokenCount += 1
+                if firstTokenAt == nil {
+                    firstTokenAt = Date()
+                }
                 guard !interrupted else {
                     NSLog("PipelineCoordinator: generation interrupted")
                     break
@@ -1632,11 +1909,7 @@ actor PipelineCoordinator {
                     if let tagRange = sentenceBuffer.range(of: "<tool_call>") {
                         let beforeTag = String(sentenceBuffer[..<tagRange.lowerBound])
                         let cleaned = TextProcessing.stripNonSpeechChars(beforeTag)
-                        if !cleaned.isEmpty {
-                            recordSpokenText(cleaned)
-                            eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                            enqueueTTS(cleaned, isFinal: false)
-                        }
+                        emitStreamingChunk(cleaned)
                     }
                     sentenceBuffer = ""
                     continue
@@ -1714,25 +1987,37 @@ actor PipelineCoordinator {
                         // reasoning), discard it and log to debug console instead.
                         let isMetaCommentary = !firstTtsSent && TextProcessing.isMetaCommentary(cleaned)
                         if !cleaned.isEmpty && !isMetaCommentary {
-                            firstTtsSent = true
-                            recordSpokenText(cleaned)
-                            eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                            enqueueTTS(cleaned, isFinal: false)
-                        } else if isMetaCommentary {
-                            debugLog(debugConsole, .llmThink, "[suppressed meta-commentary] \(cleaned)")
+                            let now = Date()
+                            let interval = lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+                            let shouldHoldForCoalesce = cleaned.count < minSentenceChunkChars
+                                && interval < minSentenceFlushIntervalSec
+
+                            if shouldHoldForCoalesce {
+                                // Keep buffering until we have a bigger chunk or enough cadence spacing.
+                            } else {
+                                emitStreamingChunk(cleaned)
+                                sentenceBuffer = String(sentenceBuffer[boundary...])
+                            }
+                        } else {
+                            if isMetaCommentary {
+                                debugLog(debugConsole, .llmThink, "[suppressed meta-commentary] \(cleaned)")
+                            }
+                            sentenceBuffer = String(sentenceBuffer[boundary...])
                         }
-                        sentenceBuffer = String(sentenceBuffer[boundary...])
-                    } else if sentenceBuffer.count > 200 {
+                    } else if sentenceBuffer.count >= maxCharsBeforeClauseFlush {
                         if let clause = TextProcessing.findClauseBoundary(in: sentenceBuffer) {
                             let text = String(sentenceBuffer[..<clause])
                             let cleaned = TextProcessing.stripNonSpeechChars(text)
                             if !cleaned.isEmpty {
-                                firstTtsSent = true
-                                recordSpokenText(cleaned)
-                                eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                                enqueueTTS(cleaned, isFinal: false)
+                                let now = Date()
+                                let interval = lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+                                let canFlushClause = cleaned.count >= minClauseChunkChars
+                                    && interval >= minClauseFlushIntervalSec
+                                if canFlushClause {
+                                    emitStreamingChunk(cleaned)
+                                    sentenceBuffer = String(sentenceBuffer[clause...])
+                                }
                             }
-                            sentenceBuffer = String(sentenceBuffer[clause...])
                         }
                     }
                 }
@@ -1742,16 +2027,49 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .pipeline, "⚠️ LLM error: \(error.localizedDescription)")
         }
 
-        let llmElapsed = Date().timeIntervalSince(llmStartedAt)
+        if staleGenerationDetected {
+            return
+        }
+
+        let llmEndedAt = Date()
+        let llmElapsed = llmEndedAt.timeIntervalSince(llmStartedAt)
         if llmElapsed > 0 {
             let throughput = Double(llmTokenCount) / llmElapsed
             NSLog("phase1.llm_token_throughput_tps=%.2f", throughput)
-            debugLog(debugConsole, .pipeline, "LLM done: \(llmTokenCount) tokens in \(String(format: "%.1f", llmElapsed))s (\(String(format: "%.1f", throughput)) t/s)")
-            if llmTokenCount == 0 {
-                debugLog(debugConsole, .pipeline, "⚠️ 0 tokens generated — possible memory pressure, model not loaded, or context overflow")
-            } else if throughput < 2.0 {
-                debugLog(debugConsole, .pipeline, "⚠️ Very low throughput (\(String(format: "%.1f", throughput)) t/s) — system under memory pressure?")
+
+            if let firstTokenAt {
+                let firstTokenLatency = firstTokenAt.timeIntervalSince(llmStartedAt)
+                let decodeElapsed = max(llmEndedAt.timeIntervalSince(firstTokenAt), 0.001)
+                let decodeTps = Double(llmTokenCount) / decodeElapsed
+                debugLog(
+                    debugConsole,
+                    .pipeline,
+                    "LLM done: \(llmTokenCount) tokens total=\(String(format: "%.1f", llmElapsed))s first_token=\(String(format: "%.1f", firstTokenLatency))s decode=\(String(format: "%.1f", decodeElapsed))s decode_tps=\(String(format: "%.1f", decodeTps))"
+                )
+
+                if llmTokenCount == 0 {
+                    debugLog(debugConsole, .pipeline, "⚠️ 0 tokens generated — possible model stall or context overflow")
+                } else if llmTokenCount >= 128 && decodeTps < 2.0 {
+                    debugLog(debugConsole, .pipeline, "⚠️ Low decode throughput (\(String(format: "%.1f", decodeTps)) t/s) during long generation")
+                } else if llmTokenCount < 128 && firstTokenLatency > 8.0 {
+                    debugLog(debugConsole, .pipeline, "ℹ️ Turn was prefill-heavy (long first-token latency) — decode speed itself was normal")
+                }
+            } else {
+                debugLog(debugConsole, .pipeline, "LLM done: \(llmTokenCount) tokens in \(String(format: "%.1f", llmElapsed))s (\(String(format: "%.1f", throughput)) t/s)")
+                if llmTokenCount == 0 {
+                    debugLog(debugConsole, .pipeline, "⚠️ 0 tokens generated — possible model stall or context overflow")
+                }
             }
+        }
+
+        if streamingChunkCount > 0 {
+            let avgChunk = Double(streamingChunkCharsTotal) / Double(streamingChunkCount)
+            let shortRatio = Double(streamingShortChunkCount) / Double(streamingChunkCount)
+            debugLog(
+                debugConsole,
+                .pipeline,
+                "TTS stream chunks: count=\(streamingChunkCount) avg_chars=\(String(format: "%.1f", avgChunk)) short_ratio=\(String(format: "%.2f", shortRatio))"
+            )
         }
 
         // Flush remaining text.
@@ -1827,7 +2145,8 @@ actor PipelineCoordinator {
                     userText: userText,
                     isToolFollowUp: true,
                     turnCount: turnCount,
-                    forceSuppressThinking: true
+                    forceSuppressThinking: true,
+                    generationID: generationID
                 )
                 return
             }
@@ -1914,7 +2233,9 @@ actor PipelineCoordinator {
                 userText: userText,
                 toolCalls: Array(toolCalls.prefix(5)),
                 assistantToolMessage: assistantToolMessage,
-                forceSuppressThinking: forceSuppressThinking
+                forceSuppressThinking: forceSuppressThinking,
+                capabilityTicket: activeCapabilityTicket,
+                explicitUserAuthorization: explicitUserAuthorizationForTurn
             )
 
             let ack = "I’ll check that in the background and report back as soon as it’s ready."
@@ -2013,7 +2334,8 @@ actor PipelineCoordinator {
             userText: userText,
             isToolFollowUp: true,
             turnCount: turnCount + 1,
-            forceSuppressThinking: forceSuppressThinking
+            forceSuppressThinking: forceSuppressThinking,
+            generationID: generationID
         )
     }
 
@@ -2060,6 +2382,12 @@ actor PipelineCoordinator {
             lastAssistantStart = Date()
             echoSuppressor.onAssistantSpeechStart()
         }
+
+        let cleaned = TextProcessing.stripNonSpeechChars(text)
+        if !cleaned.isEmpty {
+            eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
+        }
+
         await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
     }
 
@@ -2108,9 +2436,25 @@ actor PipelineCoordinator {
 
     // MARK: - Barge-In
 
+    static func shouldTrackBargeIn(assistantSpeaking: Bool) -> Bool {
+        assistantSpeaking
+    }
+
+    static func shouldAllowBargeInInterrupt(assistantSpeaking: Bool, assistantGenerating: Bool) -> Bool {
+        // Intentional: barge-in is an audible interruption affordance.
+        // If the model is generating silently, we should not interrupt due to
+        // ambient noise or speaker bleed while no speech is active.
+        assistantSpeaking
+    }
+
     private func handleBargeIn(rms: Float) {
         guard bargeInEnabledLive ?? config.bargeIn.enabled else { return }
-        guard assistantSpeaking || assistantGenerating else { return }
+        // Non-interruptible utterances (speakDirect) suppress barge-in entirely.
+        guard !bargeInSuppressed else { return }
+        guard Self.shouldAllowBargeInInterrupt(
+            assistantSpeaking: assistantSpeaking,
+            assistantGenerating: assistantGenerating
+        ) else { return }
         guard rms >= config.bargeIn.minRms else { return }
 
         // Check holdoff — don't interrupt immediately after playback starts.
@@ -2403,14 +2747,18 @@ actor PipelineCoordinator {
         userText: String,
         toolCalls: [ToolCall],
         assistantToolMessage: String,
-        forceSuppressThinking: Bool
+        forceSuppressThinking: Bool,
+        capabilityTicket: CapabilityTicket?,
+        explicitUserAuthorization: Bool
     ) async {
         let job = DeferredToolJob(
             id: UUID(),
             userText: userText,
             toolCalls: toolCalls,
             assistantToolMessage: assistantToolMessage,
-            forceSuppressThinking: forceSuppressThinking
+            forceSuppressThinking: forceSuppressThinking,
+            capabilityTicket: capabilityTicket,
+            explicitUserAuthorization: explicitUserAuthorization
         )
 
         await conversationState.addAssistantMessage(job.assistantToolMessage)
@@ -2440,7 +2788,11 @@ actor PipelineCoordinator {
             let inputJSON = Self.serializeArguments(call.arguments)
             eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))
 
-            let result = await executeTool(call)
+            let result = await executeTool(
+                call,
+                capabilityTicketOverride: job.capabilityTicket,
+                explicitUserAuthorizationOverride: job.explicitUserAuthorization
+            )
             if result.isError {
                 toolFailureCount += 1
                 if firstToolError == nil {
@@ -2483,9 +2835,26 @@ actor PipelineCoordinator {
             return
         }
 
+        // Wait for any in-progress speech to finish before starting the
+        // follow-up generation.  Without this, the tool-result LLM response
+        // can interrupt the acknowledgment message mid-sentence.
+        for _ in 0..<30 {
+            guard !Task.isCancelled else { return }
+            if !assistantSpeaking { break }
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+        }
+
+        explicitUserAuthorizationForTurn = job.explicitUserAuthorization
         assistantGenerating = true
         eventBus.send(.assistantGenerating(true))
         await playback.playThinkingTone()
+
+        // Re-issue a capability ticket for the follow-up turn so the LLM
+        // can make additional tool calls (e.g. a second web_search).
+        activeCapabilityTicket = CapabilityTicketIssuer.issue(
+            mode: effectiveToolMode(),
+            registry: registry
+        )
 
         await generateWithTools(
             userText: job.userText,
@@ -2497,7 +2866,11 @@ actor PipelineCoordinator {
 
     private static let toolTimeoutSeconds: TimeInterval = 30
 
-    private func executeTool(_ call: ToolCall) async -> ToolResult {
+    private func executeTool(
+        _ call: ToolCall,
+        capabilityTicketOverride: CapabilityTicket? = nil,
+        explicitUserAuthorizationOverride: Bool? = nil
+    ) async -> ToolResult {
         // Tool mode enforcement — reject tools not allowed in current mode.
         let toolMode = effectiveToolMode()
         debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(toolMode)")
@@ -2538,7 +2911,9 @@ actor PipelineCoordinator {
         }
 
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
-        let hasCapabilityTicket = activeCapabilityTicket?.allows(toolName: call.name) ?? false
+        let effectiveTicket = capabilityTicketOverride ?? activeCapabilityTicket
+        let hasCapabilityTicket = effectiveTicket?.allows(toolName: call.name) ?? false
+        let explicitAuthorization = explicitUserAuthorizationOverride ?? explicitUserAuthorizationForTurn
         let intent = ActionIntent(
             source: .voice,
             toolName: call.name,
@@ -2546,7 +2921,7 @@ actor PipelineCoordinator {
             requiresApproval: tool.requiresApproval,
             isOwner: currentSpeakerIsOwner,
             livenessScore: livenessScore,
-            explicitUserAuthorization: false,
+            explicitUserAuthorization: explicitAuthorization,
             hasCapabilityTicket: hasCapabilityTicket,
             policyProfile: policyProfile,
             argumentSummary: Self.buildApprovalDescription(
@@ -2647,11 +3022,12 @@ actor PipelineCoordinator {
             if let manager = approvalManager {
                 debugLog(debugConsole, .approval, "Requesting approval for \(call.name): \(prompt.message)")
                 awaitingApproval = true
-                await speakDirect(prompt.message)
-                let approved = await manager.requestApproval(
+                async let approvalDecision = manager.requestApproval(
                     toolName: call.name,
                     description: prompt.message
                 )
+                await speakDirect(prompt.message)
+                let approved = await approvalDecision
                 awaitingApproval = false
                 approvedByUser = approved
                 debugLog(debugConsole, .approval, "Approval result for \(call.name): \(approved)")
@@ -2729,7 +3105,7 @@ actor PipelineCoordinator {
 
         // Execute with timeout and analytics.
         var executionArguments = call.arguments
-        if call.name == "run_skill", let ticketId = activeCapabilityTicket?.id {
+        if call.name == "run_skill", let ticketId = effectiveTicket?.id {
             executionArguments["capability_ticket"] = ticketId
         }
 
@@ -2808,16 +3184,16 @@ actor PipelineCoordinator {
 
     /// Map current tool mode to an autonomy policy profile.
     ///
-    /// - off/read_only => cautious profile
-    /// - read_write/full => balanced profile
+    /// - off => cautious profile
+    /// - read_only/read_write/full => balanced profile
     /// - full_no_approval => autonomous profile
     private func currentPolicyProfile() -> PolicyProfile {
         switch effectiveToolMode() {
-        case "off", "read_only":
+        case "off":
             return .moreCautious
         case "full_no_approval":
             return .moreAutonomous
-        case "read_write", "full":
+        case "read_only", "read_write", "full":
             return .balanced
         default:
             return .balanced

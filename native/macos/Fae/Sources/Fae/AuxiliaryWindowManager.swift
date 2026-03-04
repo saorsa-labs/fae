@@ -2,12 +2,22 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Owns and positions auxiliary `NSPanel` windows (conversation, canvas, and approval).
+/// NSPanel subclass that allows becoming key window when clicked.
 ///
-/// All panels slide in beside the compact orb window, which shifts sideways to make
-/// room. The orb always stays in compact mode — panels are additive, not replacements.
-/// All panels are `.nonactivatingPanel` so they never steal keyboard focus from the
-/// orb's input bar.
+/// Used for the canvas panel which contains interactive WKWebView content (governance
+/// action buttons). Standard `.nonactivatingPanel` prevents `canBecomeKey`, which means
+/// WKWebView link clicks are silently dropped. This subclass re-enables key status
+/// so clicks work, while keeping `.nonactivatingPanel` to avoid activating the app.
+private final class InteractivePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
+/// Owns and positions auxiliary `NSPanel` windows (canvas, approval, debug console).
+///
+/// Conversation is now inline in the main window — no separate conversation panel.
+/// The canvas panel slides in beside the compact orb window, which shifts sideways
+/// to make room. All panels are `.nonactivatingPanel` so they never steal keyboard
+/// focus from the orb's input bar.
 @MainActor
 final class AuxiliaryWindowManager: ObservableObject {
 
@@ -18,14 +28,12 @@ final class AuxiliaryWindowManager: ObservableObject {
         didSet { UserDefaults.standard.set(autoHideOnCollapse, forKey: Self.autoHideKey) }
     }
 
-    @Published private(set) var isConversationVisible: Bool = false
     @Published private(set) var isCanvasVisible: Bool = false
     @Published private(set) var isApprovalVisible: Bool = false
     @Published private(set) var isDebugConsoleVisible: Bool = false
 
     // MARK: - Private State
 
-    private var conversationPanel: NSPanel?
     private var canvasPanel: NSPanel?
     private var approvalPanel: NSPanel?
     private var debugConsolePanel: NSPanel?
@@ -39,7 +47,6 @@ final class AuxiliaryWindowManager: ObservableObject {
     private static let autoHideKey = "fae.windows.autoHideOnCollapse"
 
     private let panelGap: CGFloat = 12
-    private let conversationSize = NSSize(width: 340, height: 500)
     private let canvasSize = NSSize(width: 420, height: 540)
 
     /// The orb window frame saved *before* the first panel-induced shift.
@@ -55,7 +62,6 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     // MARK: - Weak References
 
-    weak var conversationController: ConversationController?
     weak var canvasController: CanvasController?
     weak var windowState: WindowStateController?
     weak var subtitleState: SubtitleStateController?
@@ -63,7 +69,6 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     private var modeCancellable: AnyCancellable?
     private var approvalCancellable: AnyCancellable?
-    private var conversationPanelDelegate: PanelCloseDelegate?
     private var canvasPanelDelegate: PanelCloseDelegate?
 
     // MARK: - Init
@@ -84,7 +89,6 @@ final class AuxiliaryWindowManager: ObservableObject {
                 guard let self else { return }
                 // Auto-hide panels when orb collapses due to inactivity.
                 if newMode == .collapsed, self.autoHideOnCollapse {
-                    self.hideConversation()
                     self.hideCanvas()
                 }
             }
@@ -105,6 +109,15 @@ final class AuxiliaryWindowManager: ObservableObject {
             }
     }
 
+    // MARK: - Focus Main Window
+
+    /// Bring the main window to front and focus the input field.
+    /// Replaces the old `showConversation()` — conversation is now inline.
+    func focusMainWindow() {
+        windowState?.showWindow()
+        NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
+    }
+
     // MARK: - Canvas Window
 
     func showCanvas() {
@@ -112,7 +125,7 @@ final class AuxiliaryWindowManager: ObservableObject {
         if canvasPanel == nil { canvasPanel = makeCanvasPanel() }
         guard let panel = canvasPanel else { return }
         canvasPanel?.minSize = NSSize(width: 360, height: 400)
-        animatedShow(panel: panel, panelSize: canvasSize, isCanvas: true)
+        animatedShow(panel: panel, panelSize: canvasSize)
     }
 
     func hideCanvas() {
@@ -122,33 +135,11 @@ final class AuxiliaryWindowManager: ObservableObject {
             return
         }
         guard !isAnimating else { return }
-        animatedHide(panel: canvasPanel, isCanvas: true)
+        animatedHide(panel: canvasPanel)
     }
 
     func toggleCanvas() {
         isCanvasVisible ? hideCanvas() : showCanvas()
-    }
-
-    // MARK: - Conversation Window
-
-    func showConversation() {
-        guard !isAnimating else { return }
-        if conversationPanel == nil { conversationPanel = makeConversationPanel() }
-        guard let panel = conversationPanel else { return }
-        animatedShow(panel: panel, panelSize: conversationSize, isCanvas: false)
-    }
-
-    func hideConversation() {
-        guard isConversationVisible else {
-            conversationPanel?.orderOut(nil)
-            return
-        }
-        guard !isAnimating else { return }
-        animatedHide(panel: conversationPanel, isCanvas: false)
-    }
-
-    func toggleConversation() {
-        isConversationVisible ? hideConversation() : showConversation()
     }
 
     // MARK: - Debug Console
@@ -190,12 +181,6 @@ final class AuxiliaryWindowManager: ObservableObject {
         // Expand to compact so the approval card and conversation are both visible.
         windowState?.transitionToCompact()
 
-        // Open conversation so the user can see the tool execution context
-        // (what was asked before the tool was invoked).
-        if !isConversationVisible {
-            showConversation()
-        }
-
         let orbFrame = orbWindow.frame
         let panelSize = NSSize(width: 260, height: 130)
         // Position ABOVE the orb — always on screen, never below the dock.
@@ -205,7 +190,7 @@ final class AuxiliaryWindowManager: ObservableObject {
 
         panel.setFrame(frame, display: false)
         panel.alphaValue = 0
-        // Float above conversation / canvas panels so it's never obscured.
+        // Float above canvas panels so it's never obscured.
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 2)
         panel.orderFront(nil)
 
@@ -246,9 +231,6 @@ final class AuxiliaryWindowManager: ObservableObject {
     /// Reposition visible panels relative to the orb (e.g. after the user
     /// manually drags the orb window).
     func repositionWindows(relativeTo orbFrame: NSRect) {
-        if let panel = conversationPanel, isConversationVisible {
-            panel.setFrame(conversationFrame(relativeTo: orbFrame), display: true)
-        }
         if let panel = canvasPanel, isCanvasVisible {
             panel.setFrame(canvasFrame(relativeTo: orbFrame), display: true)
         }
@@ -278,54 +260,43 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     // MARK: - Animated Show
 
-    /// Shared animation logic for showing any panel. The orb shifts to make
+    /// Animation logic for showing the canvas panel. The orb shifts to make
     /// room and the panel slides in from behind the orb edge.
-    private func animatedShow(panel: NSPanel, panelSize: NSSize, isCanvas: Bool) {
+    private func animatedShow(panel: NSPanel, panelSize: NSSize) {
         guard let orbWindow = windowState?.window else {
             // Fallback: just show without animation
-            if isCanvas { isCanvasVisible = true } else { isConversationVisible = true }
+            isCanvasVisible = true
             panel.orderFront(nil)
             return
         }
 
         isAnimating = true
 
-        let anyPanelAlreadyVisible = isConversationVisible || isCanvasVisible
-
-        // Save original orb position before any shift (only on first panel open).
-        if !anyPanelAlreadyVisible {
+        // Save original orb position before the shift (only on first panel open).
+        if !isCanvasVisible {
             orbFrameBeforePanels = orbWindow.frame
         }
 
-        // Mark visible immediately so frame calculations account for stacking.
-        if isCanvas { isCanvasVisible = true } else { isConversationVisible = true }
+        // Mark visible immediately so frame calculations are correct.
+        isCanvasVisible = true
 
         // Calculate the shifted orb position.
         let side = preferredSide()
-        let targetOrbFrame: NSRect
-        if anyPanelAlreadyVisible {
-            // Orb already shifted — keep it where it is.
-            targetOrbFrame = orbWindow.frame
-        } else {
-            // First panel: shift the orb to make room.
-            targetOrbFrame = shiftedOrbFrame(
-                original: orbWindow.frame,
-                forPanelWidth: panelSize.width,
-                side: side
-            )
-        }
+        let targetOrbFrame = shiftedOrbFrame(
+            original: orbWindow.frame,
+            forPanelWidth: panelSize.width,
+            side: side
+        )
 
         // Final panel position.
-        let targetPanelFrame = isCanvas
-            ? canvasFrame(relativeTo: targetOrbFrame)
-            : conversationFrame(relativeTo: targetOrbFrame)
+        let targetPanelFrame = canvasFrame(relativeTo: targetOrbFrame)
 
         // Start the panel overlapping the orb edge, fully transparent.
         var startFrame = targetPanelFrame
         if side == .right {
-            startFrame.origin.x = (anyPanelAlreadyVisible ? targetOrbFrame.maxX : orbWindow.frame.maxX) - panelSize.width * 0.3
+            startFrame.origin.x = orbWindow.frame.maxX - panelSize.width * 0.3
         } else {
-            startFrame.origin.x = (anyPanelAlreadyVisible ? targetOrbFrame.minX : orbWindow.frame.minX) - panelSize.width * 0.7
+            startFrame.origin.x = orbWindow.frame.minX - panelSize.width * 0.7
         }
         panel.setFrame(startFrame, display: false)
         panel.alphaValue = 0
@@ -336,9 +307,7 @@ final class AuxiliaryWindowManager: ObservableObject {
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             ctx.allowsImplicitAnimation = true
 
-            if !anyPanelAlreadyVisible {
-                orbWindow.animator().setFrame(targetOrbFrame, display: true)
-            }
+            orbWindow.animator().setFrame(targetOrbFrame, display: true)
             panel.animator().setFrame(targetPanelFrame, display: true)
             panel.animator().alphaValue = 1
         }, completionHandler: {
@@ -350,28 +319,23 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     // MARK: - Animated Hide
 
-    /// Shared animation logic for hiding any panel. The panel slides back
-    /// toward the orb edge and fades out.  If no other panels are visible
-    /// the orb returns to its original position.
-    private func animatedHide(panel: NSPanel?, isCanvas: Bool) {
+    /// Animation logic for hiding the canvas panel. The panel slides back
+    /// toward the orb edge and fades out, and the orb returns to its
+    /// original position.
+    private func animatedHide(panel: NSPanel?) {
         guard let panel else { return }
         guard let orbWindow = windowState?.window else {
             panel.orderOut(nil)
-            if isCanvas {
-                isCanvasVisible = false
-                canvasController?.clear()
-            } else {
-                isConversationVisible = false
-            }
+            isCanvasVisible = false
+            canvasController?.clear()
             return
         }
 
         isAnimating = true
 
         // Mark invisible immediately.
-        if isCanvas { isCanvasVisible = false } else { isConversationVisible = false }
+        isCanvasVisible = false
 
-        let otherPanelStillVisible = isConversationVisible || isCanvasVisible
         let side = preferredSide()
 
         // Collapse frame: slide the panel back toward the orb edge.
@@ -382,22 +346,15 @@ final class AuxiliaryWindowManager: ObservableObject {
             collapseFrame.origin.x = orbWindow.frame.minX - panel.frame.width * 0.7
         }
 
-        // Orb destination.
-        let orbTarget: NSRect
-        if otherPanelStillVisible {
-            orbTarget = orbWindow.frame
-        } else {
-            orbTarget = orbFrameBeforePanels ?? orbWindow.frame
-        }
+        // Orb destination — return to original position.
+        let orbTarget = orbFrameBeforePanels ?? orbWindow.frame
 
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = animationDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             ctx.allowsImplicitAnimation = true
 
-            if !otherPanelStillVisible {
-                orbWindow.animator().setFrame(orbTarget, display: true)
-            }
+            orbWindow.animator().setFrame(orbTarget, display: true)
             panel.animator().setFrame(collapseFrame, display: true)
             panel.animator().alphaValue = 0
         }, completionHandler: {
@@ -407,59 +364,15 @@ final class AuxiliaryWindowManager: ObservableObject {
 
                 // Clear canvas content after the panel has finished hiding so
                 // it is blank and ready for next use (not stale content).
-                if isCanvas { self?.canvasController?.clear() }
+                self?.canvasController?.clear()
 
-                // Clean up saved orb position when all panels closed.
-                if self?.isConversationVisible != true, self?.isCanvasVisible != true {
-                    self?.orbFrameBeforePanels = nil
-                }
-
-                // Reposition the remaining panel if the stacking changed.
-                self?.repositionRemainingPanels(orbFrame: orbTarget)
+                // Clean up saved orb position.
+                self?.orbFrameBeforePanels = nil
             }
         })
     }
 
-    /// After one panel hides, reposition any remaining visible panel to
-    /// account for stacking changes (e.g. canvas moves up when conversation
-    /// closes above it).
-    private func repositionRemainingPanels(orbFrame: NSRect) {
-        if let panel = canvasPanel, isCanvasVisible {
-            let target = canvasFrame(relativeTo: orbFrame)
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrame(target, display: true)
-            }
-        }
-        if let panel = conversationPanel, isConversationVisible {
-            let target = conversationFrame(relativeTo: orbFrame)
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrame(target, display: true)
-            }
-        }
-    }
-
     // MARK: - Panel Creation
-
-    private func makeConversationPanel() -> NSPanel {
-        let delegate = PanelCloseDelegate { [weak self] in
-            self?.hideConversation()
-        }
-        conversationPanelDelegate = delegate
-        let panel = makeUtilityPanel(size: conversationSize, title: "Conversation", delegate: delegate)
-
-        guard let controller = conversationController else { return panel }
-
-        let contentView = ConversationWindowView(
-            conversationController: controller,
-            onClose: { [weak self] in self?.hideConversation() }
-        )
-        embedSwiftUI(contentView, in: panel)
-        return panel
-    }
 
     private func makeCanvasPanel() -> NSPanel {
         let delegate = PanelCloseDelegate { [weak self] in
@@ -538,7 +451,9 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     private func makeApprovalPanel(controller: ApprovalOverlayController) -> NSPanel {
         let size = NSSize(width: 240, height: 120)
-        let panel = NSPanel(
+        // Use InteractivePanel so approval buttons (Yes/No, Enable Tools) receive clicks.
+        // Plain NSPanel with .nonactivatingPanel has canBecomeKey=false → clicks silently dropped.
+        let panel = InteractivePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .utilityWindow, .nonactivatingPanel],
             backing: .buffered,
@@ -558,7 +473,8 @@ final class AuxiliaryWindowManager: ObservableObject {
     }
 
     private func makeUtilityPanel(size: NSSize, title: String, delegate: PanelCloseDelegate) -> NSPanel {
-        let panel = NSPanel(
+        // Use InteractivePanel so WKWebView content (governance buttons) receives clicks.
+        let panel = InteractivePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .utilityWindow, .nonactivatingPanel, .resizable],
             backing: .buffered,
@@ -616,27 +532,10 @@ final class AuxiliaryWindowManager: ObservableObject {
         return clampToScreen(shifted)
     }
 
-    private func conversationFrame(relativeTo orbFrame: NSRect) -> NSRect {
-        let side = preferredSide()
-        let size = conversationSize
-        let y = orbFrame.maxY - size.height
-
-        let x: CGFloat = side == .right
-            ? orbFrame.maxX + panelGap
-            : orbFrame.minX - size.width - panelGap
-
-        return clampToScreen(NSRect(x: x, y: y, width: size.width, height: size.height))
-    }
-
     private func canvasFrame(relativeTo orbFrame: NSRect) -> NSRect {
         let side = preferredSide()
         let size = canvasSize
-
-        // Stack below conversation if both visible, otherwise align to orb top.
-        let topOffset: CGFloat = isConversationVisible
-            ? conversationSize.height + panelGap
-            : 0
-        let y = orbFrame.maxY - topOffset - size.height
+        let y = orbFrame.maxY - size.height
 
         let x: CGFloat = side == .right
             ? orbFrame.maxX + panelGap

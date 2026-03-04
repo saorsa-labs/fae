@@ -4,218 +4,20 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var orbAnimation: OrbAnimationState
-    @EnvironmentObject private var conversation: ConversationController
-    @EnvironmentObject private var conversationBridge: ConversationBridgeController
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
-    @EnvironmentObject private var subtitles: SubtitleStateController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
-    @EnvironmentObject private var rescueMode: RescueMode
     @State private var viewLoaded = false
 
     private static var menuHandlersKey: UInt8 = 0
 
     var body: some View {
         ZStack {
-            nativeConversationView
-                .transition(.opacity)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // SwiftUI-native frosted glass — .ultraThinMaterial in dark mode.
-        // The window is frameless (.borderless) so there is no title bar
-        // to interfere with the material blur.
-        // In collapsed mode, use a clear background so the circular orb
-        // floats without a frosted-glass square behind it.
-        .background(
-            windowState.mode == .collapsed
-                ? AnyShapeStyle(Color.clear)
-                : AnyShapeStyle(.ultraThinMaterial),
-            ignoresSafeAreaEdges: .all
-        )
-        .preferredColorScheme(.dark)
-        .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
-        .background(
-            NSWindowAccessor { window in
-                // Setting the window triggers WindowStateController's didSet
-                // which configures the frameless window style and transparency.
-                windowState.window = window
-            }
-        )
-        .animation(.easeInOut(duration: 0.5), value: windowState.mode)
-        .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
-        .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
-        .animation(.easeInOut(duration: 0.2), value: auxiliaryWindows.isApprovalVisible)
-    }
-
-    // MARK: - Context Menu
-
-    private func showOrbContextMenu() {
-        guard let window = windowState.window,
-              let contentView = window.contentView else { return }
-
-        let menu = NSMenu()
-
-        // Settings — SwiftUI Settings scene uses the AppKit responder chain
-        // selector "showSettingsWindow:" which is the standard macOS action.
-        let settingsItem = NSMenuItem(
-            title: "Settings…",
-            action: Selector(("showSettingsWindow:")),
-            keyEquivalent: ","
-        )
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-
-        // Reset Conversation
-        let resetHandler = MenuActionHandler { [conversation, subtitles] in
-            conversation.clearMessages()
-            subtitles.clearAll()
-        }
-        let resetItem = NSMenuItem(
-            title: "Reset Conversation",
-            action: #selector(MenuActionHandler.invoke),
-            keyEquivalent: ""
-        )
-        resetItem.target = resetHandler
-        menu.addItem(resetItem)
-
-        // Hide Fae
-        let hideHandler = MenuActionHandler { [windowState] in
-            windowState.hideWindow()
-        }
-        let hideItem = NSMenuItem(
-            title: "Hide Fae",
-            action: #selector(MenuActionHandler.invoke),
-            keyEquivalent: ""
-        )
-        hideItem.target = hideHandler
-        menu.addItem(hideItem)
-
-        menu.addItem(.separator())
-
-        // Quit
-        let quitItem = NSMenuItem(
-            title: "Quit Fae",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
-        menu.addItem(quitItem)
-
-        // Retain handlers for the lifetime of the menu via associated object
-        objc_setAssociatedObject(
-            menu, &ContentView.menuHandlersKey,
-            [resetHandler, hideHandler] as NSArray,
-            .OBJC_ASSOCIATION_RETAIN
-        )
-
-        // Show at mouse location
-        let mouseLocation = window.mouseLocationOutsideOfEventStream
-        menu.popUp(positioning: nil, at: mouseLocation, in: contentView)
-    }
-
-    // MARK: - Native Conversation View
-
-    /// Fully native layered UI:
-    /// - Layer 0: Metal orb animation (GPU-rendered fog-cloud orb)
-    /// - Layer 1: Progress bar overlay
-    /// - Layer 2: Subtitle bubbles (assistant, user, tool)
-    /// - Layer 3: Input bar (mic toggle, text field, send button, action pills)
-    private var nativeConversationView: some View {
-        ZStack {
-            // Layer 0: Metal orb animation (replaces WKWebView)
-            NativeOrbView(
-                orbAnimation: orbAnimation,
-                audioRMS: pipelineAux.audioRMS,
-                windowMode: windowState.mode.rawValue,
-                onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
-                onOrbClicked: {
-                    if windowState.mode == .collapsed {
-                        windowState.transitionToCompact()
-                        // Reset the conversation engagement window so Fae
-                        // responds to the next utterance without requiring
-                        // direct address ("Fae, ...").
-                        NotificationCenter.default.post(
-                            name: .faeConversationEngage,
-                            object: nil
-                        )
-                    }
-                },
-                onOrbContextMenu: {
-                    showOrbContextMenu()
-                }
-            )
-            .clipShape(
-                // Circular clip when collapsed so the orb looks like a floating sphere.
-                // Full rounded rect in compact mode to match the frosted window.
-                windowState.mode == .collapsed
-                    ? AnyShape(Circle())
-                    : AnyShape(RoundedRectangle(cornerRadius: 12))
-            )
-            .opacity(viewLoaded ? 1 : 0)
-
-            // Only show overlays in compact mode (not collapsed 80×80 orb)
-            if windowState.mode == .compact {
-                // Rescue mode badge
-                if rescueMode.isActive {
-                    VStack {
-                        HStack {
-                            Text("Rescue Mode")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.9))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.gray.opacity(0.6))
-                                .clipShape(Capsule())
-                                .padding(.leading, 10)
-                                .padding(.top, 8)
-                            Spacer()
-                        }
-                        Spacer()
-                    }
-                }
-
-                // Layer 1: Progress bar (always visible for download/load feedback)
-                ProgressOverlayView()
-
-                // Layer 2: Subtitle overlay (above input bar)
-                SubtitleOverlayView()
-                    .padding(.bottom, pipelineAux.isPipelineReady ? 80 : 0)
-
-                // Layer 3: Input bar — hidden until models are loaded so
-                // users don't try to chat before the pipeline is ready.
-                if pipelineAux.isPipelineReady {
-                    InputBarView()
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-
-                // Layer 4: Emergency stop — visible whenever a tool approval is
-                // pending. Lets the user kill everything quickly if Fae misbehaves.
-                if auxiliaryWindows.isApprovalVisible {
-                    VStack {
-                        HStack {
-                            Spacer()
-                            Button(action: { auxiliaryWindows.emergencyStop() }) {
-                                Label("Stop", systemImage: "xmark.circle.fill")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                            }
-                            .buttonStyle(.plain)
-                            .background(Color.red)
-                            .clipShape(Capsule())
-                            .shadow(color: .red.opacity(0.5), radius: 6)
-                            .padding(.trailing, 10)
-                            .padding(.top, 8)
-                        }
-                        Spacer()
-                    }
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
-                        removal: .opacity
-                    ))
-                }
+            if windowState.mode == .collapsed {
+                collapsedView
+            } else {
+                compactView
             }
 
             // Loading placeholder
@@ -232,18 +34,161 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Frosted glass in compact mode, clear in collapsed so the orb floats.
+        .background {
+            if windowState.mode != .collapsed {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .ignoresSafeArea()
+            }
+        }
+        .clipShape(
+            windowState.mode == .collapsed
+                ? AnyShape(Circle())
+                : AnyShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        )
+        .preferredColorScheme(.dark)
+        .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
+        .background(
+            NSWindowAccessor { window in
+                windowState.window = window
+            }
+        )
+        .animation(.easeInOut(duration: 0.5), value: windowState.mode)
+        .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
+        .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
+        .animation(.easeInOut(duration: 0.2), value: auxiliaryWindows.isApprovalVisible)
     }
-}
 
-/// Lightweight Objective-C target for NSMenuItem action callbacks.
-private final class MenuActionHandler: NSObject {
-    private let closure: () -> Void
+    // MARK: - Collapsed View
 
-    init(_ closure: @escaping () -> Void) {
-        self.closure = closure
+    /// Full-window orb for the 120x120 collapsed mode.
+    private var collapsedView: some View {
+        NativeOrbView(
+            orbAnimation: orbAnimation,
+            audioRMS: pipelineAux.audioRMS,
+            windowMode: windowState.mode.rawValue,
+            onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
+            onOrbClicked: {
+                windowState.transitionToCompact()
+                NotificationCenter.default.post(
+                    name: .faeConversationEngage,
+                    object: nil
+                )
+            },
+            onOrbContextMenu: {
+                showCollapsedContextMenu()
+            }
+        )
+        .clipShape(Circle())
+        .opacity(viewLoaded ? 1 : 0)
     }
 
-    @objc func invoke() {
-        closure()
+    // MARK: - Compact View
+
+    /// Three-zone vertical layout: orb crown, conversation scroll, input bar.
+    private var compactView: some View {
+        VStack(spacing: 0) {
+            // Zone 1: Orb Crown — dedicated 160pt hero section, never covered
+            OrbCrownView(
+                onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } }
+            )
+            .frame(height: 300)
+
+            // Subtle separator
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+
+            // Zone 2: Conversation — scrolling, fills remaining space
+            ConversationScrollView()
+
+            // Subtle separator
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+
+            // Zone 3: Input — pinned at bottom, hidden until pipeline ready
+            if pipelineAux.isPipelineReady {
+                InputBarView()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .opacity(viewLoaded ? 1 : 0)
+        .overlay {
+            // Emergency stop — visible whenever a tool approval is pending
+            if auxiliaryWindows.isApprovalVisible {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: { auxiliaryWindows.emergencyStop() }) {
+                            Label("Stop", systemImage: "xmark.circle.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                        .background(Color.red)
+                        .clipShape(Capsule())
+                        .shadow(color: .red.opacity(0.5), radius: 6)
+                        .padding(.trailing, 10)
+                        .padding(.top, 8)
+                    }
+                    Spacer()
+                }
+                .transition(.asymmetric(
+                    insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .opacity
+                ))
+            }
+        }
+    }
+
+    // MARK: - Collapsed Context Menu
+
+    /// Simplified context menu for the collapsed orb (no Reset Conversation —
+    /// that lives in the full compact context menu via OrbCrownView).
+    private func showCollapsedContextMenu() {
+        guard let window = windowState.window,
+              let contentView = window.contentView else { return }
+
+        let menu = NSMenu()
+
+        let settingsItem = NSMenuItem(
+            title: "Settings\u{2026}",
+            action: Selector(("showSettingsWindow:")),
+            keyEquivalent: ","
+        )
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
+        let hideHandler = MenuActionHandler { [windowState] in
+            windowState.hideWindow()
+        }
+        let hideItem = NSMenuItem(
+            title: "Hide Fae",
+            action: #selector(MenuActionHandler.invoke),
+            keyEquivalent: ""
+        )
+        hideItem.target = hideHandler
+        menu.addItem(hideItem)
+
+        menu.addItem(.separator())
+
+        let quitItem = NSMenuItem(
+            title: "Quit Fae",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        menu.addItem(quitItem)
+
+        objc_setAssociatedObject(
+            menu, &Self.menuHandlersKey,
+            [hideHandler] as NSArray,
+            .OBJC_ASSOCIATION_RETAIN
+        )
+
+        let mouseLocation = window.mouseLocationOutsideOfEventStream
+        menu.popUp(positioning: nil, at: mouseLocation, in: contentView)
     }
 }

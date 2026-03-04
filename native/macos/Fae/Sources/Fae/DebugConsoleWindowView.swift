@@ -6,6 +6,7 @@ import AppKit
 struct DebugConsoleWindowView: View {
     @ObservedObject var controller: DebugConsoleController
     @State private var autoScroll = true
+    @State private var copyConfirmation: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,20 +21,46 @@ struct DebugConsoleWindowView: View {
     // MARK: - Subviews
 
     private var toolbar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Text("Debug Console")
                 .font(.system(.subheadline, design: .monospaced, weight: .semibold))
                 .foregroundStyle(.secondary)
+
+            Button("Clear") {
+                controller.clear()
+                copyConfirmation = nil
+            }
+            .buttonStyle(.borderless)
+            .font(.system(.caption, design: .monospaced))
+            .disabled(controller.events.isEmpty)
+
+            if let copyConfirmation {
+                Text(copyConfirmation)
+                    .font(.system(.caption2, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(.green)
+                    .padding(.leading, 4)
+            }
+
             Spacer()
+
             Toggle("Auto-scroll", isOn: $autoScroll)
                 .toggleStyle(.checkbox)
                 .font(.system(.caption, design: .monospaced))
-            Button("Clear") { controller.clear() }
-                .buttonStyle(.borderless)
-                .font(.system(.caption, design: .monospaced))
-            Button("Copy All") { controller.copyAll() }
-                .buttonStyle(.borderless)
-                .font(.system(.caption, design: .monospaced))
+
+            Divider()
+                .frame(height: 14)
+
+            Button("Copy All") {
+                controller.copyAll()
+                copyConfirmation = "Copied"
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    copyConfirmation = nil
+                }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(.caption, design: .monospaced))
+            .disabled(controller.events.isEmpty)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

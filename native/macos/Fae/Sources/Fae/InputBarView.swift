@@ -1,20 +1,18 @@
 import Combine
 import SwiftUI
 
-/// Native input bar with microphone toggle, text field, send button, and action pills.
+/// Native input bar with microphone toggle, text field, send button, and thinking pill.
 ///
-/// Positioned at the bottom of the main window, visible only in compact mode.
-/// Mirrors the styling from the conversation HTML input bar: glassmorphic background,
-/// heather accent, serif font, and the same interaction patterns.
+/// Positioned at the bottom of the main window in the compact three-zone layout.
+/// The text field grows upward within its container, pushing the conversation
+/// scroll view up naturally — no window resizing needed.
 struct InputBarView: View {
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var windowState: WindowStateController
-    @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var faeCore: FaeCore
 
     @State private var messageText: String = ""
     @State private var isSendAnimating: Bool = false
-    @State private var lastLineCount: Int = 1
     @FocusState private var isTextFieldFocused: Bool
 
     /// Heather accent colour.
@@ -25,54 +23,40 @@ struct InputBarView: View {
     )
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            VStack(spacing: 10) {
-                // Input row: mic + textfield + send/stop
-                HStack(spacing: 10) {
-                    micToggleButton
-                    messageField
-                    Group {
-                        if conversation.isGenerating {
-                            stopButton
-                        } else {
-                            sendButton
-                        }
+        VStack(spacing: 10) {
+            // Input row: mic + textfield + send/stop
+            HStack(spacing: 10) {
+                micToggleButton
+                messageField
+                Group {
+                    if conversation.isGenerating {
+                        stopButton
+                    } else {
+                        sendButton
                     }
-                    .animation(.easeInOut(duration: 0.2), value: conversation.isGenerating)
                 }
+                .animation(.easeInOut(duration: 0.2), value: conversation.isGenerating)
+            }
 
-                // Action pills
-                HStack(spacing: 8) {
-                    actionPill(
-                        label: auxiliaryWindows.isConversationVisible
-                            ? "Hide Discussions" : "Show Discussions",
-                        action: { auxiliaryWindows.toggleConversation() }
-                    )
-                    actionPill(
-                        label: auxiliaryWindows.isCanvasVisible
-                            ? "Hide Canvas" : "Show Canvas",
-                        action: { auxiliaryWindows.toggleCanvas() }
-                    )
-                    thinkingTogglePill
-                }
+            // Action pills
+            HStack(spacing: 8) {
+                thinkingTogglePill
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(
-                Rectangle()
-                    .fill(.ultraThinMaterial.opacity(0.6))
-                    .overlay(
-                        Rectangle()
-                            .fill(Color.white.opacity(0.04))
-                    )
-            )
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(Color.white.opacity(0.07))
-                    .frame(height: 1)
-            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            Rectangle()
+                .fill(.ultraThinMaterial.opacity(0.6))
+                .overlay(
+                    Rectangle()
+                        .fill(Color.white.opacity(0.04))
+                )
+        )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.07))
+                .frame(height: 1)
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .faeWillFocusInputField)
@@ -85,9 +69,6 @@ struct InputBarView: View {
             if let text = note.userInfo?["text"] as? String {
                 messageText = text
             }
-        }
-        .onChange(of: messageText) { _, newText in
-            updateWindowHeightForText(newText)
         }
     }
 
@@ -136,7 +117,7 @@ struct InputBarView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 13, weight: .regular, design: .serif))
             .foregroundColor(.white.opacity(0.92))
-            .lineLimit(1...20)
+            .lineLimit(1...8)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
@@ -218,28 +199,6 @@ struct InputBarView: View {
         .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
-    // MARK: - Action Pill
-
-    @ViewBuilder
-    private func actionPill(label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(Color.white.opacity(0.45))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color.white.opacity(0.05))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: - Thinking Toggle Pill
 
     private var thinkingTogglePill: some View {
@@ -275,7 +234,6 @@ struct InputBarView: View {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // Detect URLs
         detectAndReportLinks(in: trimmed)
 
         conversation.handleUserSent(trimmed)
@@ -289,8 +247,6 @@ struct InputBarView: View {
         }
 
         messageText = ""
-        lastLineCount = 1
-        windowState.releaseExtraHeight()
     }
 
     /// Detect URLs in the message and report them to the conversation controller.
@@ -301,25 +257,6 @@ struct InputBarView: View {
             if let url = result?.url {
                 conversation.handleLinkDetected(url.absoluteString)
             }
-        }
-    }
-
-    // MARK: - Dynamic Height
-
-    private func updateWindowHeightForText(_ text: String) {
-        // Count newlines + estimate wrapped lines (rough: 1 line per ~38 chars in the field)
-        let explicitLines = text.filter { $0 == "\n" }.count + 1
-        let wrapEstimate = max(1, text.count / 38)
-        let lineCount = max(explicitLines, wrapEstimate)
-
-        guard lineCount != lastLineCount else { return }
-        lastLineCount = lineCount
-
-        if lineCount > 3 {
-            let extra = CGFloat(lineCount - 3) * 22.0
-            windowState.requestExtraHeight(extra)
-        } else {
-            windowState.releaseExtraHeight()
         }
     }
 }

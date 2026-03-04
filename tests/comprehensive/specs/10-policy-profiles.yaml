@@ -1,0 +1,151 @@
+phase: "10-policy-profiles"
+name: "Policy Profiles"
+description: "Validates TrustedActionBroker policy profile switching and behavior differences"
+tests:
+  - id: "prof-001"
+    name: "Switch to moreCautious profile"
+    class: deterministic
+    timeout_s: 10
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "read_only"}
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "config_accepted"
+        check: "status_code == 200"
+      - name: "profile_set"
+        check: "body.policyProfile == 'moreCautious'"
+    pass_threshold: 1.0
+
+  - id: "prof-002"
+    name: "moreCautious confirms medium-risk actions"
+    class: deterministic
+    timeout_s: 90
+    depends_on: ["prof-001"]
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+    phrasings:
+      - "Fae, write 'cautious test' to /tmp/cautious-test.txt"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "sleep"
+        duration_ms: 5000
+      - action: "http_get"
+        url: "/approvals"
+    criteria:
+      - name: "approval_required"
+        check: "body.pending is list and len(body.pending) > 0"
+    pass_threshold: 1.0
+
+  - id: "prof-003"
+    name: "Switch to moreAutonomous profile"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "config_accepted"
+        check: "status_code == 200"
+      - name: "profile_set"
+        check: "body.policyProfile == 'moreAutonomous'"
+    pass_threshold: 1.0
+
+  - id: "prof-004"
+    name: "moreAutonomous skips low-risk confirmation"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["prof-003"]
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, read /etc/hosts"
+      - "Fae, show me /etc/hosts"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_executed"
+        check: "events_contain_kind('Tool', 'read')"
+      - name: "no_approval_needed"
+        check: "not events_contain_any(['approval', 'confirm', 'pending'])"
+    pass_threshold: 1.0
+
+  - id: "prof-005"
+    name: "Return to balanced profile"
+    class: deterministic
+    timeout_s: 10
+    setup: []
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "config_accepted"
+        check: "status_code == 200"
+      - name: "profile_set"
+        check: "body.policyProfile == 'balanced'"
+    pass_threshold: 1.0
+
+  - id: "prof-006"
+    name: "Balanced profile default tool behavior"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["prof-005"]
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, read /etc/hosts"
+      - "Fae, show me /etc/hosts"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "tool_executed"
+        check: "events_contain_kind('Tool', 'read')"
+      - name: "response_has_content"
+        check: "assistant_response_contains('127.0.0.1')"
+    pass_threshold: 1.0

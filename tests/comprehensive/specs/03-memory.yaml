@@ -1,0 +1,259 @@
+phase: "03-memory"
+name: "Memory"
+description: "Validates memory capture, recall, forget, and entity graph operations"
+tests:
+  - id: "mem-001"
+    name: "Explicit remember command"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, remember that my favorite color is blue"
+      - "Fae, please remember my favorite color is blue"
+      - "Fae, I want you to remember that my favorite color is blue"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "response_confirms"
+        check: "assistant_response_contains_any(['remember', 'noted', 'got it', 'blue'])"
+    pass_threshold: 1.0
+
+  - id: "mem-002"
+    name: "Recall remembered fact"
+    class: llm_scored
+    timeout_s: 200
+    depends_on: ["mem-001"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what's my favorite color?"
+      - "Fae, do you remember my favorite color?"
+      - "Fae, what color do I like?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "recalls_blue"
+        check: "assistant_response_contains('blue')"
+    pass_threshold: 1.0
+
+  - id: "mem-003"
+    name: "Profile capture from name statement"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, my name is TestUser"
+      - "Fae, call me TestUser"
+      - "Fae, I'm TestUser"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "acknowledges_name"
+        check: "assistant_response_contains('TestUser')"
+    pass_threshold: 1.0
+
+  - id: "mem-004"
+    name: "Profile recall for name"
+    class: llm_scored
+    timeout_s: 200
+    depends_on: ["mem-003"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what's my name?"
+      - "Fae, do you know who I am?"
+      - "Fae, what do you call me?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "recalls_name"
+        check: "assistant_response_contains('TestUser')"
+    pass_threshold: 1.0
+
+  - id: "mem-005"
+    name: "Forget command soft-deletes memory"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["mem-001"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, forget my favorite color"
+      - "Fae, please forget what my favorite color is"
+      - "Fae, I don't want you to remember my favorite color anymore"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "confirms_forget"
+        check: "assistant_response_contains_any(['forget', 'forgot', 'removed', 'deleted', 'done'])"
+    pass_threshold: 1.0
+
+  - id: "mem-006"
+    name: "Forgotten fact no longer recalled"
+    class: llm_scored
+    timeout_s: 200
+    depends_on: ["mem-005"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what's my favorite color?"
+      - "Fae, do you know my favorite color?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "does_not_mention_blue"
+        check: "not assistant_response_contains('blue')"
+    pass_threshold: 1.0
+
+  - id: "mem-007"
+    name: "Interest capture"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, I'm really interested in quantum computing"
+      - "Fae, I find quantum computing fascinating"
+      - "Fae, I love learning about quantum computing"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "acknowledges_interest"
+        check: "assistant_response_contains_any(['quantum', 'interest', 'computing'])"
+    pass_threshold: 1.0
+
+  - id: "mem-008"
+    name: "Commitment capture"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, I need to finish my report by next Friday"
+      - "Fae, remind me I have to complete the report by next Friday"
+      - "Fae, I have a deadline for my report next Friday"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "acknowledges_commitment"
+        check: "assistant_response_contains_any(['report', 'Friday', 'deadline', 'noted'])"
+    pass_threshold: 1.0
+
+  - id: "mem-009"
+    name: "Person capture with entity"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, my sister Alice works at Google"
+      - "Fae, remember that my sister Alice works at Google"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "acknowledges_person"
+        check: "assistant_response_contains_any(['Alice', 'sister', 'Google'])"
+    pass_threshold: 1.0
+
+  - id: "mem-010"
+    name: "Entity graph query"
+    class: llm_scored
+    timeout_s: 200
+    depends_on: ["mem-009"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, who works at Google?"
+      - "Fae, do you know anyone who works at Google?"
+      - "Fae, tell me about people who work at Google"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "mentions_alice"
+        check: "assistant_response_contains('Alice')"
+    pass_threshold: 1.0

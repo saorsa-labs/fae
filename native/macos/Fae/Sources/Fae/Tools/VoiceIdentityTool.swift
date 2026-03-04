@@ -5,22 +5,25 @@ import Foundation
 /// Actions:
 /// - `check_status` — returns enrollment state, speaker count, confidence scores
 /// - `collect_sample` — plays ready beep, captures audio, embeds, enrolls
+/// - `collect_wake_samples` — captures short "Hey Fae" samples and learns user wake aliases
 /// - `confirm_identity` — matches current speaker against all profiles
 /// - `rename_speaker` — updates display name
 /// - `list_speakers` — lists all enrolled speakers with roles and counts
 struct VoiceIdentityTool: Tool {
     let name = "voice_identity"
     let description = """
-        Manage voice identity: enroll speakers, verify identity, list profiles. \
+        Manage voice identity: enroll speakers, verify identity, and personalize wake name detection. \
         Actions: check_status, collect_sample (plays beep then captures voice), \
-        confirm_identity, rename_speaker, list_speakers.
+        collect_wake_samples, confirm_identity, rename_speaker, list_speakers.
         """
     let parametersSchema = #"""
         {
-            "action": "string (required) — one of: check_status, collect_sample, confirm_identity, rename_speaker, list_speakers",
+            "action": "string (required) — one of: check_status, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers",
             "label": "string (optional) — speaker label for collect_sample or rename_speaker (e.g. 'alice')",
             "role": "string (optional) — speaker role for collect_sample: 'owner', 'trusted', 'guest' (default: 'guest')",
             "display_name": "string (optional) — human-readable name for collect_sample or rename_speaker",
+            "count": "number (optional) — number of wake samples for collect_wake_samples (default: 3, max: 6)",
+            "phrase": "string (optional) — wake phrase prompt label for collect_wake_samples (default: 'Hey Fae')",
             "threshold": "number (optional) — similarity threshold for confirm_identity (default: 0.70)"
         }
         """#
@@ -36,6 +39,8 @@ struct VoiceIdentityTool: Tool {
     let speakerProfileStore: SpeakerProfileStore?
     let audioCaptureManager: AudioCaptureManager?
     let audioPlaybackManager: AudioPlaybackManager?
+    let sttEngine: MLXSTTEngine?
+    let wakeWordProfileStore: WakeWordProfileStore?
 
     // MARK: - Execute
 
@@ -49,6 +54,8 @@ struct VoiceIdentityTool: Tool {
             return await checkStatus()
         case "collect_sample":
             return await collectSample(input: input)
+        case "collect_wake_samples":
+            return await collectWakeSamples(input: input)
         case "confirm_identity":
             return await confirmIdentity(input: input)
         case "rename_speaker":
@@ -56,7 +63,7 @@ struct VoiceIdentityTool: Tool {
         case "list_speakers":
             return await listSpeakers()
         default:
-            return .error("Unknown action: \(action). Valid actions: check_status, collect_sample, confirm_identity, rename_speaker, list_speakers")
+            return .error("Unknown action: \(action). Valid actions: check_status, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers")
         }
     }
 
@@ -168,6 +175,88 @@ struct VoiceIdentityTool: Tool {
             "quality": "\(quality)", \
             "message": "Voice sample collected and enrolled. \(qualityAdvice(enrollmentCount))"}
             """)
+    }
+
+    private func collectWakeSamples(input: [String: Any]) async -> ToolResult {
+        guard let capture = audioCaptureManager else {
+            return .error("Audio capture not available.")
+        }
+        guard let stt = sttEngine else {
+            return .error("STT engine not available — cannot learn wake aliases right now.")
+        }
+        guard let wakeStore = wakeWordProfileStore else {
+            return .error("Wake profile store not available.")
+        }
+
+        let requestedCount = input["count"] as? Int ?? 3
+        let count = max(1, min(requestedCount, 6))
+        let rawPhrase = (input["phrase"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let phrase: String
+        if let rawPhrase, !rawPhrase.isEmpty {
+            phrase = rawPhrase
+        } else {
+            phrase = "Hey Fae"
+        }
+
+        var transcripts: [String] = []
+        var learnedAliases: [String] = []
+
+        for _ in 0..<count {
+            if let playback = audioPlaybackManager {
+                await playback.playReadyBeep()
+                try? await Task.sleep(nanoseconds: 180_000_000)
+            }
+
+            let samples: [Float]
+            do {
+                samples = try await capture.captureSegment(durationSeconds: 2.0)
+            } catch {
+                return .error("Wake sample capture failed: \(error.localizedDescription)")
+            }
+
+            guard samples.count > 6_000 else {
+                continue
+            }
+
+            do {
+                let result = try await stt.transcribe(
+                    samples: samples,
+                    sampleRate: AudioCaptureManager.targetSampleRate
+                )
+                let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !transcript.isEmpty {
+                    transcripts.append(transcript)
+                }
+                if let alias = TextProcessing.extractWakeAliasCandidate(from: transcript) {
+                    await wakeStore.recordAliasCandidate(alias, source: "enrollment")
+                    learnedAliases.append(alias)
+                }
+            } catch {
+                // Keep going — we still may learn from other samples.
+                NSLog("VoiceIdentityTool: wake sample STT failed: %@", error.localizedDescription)
+            }
+        }
+
+        let uniqueLearned = Array(Set(learnedAliases)).sorted()
+        let payload: [String: Any] = [
+            "learned": !uniqueLearned.isEmpty,
+            "phrase": phrase,
+            "samples_requested": count,
+            "samples_transcribed": transcripts.count,
+            "learned_aliases": uniqueLearned,
+            "transcripts": transcripts,
+            "message": uniqueLearned.isEmpty
+                ? "I heard your samples, but I couldn't confidently derive a new wake-name variant yet."
+                : "Wake-name personalization updated from your voice samples."
+        ]
+
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let json = String(data: data, encoding: .utf8)
+        {
+            return .success(json)
+        }
+
+        return .success("{\"learned\":\(!uniqueLearned.isEmpty)}")
     }
 
     private func confirmIdentity(input: [String: Any]) async -> ToolResult {

@@ -99,7 +99,7 @@ struct SettingsChannelsTab: View {
             .foregroundStyle(.secondary)
 
             Button("Start guided setup in chat") {
-                auxiliaryWindows.showConversation()
+                auxiliaryWindows.focusMainWindow()
                 commandSender?.sendCommand(
                     name: "conversation.inject_text",
                     payload: ["text": "Help me set up a channel using the guided workflow."]
@@ -108,7 +108,7 @@ struct SettingsChannelsTab: View {
             .buttonStyle(.borderedProminent)
 
             Button("Open conversation") {
-                auxiliaryWindows.showConversation()
+                auxiliaryWindows.focusMainWindow()
             }
             .buttonStyle(.bordered)
         }
@@ -132,7 +132,7 @@ struct SettingsChannelsTab: View {
 
             HStack(spacing: 8) {
                 Button("Configure via Chat") {
-                    auxiliaryWindows.showConversation()
+                    auxiliaryWindows.focusMainWindow()
                 }
                 .buttonStyle(.bordered)
 

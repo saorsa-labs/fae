@@ -11,6 +11,10 @@ enum ToolRiskDecision: Sendable {
     case requireApproval(reason: String)
 }
 
+/// Legacy helper kept for backwards compatibility in tests.
+///
+/// Production enforcement is centralized in `DefaultTrustedActionBroker`
+/// at the `PipelineCoordinator.executeTool` chokepoint.
 enum ToolRiskPolicy {
     static func decision(for tool: any Tool) -> ToolRiskDecision {
         if tool.requiresApproval {

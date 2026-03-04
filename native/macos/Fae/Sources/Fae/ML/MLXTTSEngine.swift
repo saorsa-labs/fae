@@ -190,13 +190,21 @@ actor MLXTTSEngine: TTSEngine {
     ///   - refText: Transcript of the reference audio.
     func synthesize(text: String, refAudio: MLXArray, refText: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task { [weak self] in
+                guard let self else {
+                    continuation.finish()
+                    return
+                }
                 await self.synthesizeWithRef(
                     text: text,
                     refAudio: refAudio,
                     refText: refText,
                     continuation: continuation
                 )
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }
@@ -209,12 +217,20 @@ actor MLXTTSEngine: TTSEngine {
     ///     Pass nil to use Fae's cloned voice via ICL (in-context learning) mode.
     func synthesize(text: String, voiceInstruct: String?) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task { [weak self] in
+                guard let self else {
+                    continuation.finish()
+                    return
+                }
                 await self.synthesizeInternal(
                     text: text,
                     voiceInstruct: voiceInstruct,
                     continuation: continuation
                 )
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }
@@ -261,6 +277,9 @@ actor MLXTTSEngine: TTSEngine {
                 language: nil
             )
             for try await samples in stream {
+                if Task.isCancelled {
+                    break
+                }
                 guard let format = AVAudioFormat(
                     standardFormatWithSampleRate: Double(sampleRate),
                     channels: 1
@@ -275,11 +294,18 @@ actor MLXTTSEngine: TTSEngine {
                         dest.update(from: src.baseAddress!, count: samples.count)
                     }
                 }
+                if Task.isCancelled {
+                    break
+                }
                 continuation.yield(buffer)
             }
             continuation.finish()
         } catch {
-            continuation.finish(throwing: error)
+            if Task.isCancelled {
+                continuation.finish()
+            } else {
+                continuation.finish(throwing: error)
+            }
         }
     }
 
@@ -332,6 +358,9 @@ actor MLXTTSEngine: TTSEngine {
                 language: nil
             )
             for try await samples in stream {
+                if Task.isCancelled {
+                    break
+                }
                 guard let format = AVAudioFormat(
                     standardFormatWithSampleRate: Double(sampleRate),
                     channels: 1
@@ -346,11 +375,18 @@ actor MLXTTSEngine: TTSEngine {
                         dest.update(from: src.baseAddress!, count: samples.count)
                     }
                 }
+                if Task.isCancelled {
+                    break
+                }
                 continuation.yield(buffer)
             }
             continuation.finish()
         } catch {
-            continuation.finish(throwing: error)
+            if Task.isCancelled {
+                continuation.finish()
+            } else {
+                continuation.finish(throwing: error)
+            }
         }
     }
 

@@ -11,6 +11,16 @@ enum SafeBashExecutor {
         "diskutil erasedisk",
         ":(){:|:&};:",
         "sudo ",
+        "launchctl unload",
+        "launchctl remove",
+        "chown -r",
+        "chmod 777",
+    ]
+
+    private static let deniedRegexes: [String] = [
+        #"(?i)\b(curl|wget)\b[^\n|]*\|\s*(sh|bash|zsh)\b"#,
+        #"(?i)\b(eval|exec)\s*\("#,
+        #"(?i)>\s*(/etc|/private/etc|~/.ssh|~/.zshrc|~/.bashrc|~/.profile)"#,
     ]
 
     static func execute(command: String, timeoutSeconds: Int) async throws -> (status: Int32, stdout: Data, stderr: Data) {
@@ -21,6 +31,18 @@ enum SafeBashExecutor {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Command blocked by safety policy: \(pattern)"]
             )
+        }
+
+        for regexPattern in deniedRegexes {
+            if let regex = try? NSRegularExpression(pattern: regexPattern),
+               regex.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)) != nil
+            {
+                throw NSError(
+                    domain: "SafeBashExecutor",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Command blocked by advanced safety policy"]
+                )
+            }
         }
 
         let process = Process()

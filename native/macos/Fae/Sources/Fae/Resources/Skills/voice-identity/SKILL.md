@@ -19,9 +19,10 @@ When no primary user is enrolled (check via `voice_identity check_status` — `h
 5. Collect 2 more samples (3 total) with natural prompts:
    - "Great! One more — tell me about something you enjoy."
    - "Perfect. Last one — say anything that comes to mind."
-6. After 3 samples, use `voice_identity confirm_identity` to verify.
-7. If confirmed, respond warmly: "Got it! I'll recognize you from now on, [name]."
-8. Remember their name and the enrollment via memory.
+6. Wake-name tuning (important): ask them to say "Hey Fae" naturally a few times and run `voice_identity collect_wake_samples` with `count: 3`.
+7. After samples are collected, use `voice_identity confirm_identity` to verify.
+8. If confirmed, respond warmly: "Got it! I'll recognize you from now on, [name]."
+9. Remember their name and the enrollment via memory.
 
 ## Introducing a New Person
 

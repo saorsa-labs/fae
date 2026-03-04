@@ -50,7 +50,12 @@ private struct ApprovalCard: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
-            HStack(spacing: 12) {
+            Text("Say yes, no, or always.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+
+            // Row 1: Primary actions — No / Yes / Always
+            HStack(spacing: 8) {
                 Button(action: { controller.deny() }) {
                     Text("No")
                         .font(.system(size: 12, weight: .medium))
@@ -70,10 +75,40 @@ private struct ApprovalCard: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
                 .keyboardShortcut(.return, modifiers: [])
+
+                Button(action: { controller.approveAlways() }) {
+                    Text("Always")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+            }
+
+            // Row 2: Escalation — Approve All Read-Only / Approve All
+            HStack(spacing: 8) {
+                Button(action: { controller.approveAllReadOnly() }) {
+                    Text("Approve All Read-Only")
+                        .font(.system(size: 10, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.bordered)
+                .tint(.teal)
+
+                Button(action: { controller.approveAll() }) {
+                    Text("Approve All")
+                        .font(.system(size: 10, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
             }
         }
         .padding(14)
-        .frame(width: 240)
+        .frame(width: 300)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)

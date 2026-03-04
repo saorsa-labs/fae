@@ -28,6 +28,24 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         XCTAssertEqual(cleaned, "hiddenHello world")
     }
 
+    func testStripNonSpeechCharsNormalizesHistoricalNumberArtifacts() {
+        let text = "The ab acus in Mes opot amia dates to 3 0 0 0 - 2 5 0 0 BCE."
+        let cleaned = TextProcessing.stripNonSpeechChars(text)
+
+        XCTAssertTrue(cleaned.contains("abacus"))
+        XCTAssertTrue(cleaned.contains("Mesopotamia"))
+        XCTAssertTrue(cleaned.contains("3000 to 2500"))
+        XCTAssertTrue(cleaned.contains("B C E"))
+    }
+
+    func testStripNonSpeechCharsVerbalizesDates() {
+        let text = "Milestones were 2026-03-03 and 03/04/2026."
+        let cleaned = TextProcessing.stripNonSpeechChars(text)
+
+        XCTAssertTrue(cleaned.contains("March 3, 2026"))
+        XCTAssertTrue(cleaned.contains("March 4, 2026"))
+    }
+
     func testParseToolCallsSupportsQwen35XmlFormat() {
         let response = """
         Sure — doing it now.
@@ -53,5 +71,42 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(calls[0].name, "read")
         XCTAssertEqual(calls[0].arguments["path"] as? String, "/tmp/x.txt")
+    }
+
+    func testWakeAddressMatchDetectsFuzzyNearMissAtGreeting() {
+        let match = TextProcessing.findWakeAddressMatch(
+            in: "Hey faeye open settings",
+            aliases: TextProcessing.nameVariants,
+            wakeWord: "hi fae"
+        )
+
+        XCTAssertNotNil(match)
+        XCTAssertEqual(match?.kind, .fuzzy)
+        XCTAssertEqual(match?.matchedToken, "faeye")
+    }
+
+    func testExtractWakeAliasCandidateFromGreeting() {
+        let alias = TextProcessing.extractWakeAliasCandidate(from: "Hi Faye can you help")
+        XCTAssertEqual(alias, "faye")
+    }
+
+    func testBargeInOnlyTracksWhileAssistantSpeaking() {
+        XCTAssertTrue(PipelineCoordinator.shouldTrackBargeIn(assistantSpeaking: true))
+        XCTAssertFalse(PipelineCoordinator.shouldTrackBargeIn(assistantSpeaking: false))
+    }
+
+    func testBargeInDoesNotInterruptSilentGeneration() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldAllowBargeInInterrupt(
+                assistantSpeaking: false,
+                assistantGenerating: true
+            )
+        )
+        XCTAssertTrue(
+            PipelineCoordinator.shouldAllowBargeInInterrupt(
+                assistantSpeaking: true,
+                assistantGenerating: true
+            )
+        )
     }
 }

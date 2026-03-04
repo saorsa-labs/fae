@@ -56,11 +56,17 @@ final class DebugConsoleController: ObservableObject {
     /// When false, `log()` is a no-op (zero overhead when console is hidden).
     var isEnabled: Bool = true
 
+    /// Optional callback for file logging (set by TestServer when active).
+    /// Called with (event, sequenceIndex) after each event is appended.
+    var fileLoggerCallback: ((DebugEvent, Int) -> Void)?
+
     private static let maxEvents = 500
 
     func log(_ kind: DebugEventKind, _ text: String) {
         guard isEnabled else { return }
-        events.append(DebugEvent(timestamp: Date(), kind: kind, text: text))
+        let event = DebugEvent(timestamp: Date(), kind: kind, text: text)
+        events.append(event)
+        fileLoggerCallback?(event, events.count - 1)
         if events.count > Self.maxEvents {
             events.removeFirst(events.count - Self.maxEvents)
         }

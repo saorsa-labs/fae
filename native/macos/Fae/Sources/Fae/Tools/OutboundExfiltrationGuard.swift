@@ -35,7 +35,7 @@ actor OutboundExfiltrationGuard {
     }
 
     func evaluate(toolName: String, arguments: [String: Any]) -> GuardDecision? {
-        guard isOutboundTool(toolName) else { return nil }
+        guard isOutboundTool(toolName, arguments: arguments) else { return nil }
         loadIfNeeded()
 
         let recipient = extractRecipient(from: arguments)
@@ -56,7 +56,7 @@ actor OutboundExfiltrationGuard {
     }
 
     func recordSuccessfulSend(toolName: String, arguments: [String: Any]) {
-        guard isOutboundTool(toolName) else { return }
+        guard isOutboundTool(toolName, arguments: arguments) else { return }
         guard let recipient = extractRecipient(from: arguments) else { return }
 
         loadIfNeeded()
@@ -67,13 +67,33 @@ actor OutboundExfiltrationGuard {
         saveState()
     }
 
-    private func isOutboundTool(_ toolName: String) -> Bool {
+    private func isOutboundTool(_ toolName: String, arguments: [String: Any]) -> Bool {
         let normalized = toolName.lowercased()
-        return normalized.contains("send")
+        let directNameMatch = normalized.contains("send")
             || normalized.contains("post")
             || normalized.contains("publish")
             || normalized.contains("mail_out")
             || normalized.contains("channel_out")
+
+        if directNameMatch {
+            return true
+        }
+
+        let action = (arguments["action"] as? String ?? arguments["operation"] as? String ?? "")
+            .lowercased()
+        let outboundActions = [
+            "send", "post", "publish", "message", "email", "mail", "deliver", "notify", "share",
+        ]
+        if outboundActions.contains(where: { action.contains($0) }) {
+            return true
+        }
+
+        // Presence of recipient-like fields is a strong outbound signal.
+        if extractRecipient(from: arguments) != nil {
+            return true
+        }
+
+        return false
     }
 
     private func extractRecipient(from args: [String: Any]) -> String? {

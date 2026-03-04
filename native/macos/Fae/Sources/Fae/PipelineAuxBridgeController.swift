@@ -320,10 +320,6 @@ final class PipelineAuxBridgeController: ObservableObject {
 
         switch type {
         case "executing", "call":
-            // Auto-show canvas when a tool starts running
-            if let aux = auxiliaryWindows, !aux.isCanvasVisible {
-                aux.showCanvas()
-            }
             let card = ActivityCard(
                 id: cardId,
                 kind: .toolCall(name: name),
@@ -373,14 +369,6 @@ final class PipelineAuxBridgeController: ObservableObject {
                 auxiliaryWindows?.showCanvas()
             } else {
                 auxiliaryWindows?.hideCanvas()
-            }
-
-        case "pipeline.conversation_visibility":
-            let visible = payload["visible"] as? Bool ?? false
-            if visible {
-                auxiliaryWindows?.showConversation()
-            } else {
-                auxiliaryWindows?.hideConversation()
             }
 
         case "pipeline.canvas_content":

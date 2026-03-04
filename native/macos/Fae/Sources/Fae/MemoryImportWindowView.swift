@@ -215,7 +215,7 @@ struct MemoryImportWindowView: View {
 
         let fullMessage = Self.instructionPrefix + trimmed
         conversation.handleUserSent(fullMessage)
-        auxiliaryWindows.showConversation()
+        auxiliaryWindows.focusMainWindow()
         dismissAction()
     }
 }

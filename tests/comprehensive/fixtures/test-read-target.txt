@@ -1,0 +1,4 @@
+This is a Fae test fixture file.
+Line 2: The quick brown fox jumps over the lazy dog.
+Line 3: 42
+Line 4: Fae comprehensive test suite validation content.

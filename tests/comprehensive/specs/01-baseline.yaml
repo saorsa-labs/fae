@@ -1,0 +1,268 @@
+phase: "01-baseline"
+name: "Baseline"
+description: "Validates core LLM response quality, cancel, and address gating"
+tests:
+  - id: "base-001"
+    name: "Greeting response"
+    class: llm_scored
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, hello"
+      - "Fae, hi there"
+      - "Fae, hey"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "friendly_tone"
+        check: "llm_judge('Is this a friendly greeting response?', assistant_response) >= 0.7"
+    pass_threshold: 1.0
+
+  - id: "base-002"
+    name: "Math accuracy"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      # Disable tools to minimize system prompt → faster prefill
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what is 123 plus 456?"
+      - "Fae, calculate 123 + 456"
+      - "Fae, what's the sum of 123 and 456?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "correct_answer"
+        check: "assistant_response_contains('579')"
+    pass_threshold: 1.0
+
+  - id: "base-003"
+    name: "Factual knowledge"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what is the capital of France?"
+      - "Fae, tell me the capital city of France"
+      - "Fae, which city is France's capital?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "correct_answer"
+        check: "assistant_response_contains('Paris')"
+    pass_threshold: 1.0
+
+  - id: "base-004"
+    name: "Multi-turn context retention"
+    class: llm_scored
+    timeout_s: 400
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "inject"
+        text: "Fae, my favorite animal is a red panda"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "inject"
+        text: "Fae, I also like hiking in the mountains"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "inject"
+        text: "Fae, what's my favorite animal and what do I like to do?"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "recalls_animal"
+        check: "assistant_response_contains('red panda')"
+      - name: "recalls_activity"
+        check: "assistant_response_contains_any(['hiking', 'mountains'])"
+    pass_threshold: 1.0
+
+  - id: "base-005"
+    name: "Cancel generation"
+    class: deterministic
+    timeout_s: 120
+    setup:
+      # Disable tools for faster prefill — cancel test doesn't need tools
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, write a very long essay about the history of computing from ancient abacus to modern quantum computers"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      # Wait for generation to be in progress (prefill ~15-30s without tools).
+      # Use wait_generation Phase 1 to detect when generation starts, then cancel.
+      - action: "wait_generation"
+        max_wait_s: 60
+      # Generation completed — for cancel test, we need to catch it mid-stream.
+      # If it already finished, cancel is a no-op and isGenerating=false anyway.
+      - action: "http_post"
+        url: "/cancel"
+        body: {}
+      # Allow pipeline time to tear down generation
+      - action: "sleep"
+        duration_ms: 10000
+      - action: "http_get"
+        url: "/conversation"
+    criteria:
+      - name: "cancel_accepted"
+        check: "status_code == 200"
+      - name: "generation_stopped"
+        check: "body.isGenerating == false"
+    pass_threshold: 1.0
+
+  - id: "base-006"
+    name: "Direct address gating ON blocks non-addressed"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "conversation.require_direct_address", "value": "true"}
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "conversation.require_direct_address", "value": "false"}
+    phrasings: []
+    steps:
+      - action: "inject"
+        text: "What is two plus two?"
+      - action: "sleep"
+        duration_ms: 5000
+      - action: "http_get"
+        url: "/conversation"
+    criteria:
+      - name: "no_response"
+        check: "body.count == 0 or last_message_role != 'assistant'"
+    pass_threshold: 1.0
+
+  - id: "base-007"
+    name: "Direct address gating OFF allows non-addressed"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "conversation.require_direct_address", "value": "false"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "inject"
+        text: "What is two plus two?"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+    pass_threshold: 1.0
+
+  - id: "base-008"
+    name: "Thinking mode toggle"
+    class: deterministic
+    timeout_s: 400
+    setup:
+      # Disable tools to minimize prefill latency
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.thinking_enabled", "value": "false"}
+    phrasings: []
+    steps:
+      # Phase 1: thinking ON — simple query to minimize think time
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.thinking_enabled", "value": "true"}
+      - action: "inject"
+        text: "Fae, say hello"
+      - action: "wait_generation"
+        max_wait_s: 240
+      - action: "collect_events"
+        tag: "thinking_on"
+      # Phase 2: thinking OFF
+      - action: "http_post"
+        url: "/cancel"
+        body: {}
+      - action: "sleep"
+        duration_ms: 2000
+      - action: "http_post"
+        url: "/reset"
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.thinking_enabled", "value": "false"}
+      - action: "inject"
+        text: "Fae, say hello"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+        tag: "thinking_off"
+    criteria:
+      - name: "thinking_on_has_think_events"
+        check: "tagged_events('thinking_on').any_contain_kind('Think')"
+      - name: "thinking_off_no_think_events"
+        check: "not tagged_events('thinking_off').any_contain_kind('Think')"
+    pass_threshold: 1.0

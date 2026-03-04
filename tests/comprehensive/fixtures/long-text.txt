@@ -1,0 +1,67 @@
+The History of Computer Networking: From ARPANET to the Modern Internet
+
+The story of computer networking begins in the late 1960s with the Advanced Research
+Projects Agency Network, known as ARPANET. Funded by the United States Department of
+Defense, ARPANET was conceived as a means to share computing resources among research
+institutions. On October 29, 1969, the first message was sent between computers at UCLA
+and the Stanford Research Institute. The intended message was "LOGIN" but the system
+crashed after transmitting just two letters: "LO." Despite this inauspicious start, the
+experiment proved that packet-switched networking was viable.
+
+Packet switching, the foundational technology of ARPANET, was independently developed by
+Paul Baran at RAND Corporation and Donald Davies at the National Physical Laboratory in
+the United Kingdom. Unlike circuit-switched telephone networks, which dedicated a physical
+path for each call, packet switching broke data into small chunks that could travel
+independently across the network and be reassembled at their destination. This approach
+was far more resilient and efficient.
+
+Throughout the 1970s, ARPANET grew steadily. Researchers developed key protocols including
+the Network Control Protocol and later the Transmission Control Protocol and Internet
+Protocol, collectively known as TCP/IP. Vinton Cerf and Robert Kahn published their
+seminal paper on TCP in 1974, laying the groundwork for internetworking. TCP/IP provided
+a universal language that allowed different networks to communicate with each other,
+forming an "internet" of networks.
+
+The transition from ARPANET to TCP/IP was completed on January 1, 1983, a date sometimes
+called "flag day." This switchover was a watershed moment because it established the
+protocol suite that still underpins the modern internet. Around the same time, the Domain
+Name System was introduced by Paul Mockapetris, replacing the cumbersome practice of
+maintaining hosts files with a distributed, hierarchical naming system.
+
+The 1980s saw the emergence of several competing network architectures. The National
+Science Foundation created NSFNET in 1985 to connect supercomputing centers, which
+quickly became the backbone of academic networking in the United States. Meanwhile,
+commercial networks like CompuServe, Prodigy, and America Online brought connectivity
+to ordinary consumers, albeit through proprietary walled gardens.
+
+The invention of the World Wide Web by Tim Berners-Lee at CERN in 1989 transformed the
+internet from a tool for specialists into a global information platform. Berners-Lee
+combined hypertext with the internet to create a system where documents could link to
+one another across the network. The release of the Mosaic web browser in 1993 made the
+web accessible to non-technical users and sparked explosive growth.
+
+The commercialization of the internet in the mid-1990s brought unprecedented change.
+The dot-com boom saw billions of dollars invested in internet startups. Ethernet, which
+Robert Metcalfe had invented at Xerox PARC in 1973, became the dominant local area
+network technology. Fiber optic cables were laid across ocean floors, connecting
+continents with high-bandwidth links.
+
+The early 2000s brought broadband to homes, replacing dial-up modems with DSL and cable
+connections. Wireless networking emerged with the IEEE 802.11 standards, eventually
+branded as Wi-Fi. Mobile networking evolved through successive generations: 2G brought
+digital voice, 3G enabled mobile data, 4G LTE provided broadband speeds on mobile
+devices, and 5G now promises ultra-low latency and massive device connectivity.
+
+Today the internet connects over five billion people worldwide. Cloud computing
+concentrates processing power in massive data centers. Content delivery networks
+distribute data to edge servers close to users. Software-defined networking and network
+function virtualization have made networks programmable and flexible. The rise of the
+Internet of Things has connected billions of devices from thermostats to industrial
+sensors.
+
+Looking ahead, researchers are exploring quantum networking, which could enable
+fundamentally secure communication through quantum key distribution. Post-quantum
+cryptography is being developed to protect classical networks against future quantum
+computers. Satellite constellations like Starlink aim to bring connectivity to remote
+areas. The network that began with a crashed two-letter message now carries the bulk
+of human communication, commerce, and knowledge.

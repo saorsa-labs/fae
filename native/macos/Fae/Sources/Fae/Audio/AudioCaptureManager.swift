@@ -28,6 +28,7 @@ actor AudioCaptureManager {
         }
 
         let inputNode = engine.inputNode
+        configureVoiceProcessingIfAvailable(on: inputNode)
         let nativeFormat = inputNode.outputFormat(forBus: 0)
 
         // Use native format for the tap to avoid format mismatch crashes,
@@ -90,6 +91,7 @@ actor AudioCaptureManager {
         isCapturing = true
         NSLog("AudioCaptureManager: started capture at %d Hz (native: %.0f Hz, %d ch)",
               Self.targetSampleRate, nativeFormat.sampleRate, nativeFormat.channelCount)
+        logMicrophoneModeDiagnosticsIfAvailable()
 
         return stream
     }
@@ -190,6 +192,45 @@ actor AudioCaptureManager {
     }
 
     // MARK: - Private
+
+    private func configureVoiceProcessingIfAvailable(on inputNode: AVAudioInputNode) {
+        do {
+            try inputNode.setVoiceProcessingEnabled(true)
+            inputNode.isVoiceProcessingBypassed = false
+            inputNode.isVoiceProcessingAGCEnabled = true
+            NSLog("AudioCaptureManager: voice processing enabled on input node")
+        } catch {
+            NSLog("AudioCaptureManager: voice processing unavailable (%@)", error.localizedDescription)
+        }
+    }
+
+    private func logMicrophoneModeDiagnosticsIfAvailable() {
+        if #available(macOS 12.0, *) {
+            let active = AVCaptureDevice.activeMicrophoneMode
+            let preferred = AVCaptureDevice.preferredMicrophoneMode
+            NSLog(
+                "AudioCaptureManager: microphone mode active=%@ preferred=%@",
+                Self.microphoneModeLabel(active),
+                Self.microphoneModeLabel(preferred)
+            )
+            if active != .voiceIsolation {
+                NSLog("AudioCaptureManager: tip — switch to Voice Isolation in Control Center for cleaner speech capture")
+            }
+        }
+    }
+
+    private static func microphoneModeLabel(_ mode: AVCaptureDevice.MicrophoneMode) -> String {
+        switch mode {
+        case .standard:
+            return "standard"
+        case .wideSpectrum:
+            return "wide_spectrum"
+        case .voiceIsolation:
+            return "voice_isolation"
+        @unknown default:
+            return "unknown"
+        }
+    }
 
     private func emitChunk(_ chunk: AudioChunk) {
         continuation?.yield(chunk)

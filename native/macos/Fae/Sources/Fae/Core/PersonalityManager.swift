@@ -213,8 +213,8 @@ enum PersonalityManager {
     ]
 
     static let approvalAmbiguous = [
-        "Was that a yes or no?", "Sorry, I didn't catch that. Yes or no?",
-        "I need a clear yes or no.",
+        "Was that a yes, no, or always?", "Sorry, I didn't catch that. Yes, no, or always?",
+        "I need a clear yes, no, or always.",
     ]
 
     // MARK: - Acknowledgment Rotation
@@ -241,26 +241,26 @@ enum PersonalityManager {
         case "bash":
             let cmd = extractField("command", from: inputJSON)
             let truncated = String(cmd.prefix(60))
-            return "I'd like to run a command: \(truncated). Say yes or no."
+            return "I'd like to run a command: \(truncated). Say yes, no, or always."
 
         case "write":
             let path = extractField("path", from: inputJSON)
             let truncated = String(path.prefix(80))
-            return "I'd like to create the file \(truncated). Say yes or no."
+            return "I'd like to create the file \(truncated). Say yes, no, or always."
 
         case "edit":
             let path = extractField("path", from: inputJSON)
             let truncated = String(path.prefix(80))
-            return "I'd like to edit \(truncated). Say yes or no."
+            return "I'd like to edit \(truncated). Say yes, no, or always."
 
         case "desktop", "desktop_automation":
-            return "I'd like to use desktop automation. Say yes or no."
+            return "I'd like to use desktop automation. Say yes, no, or always."
 
         case "python_skill":
-            return "I'd like to run a Python skill. Say yes or no."
+            return "I'd like to run a Python skill. Say yes, no, or always."
 
         default:
-            return "I'd like to use the \(toolName) tool. Say yes or no."
+            return "I'd like to use the \(toolName) tool. Say yes, no, or always."
         }
     }
 

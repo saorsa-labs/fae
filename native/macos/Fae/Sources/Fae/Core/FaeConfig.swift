@@ -48,7 +48,8 @@ struct FaeConfig: Codable {
 
     struct LlmConfig: Codable {
         var maxTokens: Int = 4096
-        var contextSizeTokens: Int = 16_384
+        /// Context size in tokens. 0 = auto (use model-recommended size based on RAM tier).
+        var contextSizeTokens: Int = 0
         var temperature: Float = 0.7
         var topP: Float = 0.9
         var topK: Int = 40
@@ -105,8 +106,12 @@ struct FaeConfig: Codable {
 
     struct BargeInConfig: Codable {
         var enabled: Bool = true
-        var minRms: Float = 0.05
-        var confirmMs: Int = 150
+        /// Minimum RMS energy for barge-in candidate. Raised from 0.05 to 0.08
+        /// to filter background noise while still accepting conversational speech.
+        var minRms: Float = 0.08
+        /// Continuous speech duration (ms) before barge-in fires. Raised from 150
+        /// to 350 so transient sounds and ambient noise don't trigger interruption.
+        var confirmMs: Int = 350
         var assistantStartHoldoffMs: Int = 500
         var bargeInSilenceMs: Int = 600
     }

@@ -15,6 +15,8 @@ protocol HostCommandSender: AnyObject {
 final class HostCommandBridge: ObservableObject {
     weak var sender: HostCommandSender?
     weak var debugConsole: DebugConsoleController?
+    /// Direct reference for spoken acknowledgments (e.g., "tools enabled").
+    weak var faeCore: FaeCore?
 
     private var observations: [NSObjectProtocol] = []
 
@@ -170,11 +172,15 @@ final class HostCommandBridge: ObservableObject {
                 guard let requestId = notification.userInfo?["request_id"],
                       let approved = notification.userInfo?["approved"] as? Bool
                 else { return }
+                var payload: [String: Any] = ["request_id": requestId, "approved": approved]
+                if let decision = notification.userInfo?["decision"] as? String {
+                    payload["decision"] = decision
+                }
+                if let toolName = notification.userInfo?["tool_name"] as? String {
+                    payload["tool_name"] = toolName
+                }
                 Task { @MainActor in
-                    self?.dispatch(
-                        "approval.respond",
-                        payload: ["request_id": requestId, "approved": approved]
-                    )
+                    self?.dispatch("approval.respond", payload: payload)
                 }
             }
         )
@@ -219,6 +225,10 @@ final class HostCommandBridge: ObservableObject {
                             ]
                         )
                         Self.incrementAuditCounter("fae.governance.set_tool_mode")
+
+                        // Spoken acknowledgment so the user knows the change took effect.
+                        let label = Self.toolModeLabel(value)
+                        self.faeCore?.speakDirect("Got it — \(label).")
 
                     case "set_setting":
                         guard let key = notification.userInfo?["key"] as? String,
@@ -267,8 +277,8 @@ final class HostCommandBridge: ObservableObject {
                         Self.incrementAuditCounter("fae.governance.request_permission")
 
                     case "open_settings":
-                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                        NSApp.activate(ignoringOtherApps: true)
+                        debugLog(self.debugConsole, .governance, "Posting faeOpenSettingsRequested from governance bridge")
+                        NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
                         Self.incrementAuditCounter("fae.governance.open_settings")
 
                     case "start_owner_enrollment":
@@ -343,5 +353,17 @@ final class HostCommandBridge: ObservableObject {
         let defaults = UserDefaults.standard
         let current = defaults.integer(forKey: key)
         defaults.set(current + 1, forKey: key)
+    }
+
+    /// Human-friendly label for a tool_mode value.
+    private static func toolModeLabel(_ mode: String) -> String {
+        switch mode {
+        case "full":              return "tools are enabled with approval"
+        case "full_no_approval":  return "tools are fully enabled"
+        case "read_only":         return "tools are set to read-only"
+        case "read_write":        return "tools are set to read-write"
+        case "off":               return "tools are turned off"
+        default:                  return "tool mode updated"
+        }
     }
 }

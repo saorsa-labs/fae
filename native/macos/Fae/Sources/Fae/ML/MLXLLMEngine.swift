@@ -15,7 +15,16 @@ actor MLXLLMEngine: LLMEngine {
         loadState = .loading
         NSLog("MLXLLMEngine: loading model %@", modelID)
         do {
-            let config = ModelConfiguration(id: modelID)
+            var config = ModelConfiguration(id: modelID)
+            // Qwen3.5 models use XML parameter format for tool calls:
+            //   <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
+            // The default .json ToolCallProcessor can't parse XML content and silently
+            // discards tool calls. Setting .xmlFunction activates XMLFunctionParser which
+            // correctly handles this format.
+            if modelID.lowercased().contains("qwen3.5") {
+                config.toolCallFormat = .xmlFunction
+                NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen3.5")
+            }
             container = try await LLMModelFactory.shared.loadContainer(configuration: config)
             isLoaded = true
             loadState = .loaded
@@ -62,7 +71,7 @@ actor MLXLLMEngine: LLMEngine {
         options: GenerationOptions
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task { [weak self] in
+            let producer = Task { [weak self] in
                 guard let self else {
                     continuation.finish()
                     return
@@ -126,14 +135,44 @@ actor MLXLLMEngine: LLMEngine {
                         parameters: params
                     )
 
+                    // With .xmlFunction format (inline), the ToolCallProcessor passes
+                    // raw XML text through as .chunk events AND emits .toolCall events
+                    // when parsing succeeds. We suppress the raw XML text between
+                    // <tool_call>...</tool_call> tags so PipelineCoordinator only sees
+                    // clean JSON-serialized tool calls from the .toolCall events.
+                    var insideToolCallTag = false
+
                     for await generation in stream {
+                        if Task.isCancelled {
+                            break
+                        }
                         switch generation {
                         case .chunk(let text):
-                            continuation.yield(text)
+                            if insideToolCallTag {
+                                // Suppress raw XML text inside <tool_call> region.
+                                if text.contains("</tool_call>") {
+                                    insideToolCallTag = false
+                                    // Yield any trailing text after the closing tag.
+                                    if let range = text.range(of: "</tool_call>") {
+                                        let after = String(text[range.upperBound...])
+                                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                                        if !after.isEmpty { continuation.yield(after) }
+                                    }
+                                }
+                            } else if text.contains("<tool_call>") {
+                                insideToolCallTag = true
+                                // Yield any text before the opening tag.
+                                if let range = text.range(of: "<tool_call>") {
+                                    let before = String(text[..<range.lowerBound])
+                                    if !before.isEmpty { continuation.yield(before) }
+                                }
+                            } else {
+                                continuation.yield(text)
+                            }
                         case .info:
                             break
                         case .toolCall(let call):
-                            // Serialize native ToolCall back to text so the existing
+                            // Serialize native ToolCall to JSON text so the existing
                             // parseToolCalls() parser in PipelineCoordinator picks it up.
                             let jsonObj: [String: Any] = [
                                 "name": call.function.name,
@@ -152,8 +191,16 @@ actor MLXLLMEngine: LLMEngine {
 
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: error)
+                    if Task.isCancelled {
+                        continuation.finish()
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
                 }
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }
