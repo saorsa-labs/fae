@@ -9,12 +9,14 @@ struct LLMMessage: Sendable, Codable {
     let content: String
     let toolCallID: String?
     let name: String?
+    let tag: String?
 
-    init(role: Role, content: String, toolCallID: String? = nil, name: String? = nil) {
+    init(role: Role, content: String, toolCallID: String? = nil, name: String? = nil, tag: String? = nil) {
         self.role = role
         self.content = content
         self.toolCallID = toolCallID
         self.name = name
+        self.tag = tag
     }
 }
 

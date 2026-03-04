@@ -297,6 +297,28 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     await sched.setSpeakHandler { [weak coordinator] text in
                         await coordinator?.speakDirect(text)
                     }
+                    await sched.setProactiveQueryHandler { [weak coordinator] prompt, silent, taskId, allowedTools, consentGranted in
+                        await coordinator?.injectProactiveQuery(
+                            prompt: prompt,
+                            silent: silent,
+                            taskId: taskId,
+                            allowedTools: allowedTools,
+                            consentGranted: consentGranted
+                        )
+                    }
+                    await coordinator.setUserInteractionHandler { [weak sched] in
+                        await sched?.checkMorningBriefingFallback()
+                    }
+                    await coordinator.setProactivePresenceHandler { [weak sched] userPresent in
+                        guard userPresent else { return }
+                        await sched?.recordUserSeen()
+                        await sched?.notifyUserDetectedPostQuietHours()
+                    }
+                    await coordinator.setProactiveScreenContextHandler { [weak sched] hash in
+                        await sched?.shouldPersistScreenContext(contentHash: hash) ?? true
+                    }
+
+                    await sched.setAwarenessConfig(config.awareness)
                     await sched.start()
                     self.scheduler = sched
 
@@ -446,6 +468,35 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Keeps control-plane behaviors skill.md-driven while preserving low-latency UX.
     private func activateAlwaysOnSkills(skillManager: SkillManager) async {
         _ = await skillManager.activate(skillName: "window-control")
+        await syncAwarenessSkills(skillManager: skillManager)
+    }
+
+    private func syncAwarenessSkills(skillManager: SkillManager) async {
+        let awarenessEnabled = config.awareness.enabled && config.awareness.consentGrantedAt != nil
+
+        if awarenessEnabled, config.awareness.cameraEnabled {
+            _ = await skillManager.activate(skillName: "proactive-awareness")
+        } else {
+            await skillManager.deactivate(skillName: "proactive-awareness")
+        }
+
+        if awarenessEnabled, config.awareness.screenEnabled {
+            _ = await skillManager.activate(skillName: "screen-awareness")
+        } else {
+            await skillManager.deactivate(skillName: "screen-awareness")
+        }
+
+        if awarenessEnabled, config.awareness.overnightWorkEnabled {
+            _ = await skillManager.activate(skillName: "overnight-research")
+        } else {
+            await skillManager.deactivate(skillName: "overnight-research")
+        }
+
+        if awarenessEnabled, config.awareness.enhancedBriefingEnabled {
+            _ = await skillManager.activate(skillName: "morning-briefing-v2")
+        } else {
+            await skillManager.deactivate(skillName: "morning-briefing-v2")
+        }
     }
 
     // MARK: - Skill-Driven Voice Enrollment
@@ -605,6 +656,19 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 }
             }
 
+        case "awareness.start_onboarding":
+            if let coordinator = pipelineCoordinator,
+               let sm = skillManagerRef
+            {
+                Task {
+                    _ = await sm.activate(skillName: "first-launch-onboarding")
+                    await coordinator.wake()
+                    await coordinator.injectText(
+                        "Please guide me through proactive awareness setup now. Follow the first-launch-onboarding skill exactly, ask for explicit consent before any camera use, and explain each step."
+                    )
+                }
+            }
+
         case "skills.reload":
             Task {
                 await scheduler?.triggerTask(id: "skill_health_check")
@@ -744,6 +808,24 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "approveAllReadOnly": return .approveAllReadOnly
         case "approveAll": return .approveAll
         default: return approved ? .yes : .no
+        }
+    }
+
+    private func refreshAwarenessRuntime(restartSchedulerTasks: Bool) {
+        let awareness = config.awareness
+        let schedulerRef = scheduler
+        let skillManagerRef = skillManagerRef
+
+        Task {
+            if let schedulerRef {
+                await schedulerRef.setAwarenessConfig(awareness)
+                if restartSchedulerTasks {
+                    await schedulerRef.restartAwarenessTasks()
+                }
+            }
+            if let skillManagerRef {
+                await syncAwarenessSkills(skillManager: skillManagerRef)
+            }
         }
     }
 
@@ -967,6 +1049,71 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard allowed.contains(normalized) else { return }
             config.vision.modelPreset = normalized
             persistConfig(reason: "config.patch.vision.model_preset")
+
+        case "awareness.enabled":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.enabled = enabled
+            if enabled && config.awareness.consentGrantedAt == nil {
+                config.awareness.consentGrantedAt = ISO8601DateFormatter().string(from: Date())
+            }
+            persistConfig(reason: "config.patch.awareness.enabled")
+            refreshAwarenessRuntime(restartSchedulerTasks: true)
+
+        case "awareness.camera_enabled":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.cameraEnabled = enabled
+            persistConfig(reason: "config.patch.awareness.camera_enabled")
+            refreshAwarenessRuntime(restartSchedulerTasks: true)
+
+        case "awareness.screen_enabled":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.screenEnabled = enabled
+            persistConfig(reason: "config.patch.awareness.screen_enabled")
+            refreshAwarenessRuntime(restartSchedulerTasks: true)
+
+        case "awareness.camera_interval_seconds":
+            let parsed: Int?
+            if let v = value as? Int { parsed = v }
+            else if let v = value as? Double { parsed = Int(v) }
+            else { parsed = nil }
+            guard let interval = parsed, (10 ... 120).contains(interval) else { return }
+            config.awareness.cameraIntervalSeconds = interval
+            persistConfig(reason: "config.patch.awareness.camera_interval_seconds")
+            refreshAwarenessRuntime(restartSchedulerTasks: true)
+
+        case "awareness.screen_interval_seconds":
+            let parsed: Int?
+            if let v = value as? Int { parsed = v }
+            else if let v = value as? Double { parsed = Int(v) }
+            else { parsed = nil }
+            guard let interval = parsed, (10 ... 120).contains(interval) else { return }
+            config.awareness.screenIntervalSeconds = interval
+            persistConfig(reason: "config.patch.awareness.screen_interval_seconds")
+            refreshAwarenessRuntime(restartSchedulerTasks: true)
+
+        case "awareness.overnight_work":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.overnightWorkEnabled = enabled
+            persistConfig(reason: "config.patch.awareness.overnight_work")
+            refreshAwarenessRuntime(restartSchedulerTasks: false)
+
+        case "awareness.enhanced_briefing":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.enhancedBriefingEnabled = enabled
+            persistConfig(reason: "config.patch.awareness.enhanced_briefing")
+            refreshAwarenessRuntime(restartSchedulerTasks: false)
+
+        case "awareness.pause_on_battery":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.pauseOnBattery = enabled
+            persistConfig(reason: "config.patch.awareness.pause_on_battery")
+            refreshAwarenessRuntime(restartSchedulerTasks: false)
+
+        case "awareness.pause_on_thermal_pressure":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.pauseOnThermalPressure = enabled
+            persistConfig(reason: "config.patch.awareness.pause_on_thermal_pressure")
+            refreshAwarenessRuntime(restartSchedulerTasks: false)
 
         default:
             NSLog("FaeCore: ignoring unknown config key '%@'", key)

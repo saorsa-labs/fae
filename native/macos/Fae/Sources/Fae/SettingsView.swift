@@ -47,6 +47,11 @@ struct SettingsView: View {
                     Label("Privacy & Security", systemImage: "lock.shield")
                 }
 
+                SettingsAwarenessTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Awareness", systemImage: "eye")
+                    }
+
                 SettingsMemoryTab(commandSender: commandSender)
                     .tabItem {
                         Label("Memory", systemImage: "brain")
@@ -91,6 +96,11 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Personality", systemImage: "heart")
                 }
+
+                SettingsAwarenessTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Awareness", systemImage: "eye")
+                    }
 
                 SettingsSchedulesTab(commandSender: commandSender)
                     .tabItem {

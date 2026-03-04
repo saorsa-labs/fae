@@ -158,7 +158,7 @@ Implementation files:
 
 ## Scheduler
 
-Tick interval: 60s. All 13 built-in tasks:
+Tick interval: 60s. All 17 built-in tasks:
 
 | Task | Schedule | Purpose |
 |------|----------|---------|
@@ -171,14 +171,33 @@ Tick interval: 60s. All 13 built-in tasks:
 | `vault_backup` | daily 02:30 | Git vault full snapshot |
 | `noise_budget_reset` | daily 00:00 | Reset proactive interjection counter |
 | `stale_relationships` | every 7d | Detect relationships needing check-in |
-| `morning_briefing` | daily 08:00 | Compile and speak morning briefing |
+| `morning_briefing` | daily 08:00 | Compile and speak morning briefing (suppressed when enhanced briefing active) |
 | `skill_proposals` | daily 11:00 | Detect skill opportunities from interests |
 | `skill_health_check` | every 5min | Python skill health checks |
 | `embedding_reindex` | weekly Sun 03:00 | Re-embed records missing ANN vectors after model change |
+| `camera_presence_check` | repeating (30s default) | Camera-based user presence detection (awareness) |
+| `screen_activity_check` | repeating (19s default) | Screen activity monitoring (awareness) |
+| `overnight_work` | hourly 22:00-06:00 | Quiet-hours research on user interests (awareness) |
+| `enhanced_morning_briefing` | deferred until user detected after 07:00 | Calendar, mail, research, reminders (awareness) |
+
+The last 4 tasks are **awareness tasks** — only active when `awareness.enabled = true` with valid consent. They use `proactiveQueryHandler` instead of `speakHandler` to inject full LLM conversations with tool access.
 
 ### Scheduler speak handler
 
-The scheduler can make Fae speak via `speakHandler` closure, wired by `FaeCore` to `PipelineCoordinator.speakDirect()`. Used by morning briefing and stale relationship reminders.
+The scheduler can make Fae speak via `speakHandler` closure, wired by `FaeCore` to `PipelineCoordinator.speakDirect()`. Used by legacy morning briefing and stale relationship reminders.
+
+### Scheduler proactive query handler
+
+For awareness tasks, the scheduler uses `proactiveQueryHandler` — a 5-parameter closure `(prompt, silent, taskId, allowedTools, consentGranted)` wired by `FaeCore` to `PipelineCoordinator.injectProactiveQuery()`. This injects a full LLM conversation turn with tool access, gated by `AwarenessThrottle` and `TrustedActionBroker` per-task allowlists.
+
+### Awareness task tracking state
+
+The scheduler maintains per-session awareness state:
+- `lastUserSeenAt: Date?` — last camera detection (drives adaptive frequency + morning briefing trigger)
+- `morningBriefingDelivered: Bool` — reset daily at 00:00, prevents duplicate briefings
+- `lastCameraCheckAt / lastScreenCheckAt` — interval enforcement
+- `lastFrontmostAppBundleId` — smart screen gating (only observe on app change or 2min minimum)
+- `lastScreenContentHash / lastScreenContextPersistedAt` — SHA256-based screen context coalescing
 
 Implementation: `Scheduler/FaeScheduler.swift`
 
@@ -190,7 +209,7 @@ Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. 
 |----------|-------|
 | Core | `read`, `write`, `edit`, `bash`, `self_config` |
 | Web | `web_search` (DuckDuckGo HTML), `fetch_url` (with content extraction) |
-| Skills | `activate_skill` (load skill instructions), `run_skill` (execute Python), `manage_skill` (create/delete/list) |
+| Skills | `activate_skill` (load skill instructions), `run_skill` (execute Python), `manage_skill` (create/update/delete/list) |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
 | Vision | `screenshot` (screen capture → VLM), `camera` (webcam capture → VLM), `read_screen` (screenshot + accessibility tree) |
@@ -250,11 +269,13 @@ status badges and Grant buttons. See `docs/guides/scheduler-tooling-and-permissi
 | **TrustedActionBroker** | `TrustedActionBroker.evaluate()` | Default-deny policy chokepoint; all tool calls route through |
 | **Outbound guard** | `OutboundExfiltrationGuard` | Novel recipient confirmation + sensitive payload detection |
 
-**TrustedActionBroker** (v0.8.63): Central policy chokepoint implementing default-deny. Every tool call is modeled as an `ActionIntent` and evaluated to a `BrokerDecision`:
+**TrustedActionBroker** (v0.8.63, extended v0.8.82): Central policy chokepoint implementing default-deny. Every tool call is modeled as an `ActionIntent` and evaluated to a `BrokerDecision`:
 - `allow` — proceed immediately
 - `allowWithTransform(.checkpointBeforeMutation)` — create reversibility checkpoint then proceed
 - `confirm(reason:)` — require user approval with plain-language explanation
 - `deny(reason:)` — block with explanation
+
+**Scheduler awareness bypass** (v0.8.82): `ActionIntent` includes `schedulerTaskId: String?` and `schedulerConsentGranted: Bool` for per-request consent. Scheduler-sourced intents follow a strict evaluation path with per-task tool allowlists and no fallthrough to normal policy. See "Proactive awareness system" section for details.
 
 Three `PolicyProfile` modes (configurable via Settings > Tools):
 - **balanced** (default) — production safety defaults
@@ -294,11 +315,11 @@ Implementation files:
 | `Tools/BuiltinTools.swift` | All core + web tool implementations |
 | `Tools/AppleTools.swift` | Apple integration tools (calendar, contacts, etc.) |
 | `Tools/SchedulerTools.swift` | Scheduler management tools |
-| `Tools/SkillTools.swift` | Skill tools (activate_skill, run_skill, manage_skill) |
+| `Tools/SkillTools.swift` | Skill tools (activate_skill, run_skill, manage_skill with `update` action) |
 | `Tools/Tool.swift` | Tool protocol definition |
 | `Tools/RoleplayTool.swift` | Multi-voice roleplay session management |
 | `Tools/ToolRegistry.swift` | Dynamic tool registration, schema generation, mode filtering |
-| `Tools/TrustedActionBroker.swift` | Central default-deny policy chokepoint |
+| `Tools/TrustedActionBroker.swift` | Central default-deny policy chokepoint; scheduler per-task allowlists |
 | `Tools/CapabilityTicket.swift` | Task-scoped temporary grants with TTL |
 | `Tools/ReversibilityEngine.swift` | Pre-mutation file checkpoints and rollback |
 | `Tools/SafeBashExecutor.swift` | Sandboxed bash execution with denylist |
@@ -502,8 +523,18 @@ Adjustable keys:
 | `conversation.require_direct_address` | Bool | — | "Only respond when I say your name" |
 | `conversation.direct_address_followup_s` | Int | 5–60 | "Keep listening longer" |
 | `vision.enabled` | Bool | — | "Enable/disable vision" |
+| `awareness.enabled` | Bool | — | "Enable/disable proactive awareness" |
+| `awareness.camera_enabled` | Bool | — | "Enable/disable camera presence checks" |
+| `awareness.screen_enabled` | Bool | — | "Enable/disable screen monitoring" |
+| `awareness.camera_interval_seconds` | Int | 10–120 | "Check the camera every 60 seconds" |
+| `awareness.screen_interval_seconds` | Int | 10–60 | "Check the screen every 30 seconds" |
+| `awareness.overnight_work` | Bool | — | "Enable/disable overnight research" |
+| `awareness.enhanced_briefing` | Bool | — | "Enable/disable enhanced morning briefing" |
+| `awareness.pause_on_battery` | Bool | — | "Keep running on battery" |
+| `awareness.pause_on_thermal_pressure` | Bool | — | "Ignore thermal pressure" |
 
 Changes route through `FaeCore.patchConfig()` — the same pathway Settings UI uses. Fully bidirectional.
+Awareness config changes trigger `refreshAwarenessRuntime()` which syncs scheduler config, restarts awareness tasks, and activates/deactivates awareness skills.
 
 **Directives** (persistent standing orders):
 
@@ -542,12 +573,12 @@ Implementation files:
 
 | File | Role |
 |------|------|
-| `Skills/SkillManager.swift` | Directory-based discovery, activation, execution, management |
+| `Skills/SkillManager.swift` | Directory-based discovery, activation, execution, management, `updateSkill()`, `deactivate()` |
 | `Skills/SkillTypes.swift` | `SkillMetadata`, `SkillRecord`, `SkillType`, `SkillTier`, `SkillHealthStatus` |
 | `Skills/SkillParser.swift` | YAML frontmatter parser for SKILL.md |
 | `Skills/SkillMigrator.swift` | One-time migration of legacy flat `.py` files to directory format |
-| `Tools/SkillTools.swift` | `ActivateSkillTool`, `RunSkillTool`, `ManageSkillTool` |
-| `Core/PersonalityManager.swift` | Python/uv capability prompt + self-modification prompt |
+| `Tools/SkillTools.swift` | `ActivateSkillTool`, `RunSkillTool`, `ManageSkillTool` (with `update` action) |
+| `Core/PersonalityManager.swift` | Python/uv capability prompt + self-modification prompt + awareness self-adaptation |
 
 ## Rescue mode
 
@@ -558,7 +589,7 @@ Safe boot that bypasses all user customizations without deleting data.
 | Soul contract | User's `soul.md` | Bundled default |
 | Directive | `directive.md` | Empty (bypassed, not deleted) |
 | Tool mode | config value (default: "full") | `read_only` |
-| Scheduler | All 13 tasks active | Not started |
+| Scheduler | All 17 tasks active | Not started |
 | Memory capture | Enabled | Disabled (recall still works) |
 | Orb palette | Dynamic | Forced `.silverMist` |
 
@@ -621,17 +652,178 @@ Fae doesn't just respond — she actively learns from conversations and acts on 
 - Suggest new Python skills when patterns emerge
 - Limit to 1-2 proactive items per conversation start (noise control)
 
-### Morning briefing
+### Legacy morning briefing
 
-`FaeScheduler.runMorningBriefing()` runs daily at 08:00:
-
-1. Queries memory for recent commitments, events, and people
-2. Compiles a brief summary (1-3 sentences)
-3. Speaks via `speakHandler` → `PipelineCoordinator.speakDirect()`
+`FaeScheduler.runMorningBriefing()` runs daily at 08:00 — **suppressed when enhanced morning briefing is active** (awareness system). Queries memory for recent commitments, events, and people, compiles a brief summary (1-3 sentences), speaks via `speakHandler`.
 
 ### Noise budget
 
 `proactiveInterjectionCount` tracks daily proactive messages. Reset at midnight by `noise_budget_reset` scheduler task.
+
+## Proactive awareness system (v0.8.82)
+
+Fae can proactively see users via camera, monitor screen activity, research overnight, and deliver enhanced morning briefings. Everything runs on-device. Requires explicit user consent before any camera/screen use.
+
+### Architecture: three layers + five skills
+
+**Swift layers** (minimal scaffolding):
+1. `injectProactiveQuery()` on PipelineCoordinator — scheduler-triggered full LLM conversation with tools
+2. `AwarenessConfig` in FaeConfig — consent state + per-feature toggles
+3. TrustedActionBroker scheduler bypass — auto-allow camera/screenshot for consented scheduled observations
+
+**Skills** (LLM-driven behavior):
+1. `proactive-awareness` — camera observation: greetings, mood, stranger detection, presence tracking
+2. `screen-awareness` — screenshot observation: activity context, task detection
+3. `overnight-research` — quiet-hours research using web_search + memory
+4. `morning-briefing-v2` — enhanced briefing: calendar, mail, research findings, birthdays
+5. `first-launch-onboarding` — camera greeting → contact lookup → voice enrollment → awareness consent
+
+### Consent model
+
+**No silent behavior changes.** Vision and awareness are NEVER auto-enabled. Users must explicitly opt in via:
+- Voice: "Fae, set up awareness" → activates `first-launch-onboarding` skill (interactive consent flow)
+- Settings: Awareness tab → "Set Up Proactive Awareness" button → triggers onboarding flow
+- Onboarding asks for explicit confirmation BEFORE any camera or screen capture
+
+Consent timestamp stored as `awareness.consentGrantedAt` (ISO8601). Double-checked at runtime: both `awareness.enabled == true` AND `consentGrantedAt != nil` required.
+
+### `injectProactiveQuery()` — scheduler→pipeline bridge
+
+```swift
+func injectProactiveQuery(
+    prompt: String, silent: Bool, taskId: String,
+    allowedTools: Set<String>, consentGranted: Bool
+) async
+```
+
+Key design decisions:
+- **Guards**: Returns early if `assistantGenerating || assistantSpeaking` (never interrupts active conversation)
+- **Per-request immutable context**: `ProactiveRequestContext` struct passed through the call stack (processTranscription → generateWithTools → executeTool). NOT a shared mutable field — prevents actor reentrancy races.
+- **Tool restriction**: `executeTool()` rejects any tool not in `proactiveContext.allowedTools`
+- **Tagged messages**: Each proactive turn assigns a `conversationTag` (e.g., `"camera_presence_check-1709550000"`). Added to `LLMMessage.tag`. Cleaned up via `removeMessages(taggedWith:)` after the turn completes.
+- **Thinking**: Forces `suppressThinking = true` for speed
+
+### `ProactiveRequestContext`
+
+```swift
+struct ProactiveRequestContext: Sendable {
+    let source: ActionSource        // .scheduler
+    let taskId: String              // e.g. "camera_presence_check"
+    let allowedTools: Set<String>   // strict per-task allowlist
+    let consentGranted: Bool        // per-request consent state
+    let conversationTag: String     // for tagged message cleanup
+}
+```
+
+### TrustedActionBroker — scheduler policy
+
+Scheduler-sourced actions follow a strict evaluation path with **no fallthrough** to normal policy:
+
+1. Check `intent.schedulerConsentGranted` — deny if no consent (per-request, NOT cached at init)
+2. Check `intent.schedulerTaskId` maps to a known allowlist
+3. Check tool against `schedulerDeniedTools` (write, edit, bash, manage_skill, self_config) — always denied
+4. Check tool against task-specific allowlist — deny if not listed
+
+**Per-task tool allowlists** (each task gets minimum required tools):
+
+| Task | Allowed Tools |
+|------|---------------|
+| `camera_presence_check` | `camera` |
+| `screen_activity_check` | `screenshot` |
+| `overnight_work` | `web_search`, `fetch_url`, `activate_skill` |
+| `enhanced_morning_briefing` | `calendar`, `reminders`, `contacts`, `mail`, `notes`, `activate_skill` |
+
+### AwarenessThrottle
+
+Lightweight utility gating awareness observations. Returns `ThrottleDecision`:
+- `.skip(reason:)` — don't run at all
+- `.silentOnly` — run but suppress speech
+- `.normal` — full behavior
+
+Checks (in order):
+1. **Master gate**: `awareness.enabled && consentGrantedAt != nil`
+2. **Battery**: skip when on battery + `pauseOnBattery` (via IOKit `IOPSCopyPowerSourcesInfo`)
+3. **Thermal**: skip when `.serious`/`.critical` (via `ProcessInfo.processInfo.thermalState`)
+4. **Quiet hours (22:00-07:00)**: camera → `.silentOnly`, screen → `.skip`, overnight_work → `.normal`
+
+Additional throttle helpers:
+- `shouldReduceFrequency(lastUserSeenAt:)` — reduce to 5min interval when user absent >30min
+- `randomJitter()` — ±5s jitter on timers to prevent synchronized VLM spikes
+
+### Morning briefing trigger (deferred, not fixed-time)
+
+The enhanced morning briefing does NOT fire at a fixed time. It triggers on **first user detection after 07:00**:
+
+1. **Primary**: Camera detects user → `proactivePresenceHandler` calls `notifyUserDetectedPostQuietHours()` → triggers briefing
+2. **Fallback**: If camera is disabled or user not detected by camera, `userInteractionHandler` calls `checkMorningBriefingFallback()` on first voice/text interaction after 07:00
+3. **Daily reset**: `morningBriefingDelivered` flag reset at 00:00, prevents duplicate briefings
+
+### Screen context coalescing
+
+Screen observations run frequently (every 19s) but context is only persisted when meaningful:
+- `shouldPersistScreenContext(contentHash:)` on FaeScheduler
+- Only persist when SHA256 hash of VLM description changes (different app/document) OR 2 minutes elapsed
+- Single updatable `screen_context_current` memory record (`.episode` kind) — not appends
+
+### Handler closures (FaeCore wiring)
+
+FaeCore wires three handler closures connecting PipelineCoordinator and FaeScheduler:
+
+| Handler | Set on | Called from | Purpose |
+|---------|--------|-------------|---------|
+| `userInteractionHandler` | PipelineCoordinator | User voice/text turns | Morning briefing fallback trigger |
+| `proactivePresenceHandler` | PipelineCoordinator | Camera observation results | Record user presence, trigger morning briefing |
+| `proactiveScreenContextHandler` | PipelineCoordinator | Screen observation results | SHA256 hash-based persistence gating |
+
+### Awareness skill lifecycle
+
+`FaeCore.syncAwarenessSkills(skillManager:)` activates/deactivates skills based on config:
+- `proactive-awareness` — activated when `awareness.enabled && cameraEnabled`
+- `screen-awareness` — activated when `awareness.enabled && screenEnabled`
+- `overnight-research` — activated when `awareness.enabled && overnightWorkEnabled`
+- `morning-briefing-v2` — activated when `awareness.enabled && enhancedBriefingEnabled`
+- `first-launch-onboarding` — activated on demand (onboarding command)
+
+Skills can self-modify: the LLM can use `manage_skill create` to override built-in skills with personal copies, or `manage_skill update` to modify personal skills directly.
+
+### Onboarding flow
+
+The `first-launch-onboarding` skill guides an 8-step interactive consent flow:
+
+1. Voice introduction (no camera yet)
+2. Voice enrollment (if not already done)
+3. Contact lookup (name, birthday, relationships)
+4. **Awareness consent** (explicit ask BEFORE any camera use)
+5. Enable awareness (only after "yes") — sets `vision.enabled`, `awareness.enabled`, all sub-features
+6. Camera greeting (only AFTER consent + permissions)
+7. Schedule preferences
+8. Welcome
+
+**Onboarding uses `injectText()` (interactive path)**, NOT `injectProactiveQuery()` — because the broker denies `self_config` from scheduler source, and onboarding needs to modify settings.
+
+### Existing user upgrade
+
+No silent behavior changes. Existing users see a one-time spoken prompt: "I've learned some new tricks..." with instructions to say "Fae, set up awareness" or visit Settings. Vision stays off, awareness stays off until explicit opt-in.
+
+### Implementation files
+
+| File | Role |
+|------|------|
+| `Core/FaeConfig.swift` | `AwarenessConfig` struct + `[awareness]` section in config.toml |
+| `Pipeline/PipelineCoordinator.swift` | `injectProactiveQuery()`, `ProactiveRequestContext`, handler closures |
+| `Scheduler/FaeScheduler.swift` | 4 awareness tasks, proactiveQueryHandler, tracking state, screen coalescing |
+| `Scheduler/AwarenessThrottle.swift` | Battery/thermal/quiet-hours gating, adaptive frequency, jitter |
+| `Tools/TrustedActionBroker.swift` | Scheduler auto-allow path, per-task allowlists, `schedulerAutoAllowed` reason code |
+| `Core/FaeCore.swift` | `refreshAwarenessRuntime()`, `syncAwarenessSkills()`, handler wiring, onboarding command |
+| `Core/PersonalityManager.swift` | Awareness settings in selfModificationPrompt, skill self-adaptation |
+| `SettingsAwarenessTab.swift` | Awareness settings UI tab |
+| `Pipeline/ConversationState.swift` | `removeMessages(taggedWith:)` for proactive message cleanup |
+| `Core/FaeTypes.swift` | `LLMMessage.tag` field for proactive message tagging |
+| `Resources/Skills/proactive-awareness/SKILL.md` | Camera observation: greetings, mood, presence, strangers |
+| `Resources/Skills/screen-awareness/SKILL.md` | Silent screen context monitoring |
+| `Resources/Skills/overnight-research/SKILL.md` | Quiet-hours web research |
+| `Resources/Skills/morning-briefing-v2/SKILL.md` | Enhanced morning briefing |
+| `Resources/Skills/first-launch-onboarding/SKILL.md` | 8-step consent-first onboarding flow |
 
 ## Prompt/identity stack
 
@@ -742,6 +934,18 @@ directAddressFollowupS = 20
 [vision]
 enabled = false
 modelPreset = "auto"
+
+[awareness]
+enabled = false
+cameraEnabled = false
+screenEnabled = false
+cameraIntervalSeconds = 30
+screenIntervalSeconds = 19
+overnightWorkEnabled = false
+enhancedBriefingEnabled = false
+pauseOnBattery = true
+pauseOnThermalPressure = true
+# consentGrantedAt = "2026-03-04T10:00:00Z"  # Set when user explicitly consents
 ```
 
 Data paths:
@@ -764,11 +968,11 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `FaeApp.swift` | App entry, FaeAppDelegate owns all state, creates window via AppKit |
 | `ContentView.swift` | Main view, orb, progress overlay, subtitle overlay |
 | `BackendEventRouter.swift` | Routes FaeEventBus events to NotificationCenter |
-| `Core/FaeCore.swift` | Lightweight facade: config, ModelManager, PipelineCoordinator, Scheduler |
-| `Core/FaeConfig.swift` | Model selection, TTS config, tool mode, speaker config |
+| `Core/FaeCore.swift` | Lightweight facade: config, ModelManager, PipelineCoordinator, Scheduler, awareness wiring |
+| `Core/FaeConfig.swift` | Model selection, TTS config, tool mode, speaker config, awareness config |
 | `Core/FaeEventBus.swift` | Combine-based event bus |
 | `Core/FaeEvent.swift` | Event types |
-| `Core/FaeTypes.swift` | Shared type definitions |
+| `Core/FaeTypes.swift` | Shared type definitions (LLMMessage with `tag` for proactive cleanup) |
 | `Core/PersonalityManager.swift` | System prompt assembly with tool schemas, self-mod, proactive |
 | `Core/MLProtocols.swift` | ML engine protocols (STT, LLM, TTS, Embedding, Speaker) |
 | `Core/VoiceCommandParser.swift` | Voice command detection (show/hide conversation, etc.) |
@@ -797,11 +1001,11 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 
 | File | Role |
 |------|------|
-| `Pipeline/PipelineCoordinator.swift` | Unified pipeline: STT → LLM (with tools) → TTS |
+| `Pipeline/PipelineCoordinator.swift` | Unified pipeline: STT → LLM (with tools) → TTS; `injectProactiveQuery()`, `ProactiveRequestContext` |
 | `Pipeline/EchoSuppressor.swift` | Time-based + text-overlap + voice identity echo filtering; `isInSuppression` for barge-in gating |
 | `Pipeline/VoiceActivityDetector.swift` | Voice activity detection |
 | `Pipeline/VoiceTagParser.swift` | `VoiceSegment` + `VoiceTagStripper` for multi-voice roleplay |
-| `Pipeline/ConversationState.swift` | Conversation history management |
+| `Pipeline/ConversationState.swift` | Conversation history management; `removeMessages(taggedWith:)` for proactive cleanup |
 | `Pipeline/TextProcessing.swift` | Text cleanup and processing utilities |
 
 ### Memory
@@ -825,7 +1029,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | File | Role |
 |------|------|
 | `Tools/BuiltinTools.swift` | Core tools (read, write, edit, bash, self_config, web_search, fetch_url) |
-| `Tools/SkillTools.swift` | Skill tools (activate_skill, run_skill, manage_skill) |
+| `Tools/SkillTools.swift` | Skill tools (activate_skill, run_skill, manage_skill with `update` action) |
 | `Tools/AppleTools.swift` | Apple integration tools (calendar, contacts, mail, reminders, notes) |
 | `Tools/SchedulerTools.swift` | Scheduler management tools |
 | `Tools/Tool.swift` | Tool protocol definition |
@@ -850,8 +1054,9 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 
 | File | Role |
 |------|------|
-| `Scheduler/FaeScheduler.swift` | Background task scheduler with speak handler (13 tasks) |
-| `Skills/SkillManager.swift` | Directory-based skill discovery, activation, execution, management |
+| `Scheduler/FaeScheduler.swift` | Background task scheduler with speak handler + proactive query handler (17 tasks) |
+| `Scheduler/AwarenessThrottle.swift` | Battery/thermal/quiet-hours gating for awareness observations |
+| `Skills/SkillManager.swift` | Directory-based skill discovery, activation, execution, management, `updateSkill()`, `deactivate()` |
 | `Skills/SkillTypes.swift` | `SkillMetadata`, `SkillRecord`, `SkillType`, `SkillTier`, `SkillHealthStatus` |
 | `Skills/SkillParser.swift` | YAML frontmatter parser for SKILL.md files |
 | `Skills/SkillMigrator.swift` | One-time migration of legacy flat `.py` files to directory format |
@@ -907,6 +1112,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `SettingsSchedulesTab.swift` | Scheduler task configuration |
 | `SettingsChannelsTab.swift` | Channel configuration |
 | `SettingsSkillsTab.swift` | Unified skill display with type/tier badges, Apple apps, system capabilities |
+| `SettingsAwarenessTab.swift` | Proactive awareness settings (consent, camera, screen, overnight, briefing, resource toggles) |
 | `SettingsAboutTab.swift` | About, version info |
 | `SettingsDeveloperTab.swift` | Developer diagnostics (Option-held) + security dashboard |
 | `PersonalityEditorController.swift` | Opens soul.md / directive.md in system text editor |
@@ -1128,3 +1334,22 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - PersonalityManager: when native tools active, uses behavioral guidance only (no inline schemas — chat template handles it)
   - Package.swift: fix resource bundle double-nesting (.copy("Resources") → individual entries)
   - ResourceBundle.swift: multi-marker bundle detection (Skills, default.metallib, SOUL.md)
+- **v0.8.82** — Proactive Visual Awareness: camera presence, screen monitoring, overnight research, enhanced briefings
+  - AwarenessConfig: `[awareness]` section in config.toml with master toggle, per-feature toggles, consent timestamp
+  - PipelineCoordinator: `injectProactiveQuery()` with immutable `ProactiveRequestContext` passed through call stack (no shared mutable field)
+  - TrustedActionBroker: scheduler auto-allow with strict per-task tool allowlists, no fallthrough, per-request consent via `intent.schedulerConsentGranted`
+  - AwarenessThrottle: battery (IOKit), thermal (ProcessInfo), quiet hours (22:00-07:00), adaptive frequency, ±5s jitter
+  - FaeScheduler: 4 new awareness tasks (camera_presence_check, screen_activity_check, overnight_work, enhanced_morning_briefing)
+  - Screen context coalescing: SHA256 hash-based duplicate suppression, 2min minimum between persists
+  - Morning briefing trigger: deferred until camera detects user after 07:00, with fallback on first voice/text interaction
+  - Tagged message cleanup: `LLMMessage.tag` field + `removeMessages(taggedWith:)` — no "remove last N"
+  - Handler closures: userInteractionHandler, proactivePresenceHandler, proactiveScreenContextHandler wired between PipelineCoordinator and FaeScheduler
+  - Awareness skill lifecycle: `syncAwarenessSkills()` activates/deactivates skills per config toggles
+  - ManageSkillTool: `update` action for personal skill modification; `SkillManager.deactivate()` method
+  - 5 new built-in skills: proactive-awareness, screen-awareness, overnight-research, morning-briefing-v2, first-launch-onboarding
+  - Onboarding uses interactive `injectText()` path (not scheduler source) — consent BEFORE camera, never pre-consent surveillance
+  - SettingsAwarenessTab: full settings UI with consent dialog, toggles, interval pickers, resource management
+  - Existing user upgrade: no silent behavior changes — spoken prompt + Settings entry point only
+  - FaeCore: `refreshAwarenessRuntime()` consolidates config changes → scheduler restart → skill sync
+  - Legacy morning briefing suppressed when enhanced briefing active
+  - Total: 17 scheduler tasks (was 13), 31 tools (unchanged)

@@ -90,8 +90,8 @@ struct RunSkillTool: Tool {
 /// High-risk: modifies the skills directory.
 struct ManageSkillTool: Tool {
     let name = "manage_skill"
-    let description = "Create, update, or delete personal skills. Actions: create, delete, list."
-    let parametersSchema = #"{"action": "string (required: create|delete|list)", "name": "string (required for create/delete)", "description": "string (required for create — what the skill does)", "body": "string (required for create — SKILL.md instructions)", "script": "string (optional for create — Python script content)"}"#
+    let description = "Create, update, or delete personal skills. Actions: create, update, delete, list."
+    let parametersSchema = #"{"action": "string (required: create|update|delete|list)", "name": "string (required for create/update/delete)", "description": "string (required for create, optional for update — what the skill does)", "body": "string (required for create, optional for update — SKILL.md instructions)", "script": "string (optional for create — Python script content)"}"#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"manage_skill","arguments":{"action":"create","name":"weather-check","description":"Check weather for a city","body":"Search for weather using web_search tool."}}</tool_call>"#
@@ -110,12 +110,14 @@ struct ManageSkillTool: Tool {
         switch action {
         case "create":
             return await handleCreate(input: input)
+        case "update":
+            return await handleUpdate(input: input)
         case "delete":
             return await handleDelete(input: input)
         case "list":
             return await handleList()
         default:
-            return .error("Unknown action '\(action)'. Use: create, delete, list")
+            return .error("Unknown action '\(action)'. Use: create, update, delete, list")
         }
     }
 
@@ -143,6 +145,30 @@ struct ManageSkillTool: Tool {
             return .success("Created \(typeLabel) skill '\(name)': \(description)")
         } catch {
             return .error("Failed to create skill: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleUpdate(input: [String: Any]) async -> ToolResult {
+        guard let name = input["name"] as? String, !name.isEmpty else {
+            return .error("Missing required parameter: name")
+        }
+
+        let description = input["description"] as? String
+        let body = input["body"] as? String
+
+        guard description != nil || body != nil else {
+            return .error("At least one of 'description' or 'body' must be provided for update.")
+        }
+
+        do {
+            let metadata = try await skillManager.updateSkill(
+                name: name,
+                description: description,
+                body: body
+            )
+            return .success("Updated skill '\(metadata.name)' successfully.")
+        } catch {
+            return .error("Failed to update skill: \(error.localizedDescription)")
         }
     }
 

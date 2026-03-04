@@ -50,7 +50,7 @@ actor ConversationStateTracker {
     // MARK: - History Management
 
     /// Add a user message to history, optionally annotated with speaker name and ID.
-    func addUserMessage(_ text: String, speakerDisplayName: String? = nil, speakerId: String? = nil) {
+    func addUserMessage(_ text: String, speakerDisplayName: String? = nil, speakerId: String? = nil, tag: String? = nil) {
         let content: String
         if let name = speakerDisplayName, let speakerId, !speakerId.isEmpty {
             content = "[\(name) | id:\(speakerId)]: \(text)"
@@ -61,25 +61,25 @@ actor ConversationStateTracker {
         } else {
             content = text
         }
-        history.append(LLMMessage(role: .user, content: content))
+        history.append(LLMMessage(role: .user, content: content, tag: tag))
         trimHistory()
     }
 
     /// Add an assistant message to history.
-    func addAssistantMessage(_ text: String) {
-        history.append(LLMMessage(role: .assistant, content: text))
+    func addAssistantMessage(_ text: String, tag: String? = nil) {
+        history.append(LLMMessage(role: .assistant, content: text, tag: tag))
         lastAssistantText = text
         trimHistory()
     }
 
     /// Add a tool result to history.
-    func addToolResult(id: String, name: String, content: String) {
+    func addToolResult(id: String, name: String, content: String, tag: String? = nil) {
         let maxToolResultChars = 2_000
         let normalized = content.trimmingCharacters(in: .whitespacesAndNewlines)
         let bounded = normalized.count > maxToolResultChars
             ? String(normalized.prefix(maxToolResultChars)) + "\n[truncated]"
             : normalized
-        history.append(LLMMessage(role: .tool, content: bounded, toolCallID: id, name: name))
+        history.append(LLMMessage(role: .tool, content: bounded, toolCallID: id, name: name, tag: tag))
         trimHistory()
     }
 
@@ -88,6 +88,12 @@ actor ConversationStateTracker {
         if history.count > keep {
             history = Array(history.suffix(keep))
         }
+    }
+
+    /// Remove history entries with a specific tag.
+    func removeMessages(taggedWith tag: String) {
+        history.removeAll { $0.tag == tag }
+        lastAssistantText = history.last(where: { $0.role == .assistant })?.content
     }
 
     /// Clear all history.

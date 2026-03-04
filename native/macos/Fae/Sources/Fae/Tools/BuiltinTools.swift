@@ -318,6 +318,42 @@ struct SelfConfigTool: Tool {
             valueType: .string(allowed: ["auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit"]),
             description: "Vision model preset (auto, qwen3_vl_4b_4bit, qwen3_vl_4b_8bit)."
         ),
+        "awareness.enabled": SettingSpec(
+            valueType: .bool,
+            description: "Master toggle for proactive awareness (requires consent)"
+        ),
+        "awareness.camera_enabled": SettingSpec(
+            valueType: .bool,
+            description: "Camera-based presence detection and greetings"
+        ),
+        "awareness.screen_enabled": SettingSpec(
+            valueType: .bool,
+            description: "Screen activity monitoring for contextual help"
+        ),
+        "awareness.camera_interval_seconds": SettingSpec(
+            valueType: .int(min: 10, max: 120),
+            description: "Camera check interval in seconds (10-120)"
+        ),
+        "awareness.screen_interval_seconds": SettingSpec(
+            valueType: .int(min: 10, max: 120),
+            description: "Screen check interval in seconds (10-120)"
+        ),
+        "awareness.overnight_work": SettingSpec(
+            valueType: .bool,
+            description: "Research topics during quiet hours (22:00-06:00)"
+        ),
+        "awareness.enhanced_briefing": SettingSpec(
+            valueType: .bool,
+            description: "Enhanced morning briefing with calendar, mail, and research"
+        ),
+        "awareness.pause_on_battery": SettingSpec(
+            valueType: .bool,
+            description: "Pause proactive observations when on battery power"
+        ),
+        "awareness.pause_on_thermal_pressure": SettingSpec(
+            valueType: .bool,
+            description: "Pause proactive observations under high thermal pressure"
+        ),
     ]
 
     /// Patterns that indicate an attempt to bypass safety.

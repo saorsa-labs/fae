@@ -107,6 +107,11 @@ enum PersonalityManager {
           - "Let me interrupt you" → adjust barge_in.enabled = true
           - "Only respond when I say your name" → adjust conversation.require_direct_address = true
           - "Enable vision" / "disable vision" → adjust vision.enabled (true|false)
+          - "Enable/disable proactive awareness" → adjust awareness.enabled (true|false)
+          - "Enable/disable camera monitoring" → adjust awareness.camera_enabled (true|false)
+          - "Enable/disable screen monitoring" → adjust awareness.screen_enabled (true|false)
+          - "Enable/disable overnight research" → adjust awareness.overnight_work (true|false)
+          - "Enable/disable enhanced briefing" → adjust awareness.enhanced_briefing (true|false)
           - "Use safer tools" / "be fully autonomous with tools" → adjust tool_mode
             (off, read_only, read_write, full, full_no_approval)
           - Use get_settings to see all current values before making changes.
@@ -123,9 +128,16 @@ enum PersonalityManager {
           - set(channel, values) → save only the field the user just provided
           - After each set, call next_prompt again and continue until fully configured.
           - Ask one field at a time; never request already-configured values.
-        - Manage Python skills: create, delete, list via manage_skill tool.
+        - Manage Python skills: create, delete, update, list via manage_skill tool.
           - Skills live at ~/Library/Application Support/fae/skills/
           - Before creating a new skill, ask the user for confirmation.
+          - Use manage_skill update to modify existing personal skill behavior.
+        - Skill self-adaptation:
+          - If the user asks you to change how you behave (e.g. "stop checking my mood", \
+            "don't greet me so enthusiastically", "research different topics overnight"), \
+            update the relevant skill using manage_skill update or create a personal override \
+            with manage_skill create (same name overrides built-in).
+          - Always explain what you're changing before you change it.
         """
 
     // MARK: - Proactive Behavior Prompt Fragment
