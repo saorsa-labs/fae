@@ -89,13 +89,9 @@ actor AudioPlaybackManager {
         buffer.frameLength = frameCount
 
         // Fill buffer — duplicate mono to all output channels.
-        let channelCount = Int(outputFormat.channelCount)
-        for ch in 0..<channelCount {
-            if let channelData = buffer.floatChannelData?[ch] {
-                for i in 0..<Int(frameCount) {
-                    channelData[i] = resampled[i]
-                }
-            }
+        guard fillPCMBuffer(buffer, withMono: resampled) else {
+            NSLog("AudioPlaybackManager: failed to populate PCM buffer for output format")
+            return
         }
 
         if isFinal {
@@ -106,6 +102,8 @@ actor AudioPlaybackManager {
         playerNode.scheduleBuffer(buffer) { [weak self] in
             Task { await self?.bufferCompleted() }
         }
+
+        onEvent?(.level(rms: rms(resampled)))
 
         if !isPlaying {
             playerNode.play()
@@ -186,6 +184,36 @@ actor AudioPlaybackManager {
         }
     }
 
+    private func fillPCMBuffer(_ buffer: AVAudioPCMBuffer, withMono samples: [Float]) -> Bool {
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount == samples.count else { return false }
+
+        let channelCount = Int(buffer.format.channelCount)
+
+        if let floatData = buffer.floatChannelData {
+            for ch in 0..<channelCount {
+                let dst = floatData[ch]
+                for i in 0..<frameCount {
+                    dst[i] = samples[i]
+                }
+            }
+            return true
+        }
+
+        if let int16Data = buffer.int16ChannelData {
+            for ch in 0..<channelCount {
+                let dst = int16Data[ch]
+                for i in 0..<frameCount {
+                    let clamped = max(-1.0, min(1.0, samples[i]))
+                    dst[i] = Int16(clamped * Float(Int16.max))
+                }
+            }
+            return true
+        }
+
+        return false
+    }
+
     private func converterKey(srcRate: Double, dstRate: Double) -> String {
         "\(Int(srcRate.rounded()))->\(Int(dstRate.rounded()))"
     }
@@ -240,6 +268,8 @@ actor AudioPlaybackManager {
             return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
         }
 
+        converter.reset()
+
         var consumedInput = false
         var conversionError: NSError?
         let status = converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
@@ -256,10 +286,34 @@ actor AudioPlaybackManager {
               status == .haveData || status == .endOfStream || status == .inputRanDry,
               let outData = outputBuffer.floatChannelData?[0]
         else {
+            NSLog("AudioPlaybackManager: AVAudioConverter resample failed (status=%d) — falling back", status.rawValue)
             return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
         }
 
-        return Array(UnsafeBufferPointer(start: outData, count: Int(outputBuffer.frameLength)))
+        let outCount = Int(outputBuffer.frameLength)
+        guard outCount > 0 else {
+            NSLog("AudioPlaybackManager: AVAudioConverter produced 0 frames — falling back")
+            return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
+        }
+
+        let output = Array(UnsafeBufferPointer(start: outData, count: outCount))
+
+        // Safety: if conversion produced effectively silent output while input had signal,
+        // use the deterministic linear fallback instead.
+        let inRms = rms(input)
+        let outRms = rms(output)
+        if inRms > 0.001 && (outRms < 0.00001 || outRms < inRms * 0.1) {
+            NSLog("AudioPlaybackManager: AVAudioConverter output attenuated (inRms=%.6f outRms=%.6f) — falling back", inRms, outRms)
+            return Self.linearResampleFallback(input, from: srcRate, to: dstRate)
+        }
+
+        return output
+    }
+
+    private func rms(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        let sum = samples.reduce(Float(0)) { $0 + ($1 * $1) }
+        return sqrt(sum / Float(samples.count))
     }
 
     /// Legacy linear interpolation fallback if AVAudioConverter is unavailable.

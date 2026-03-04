@@ -68,11 +68,22 @@ struct EchoSuppressor {
     }
 
     /// Call when assistant stops speaking. Starts the echo tail windows.
-    mutating func onAssistantSpeechEnd() {
+    ///
+    /// - Parameter speechDurationSecs: How long the assistant spoke. Longer TTS
+    ///   responses produce more room echo and speaker bleedthrough, so the echo
+    ///   tail and guard windows scale proportionally.
+    mutating func onAssistantSpeechEnd(speechDurationSecs: Double = 0) {
         assistantSpeaking = false
         let now = Date()
-        suppressUntil = now.addingTimeInterval(Double(echoTailMs) / 1000.0)
-        shortUtteranceGuardUntil = now.addingTimeInterval(Double(shortUtteranceGuardMs) / 1000.0)
+
+        // Scale echo windows based on speech duration: +500ms per second of speech,
+        // capped at 5s bonus.  A 8s TTS response adds ~4s of extra tail.
+        let durationBonusMs = Int(min(speechDurationSecs, 10) * 500)
+        let tailMs = echoTailMs + durationBonusMs
+        let guardMs = shortUtteranceGuardMs + durationBonusMs
+
+        suppressUntil = now.addingTimeInterval(Double(tailMs) / 1000.0)
+        shortUtteranceGuardUntil = now.addingTimeInterval(Double(guardMs) / 1000.0)
     }
 
     /// Evaluate whether a completed speech segment should be accepted or dropped.
@@ -81,8 +92,19 @@ struct EchoSuppressor {
     ///   - durationSecs: Duration of the speech segment in seconds.
     ///   - rms: RMS energy of the segment.
     ///   - awaitingApproval: Whether we're waiting for a yes/no approval response.
+    ///   - segmentOnset: Wall-clock time when speech onset was detected by the VAD.
+    ///     The echo tail is checked against this onset time (not current time) to
+    ///     catch segments that *started* during the echo window but took seconds
+    ///     to complete — e.g. an 8s echo segment that finishes 9s after playback
+    ///     ends would slip through a current-time check but is caught by onset.
     /// - Returns: `true` if the segment should be forwarded to STT, `false` to drop.
-    mutating func shouldAccept(durationSecs: Float, rms: Float, awaitingApproval: Bool) -> Bool {
+    mutating func shouldAccept(
+        durationSecs: Float,
+        rms: Float,
+        awaitingApproval: Bool,
+        segmentOnset: Date? = nil
+    ) -> Bool {
+        let onset = segmentOnset ?? Date()
         let now = Date()
 
         // 1. Active suppression — assistant is speaking.
@@ -90,12 +112,16 @@ struct EchoSuppressor {
             return false
         }
 
-        // 2. Echo tail window.
-        if let until = suppressUntil, now < until {
+        // 2. Echo tail window — check against segment ONSET time.
+        //    A segment whose speech started during the echo tail is almost certainly
+        //    speaker bleedthrough, even if it finishes seconds later.
+        if let until = suppressUntil, onset < until {
             return false
         }
 
         // 3. Short utterance guard — drop very short segments post-playback.
+        //    Use current time here: a long segment that starts in the guard window
+        //    but extends past it is likely real speech, not echo.
         if let until = shortUtteranceGuardUntil, now < until {
             if durationSecs < Self.minPostPlaybackSegmentSecs {
                 // Exception: during approval, accept shorter segments.

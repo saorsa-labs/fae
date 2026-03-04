@@ -795,6 +795,8 @@ actor PipelineCoordinator {
     private func startSpeechSegmentProcessingLoop() {
         guard speechSegmentTask == nil else { return }
 
+        NSLog("PipelineCoordinator: speech segment queue started (depth=%d)", Self.speechSegmentQueueDepth)
+
         let stream = AsyncStream<SpeechSegment>(bufferingPolicy: .bufferingNewest(Self.speechSegmentQueueDepth)) {
             continuation in
             self.speechSegmentContinuation = continuation
@@ -815,6 +817,7 @@ actor PipelineCoordinator {
         speechSegmentTask?.cancel()
         await speechSegmentTask?.value
         speechSegmentTask = nil
+        NSLog("PipelineCoordinator: speech segment queue stopped")
     }
 
     private func enqueueSpeechSegment(_ segment: SpeechSegment) {
@@ -825,11 +828,19 @@ actor PipelineCoordinator {
         }
 
         let result = continuation.yield(segment)
-        if case .dropped = result {
+        switch result {
+        case .enqueued:
+            debugLog(debugConsole, .pipeline, "Speech segment enqueued dur=\(String(format: "%.2f", segment.durationSeconds))s")
+        case .dropped:
             speechSegmentsDroppedForBackpressure += 1
             NSLog("PipelineCoordinator: dropped speech segment due to backpressure (count=%d)", speechSegmentsDroppedForBackpressure)
             NSLog("phase1.audio_backpressure_drop_count=%d", speechSegmentsDroppedForBackpressure)
             debugLog(debugConsole, .pipeline, "⚠️ Speech segment dropped (backpressure) count=\(speechSegmentsDroppedForBackpressure)")
+        case .terminated:
+            NSLog("PipelineCoordinator: speech segment queue terminated — processing synchronously")
+            Task { await self.handleSpeechSegment(segment) }
+        @unknown default:
+            Task { await self.handleSpeechSegment(segment) }
         }
     }
 
@@ -925,14 +936,17 @@ actor PipelineCoordinator {
         // Capture wall-clock time from VAD onset for memory timestamps.
         currentUtteranceTimestamp = segment.capturedAt
 
-        // Echo suppression check.
+        // Echo suppression check — pass segment onset time so the echo tail is
+        // checked against when the speech STARTED, not when it finished processing.
         guard echoSuppressor.shouldAccept(
             durationSecs: durationSecs,
             rms: rms,
-            awaitingApproval: awaitingApproval
+            awaitingApproval: awaitingApproval,
+            segmentOnset: segment.capturedAt
         ) else {
-            NSLog("PipelineCoordinator: dropping %.1fs speech segment (echo suppression)", durationSecs)
-            debugLog(debugConsole, .pipeline, "Echo suppressed: \(String(format: "%.1f", durationSecs))s segment (rms=\(String(format: "%.3f", rms)))")
+            NSLog("PipelineCoordinator: dropping %.1fs speech segment (echo suppression, onset=%.1fs ago)",
+                  durationSecs, Date().timeIntervalSince(segment.capturedAt))
+            debugLog(debugConsole, .pipeline, "Echo suppressed: \(String(format: "%.1f", durationSecs))s segment (rms=\(String(format: "%.3f", rms)), onset=\(String(format: "%.1f", Date().timeIntervalSince(segment.capturedAt)))s ago)")
             return
         }
 
@@ -1002,10 +1016,11 @@ actor PipelineCoordinator {
         // is nearly identical to the owner profile and would false-positive on real
         // speech if we rejected unconditionally.
         if currentSpeakerLabel == "fae_self" {
-            // Use echo tail duration (3.5s) plus a small margin rather than an
-            // aggressive 10s window. The echo suppressor already handles the first
-            // 3.5s; this catches the voice-identity false-positive tail.
-            let recentlySpoke = lastAssistantStart.map { Date().timeIntervalSince($0) < 5 } ?? false
+            // Use segment onset time (not current time) to check proximity to
+            // assistant speech. A long echo segment processed seconds later would
+            // fail a Date()-based check but its onset was during/near playback.
+            let timeSinceSpeech = lastAssistantStart.map { segment.capturedAt.timeIntervalSince($0) } ?? .infinity
+            let recentlySpoke = timeSinceSpeech < 10
             if recentlySpoke {
                 NSLog("PipelineCoordinator: dropping %.1fs segment (matched Fae's own voice, near echo window)", durationSecs)
                 debugLog(debugConsole, .pipeline, "Echo rejected (voice match fae_self, recent speech)")
@@ -2596,9 +2611,10 @@ actor PipelineCoordinator {
 
     private func markAssistantSpeechEnded(reason: String, resetVAD: Bool = false) {
         if assistantSpeaking {
-            debugLog(debugConsole, .pipeline, "Speech state → idle (\(reason))")
+            let speechDuration = lastAssistantStart.map { Date().timeIntervalSince($0) } ?? 0
+            debugLog(debugConsole, .pipeline, "Speech state → idle (\(reason), dur=\(String(format: "%.1f", speechDuration))s)")
             assistantSpeaking = false
-            echoSuppressor.onAssistantSpeechEnd()
+            echoSuppressor.onAssistantSpeechEnd(speechDurationSecs: speechDuration)
         }
         if resetVAD {
             vad.reset()

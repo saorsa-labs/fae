@@ -193,15 +193,33 @@ actor AudioCaptureManager {
 
     // MARK: - Private
 
+    /// Configure voice processing on the input node.
+    ///
+    /// Voice Processing (VP) creates a Telephony-mode aggregate audio unit with
+    /// echo cancellation that requires a reference signal from the same engine.
+    /// Fae uses separate AVAudioEngine instances for capture and playback, so VP
+    /// never receives a reference signal — its echo canceller operates with a
+    /// silent reference, which can cause it to gate or suppress real mic input.
+    ///
+    /// Additionally, macOS Voice Isolation (Neural Engine) already handles noise
+    /// suppression at the system level, and Fae's EchoSuppressor handles time-based
+    /// + text-overlap echo filtering. VP is therefore disabled to avoid:
+    /// - Signal attenuation below VAD threshold (0.008 RMS)
+    /// - Conflict with macOS Voice Isolation
+    /// - HALC_ProxyIOContext errors from aggregate device contention
     private func configureVoiceProcessingIfAvailable(on inputNode: AVAudioInputNode) {
+        // VP intentionally disabled — see doc comment above.
+        // If VP was previously enabled on this engine, disable it to avoid
+        // stale aggregate device state.
         do {
-            try inputNode.setVoiceProcessingEnabled(true)
-            inputNode.isVoiceProcessingBypassed = false
-            inputNode.isVoiceProcessingAGCEnabled = true
-            NSLog("AudioCaptureManager: voice processing enabled on input node")
+            if inputNode.isVoiceProcessingEnabled {
+                try inputNode.setVoiceProcessingEnabled(false)
+                NSLog("AudioCaptureManager: disabled stale voice processing")
+            }
         } catch {
-            NSLog("AudioCaptureManager: voice processing unavailable (%@)", error.localizedDescription)
+            // Ignore — just means VP wasn't enabled.
         }
+        NSLog("AudioCaptureManager: voice processing disabled (relying on system Voice Isolation + EchoSuppressor)")
     }
 
     private func logMicrophoneModeDiagnosticsIfAvailable() {
