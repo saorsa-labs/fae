@@ -29,6 +29,36 @@ struct ActionIntent: Sendable {
     let hasCapabilityTicket: Bool
     let policyProfile: PolicyProfile
     let argumentSummary: String
+    let schedulerTaskId: String?  // nil for non-scheduler actions
+    let schedulerConsentGranted: Bool
+
+    init(
+        source: ActionSource,
+        toolName: String,
+        riskLevel: ToolRiskLevel,
+        requiresApproval: Bool,
+        isOwner: Bool,
+        livenessScore: Float?,
+        explicitUserAuthorization: Bool,
+        hasCapabilityTicket: Bool,
+        policyProfile: PolicyProfile,
+        argumentSummary: String,
+        schedulerTaskId: String? = nil,
+        schedulerConsentGranted: Bool = false
+    ) {
+        self.source = source
+        self.toolName = toolName
+        self.riskLevel = riskLevel
+        self.requiresApproval = requiresApproval
+        self.isOwner = isOwner
+        self.livenessScore = livenessScore
+        self.explicitUserAuthorization = explicitUserAuthorization
+        self.hasCapabilityTicket = hasCapabilityTicket
+        self.policyProfile = policyProfile
+        self.argumentSummary = argumentSummary
+        self.schedulerTaskId = schedulerTaskId
+        self.schedulerConsentGranted = schedulerConsentGranted
+    }
 }
 
 /// Stable reason codes used for audit/replay.
@@ -46,6 +76,7 @@ enum DecisionReasonCode: String, Sendable {
     case outboundRecipientNovelty
     case outboundPayloadRisk
     case approvedByUserGrant
+    case schedulerAutoAllowed
 }
 
 struct DecisionReason: Sendable {
@@ -77,6 +108,19 @@ protocol TrustedActionBroker: Sendable {
 actor DefaultTrustedActionBroker: TrustedActionBroker {
     private let knownTools: Set<String>
     private let speakerConfig: FaeConfig.SpeakerConfig
+
+    /// Per-task tool allowlists for scheduler auto-allow.
+    private static let schedulerTaskAllowlists: [String: Set<String>] = [
+        "camera_presence_check": ["camera"],
+        "screen_activity_check": ["screenshot"],
+        "overnight_work": ["web_search", "fetch_url", "activate_skill"],
+        "enhanced_morning_briefing": ["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"],
+    ]
+
+    /// Tools that scheduler tasks can NEVER use regardless of allowlist.
+    private static let schedulerDeniedTools: Set<String> = [
+        "write", "edit", "bash", "manage_skill", "self_config",
+    ]
 
     /// Explicitly modeled tools in broker policy. Any known tool not listed here
     /// is denied by default until a policy rule is added.
@@ -124,6 +168,45 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
             return .deny(reason: DecisionReason(
                 code: .noCapabilityTicket,
                 message: "No active capability grant for this action."
+            ))
+        }
+
+        // Scheduler auto-allow for consented awareness observations.
+        if intent.source == .scheduler {
+            guard intent.schedulerConsentGranted else {
+                return .deny(reason: DecisionReason(
+                    code: .noCapabilityTicket,
+                    message: "Awareness consent not granted"
+                ))
+            }
+
+            guard let taskId = intent.schedulerTaskId,
+                  let allowed = Self.schedulerTaskAllowlists[taskId]
+            else {
+                return .deny(reason: DecisionReason(
+                    code: .noExplicitRule,
+                    message: "Unknown scheduler task policy"
+                ))
+            }
+
+            // Deny write/mutation tools from scheduler tasks.
+            if Self.schedulerDeniedTools.contains(intent.toolName) {
+                return .deny(reason: DecisionReason(
+                    code: .noExplicitRule,
+                    message: "Write/mutation tools not allowed for scheduler observations"
+                ))
+            }
+
+            guard allowed.contains(intent.toolName) else {
+                return .deny(reason: DecisionReason(
+                    code: .noExplicitRule,
+                    message: "Tool not allowed for scheduler task \(taskId)"
+                ))
+            }
+
+            return .allow(reason: DecisionReason(
+                code: .schedulerAutoAllowed,
+                message: "Allowed for \(taskId) with user consent"
             ))
         }
 

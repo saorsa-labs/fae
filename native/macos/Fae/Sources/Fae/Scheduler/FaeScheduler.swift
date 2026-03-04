@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 private struct SchedulerPersistedTask: Codable {
@@ -43,6 +44,13 @@ actor FaeScheduler {
     /// Closure to make Fae speak — set by FaeCore after pipeline is ready.
     var speakHandler: (@Sendable (String) async -> Void)?
 
+    /// Closure to inject a proactive query into the pipeline — set by FaeCore.
+    /// Parameters: (prompt, silent, taskId, allowedTools, consentGranted).
+    private var proactiveQueryHandler: (@Sendable (String, Bool, String, Set<String>, Bool) async -> Void)?
+
+    /// Current awareness configuration — updated by FaeCore on config changes.
+    private var awarenessConfig: FaeConfig.AwarenessConfig = FaeConfig.AwarenessConfig()
+
     /// Vault manager for backup tasks — set by FaeCore.
     private var vaultManager: GitVaultManager?
 
@@ -51,6 +59,29 @@ actor FaeScheduler {
 
     /// Tracks which interests have already had skill proposals surfaced.
     private var suggestedInterestIDs: Set<String> = []
+
+    // MARK: - Awareness Tracking State
+
+    /// When the user was last seen by camera.
+    private var lastUserSeenAt: Date?
+
+    /// Whether the enhanced morning briefing has been delivered today.
+    private var morningBriefingDelivered: Bool = false
+
+    /// Last camera check timestamp (for interval enforcement).
+    private var lastCameraCheckAt: Date?
+
+    /// Last screen check timestamp (for interval enforcement).
+    private var lastScreenCheckAt: Date?
+
+    /// Last frontmost app bundle identifier (for smart screen gating).
+    private var lastFrontmostAppBundleId: String?
+
+    /// Last persisted screen context hash for coalescing duplicate observations.
+    private var lastScreenContentHash: String?
+
+    /// Last time a screen context observation was persisted.
+    private var lastScreenContextPersistedAt: Date?
 
     init(
         eventBus: FaeEventBus,
@@ -78,6 +109,44 @@ actor FaeScheduler {
     /// Set the vault manager for backup tasks.
     func setVaultManager(_ manager: GitVaultManager) {
         vaultManager = manager
+    }
+
+    /// Set the proactive query handler (must be called before start for awareness tasks to work).
+    func setProactiveQueryHandler(
+        _ handler: @escaping @Sendable (String, Bool, String, Set<String>, Bool) async -> Void
+    ) {
+        proactiveQueryHandler = handler
+    }
+
+    /// Update awareness configuration (called by FaeCore on config changes).
+    func setAwarenessConfig(_ config: FaeConfig.AwarenessConfig) {
+        awarenessConfig = config
+    }
+
+    /// Record that the user was seen (called from camera presence observations).
+    func recordUserSeen() {
+        lastUserSeenAt = Date()
+    }
+
+    /// Whether the morning briefing has been delivered today.
+    func isMorningBriefingDelivered() -> Bool {
+        morningBriefingDelivered
+    }
+
+    /// Coalesce duplicate screen observations: persist only when hash changed or
+    /// at least 2 minutes elapsed since the previous persisted context.
+    func shouldPersistScreenContext(contentHash: String) -> Bool {
+        let now = Date()
+        let hashChanged = (contentHash != lastScreenContentHash)
+        let minElapsed = now.timeIntervalSince(lastScreenContextPersistedAt ?? .distantPast) >= 120
+
+        if hashChanged || minElapsed {
+            lastScreenContentHash = contentHash
+            lastScreenContextPersistedAt = now
+            return true
+        }
+
+        return false
     }
 
     /// Configure persistence — creates a persistence-backed ledger and loads saved state.
@@ -123,6 +192,11 @@ actor FaeScheduler {
         // Daily tasks (check every 60s, run if past due)
         scheduleRepeating("scheduler_tick", interval: 60) { [weak self] in
             await self?.runDailyChecks()
+        }
+
+        // Awareness tasks — only scheduled when awareness is enabled.
+        if awarenessConfig.enabled, awarenessConfig.consentGrantedAt != nil {
+            startAwarenessTasks()
         }
 
         NSLog("FaeScheduler: started with %d timers", timers.count)
@@ -535,6 +609,225 @@ actor FaeScheduler {
         }
     }
 
+    // MARK: - Awareness Tasks
+
+    /// Start awareness-specific repeating tasks.
+    private func startAwarenessTasks() {
+        let cameraInterval = TimeInterval(awarenessConfig.cameraIntervalSeconds)
+        let screenInterval = TimeInterval(awarenessConfig.screenIntervalSeconds)
+
+        if awarenessConfig.cameraEnabled {
+            scheduleRepeating("camera_presence_check", interval: cameraInterval) { [weak self] in
+                await self?.runCameraPresenceCheck()
+            }
+        }
+        if awarenessConfig.screenEnabled {
+            scheduleRepeating("screen_activity_check", interval: screenInterval) { [weak self] in
+                await self?.runScreenActivityCheck()
+            }
+        }
+
+        NSLog("FaeScheduler: awareness tasks started (camera=%@, screen=%@)",
+              awarenessConfig.cameraEnabled ? "on" : "off",
+              awarenessConfig.screenEnabled ? "on" : "off")
+    }
+
+    /// Restart awareness tasks after config changes. Call from FaeCore after updating awareness config.
+    func restartAwarenessTasks() {
+        // Cancel existing awareness timers.
+        for id in ["camera_presence_check", "screen_activity_check"] {
+            if let timer = timers.removeValue(forKey: id) {
+                timer.cancel()
+            }
+        }
+
+        // Re-schedule if awareness is enabled.
+        if isRunning, awarenessConfig.enabled, awarenessConfig.consentGrantedAt != nil {
+            startAwarenessTasks()
+        }
+    }
+
+    private func runCameraPresenceCheck() async {
+        let throttle = AwarenessThrottle.check(
+            config: awarenessConfig,
+            taskId: "camera_presence_check",
+            lastUserSeenAt: lastUserSeenAt
+        )
+
+        switch throttle {
+        case .skip(let reason):
+            NSLog("FaeScheduler: camera_presence_check skipped — %@", reason)
+            return
+        case .silentOnly, .normal:
+            break
+        }
+
+        // Adaptive frequency: reduce to every 5 min when user absent >30 min.
+        if AwarenessThrottle.shouldReduceFrequency(lastUserSeenAt: lastUserSeenAt) {
+            if let lastCheck = lastCameraCheckAt,
+               Date().timeIntervalSince(lastCheck) < 290 { // ~5 min minus jitter
+                return
+            }
+        }
+
+        // Enforce minimum interval with jitter.
+        if let lastCheck = lastCameraCheckAt {
+            let minInterval = TimeInterval(awarenessConfig.cameraIntervalSeconds) + AwarenessThrottle.randomJitter()
+            if Date().timeIntervalSince(lastCheck) < minInterval {
+                return
+            }
+        }
+        lastCameraCheckAt = Date()
+
+        guard let handler = proactiveQueryHandler else { return }
+
+        let silent: Bool
+        if case .silentOnly = throttle { silent = true } else { silent = false }
+        let prompt = "[PROACTIVE CAMERA OBSERVATION] Check who is at the desk using the camera tool. Follow the proactive-awareness skill instructions."
+
+        NSLog("FaeScheduler: camera_presence_check — firing (silent=%@)", silent ? "yes" : "no")
+        await handler(
+            prompt,
+            silent,
+            "camera_presence_check",
+            ["camera"],
+            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        )
+    }
+
+    private func runScreenActivityCheck() async {
+        let throttle = AwarenessThrottle.check(
+            config: awarenessConfig,
+            taskId: "screen_activity_check",
+            lastUserSeenAt: lastUserSeenAt
+        )
+
+        switch throttle {
+        case .skip(let reason):
+            NSLog("FaeScheduler: screen_activity_check skipped — %@", reason)
+            return
+        case .silentOnly, .normal:
+            break
+        }
+
+        // Smart gating: only run when frontmost app changed or 2 min minimum.
+        let currentApp = await MainActor.run {
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        }
+        let appChanged = (currentApp != lastFrontmostAppBundleId)
+        lastFrontmostAppBundleId = currentApp
+
+        if !appChanged {
+            if let lastCheck = lastScreenCheckAt,
+               Date().timeIntervalSince(lastCheck) < 120 { // 2 min minimum
+                return
+            }
+        }
+
+        // Enforce minimum interval with jitter.
+        if let lastCheck = lastScreenCheckAt {
+            let minInterval = TimeInterval(awarenessConfig.screenIntervalSeconds) + AwarenessThrottle.randomJitter()
+            if Date().timeIntervalSince(lastCheck) < minInterval {
+                return
+            }
+        }
+        lastScreenCheckAt = Date()
+
+        guard let handler = proactiveQueryHandler else { return }
+
+        let prompt = "[PROACTIVE SCREEN OBSERVATION] Take a screenshot and note the current screen context. Follow the screen-awareness skill instructions."
+
+        NSLog("FaeScheduler: screen_activity_check — firing")
+        await handler(
+            prompt,
+            true, // Screen observations are always silent.
+            "screen_activity_check",
+            ["screenshot"],
+            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        )
+    }
+
+    private func runOvernightWork() async {
+        let throttle = AwarenessThrottle.check(
+            config: awarenessConfig,
+            taskId: "overnight_work",
+            lastUserSeenAt: lastUserSeenAt
+        )
+
+        switch throttle {
+        case .skip(let reason):
+            NSLog("FaeScheduler: overnight_work skipped — %@", reason)
+            return
+        case .silentOnly, .normal:
+            break
+        }
+
+        guard let handler = proactiveQueryHandler else { return }
+
+        let prompt = "[OVERNIGHT RESEARCH CYCLE] Research topics the user cares about. Follow the overnight-research skill instructions."
+
+        NSLog("FaeScheduler: overnight_work — firing")
+        await handler(
+            prompt,
+            true, // Always silent — research stored in memory.
+            "overnight_work",
+            ["web_search", "fetch_url", "activate_skill"],
+            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        )
+    }
+
+    private func runEnhancedMorningBriefing() async {
+        guard !morningBriefingDelivered else { return }
+
+        let throttle = AwarenessThrottle.check(
+            config: awarenessConfig,
+            taskId: "enhanced_morning_briefing",
+            lastUserSeenAt: lastUserSeenAt
+        )
+
+        switch throttle {
+        case .skip(let reason):
+            NSLog("FaeScheduler: enhanced_morning_briefing skipped — %@", reason)
+            return
+        case .silentOnly:
+            // Don't deliver briefing during quiet hours.
+            return
+        case .normal:
+            break
+        }
+
+        guard let handler = proactiveQueryHandler else { return }
+
+        morningBriefingDelivered = true
+
+        let prompt = "[ENHANCED MORNING BRIEFING] [USER_JUST_ARRIVED] Deliver a warm, conversational morning briefing. Follow the morning-briefing-v2 skill instructions."
+
+        NSLog("FaeScheduler: enhanced_morning_briefing — firing")
+        await handler(
+            prompt,
+            false, // Briefing should speak.
+            "enhanced_morning_briefing",
+            ["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"],
+            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        )
+    }
+
+    /// Called when user is first detected after quiet hours — triggers morning briefing.
+    func notifyUserDetectedPostQuietHours() async {
+        let hour = Calendar.current.component(.hour, from: Date())
+        guard hour >= 7, !morningBriefingDelivered else { return }
+        guard awarenessConfig.enabled, awarenessConfig.enhancedBriefingEnabled else { return }
+        await runEnhancedMorningBriefing()
+    }
+
+    /// Fallback: trigger morning briefing on first user interaction after 07:00.
+    func checkMorningBriefingFallback() async {
+        let hour = Calendar.current.component(.hour, from: Date())
+        guard hour >= 7, hour < 12, !morningBriefingDelivered else { return }
+        guard awarenessConfig.enabled, awarenessConfig.enhancedBriefingEnabled else { return }
+        await runEnhancedMorningBriefing()
+    }
+
     // MARK: - Daily Schedule Checks
 
     /// Track which daily tasks have fired today.
@@ -553,10 +846,17 @@ actor FaeScheduler {
         if hour == 2, minute >= 30, minute < 32 { await runDailyIfNeeded("vault_backup") { await runVaultBackup() } }
         // memory_gc: daily 03:30
         if hour == 3, minute >= 30, minute < 32 { await runDailyIfNeeded("memory_gc") { await runMemoryGC() } }
-        // noise_budget_reset: daily 00:00
-        if hour == 0, minute < 2 { await runDailyIfNeeded("noise_budget_reset") { await runNoiseBudgetReset() } }
+        // noise_budget_reset: daily 00:00 + morning briefing flag reset
+        if hour == 0, minute < 2 {
+            await runDailyIfNeeded("noise_budget_reset") { await runNoiseBudgetReset() }
+            morningBriefingDelivered = false
+        }
         // morning_briefing: configurable hour (default 08:00)
-        if hour == config.morningBriefingHour, minute < 2 {
+        // Skip legacy briefing when enhanced awareness briefing is enabled.
+        if hour == config.morningBriefingHour,
+           minute < 2,
+           !(awarenessConfig.enabled && awarenessConfig.enhancedBriefingEnabled)
+        {
             await runDailyIfNeeded("morning_briefing") { await runMorningBriefing() }
         }
         // skill_proposals: configurable hour (default 11:00)
@@ -570,6 +870,23 @@ actor FaeScheduler {
         // embedding_reindex: weekly on Sunday at 03:00.
         if weekday == 1, hour == 3, minute < 2 {
             await runDailyIfNeeded("embedding_reindex") { await runEmbeddingReindex() }
+        }
+
+        // Awareness: overnight_work — hourly during 22:00-06:00.
+        if awarenessConfig.enabled, awarenessConfig.overnightWorkEnabled,
+           (hour >= 22 || hour < 6), minute < 2 {
+            let key = "overnight_work_\(hour)"
+            await runDailyIfNeeded(key) { await runOvernightWork() }
+        }
+
+        // Awareness: enhanced_morning_briefing — deferred until user detected after 07:00.
+        // This is a fallback check; primary trigger is notifyUserDetectedPostQuietHours().
+        if awarenessConfig.enabled, awarenessConfig.enhancedBriefingEnabled,
+           hour >= 7, hour < 12, !morningBriefingDelivered, minute < 2 {
+            // If camera is disabled, try fallback on the 5-minute scheduler tick.
+            if !awarenessConfig.cameraEnabled {
+                await runDailyIfNeeded("enhanced_morning_briefing") { await runEnhancedMorningBriefing() }
+            }
         }
     }
 
@@ -605,6 +922,10 @@ actor FaeScheduler {
         case "skill_health_check": await runSkillHealthCheck()
         case "embedding_reindex": await runEmbeddingReindex()
         case "vault_backup":     await runVaultBackup()
+        case "camera_presence_check":  await runCameraPresenceCheck()
+        case "screen_activity_check":  await runScreenActivityCheck()
+        case "overnight_work":         await runOvernightWork()
+        case "enhanced_morning_briefing": await runEnhancedMorningBriefing()
         default:
             NSLog("FaeScheduler: unknown task id '%@'", id)
         }
@@ -707,7 +1028,8 @@ actor FaeScheduler {
             "memory_gc", "memory_backup", "check_fae_update",
             "morning_briefing", "noise_budget_reset", "skill_proposals",
             "stale_relationships", "skill_health_check", "embedding_reindex",
-            "vault_backup",
+            "vault_backup", "camera_presence_check", "screen_activity_check",
+            "overnight_work", "enhanced_morning_briefing",
         ]
         ids.formUnion(builtinIDs)
 

@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import CryptoKit
 import Foundation
 
 /// Central voice pipeline: AudioCapture → VAD → STT → LLM → TTS → Playback.
@@ -257,6 +258,28 @@ actor PipelineCoordinator {
     /// Task-scoped capability grant consumed by the broker.
     private var activeCapabilityTicket: CapabilityTicket?
 
+    // MARK: - Proactive Awareness
+
+    /// Immutable per-turn context for scheduler-initiated proactive queries.
+    /// Passed down the current generation call stack (never stored as shared state)
+    /// to avoid source/allowlist leakage across concurrent turns.
+    struct ProactiveRequestContext: Sendable {
+        let source: ActionSource
+        let taskId: String
+        let allowedTools: Set<String>
+        let consentGranted: Bool
+        let conversationTag: String
+    }
+
+    /// Called on user-initiated turns to let scheduler run morning fallback checks.
+    private var userInteractionHandler: (@Sendable () async -> Void)?
+
+    /// Called after proactive camera observations to update scheduler presence state.
+    private var proactivePresenceHandler: (@Sendable (Bool) async -> Void)?
+
+    /// Called after proactive screen observations to decide whether to persist context.
+    private var proactiveScreenContextHandler: (@Sendable (String) async -> Bool)?
+
     // MARK: - Init
 
     init(
@@ -482,6 +505,83 @@ actor PipelineCoordinator {
         bargeInSuppressed = true
         defer { bargeInSuppressed = false }
         await speakText(text, isFinal: true, voiceInstruct: voiceInstruct)
+    }
+
+    /// Register a callback fired on each user-initiated turn.
+    func setUserInteractionHandler(_ handler: @escaping @Sendable () async -> Void) {
+        userInteractionHandler = handler
+    }
+
+    /// Register a callback fired after proactive camera observations.
+    func setProactivePresenceHandler(_ handler: @escaping @Sendable (Bool) async -> Void) {
+        proactivePresenceHandler = handler
+    }
+
+    /// Register a callback fired after proactive screen observations.
+    func setProactiveScreenContextHandler(_ handler: @escaping @Sendable (String) async -> Bool) {
+        proactiveScreenContextHandler = handler
+    }
+
+    // MARK: - Proactive Query Injection
+
+    /// Inject a scheduler-initiated proactive query into the LLM pipeline.
+    ///
+    /// Modelled after `injectText()` but for scheduler-initiated observations.
+    /// Uses a per-request `ProactiveRequestContext` (not a shared mutable field)
+    /// so actor isolation guarantees no race with user-initiated actions.
+    ///
+    /// - Parameters:
+    ///   - prompt: The proactive observation prompt (e.g. "[PROACTIVE CAMERA OBSERVATION]").
+    ///   - silent: If true, appends instruction to only speak if meaningful.
+    ///   - taskId: Scheduler task identifier for per-task tool allowlisting.
+    ///   - allowedTools: Tools this task is permitted to use.
+    ///   - consentGranted: Whether awareness consent is currently active.
+    func injectProactiveQuery(
+        prompt: String,
+        silent: Bool = true,
+        taskId: String,
+        allowedTools: Set<String>,
+        consentGranted: Bool
+    ) async {
+        // Never interrupt an active conversation or generation.
+        guard !assistantGenerating, !assistantSpeaking else {
+            NSLog("PipelineCoordinator: proactive query skipped — assistant busy")
+            return
+        }
+
+        let proactiveTag = "\(taskId)-\(Int(Date().timeIntervalSince1970 * 1000))"
+        let proactiveContext = ProactiveRequestContext(
+            source: .scheduler,
+            taskId: taskId,
+            allowedTools: allowedTools,
+            consentGranted: consentGranted,
+            conversationTag: proactiveTag
+        )
+
+        // Scheduler acts on behalf of the consented owner.
+        currentSpeakerLabel = "owner"
+        currentSpeakerDisplayName = "Owner"
+        currentSpeakerRole = .owner
+        currentSpeakerIsOwner = true
+        currentSpeakerIsKnownNonOwner = false
+
+        // Build the prompt, optionally appending silence instruction.
+        var fullPrompt = prompt
+        if silent {
+            fullPrompt += "\n\n[Respond only if you have something meaningful to say. Otherwise stay silent.]"
+        }
+
+        debugLog(debugConsole, .pipeline, "Proactive query: taskId=\(taskId) silent=\(silent)")
+
+        await processTranscription(
+            text: fullPrompt,
+            wakeMatch: nil,
+            rms: nil,
+            durationSecs: nil,
+            proactiveContext: proactiveContext
+        )
+
+        await conversationState.removeMessages(taggedWith: proactiveTag)
     }
 
     /// Test speaker match: record 2 seconds, embed, match against profiles.
@@ -1059,7 +1159,8 @@ actor PipelineCoordinator {
         text: String,
         wakeMatch: TextProcessing.WakeAddressMatch? = nil,
         rms: Float?,
-        durationSecs: Float?
+        durationSecs: Float?,
+        proactiveContext: ProactiveRequestContext? = nil
     ) async {
         debugLog(debugConsole, .qa, "Process transcription: \(text)")
 
@@ -1092,12 +1193,17 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .approval, "Explicit user authorization detected for turn")
         }
 
+        if proactiveContext == nil {
+            await userInteractionHandler?()
+        }
+
         // Unified pipeline: LLM decides when to use tools via <tool_call> markup.
         await generateWithTools(
             userText: queryText,
             isToolFollowUp: false,
             turnCount: 0,
-            forceSuppressThinking: forceFastCommandPath
+            forceSuppressThinking: forceFastCommandPath,
+            proactiveContext: proactiveContext
         )
     }
 
@@ -1598,7 +1704,8 @@ actor PipelineCoordinator {
         isToolFollowUp: Bool,
         turnCount: Int,
         forceSuppressThinking: Bool = false,
-        generationID providedGenerationID: UUID? = nil
+        generationID providedGenerationID: UUID? = nil,
+        proactiveContext: ProactiveRequestContext? = nil
     ) async {
         let maxToolTurns = 5
 
@@ -1643,7 +1750,12 @@ actor PipelineCoordinator {
             await playback.playThinkingTone()
 
             // Add user message to history.
-            await conversationState.addUserMessage(userText, speakerDisplayName: currentSpeakerDisplayName, speakerId: currentSpeakerLabel)
+            await conversationState.addUserMessage(
+                userText,
+                speakerDisplayName: currentSpeakerDisplayName,
+                speakerId: currentSpeakerLabel,
+                tag: proactiveContext?.conversationTag
+            )
 
             // Issue a short-lived capability ticket for this turn.
             let toolMode = effectiveToolMode()
@@ -2146,7 +2258,8 @@ actor PipelineCoordinator {
                     isToolFollowUp: true,
                     turnCount: turnCount,
                     forceSuppressThinking: true,
-                    generationID: generationID
+                    generationID: generationID,
+                    proactiveContext: proactiveContext
                 )
                 return
             }
@@ -2191,7 +2304,7 @@ actor PipelineCoordinator {
             }
 
             if !spokenText.isEmpty {
-                await conversationState.addAssistantMessage(spokenText)
+                await conversationState.addAssistantMessage(spokenText, tag: proactiveContext?.conversationTag)
 
                 // Memory capture.
                 let turnId = newMemoryId(prefix: "turn")
@@ -2226,6 +2339,7 @@ actor PipelineCoordinator {
         // Tool calls found — execute them.
         if turnCount == 0,
            !isToolFollowUp,
+           proactiveContext == nil,
            Self.canRunDeferredToolCalls(toolCalls, registry: registry)
         {
             let assistantToolMessage = Self.stripThinkContent(fullResponse)
@@ -2264,7 +2378,7 @@ actor PipelineCoordinator {
         }
 
         // Add the assistant's tool-calling message to history (strip think content).
-        await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse))
+        await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse), tag: proactiveContext?.conversationTag)
 
         var toolSuccessCount = 0
         var toolFailureCount = 0
@@ -2279,7 +2393,17 @@ actor PipelineCoordinator {
             let inputPreview = String(inputJSON.prefix(220))
             debugLog(debugConsole, .toolCall, "id=\(callId.prefix(8)) name=\(call.name) args=\(inputPreview)")
 
-            let result = await executeTool(call)
+            var result = await executeTool(call, proactiveContext: proactiveContext)
+            if call.name == "camera", proactiveContext?.taskId == "camera_presence_check", !result.isError {
+                let userPresent = Self.inferUserPresentFromCameraOutput(result.output)
+                await proactivePresenceHandler?(userPresent)
+            }
+            if call.name == "screenshot", proactiveContext?.taskId == "screen_activity_check", !result.isError {
+                let hash = Self.contentHash(result.output)
+                if let shouldPersist = await proactiveScreenContextHandler?(hash), !shouldPersist {
+                    result = .success("Screen context unchanged recently. Do not store a new screen context memory record; keep the existing context.")
+                }
+            }
             let outputPreview = result.output.replacingOccurrences(of: "\n", with: " ").prefix(220)
             debugLog(debugConsole, .toolResult, "id=\(callId.prefix(8)) name=\(call.name) status=\(result.isError ? "error" : "ok") output=\(outputPreview)")
             if result.isError {
@@ -2312,7 +2436,8 @@ actor PipelineCoordinator {
             await conversationState.addToolResult(
                 id: callId,
                 name: call.name,
-                content: result.output
+                content: result.output,
+                tag: proactiveContext?.conversationTag
             )
         }
 
@@ -2335,7 +2460,8 @@ actor PipelineCoordinator {
             isToolFollowUp: true,
             turnCount: turnCount + 1,
             forceSuppressThinking: forceSuppressThinking,
-            generationID: generationID
+            generationID: generationID,
+            proactiveContext: proactiveContext
         )
     }
 
@@ -2741,6 +2867,23 @@ actor PipelineCoordinator {
         return path
     }
 
+    private static func inferUserPresentFromCameraOutput(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        let absentSignals = [
+            "no person", "no people", "nobody", "empty", "vacant", "no one",
+            "no human", "no face", "unoccupied",
+        ]
+        if absentSignals.contains(where: { lower.contains($0) }) {
+            return false
+        }
+        return true
+    }
+
+    private static func contentHash(_ text: String) -> String {
+        let digest = SHA256.hash(data: Data(text.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     // MARK: - Tool Execution
 
     private func startDeferredToolJob(
@@ -2869,7 +3012,8 @@ actor PipelineCoordinator {
     private func executeTool(
         _ call: ToolCall,
         capabilityTicketOverride: CapabilityTicket? = nil,
-        explicitUserAuthorizationOverride: Bool? = nil
+        explicitUserAuthorizationOverride: Bool? = nil,
+        proactiveContext: ProactiveRequestContext? = nil
     ) async -> ToolResult {
         // Tool mode enforcement — reject tools not allowed in current mode.
         let toolMode = effectiveToolMode()
@@ -2877,6 +3021,13 @@ actor PipelineCoordinator {
         guard registry.isToolAllowed(call.name, mode: toolMode) else {
             debugLog(debugConsole, .toolResult, "Blocked by mode: \(call.name) mode=\(toolMode)")
             return .error("Tool '\(call.name)' is not available in current mode (\(toolMode))")
+        }
+
+        if let proactiveContext,
+           !proactiveContext.allowedTools.contains(call.name)
+        {
+            debugLog(debugConsole, .toolResult, "Blocked by proactive allowlist: \(call.name) task=\(proactiveContext.taskId)")
+            return .error("Tool '\(call.name)' is not allowed for proactive task '\(proactiveContext.taskId)'")
         }
 
         // Computer-use action step limiter (click/type_text/scroll).
@@ -2932,7 +3083,7 @@ actor PipelineCoordinator {
         let hasCapabilityTicket = effectiveTicket?.allows(toolName: call.name) ?? false
         let explicitAuthorization = explicitUserAuthorizationOverride ?? explicitUserAuthorizationForTurn
         let intent = ActionIntent(
-            source: .voice,
+            source: proactiveContext?.source ?? .voice,
             toolName: call.name,
             riskLevel: tool.riskLevel,
             requiresApproval: tool.requiresApproval,
@@ -2945,7 +3096,9 @@ actor PipelineCoordinator {
                 toolName: call.name,
                 reason: "confirmation required",
                 arguments: call.arguments
-            )
+            ),
+            schedulerTaskId: proactiveContext?.taskId,
+            schedulerConsentGranted: proactiveContext?.consentGranted ?? false
         )
 
         let brokerDecisionStartedAt = Date()

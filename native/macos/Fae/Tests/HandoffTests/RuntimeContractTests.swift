@@ -217,6 +217,54 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
+    func testFaeCorePersistsAwarenessPatchKeys() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "awareness.enabled", "value": true]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "awareness.camera_enabled", "value": true]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "awareness.pause_on_battery", "value": false]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "awareness.pause_on_thermal_pressure", "value": false]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertTrue(reloaded.awareness.enabled)
+        XCTAssertTrue(reloaded.awareness.cameraEnabled)
+        XCTAssertFalse(reloaded.awareness.pauseOnBattery)
+        XCTAssertFalse(reloaded.awareness.pauseOnThermalPressure)
+        XCTAssertNotNil(reloaded.awareness.consentGrantedAt)
+    }
+
+    @MainActor
     func testFaeCorePersistsVoiceIdentityLockAndExposesTTSRuntimeFields() async throws {
         let url = FaeConfig.configFileURL
         let fm = FileManager.default

@@ -10,10 +10,13 @@ final class TrustedActionBrokerTests: XCTestCase {
         isOwner: Bool = true,
         hasCapabilityTicket: Bool = true,
         explicitUserAuthorization: Bool = false,
-        profile: PolicyProfile = .balanced
+        profile: PolicyProfile = .balanced,
+        source: ActionSource = .voice,
+        schedulerTaskId: String? = nil,
+        schedulerConsentGranted: Bool = false
     ) -> ActionIntent {
         ActionIntent(
-            source: .voice,
+            source: source,
             toolName: toolName,
             riskLevel: risk,
             requiresApproval: requiresApproval,
@@ -22,7 +25,9 @@ final class TrustedActionBrokerTests: XCTestCase {
             explicitUserAuthorization: explicitUserAuthorization,
             hasCapabilityTicket: hasCapabilityTicket,
             policyProfile: profile,
-            argumentSummary: "test"
+            argumentSummary: "test",
+            schedulerTaskId: schedulerTaskId,
+            schedulerConsentGranted: schedulerConsentGranted
         )
     }
 
@@ -169,6 +174,94 @@ final class TrustedActionBrokerTests: XCTestCase {
             XCTAssertTrue(true)
         } else {
             XCTFail("Expected confirm in cautious profile")
+        }
+    }
+
+    func testSchedulerRequiresConsent() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["camera"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(
+                toolName: "camera",
+                source: .scheduler,
+                schedulerTaskId: "camera_presence_check",
+                schedulerConsentGranted: false
+            )
+        )
+
+        if case .deny(let reason) = decision {
+            XCTAssertEqual(reason.code, .noCapabilityTicket)
+        } else {
+            XCTFail("Expected deny when scheduler consent is absent")
+        }
+    }
+
+    func testSchedulerUnknownTaskDenied() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["camera"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(
+                toolName: "camera",
+                source: .scheduler,
+                schedulerTaskId: "unknown_task",
+                schedulerConsentGranted: true
+            )
+        )
+
+        if case .deny(let reason) = decision {
+            XCTAssertEqual(reason.code, .noExplicitRule)
+        } else {
+            XCTFail("Expected deny for unknown scheduler task")
+        }
+    }
+
+    func testSchedulerNonAllowlistedToolDenied() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["camera", "read"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(
+                toolName: "read",
+                source: .scheduler,
+                schedulerTaskId: "camera_presence_check",
+                schedulerConsentGranted: true
+            )
+        )
+
+        if case .deny(let reason) = decision {
+            XCTAssertEqual(reason.code, .noExplicitRule)
+        } else {
+            XCTFail("Expected deny for non-allowlisted scheduler tool")
+        }
+    }
+
+    func testSchedulerAllowlistedToolAllowed() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["camera"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(
+                toolName: "camera",
+                source: .scheduler,
+                schedulerTaskId: "camera_presence_check",
+                schedulerConsentGranted: true
+            )
+        )
+
+        if case .allow(let reason) = decision {
+            XCTAssertEqual(reason.code, .schedulerAutoAllowed)
+        } else {
+            XCTFail("Expected allow for scheduler allowlisted tool")
         }
     }
 }

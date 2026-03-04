@@ -448,6 +448,118 @@ actor SkillManager {
         return metadata
     }
 
+    /// Update a personal skill's SKILL.md (description and/or body).
+    ///
+    /// Only personal-tier skills can be updated — built-in skills are immutable.
+    /// At least one of `description` or `body` must be non-nil.
+    func updateSkill(name: String, description: String?, body: String?) throws -> SkillMetadata {
+        try Self.validateSkillName(name)
+
+        guard let existing = skillCache[name] ?? lookupSkill(named: name) else {
+            throw SkillError.notFound(name)
+        }
+
+        guard existing.tier == .personal else {
+            throw SkillError.notPersonal(name)
+        }
+
+        let skillMdURL = existing.directoryURL.appendingPathComponent("SKILL.md")
+        let currentContent = try String(contentsOf: skillMdURL, encoding: .utf8)
+
+        // Split into frontmatter lines and body.
+        let lines = currentContent.components(separatedBy: .newlines)
+        guard let firstLine = lines.first,
+              firstLine.trimmingCharacters(in: .whitespaces) == "---"
+        else {
+            throw SkillError.invalidSkillMd(name)
+        }
+
+        var closingIndex: Int?
+        for i in 1 ..< lines.count {
+            if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
+                closingIndex = i
+                break
+            }
+        }
+        guard let endIdx = closingIndex else {
+            throw SkillError.invalidSkillMd(name)
+        }
+
+        // Rebuild frontmatter lines, replacing description if provided.
+        var frontmatterLines = Array(lines[1 ..< endIdx])
+        if let newDesc = description {
+            let trimmedDesc = newDesc.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedDesc.count < 10 {
+                throw SkillError.policyViolation("description is too short; include concrete behavior")
+            }
+
+            var replaced = false
+            for i in 0 ..< frontmatterLines.count {
+                let trimmed = frontmatterLines[i].trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("description:") {
+                    frontmatterLines[i] = "description: \(trimmedDesc)"
+                    replaced = true
+                    break
+                }
+            }
+            if !replaced {
+                frontmatterLines.append("description: \(trimmedDesc)")
+            }
+        }
+
+        // Rebuild the body — use new body if provided, otherwise keep existing.
+        let existingBodyLines = Array(lines[(endIdx + 1)...])
+        let existingBody = existingBodyLines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let finalBody: String
+        if let newBody = body {
+            let trimmedBody = newBody.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedBody.count < 20 {
+                throw SkillError.policyViolation("SKILL.md body is too short")
+            }
+
+            let lowered = trimmedBody.lowercased()
+            if lowered.contains("api key") || lowered.contains("token:") || lowered.contains("password:") {
+                throw SkillError.policyViolation("skill body appears to contain credential-like content")
+            }
+
+            finalBody = trimmedBody
+        } else {
+            finalBody = existingBody
+        }
+
+        // Assemble updated SKILL.md content.
+        var updatedContent = "---\n"
+        updatedContent += frontmatterLines.joined(separator: "\n") + "\n"
+        updatedContent += "---\n"
+        updatedContent += finalBody + "\n"
+
+        try updatedContent.write(to: skillMdURL, atomically: true, encoding: .utf8)
+
+        // Re-parse and update cache.
+        guard let updatedMetadata = SkillParser.parse(
+            skillURL: skillMdURL, tier: .personal, isEnabled: existing.isEnabled
+        ) else {
+            throw SkillError.invalidSkillMd(name)
+        }
+
+        skillCache[name] = updatedMetadata
+
+        // If this skill was activated, refresh the body cache.
+        if activatedBodies[name] != nil {
+            let record = SkillParser.parseRecord(
+                skillURL: skillMdURL, tier: .personal, isEnabled: existing.isEnabled
+            )
+            if let refreshedBody = record?.fullBody {
+                activatedBodies[name] = refreshedBody
+            }
+        }
+
+        NSLog("SkillManager: updated skill '%@'", name)
+        return updatedMetadata
+    }
+
     /// Delete a personal skill directory.
     func deleteSkill(name: String) throws {
         try Self.validateSkillName(name)
@@ -880,6 +992,7 @@ actor SkillManager {
         case alreadyExists(String)
         case invalidSkillMd(String)
         case invalidName(String)
+        case notPersonal(String)
         case blockedNetworkTarget(String, String)
         case missingManifest(String)
         case invalidManifest(String)
@@ -894,6 +1007,8 @@ actor SkillManager {
             case .alreadyExists(let name): return "Skill '\(name)' already exists"
             case .invalidSkillMd(let name): return "Invalid SKILL.md for skill '\(name)'"
             case .invalidName(let name): return "Invalid skill name '\(name)'"
+            case .notPersonal(let name):
+                return "Skill '\(name)' is built-in and cannot be modified"
             case .blockedNetworkTarget(let url, let reason):
                 return "Blocked network target in skill input (\(url)): \(reason)"
             case .missingManifest(let name):

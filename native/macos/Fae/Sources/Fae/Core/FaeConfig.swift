@@ -19,6 +19,7 @@ struct FaeConfig: Codable {
     var scheduler: SchedulerConfig = SchedulerConfig()
     var skills: SkillsConfig = SkillsConfig()
     var vision: VisionConfig = VisionConfig()
+    var awareness: AwarenessConfig = AwarenessConfig()
     var userName: String?
     var onboarded: Bool = false
     var licenseAccepted: Bool = false
@@ -190,6 +191,31 @@ struct FaeConfig: Codable {
         var enabled: Bool = false
         /// VLM model preset: "auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit".
         var modelPreset: String = "auto"
+    }
+
+    // MARK: - Awareness
+
+    struct AwarenessConfig: Codable {
+        /// Master toggle — requires explicit user consent.
+        var enabled: Bool = false
+        /// Camera presence checks (greetings, mood, stranger detection).
+        var cameraEnabled: Bool = false
+        /// Screen activity monitoring (passive context-building).
+        var screenEnabled: Bool = false
+        /// Camera check interval in seconds.
+        var cameraIntervalSeconds: Int = 30
+        /// Screen check interval in seconds.
+        var screenIntervalSeconds: Int = 19
+        /// Research during quiet hours (22:00-06:00).
+        var overnightWorkEnabled: Bool = false
+        /// Enhanced morning briefing with calendar, mail, research.
+        var enhancedBriefingEnabled: Bool = false
+        /// Pause observations when on battery power.
+        var pauseOnBattery: Bool = true
+        /// Pause observations under thermal pressure.
+        var pauseOnThermalPressure: Bool = true
+        /// ISO8601 timestamp of explicit user consent. Nil means never consented.
+        var consentGrantedAt: String? = nil
     }
 
     // MARK: - Model Selection
@@ -686,6 +712,39 @@ struct FaeConfig: Codable {
                     config.vision.modelPreset = v
                 default: break
                 }
+            case "awareness":
+                switch key {
+                case "enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.enabled = v
+                case "cameraEnabled", "camera_enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.cameraEnabled = v
+                case "screenEnabled", "screen_enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.screenEnabled = v
+                case "cameraIntervalSeconds", "camera_interval_seconds":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.cameraIntervalSeconds = v
+                case "screenIntervalSeconds", "screen_interval_seconds":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.screenIntervalSeconds = v
+                case "overnightWorkEnabled", "overnight_work":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.overnightWorkEnabled = v
+                case "enhancedBriefingEnabled", "enhanced_briefing":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.enhancedBriefingEnabled = v
+                case "pauseOnBattery", "pause_on_battery":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.pauseOnBattery = v
+                case "pauseOnThermalPressure", "pause_on_thermal_pressure":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.pauseOnThermalPressure = v
+                case "consentGrantedAt", "consent_granted_at":
+                    config.awareness.consentGrantedAt = rawValue == "nil" ? nil : parseString(rawValue)
+                default: break
+                }
             case "scheduler":
                 switch key {
                 case "morningBriefingHour":
@@ -814,6 +873,19 @@ struct FaeConfig: Codable {
         lines.append("[vision]")
         lines.append("enabled = \(vision.enabled ? "true" : "false")")
         lines.append("modelPreset = \(encodeString(vision.modelPreset))")
+        lines.append("")
+
+        lines.append("[awareness]")
+        lines.append("enabled = \(awareness.enabled ? "true" : "false")")
+        lines.append("cameraEnabled = \(awareness.cameraEnabled ? "true" : "false")")
+        lines.append("screenEnabled = \(awareness.screenEnabled ? "true" : "false")")
+        lines.append("cameraIntervalSeconds = \(awareness.cameraIntervalSeconds)")
+        lines.append("screenIntervalSeconds = \(awareness.screenIntervalSeconds)")
+        lines.append("overnightWorkEnabled = \(awareness.overnightWorkEnabled ? "true" : "false")")
+        lines.append("enhancedBriefingEnabled = \(awareness.enhancedBriefingEnabled ? "true" : "false")")
+        lines.append("pauseOnBattery = \(awareness.pauseOnBattery ? "true" : "false")")
+        lines.append("pauseOnThermalPressure = \(awareness.pauseOnThermalPressure ? "true" : "false")")
+        lines.append("consentGrantedAt = \(encodeStringOrNil(awareness.consentGrantedAt))")
         lines.append("")
 
         lines.append("[speaker]")
