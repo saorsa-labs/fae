@@ -55,6 +55,7 @@ struct CanvasWindowView: View {
                 emptyPlaceholder
             } else {
                 CanvasHTMLView(htmlContent: canvasController.htmlContent)
+                .background(Color.clear)
             }
         }
     }
@@ -366,8 +367,12 @@ struct CanvasHTMLView: NSViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator
         view.underPageBackgroundColor = .clear
-        // Make WebView fully transparent so glassmorphic panel background shows through
+        // Two-layer transparency so the glassmorphic NSVisualEffectView shows through:
+        //   1. drawsBackground=false — suppresses WKWebView's private backing fill
+        //   2. wantsLayer + clear bgColor — clears the CALayer so no black bleed-through
         view.setValue(false, forKey: "drawsBackground")
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
 
         loadHTML(in: view)
         return view
@@ -385,6 +390,8 @@ struct CanvasHTMLView: NSViewRepresentable {
             <meta charset="UTF-8">
             <style>
               * { margin: 0; padding: 0; box-sizing: border-box; }
+              /* Both html and body must be transparent — WKWebView can paint either */
+              html { background: transparent !important; }
               body {
                 background: transparent;
                 color: rgba(255,255,255,0.92);
