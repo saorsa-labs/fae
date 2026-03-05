@@ -44,6 +44,7 @@ Ask explicitly:
 ## Step 5: Enable Awareness (only after explicit consent)
 
 Use `self_config` to enable:
+- `self_config adjust_setting awareness.consent_granted true`
 - `self_config adjust_setting vision.enabled true`
 - `self_config adjust_setting awareness.enabled true`
 - `self_config adjust_setting awareness.camera_enabled true`

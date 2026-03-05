@@ -290,6 +290,43 @@ actor SpeakerProfileStore {
         persist()
     }
 
+    /// Promote an existing profile to owner role.
+    ///
+    /// Returns true if a profile was promoted, false otherwise.
+    /// Never promotes `fae_self`.
+    @discardableResult
+    func promoteToOwner(label: String) -> Bool {
+        guard let idx = profiles.firstIndex(where: { $0.label == label }) else { return false }
+        guard profiles[idx].role != .faeSelf else { return false }
+        profiles[idx].role = .owner
+        persist()
+        return true
+    }
+
+    /// Set a profile role explicitly.
+    ///
+    /// Returns true if updated, false if the label was not found.
+    @discardableResult
+    func setRole(label: String, role: SpeakerRole) -> Bool {
+        guard let idx = profiles.firstIndex(where: { $0.label == label }) else { return false }
+        profiles[idx].role = role
+        persist()
+        return true
+    }
+
+    /// Migration helper: if no owner exists and exactly one non-`fae_self`
+    /// profile exists, promote it to owner.
+    ///
+    /// Returns the promoted label when applied.
+    func promoteSoleHumanProfileToOwnerIfUnambiguous() -> String? {
+        guard !hasOwnerProfile() else { return nil }
+        let candidates = profiles.filter { $0.role != .faeSelf }
+        guard candidates.count == 1 else { return nil }
+        let label = candidates[0].label
+        guard promoteToOwner(label: label) else { return nil }
+        return label
+    }
+
     /// Prune embeddings older than `maxAgeDays` from all profiles.
     ///
     /// Prevents centroid drift as a speaker's voice changes over time.

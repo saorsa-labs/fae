@@ -142,7 +142,7 @@ struct ScreenshotTool: Tool {
 /// Captures a single frame from the Mac's camera and describes it via the VLM.
 struct CameraTool: Tool {
     let name = "camera"
-    let description = "Take a photo with the Mac's camera and describe what's visible. Use when asked about something physical in the room."
+    let description = "Capture a photo using the webcam camera and describe what is visible. ALWAYS use this tool when the user asks you to look at them, see them, or asks about the camera — do not just talk about it, actually call this tool."
     let parametersSchema = #"{"prompt":{"type":"string","description":"What to look for or describe"}}"#
     let requiresApproval = false
     let riskLevel: ToolRiskLevel = .medium

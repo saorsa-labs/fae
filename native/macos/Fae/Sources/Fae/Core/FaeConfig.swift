@@ -193,7 +193,7 @@ struct FaeConfig: Codable {
 
     struct VisionConfig: Codable {
         /// Master toggle for vision capabilities (screenshot, camera, read_screen).
-        var enabled: Bool = false
+        var enabled: Bool = true
         /// VLM model preset: "auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit".
         var modelPreset: String = "auto"
     }
@@ -201,20 +201,23 @@ struct FaeConfig: Codable {
     // MARK: - Awareness
 
     struct AwarenessConfig: Codable {
-        /// Master toggle — requires explicit user consent.
-        var enabled: Bool = false
+        /// Master orchestration toggle.
+        /// Observation skills still require explicit consent (`consentGrantedAt`).
+        var enabled: Bool = true
         /// Camera presence checks (greetings, mood, stranger detection).
+        /// Kept off by default until explicit consent flow enables it.
         var cameraEnabled: Bool = false
         /// Screen activity monitoring (passive context-building).
+        /// Kept off by default until explicit consent flow enables it.
         var screenEnabled: Bool = false
         /// Camera check interval in seconds.
         var cameraIntervalSeconds: Int = 30
         /// Screen check interval in seconds.
         var screenIntervalSeconds: Int = 19
         /// Research during quiet hours (22:00-06:00).
-        var overnightWorkEnabled: Bool = false
+        var overnightWorkEnabled: Bool = true
         /// Enhanced morning briefing with calendar, mail, research.
-        var enhancedBriefingEnabled: Bool = false
+        var enhancedBriefingEnabled: Bool = true
         /// Pause observations when on battery power.
         var pauseOnBattery: Bool = true
         /// Pause observations under thermal pressure.

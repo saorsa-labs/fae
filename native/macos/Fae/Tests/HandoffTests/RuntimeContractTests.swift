@@ -239,6 +239,12 @@ final class RuntimeContractTests: XCTestCase {
 
         core.sendCommand(
             name: "config.patch",
+            payload: ["key": "awareness.consent_granted", "value": true]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
             payload: ["key": "awareness.camera_enabled", "value": true]
         )
         try await Task.sleep(nanoseconds: 120_000_000)

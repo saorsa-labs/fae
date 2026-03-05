@@ -15,6 +15,9 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(config.audio.inputSampleRate, 16_000)
         XCTAssertEqual(config.llm.voiceModelPreset, "auto")
         XCTAssertTrue(config.memory.enabled)
+        XCTAssertTrue(config.vision.enabled)
+        XCTAssertTrue(config.awareness.enabled)
+        XCTAssertNil(config.awareness.consentGrantedAt)
     }
 
     func testLoadFromInvalidContentReturnsDefaultsWithoutThrowing() throws {

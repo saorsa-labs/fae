@@ -4,7 +4,7 @@ import SwiftUI
 struct SettingsAwarenessTab: View {
     var commandSender: HostCommandSender?
 
-    @AppStorage("awareness.enabled") private var awarenessEnabled: Bool = false
+    @AppStorage("awareness.enabled") private var awarenessEnabled: Bool = true
     @AppStorage("awareness.cameraEnabled") private var cameraEnabled: Bool = false
     @AppStorage("awareness.screenEnabled") private var screenEnabled: Bool = false
     @AppStorage("awareness.cameraIntervalSeconds") private var cameraInterval: Int = 30
@@ -40,6 +40,7 @@ struct SettingsAwarenessTab: View {
             .alert("Enable Proactive Awareness?", isPresented: $showingConsentAlert) {
                 Button("Enable") {
                     awarenessEnabled = true
+                    patchConfig("awareness.consent_granted", true)
                     patchConfig("awareness.enabled", true)
                 }
                 Button("Cancel", role: .cancel) {}

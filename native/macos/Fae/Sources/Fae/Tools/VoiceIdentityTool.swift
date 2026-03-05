@@ -145,9 +145,28 @@ struct VoiceIdentityTool: Tool {
 
         // 4. Enroll.
         let hadOwnerBefore = await store.hasOwnerProfile()
+        let enrollmentActive = input["enrollment_active"] as? Bool ?? false
         await store.enroll(label: label, embedding: embedding, role: role, displayName: displayName)
 
-        if role == .owner, !hadOwnerBefore, await store.hasOwnerProfile() {
+        // Owner safeguard: only auto-promote during explicit enrollment mode,
+        // and never for the assistant self-profile.
+        let normalizedLabel = label.lowercased()
+        let canAutoPromote = enrollmentActive
+            && !hadOwnerBefore
+            && role != .faeSelf
+            && normalizedLabel != "fae_self"
+            && normalizedLabel != "fae"
+
+        var promotedToOwner = false
+        if canAutoPromote {
+            let promoted = await store.promoteToOwner(label: label)
+            if promoted {
+                promotedToOwner = true
+                NSLog("VoiceIdentityTool: owner auto-promotion applied label=%@", label)
+            }
+        }
+
+        if !hadOwnerBefore, await store.hasOwnerProfile() {
             NotificationCenter.default.post(
                 name: .faePipelineState,
                 object: nil,
@@ -169,9 +188,10 @@ struct VoiceIdentityTool: Tool {
             quality = "building"
         }
 
+        let finalRole = promotedToOwner ? SpeakerRole.owner : role
         return .success("""
             {"enrolled": true, "label": "\(label)", "display_name": "\(displayName)", \
-            "role": "\(role.rawValue)", "enrollment_count": \(enrollmentCount), \
+            "role": "\(finalRole.rawValue)", "enrollment_count": \(enrollmentCount), \
             "quality": "\(quality)", \
             "message": "Voice sample collected and enrolled. \(qualityAdvice(enrollmentCount))"}
             """)

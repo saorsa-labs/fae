@@ -1090,6 +1090,17 @@ actor PipelineCoordinator {
         previousSpeakerLabel = currentSpeakerLabel
         utterancesSinceOwnerVerified = currentSpeakerIsOwner ? 0 : utterancesSinceOwnerVerified + 1
 
+        // Owner-only listening: when requireOwnerForTools is active, known
+        // non-owner profiles are silently dropped before STT. Unknown speakers
+        // (no match above threshold) still pass — physical device access implies trust.
+        if config.speaker.requireOwnerForTools, currentSpeakerIsKnownNonOwner {
+            NSLog("PipelineCoordinator: dropping %.1fs segment from known non-owner '%@'",
+                  durationSecs, currentSpeakerLabel ?? "?")
+            debugLog(debugConsole, .speaker,
+                     "Dropped: known non-owner \(currentSpeakerLabel ?? "?") — owner-only mode")
+            return
+        }
+
         await refreshDegradedModeIfNeeded(context: "before_stt")
 
         // STT stage.
@@ -1855,6 +1866,75 @@ actor PipelineCoordinator {
         """
     }
 
+    private static func shouldShowCapabilitiesCanvas(triggerText: String, modelResponse: String) -> Bool {
+        let lowerTrigger = triggerText.lowercased()
+        let lowerResponse = stripThinkContent(modelResponse).lowercased()
+
+        if lowerResponse.contains("<show_capabilities/>") || lowerResponse.contains("<show_capabilities>") {
+            return true
+        }
+
+        let queryPhrases = [
+            "what can you do",
+            "what are your capabilities",
+            "what are your skills",
+            "show me your skills",
+            "show your skills",
+            "show capabilities",
+            "help me understand what you can do",
+        ]
+        return queryPhrases.contains { lowerTrigger.contains($0) }
+    }
+
+    private func trustedCapabilitiesCanvasHTML() -> String {
+        let toolCount = registry.toolNames.count
+        return """
+        <html>
+        <head>
+          <meta name='viewport' content='width=device-width, initial-scale=1' />
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1015; color: #e9e9ef; padding: 18px; line-height: 1.45; }
+            .panel { border: 1px solid #2a2d38; border-radius: 10px; padding: 12px; margin-bottom: 10px; background: #171a23; }
+            .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+            .chip { font-size: 11px; text-decoration: none; color: #e9e9ef; border: 1px solid #3d4354; padding: 5px 9px; border-radius: 999px; background: #202533; }
+            ul { margin: 8px 0 0 18px; padding: 0; }
+            li { margin: 4px 0; }
+            .hint { color: #99a0b6; font-size: 12px; }
+          </style>
+        </head>
+        <body>
+          <div class='panel'>
+            <p><strong>What I can do for you</strong></p>
+            <ul>
+              <li>Voice identity + owner-aware safety</li>
+              <li>Persistent memory and relationship context</li>
+              <li>\(toolCount) built-in tools (read/write/edit/bash, web, calendar, reminders, contacts, mail, notes)</li>
+              <li>Vision tools (camera, screenshot, read_screen)</li>
+              <li>Scheduler + proactive morning/overnight workflows</li>
+              <li>Skill system (activate, run, create, update)</li>
+              <li>Self-configuration of behavior and preferences</li>
+            </ul>
+            <div class='chips'>
+              <a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>
+              <a class='chip' href='fae-action://start_owner_enrollment?source=canvas'>Voice enrollment</a>
+            </div>
+            <p class='hint'>Tip: ask “show tools and permissions” for a live policy snapshot.</p>
+          </div>
+        </body>
+        </html>
+        """
+    }
+
+    private func maybeShowCapabilitiesCanvas(triggerText: String, modelResponse: String) {
+        guard Self.shouldShowCapabilitiesCanvas(triggerText: triggerText, modelResponse: modelResponse) else {
+            return
+        }
+        let html = trustedCapabilitiesCanvasHTML()
+        eventBus.send(.canvasContent(html: html, append: false))
+        eventBus.send(.canvasVisibility(true))
+        debugLog(debugConsole, .qa, "Capabilities canvas opened from trusted template")
+    }
+
     /// Unified LLM generation with inline tool execution.
     ///
     /// Streams tokens to TTS. If the model outputs `<tool_call>` markup, executes the
@@ -2449,6 +2529,11 @@ actor PipelineCoordinator {
                 await awaitPendingTTS()
                 if !spokeSomething && assistantSpeaking {
                     await playback.markEnd()
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    if assistantSpeaking {
+                        debugLog(debugConsole, .pipeline, "No roleplay TTS produced this turn — force-clearing speech state")
+                        markAssistantSpeechEnded(reason: "no_tts_this_turn")
+                    }
                 }
             } else {
                 sentenceBuffer += remaining
@@ -2471,8 +2556,15 @@ actor PipelineCoordinator {
                 await awaitPendingTTS()
                 if !shouldSpeak && assistantSpeaking {
                     // No TTS was enqueued for the final chunk (empty or non-prose).
-                    // Mark playback end so .finished fires and clears assistantSpeaking.
+                    // Mark playback end first, then force-clear only if speaking remains stuck.
                     await playback.markEnd()
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    if assistantSpeaking,
+                       spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    {
+                        debugLog(debugConsole, .pipeline, "No TTS this turn — force-clearing assistantSpeaking")
+                        markAssistantSpeechEnded(reason: "no_tts_this_turn")
+                    }
                 }
             }
 
@@ -2489,6 +2581,55 @@ actor PipelineCoordinator {
                     proactiveContext: proactiveContext
                 )
                 return
+            }
+
+            if turnCount == 0,
+               toolCalls.isEmpty,
+               proactiveContext == nil,
+               Self.isCameraIntentRequest(userText)
+            {
+                if effectiveToolMode() == "off" {
+                    debugLog(debugConsole, .qa, "Camera intent fallback skipped — tools are off")
+                } else {
+                    debugLog(debugConsole, .qa, "Camera intent fallback: forcing camera tool call")
+                    let repairCall = ToolCall(name: "camera", arguments: ["prompt": userText])
+                    let repairCallID = UUID().uuidString
+                    let inputJSON = Self.serializeArguments(repairCall.arguments)
+                    eventBus.send(.toolCall(id: repairCallID, name: repairCall.name, inputJSON: inputJSON))
+
+                    let repairResult = await executeTool(repairCall, proactiveContext: proactiveContext)
+
+                    eventBus.send(.toolResult(
+                        id: repairCallID,
+                        name: repairCall.name,
+                        success: !repairResult.isError,
+                        output: String(repairResult.output.prefix(200))
+                    ))
+
+                    if !repairResult.isError {
+                        await conversationState.addAssistantMessage(
+                            "I checked the camera.",
+                            tag: proactiveContext?.conversationTag
+                        )
+                        await conversationState.addToolResult(
+                            id: repairCallID,
+                            name: repairCall.name,
+                            content: repairResult.output
+                        )
+
+                        await generateWithTools(
+                            userText: userText,
+                            isToolFollowUp: true,
+                            turnCount: turnCount + 1,
+                            forceSuppressThinking: true,
+                            generationID: generationID,
+                            proactiveContext: proactiveContext
+                        )
+                        return
+                    }
+
+                    debugLog(debugConsole, .qa, "Camera intent fallback failed: \(repairResult.output)")
+                }
             }
 
             if turnCount == 0,
@@ -2550,6 +2691,8 @@ actor PipelineCoordinator {
             } else if !visibleResponse.isEmpty {
                 debugLog(debugConsole, .llmThink, "[suppressed non-spoken output] \(String(fullResponse.prefix(160)))")
             }
+
+            maybeShowCapabilitiesCanvas(triggerText: userText, modelResponse: fullResponse)
 
             assistantGenerating = false
             eventBus.send(.assistantGenerating(false))
@@ -3213,6 +3356,23 @@ actor PipelineCoordinator {
         }
     }
 
+    /// Heuristic: explicit visual requests where the assistant should run webcam capture.
+    private static func isCameraIntentRequest(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let cameraPhrases = [
+            "can you see me", "do you see me", "look at me", "see me",
+            "take a photo", "take a picture", "use the camera", "open the camera",
+            "what do you see", "can you see", "look through the camera",
+        ]
+        if cameraPhrases.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        return lower.contains("camera") && (
+            lower.contains("see") || lower.contains("look") || lower.contains("photo") || lower.contains("picture")
+        )
+    }
+
     /// Heuristic: requests that should be grounded in live tool data (calendar/notes/mail/etc.)
     /// rather than answered from model prior.
     private static func isToolBackedLookupRequest(_ text: String) -> Bool {
@@ -3453,11 +3613,18 @@ actor PipelineCoordinator {
         }
 
         let policyProfile = currentPolicyProfile()
+        let selfConfigRead = Self.isSelfConfigReadAction(arguments: call.arguments)
+        let effectiveRequiresApproval = Self.toolRequiresApproval(
+            toolName: call.name,
+            arguments: call.arguments,
+            defaultRequiresApproval: tool.requiresApproval
+        )
+        let effectiveRiskLevel: ToolRiskLevel = (call.name == "self_config" && selfConfigRead) ? .low : tool.riskLevel
 
         // Rate limiting.
         if let limitError = await rateLimiter.checkLimit(
             tool: call.name,
-            riskLevel: tool.riskLevel,
+            riskLevel: effectiveRiskLevel,
             profile: policyProfile
         ) {
             debugLog(debugConsole, .toolResult, "Rate limited: \(call.name) reason=\(limitError)")
@@ -3471,8 +3638,8 @@ actor PipelineCoordinator {
         let intent = ActionIntent(
             source: proactiveContext?.source ?? .voice,
             toolName: call.name,
-            riskLevel: tool.riskLevel,
-            requiresApproval: tool.requiresApproval,
+            riskLevel: effectiveRiskLevel,
+            requiresApproval: effectiveRequiresApproval,
             isOwner: currentSpeakerIsOwner,
             livenessScore: livenessScore,
             explicitUserAuthorization: explicitAuthorization,
@@ -3664,6 +3831,12 @@ actor PipelineCoordinator {
         if call.name == "run_skill", let ticketId = effectiveTicket?.id {
             executionArguments["capability_ticket"] = ticketId
         }
+        if call.name == "voice_identity",
+           let action = executionArguments["action"] as? String,
+           action == "collect_sample"
+        {
+            executionArguments["enrollment_active"] = firstOwnerEnrollmentActive
+        }
 
         let startTime = Date()
         let result: ToolResult
@@ -3828,6 +4001,54 @@ actor PipelineCoordinator {
         }
     }
 
+    /// Self-config actions that are read-only and should bypass approval prompts.
+    private static let selfConfigReadActions: Set<String> = [
+        "get_settings", "get_directive", "get_instructions",
+    ]
+
+    static func isSelfConfigReadAction(arguments: [String: Any]) -> Bool {
+        guard let action = (arguments["action"] as? String)?.lowercased() else { return false }
+        return selfConfigReadActions.contains(action)
+    }
+
+    static func toolRequiresApproval(
+        toolName: String,
+        arguments: [String: Any],
+        defaultRequiresApproval: Bool
+    ) -> Bool {
+        if toolName == "self_config" {
+            return !isSelfConfigReadAction(arguments: arguments)
+        }
+        return defaultRequiresApproval
+    }
+
+    private static func selfConfigApprovalSummary(arguments: [String: Any]) -> String {
+        let action = (arguments["action"] as? String)?.lowercased() ?? ""
+        if selfConfigReadActions.contains(action) {
+            return "I can check your current settings."
+        }
+
+        if action == "adjust_setting" {
+            let key = arguments["key"] as? String ?? "a setting"
+            return "I can update \(key)."
+        }
+
+        if action.contains("directive") || action.contains("instructions") {
+            switch action {
+            case "set_directive", "set_instructions":
+                return "I can replace your persistent directive."
+            case "append_directive", "append_instructions":
+                return "I can append to your persistent directive."
+            case "clear_directive", "clear_instructions":
+                return "I can clear your persistent directive."
+            default:
+                return "I can update your persistent directive."
+            }
+        }
+
+        return "I can update your Fae settings."
+    }
+
     /// Build a plain-language confirmation prompt with concrete action context.
     private static func buildApprovalDescription(
         toolName: String, reason: String, arguments: [String: Any]
@@ -3858,7 +4079,7 @@ actor PipelineCoordinator {
             }
 
         case "self_config":
-            summary = "I can update your persistent Fae directive."
+            summary = selfConfigApprovalSummary(arguments: arguments)
 
         case "run_skill":
             let skillName = arguments["name"] as? String ?? "a skill"

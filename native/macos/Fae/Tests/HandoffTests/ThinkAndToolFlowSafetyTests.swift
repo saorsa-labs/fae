@@ -129,4 +129,24 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
             )
         )
     }
+
+    func testSelfConfigGetSettingsBypassesApproval() {
+        XCTAssertFalse(
+            PipelineCoordinator.toolRequiresApproval(
+                toolName: "self_config",
+                arguments: ["action": "get_settings"],
+                defaultRequiresApproval: true
+            )
+        )
+    }
+
+    func testSelfConfigAdjustSettingStillRequiresApproval() {
+        XCTAssertTrue(
+            PipelineCoordinator.toolRequiresApproval(
+                toolName: "self_config",
+                arguments: ["action": "adjust_setting", "key": "tts.speed", "value": 1.1],
+                defaultRequiresApproval: true
+            )
+        )
+    }
 }

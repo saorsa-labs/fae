@@ -322,6 +322,10 @@ struct SelfConfigTool: Tool {
             valueType: .bool,
             description: "Master toggle for proactive awareness (requires consent)"
         ),
+        "awareness.consent_granted": SettingSpec(
+            valueType: .bool,
+            description: "Explicit consent gate for proactive camera/screen observations"
+        ),
         "awareness.camera_enabled": SettingSpec(
             valueType: .bool,
             description: "Camera-based presence detection and greetings"
@@ -506,6 +510,10 @@ struct SelfConfigTool: Tool {
         lines.append("  tool_mode = \(config.toolMode) — Maximum tool authority level")
         lines.append("  vision.enabled = \(config.vision.enabled) — Enable on-device vision tools")
         lines.append("  vision.model_preset = \(config.vision.modelPreset) — Vision model preset")
+        lines.append("  awareness.enabled = \(config.awareness.enabled) — Proactive orchestration master toggle")
+        lines.append("  awareness.consent_granted = \(config.awareness.consentGrantedAt != nil) — Explicit consent for camera/screen awareness")
+        lines.append("  awareness.camera_enabled = \(config.awareness.cameraEnabled) — Camera awareness")
+        lines.append("  awareness.screen_enabled = \(config.awareness.screenEnabled) — Screen awareness")
         return lines.joined(separator: "\n")
     }
 }

@@ -349,7 +349,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 // Owner enrollment check — hydrate hasOwnerSetUp from the speaker
                 // profile store (the single source of truth for owner status).
-                let hasOwner = await speakerProfileStore.hasOwnerProfile()
+                // Migration safety: if no owner exists but exactly one non-fae_self
+                // profile exists, promote it to owner.
+                var hasOwner = await speakerProfileStore.hasOwnerProfile()
+                if !hasOwner,
+                   let promotedLabel = await speakerProfileStore.promoteSoleHumanProfileToOwnerIfUnambiguous()
+                {
+                    hasOwner = true
+                    NSLog("FaeCore: owner migration promoted label=%@", promotedLabel)
+                }
+
                 await MainActor.run { self.hasOwnerSetUp = hasOwner }
                 if !hasOwner {
                     await runSkillDrivenEnrollment(coordinator: coordinator, skillManager: skillManager)
@@ -512,6 +521,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         // Mark enrollment active — bypasses direct-address and allows barge-in from anyone.
         await coordinator.setFirstOwnerEnrollmentActive(true)
+        NotificationCenter.default.post(
+            name: .faePipelineState,
+            object: nil,
+            userInfo: [
+                "event": "pipeline.enrollment_started",
+                "payload": [:] as [String: Any],
+            ]
+        )
 
         // Brief spoken intro — Fae then takes over via the skill.
         let intro = "Hi, I'm Fae. I'd love to learn your voice so I can recognise you. Just talk to me naturally and I'll guide you through it."
@@ -588,6 +605,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "onboarding.reset":
             Task {
                 await speakerProfileStore.clearOwnerProfile()
+                await pipelineCoordinator?.setFirstOwnerEnrollmentActive(false)
                 hasOwnerSetUp = false
                 NSLog("FaeCore: onboarding reset — owner profile cleared")
             }
@@ -1072,10 +1090,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "awareness.enabled":
             guard let enabled = value as? Bool else { return }
             config.awareness.enabled = enabled
-            if enabled && config.awareness.consentGrantedAt == nil {
-                config.awareness.consentGrantedAt = ISO8601DateFormatter().string(from: Date())
-            }
             persistConfig(reason: "config.patch.awareness.enabled")
+            refreshAwarenessRuntime(restartSchedulerTasks: true)
+
+        case "awareness.consent_granted":
+            guard let granted = value as? Bool else { return }
+            config.awareness.consentGrantedAt = granted
+                ? ISO8601DateFormatter().string(from: Date())
+                : nil
+            persistConfig(reason: "config.patch.awareness.consent_granted")
             refreshAwarenessRuntime(restartSchedulerTasks: true)
 
         case "awareness.camera_enabled":
@@ -1163,6 +1186,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 guard let self else { return }
                 self.hasOwnerSetUp = true
                 Task { await self.pipelineCoordinator?.setFirstOwnerEnrollmentActive(false) }
+                // Owner enrolled — auto-enable owner-only tool gating.
+                if !self.config.speaker.requireOwnerForTools {
+                    self.config.speaker.requireOwnerForTools = true
+                    self.persistConfig(reason: "owner_enrolled_auto_require_tools")
+                    NSLog("FaeCore: auto-enabled requireOwnerForTools after enrollment")
+                }
+                self.refreshAwarenessRuntime(restartSchedulerTasks: false)
                 NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true")
             }
         }
@@ -1510,6 +1540,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     deinit {
         schedulerObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        if let enrollmentCompleteObserver {
+            NotificationCenter.default.removeObserver(enrollmentCompleteObserver)
+        }
     }
 
     private func configGetResponse(key: String) -> [String: Any] {
