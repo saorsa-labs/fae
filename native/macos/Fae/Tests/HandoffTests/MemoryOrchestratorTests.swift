@@ -126,4 +126,35 @@ final class MemoryOrchestratorTests: XCTestCase {
         XCTAssertTrue(ownerNames[0].text.contains("Alice"))
         XCTAssertTrue(guestNames[0].text.contains("Bob"))
     }
+
+    func testProactiveCaptureBuildsMorningBriefingContextFromSourceMetadata() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
+        let store = try makeStore(path: dbPath)
+        let orchestrator = MemoryOrchestrator(store: store, config: enabledMemoryConfig())
+
+        _ = await orchestrator.captureProactiveRecord(
+            turnId: UUID().uuidString,
+            taskId: "overnight_work",
+            prompt: "[OVERNIGHT RESEARCH CYCLE]",
+            responseText: "The Rust release train added a new async diagnostics pass."
+        )
+        _ = await orchestrator.captureProactiveRecord(
+            turnId: UUID().uuidString,
+            taskId: "screen_activity_check",
+            prompt: "[PROACTIVE SCREEN OBSERVATION]",
+            responseText: "You were editing the permissions contract and scheduler notes."
+        )
+
+        let context = await orchestrator.recall(
+            query: "morning briefing",
+            proactiveTaskId: "enhanced_morning_briefing"
+        )
+
+        let unwrapped = try XCTUnwrap(context)
+        XCTAssertTrue(unwrapped.contains("<proactive_memory_context"))
+        XCTAssertTrue(unwrapped.contains("Rust release train"))
+        XCTAssertTrue(unwrapped.contains("permissions contract"))
+        XCTAssertTrue(unwrapped.contains("overnight research"))
+        XCTAssertTrue(unwrapped.contains("screen context"))
+    }
 }

@@ -1,6 +1,9 @@
 import Foundation
 
-/// Manages HEARTBEAT.md — Fae's proactive behavior contract.
+/// Manages HEARTBEAT.md — Fae's user-editable proactive behavior prompt contract.
+///
+/// Runtime cadence, timers, and safety gates still live in code/config. HEARTBEAT.md
+/// is loaded fresh into the model prompt so edits change how Fae frames proactive behavior.
 enum HeartbeatManager {
     static var userHeartbeatURL: URL {
         let appSupport = FileManager.default.urls(
@@ -58,5 +61,18 @@ enum HeartbeatManager {
         } catch {
             NSLog("HeartbeatManager: failed to copy default HEARTBEAT.md: %@", error.localizedDescription)
         }
+    }
+
+    static var isModified: Bool {
+        let url = userHeartbeatURL
+        guard FileManager.default.fileExists(atPath: url.path),
+              let content = try? String(contentsOf: url, encoding: .utf8)
+        else { return false }
+        return content.trimmingCharacters(in: .whitespacesAndNewlines)
+            != defaultHeartbeat().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static var lineCount: Int {
+        loadHeartbeat().components(separatedBy: .newlines).count
     }
 }

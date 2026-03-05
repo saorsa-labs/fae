@@ -309,6 +309,16 @@ actor PipelineCoordinator {
         let conversationTag: String
     }
 
+    struct DeferredProactiveRequest: Sendable {
+        let prompt: String
+        let silent: Bool
+        let taskId: String
+        let allowedTools: Set<String>
+        let consentGranted: Bool
+    }
+
+    private var deferredProactiveRequests: [DeferredProactiveRequest] = []
+
     /// Called on user-initiated turns to let scheduler run morning fallback checks.
     private var userInteractionHandler: (@Sendable () async -> Void)?
 
@@ -609,18 +619,30 @@ actor PipelineCoordinator {
         allowedTools: Set<String>,
         consentGranted: Bool
     ) async {
-        // Never interrupt an active conversation or generation.
+        let request = DeferredProactiveRequest(
+            prompt: prompt,
+            silent: silent,
+            taskId: taskId,
+            allowedTools: allowedTools,
+            consentGranted: consentGranted
+        )
+
         guard !assistantGenerating, !assistantSpeaking else {
-            NSLog("PipelineCoordinator: proactive query skipped — assistant busy")
+            enqueueDeferredProactiveRequest(request)
+            NSLog("PipelineCoordinator: proactive query deferred — assistant busy")
             return
         }
 
-        let proactiveTag = "\(taskId)-\(Int(Date().timeIntervalSince1970 * 1000))"
+        await runProactiveQuery(request)
+    }
+
+    private func runProactiveQuery(_ request: DeferredProactiveRequest) async {
+        let proactiveTag = "\(request.taskId)-\(Int(Date().timeIntervalSince1970 * 1000))"
         let proactiveContext = ProactiveRequestContext(
             source: .scheduler,
-            taskId: taskId,
-            allowedTools: allowedTools,
-            consentGranted: consentGranted,
+            taskId: request.taskId,
+            allowedTools: request.allowedTools,
+            consentGranted: request.consentGranted,
             conversationTag: proactiveTag
         )
 
@@ -631,13 +653,12 @@ actor PipelineCoordinator {
         currentSpeakerIsOwner = true
         currentSpeakerIsKnownNonOwner = false
 
-        // Build the prompt, optionally appending silence instruction.
-        var fullPrompt = prompt
-        if silent {
+        var fullPrompt = request.prompt
+        if request.silent {
             fullPrompt += "\n\n[Respond only if you have something meaningful to say. Otherwise stay silent.]"
         }
 
-        debugLog(debugConsole, .pipeline, "Proactive query: taskId=\(taskId) silent=\(silent)")
+        debugLog(debugConsole, .pipeline, "Proactive query: taskId=\(request.taskId) silent=\(request.silent)")
 
         await processTranscription(
             text: fullPrompt,
@@ -648,6 +669,32 @@ actor PipelineCoordinator {
         )
 
         await conversationState.removeMessages(taggedWith: proactiveTag)
+    }
+
+    private func enqueueDeferredProactiveRequest(_ request: DeferredProactiveRequest) {
+        let taskIDs = Self.coalescedDeferredProactiveTaskIDs(
+            existing: deferredProactiveRequests.map(\.taskId),
+            incomingTaskID: request.taskId
+        )
+        deferredProactiveRequests.removeAll { $0.taskId == request.taskId }
+        deferredProactiveRequests.append(request)
+        debugLog(debugConsole, .pipeline, "Deferred proactive queue: \(taskIDs.joined(separator: ","))")
+    }
+
+    private func scheduleDeferredProactiveDrain() {
+        guard !assistantGenerating, !assistantSpeaking, !deferredProactiveRequests.isEmpty else { return }
+        Task { await drainDeferredProactiveIfIdle() }
+    }
+
+    private func drainDeferredProactiveIfIdle() async {
+        guard !assistantGenerating, !assistantSpeaking,
+              !deferredProactiveRequests.isEmpty
+        else {
+            return
+        }
+
+        let next = deferredProactiveRequests.removeFirst()
+        await runProactiveQuery(next)
     }
 
     /// Test speaker match: record 2 seconds, embed, match against profiles.
@@ -1690,6 +1737,7 @@ actor PipelineCoordinator {
         let mode = effectiveToolMode()
         let permissions = await MainActor.run { PermissionStatusProvider.current() }
         let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+        let approvalSnapshot = await ApprovedToolsStore.shared.approvalSnapshot()
 
         let speakerState: String = {
             if currentSpeakerIsOwner { return "Owner verified" }
@@ -1710,6 +1758,7 @@ actor PipelineCoordinator {
             requireDirectAddress: effectiveRequireDirectAddress(),
             visionEnabled: effectiveVisionEnabled(),
             voiceIdentityLock: effectiveVoiceIdentityLock(),
+            approvalSnapshot: approvalSnapshot,
             registry: registry
         )
     }
@@ -1942,7 +1991,10 @@ actor PipelineCoordinator {
             )
 
             // Memory recall — inject context before generation.
-            let memoryContext = await memoryOrchestrator?.recall(query: userText)
+            let memoryContext = await memoryOrchestrator?.recall(
+                query: userText,
+                proactiveTaskId: proactiveContext?.taskId
+            )
             if let ctx = memoryContext, !ctx.isEmpty {
                 let preview = String(ctx.prefix(120)).replacingOccurrences(of: "\n", with: " ")
                 debugLog(debugConsole, .memory, "Recalled: \(preview)…")
@@ -2526,7 +2578,8 @@ actor PipelineCoordinator {
             }
 
             let spokenText = spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines)
-            let visibleResponse = fullResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+            let visibleResponse = Self.stripThinkContent(fullResponse)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             if spokenText.isEmpty && visibleResponse.isEmpty && !options.suppressThinking && !forceSuppressThinking {
                 debugLog(debugConsole, .pipeline, "No visible response after thinking block — retrying with thinking disabled")
                 await generateWithTools(
@@ -2625,8 +2678,7 @@ actor PipelineCoordinator {
                 eventBus.send(.assistantText(text: fallback, isFinal: true))
                 enqueueTTS(fallback, isFinal: true)
                 await awaitPendingTTS()
-                assistantGenerating = false
-                eventBus.send(.assistantGenerating(false))
+                endAssistantGeneration()
                 engagedUntil = Date().addingTimeInterval(
                     Double(config.conversation.directAddressFollowupS)
                 )
@@ -2652,14 +2704,25 @@ actor PipelineCoordinator {
                 if let feeling = SentimentClassifier.classify(spokenText) {
                     eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
                 }
+            } else if let proactiveContext,
+                      !visibleResponse.isEmpty
+            {
+                let turnId = newMemoryId(prefix: "proactive")
+                _ = await memoryOrchestrator?.captureProactiveRecord(
+                    turnId: turnId,
+                    taskId: proactiveContext.taskId,
+                    prompt: userText,
+                    responseText: visibleResponse,
+                    speakerId: currentSpeakerLabel
+                )
+                debugLog(debugConsole, .memory, "Captured silent proactive memory for task \(proactiveContext.taskId)")
             } else if !visibleResponse.isEmpty {
                 debugLog(debugConsole, .llmThink, "[suppressed non-spoken output] \(String(fullResponse.prefix(160)))")
             }
 
             maybeShowCapabilitiesCanvas(triggerText: userText, modelResponse: fullResponse)
 
-            assistantGenerating = false
-            eventBus.send(.assistantGenerating(false))
+            endAssistantGeneration()
 
             // Refresh follow-up window.
             engagedUntil = Date().addingTimeInterval(
@@ -2698,8 +2761,7 @@ actor PipelineCoordinator {
                 originTurnID: currentTurnID
             )
 
-            assistantGenerating = false
-            eventBus.send(.assistantGenerating(false))
+            endAssistantGeneration()
             engagedUntil = Date().addingTimeInterval(
                 Double(config.conversation.directAddressFollowupS)
             )
@@ -2713,8 +2775,7 @@ actor PipelineCoordinator {
             let msg = "I've used several tools but couldn't complete that. Could you try rephrasing?"
             eventBus.send(.assistantText(text: msg, isFinal: true))
             await speakText(msg, isFinal: true)
-            assistantGenerating = false
-            eventBus.send(.assistantGenerating(false))
+            endAssistantGeneration()
             activeCapabilityTicket = nil
             return
         }
@@ -2818,8 +2879,7 @@ actor PipelineCoordinator {
             let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
             eventBus.send(.assistantText(text: msg, isFinal: true))
             await speakText(msg, isFinal: true)
-            assistantGenerating = false
-            eventBus.send(.assistantGenerating(false))
+            endAssistantGeneration()
             activeCapabilityTicket = nil
             return
         }
@@ -2841,6 +2901,12 @@ actor PipelineCoordinator {
 
     // MARK: - Speech State
 
+    private func endAssistantGeneration() {
+        assistantGenerating = false
+        eventBus.send(.assistantGenerating(false))
+        scheduleDeferredProactiveDrain()
+    }
+
     private func markAssistantSpeechStarted() {
         guard !assistantSpeaking else { return }
         assistantSpeaking = true
@@ -2858,6 +2924,7 @@ actor PipelineCoordinator {
         if resetVAD {
             vad.reset()
         }
+        scheduleDeferredProactiveDrain()
     }
 
     // MARK: - TTS
@@ -3073,6 +3140,15 @@ actor PipelineCoordinator {
         guard !assistantSpeaking, !assistantGenerating else { return false }
         guard let originTurnID else { return true }
         return originTurnID == currentTurnID
+    }
+
+    static func coalescedDeferredProactiveTaskIDs(
+        existing: [String],
+        incomingTaskID: String
+    ) -> [String] {
+        var next = existing.filter { $0 != incomingTaskID }
+        next.append(incomingTaskID)
+        return next
     }
 
     /// Owner-verified barge-in: only the owner's voice can interrupt Fae mid-speech.

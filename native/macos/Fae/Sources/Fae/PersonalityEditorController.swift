@@ -3,7 +3,7 @@ import Foundation
 
 /// Provides Edit-menu actions for editing Fae's personality files.
 ///
-/// Opens the user's editable soul.md and directive.md in the system
+/// Opens the user's editable soul.md, heartbeat.md, and directive.md in the system
 /// default text editor. Files are read fresh every turn, so edits
 /// take effect on the next query.
 @MainActor
@@ -22,6 +22,12 @@ final class PersonalityEditorController {
         let url = directiveURL
         ensureDirectiveFile(at: url)
         NSWorkspace.shared.open(url)
+    }
+
+    /// Open the user's heartbeat.md in the default text editor.
+    func showHeartbeatEditor() {
+        HeartbeatManager.ensureUserCopy()
+        NSWorkspace.shared.open(HeartbeatManager.userHeartbeatURL)
     }
 
     // MARK: - Private

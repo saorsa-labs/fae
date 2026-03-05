@@ -55,7 +55,8 @@ actor FaeScheduler {
     private var vaultManager: GitVaultManager?
 
     /// Daily proactive interjection counter, reset at midnight.
-    private var proactiveInterjectionCount: Int = 0
+    var proactiveInterjectionCount: Int = 0
+    var proactiveDigestEligibleCounts: [String: Int] = [:]
 
     /// Tracks which interests have already had skill proposals surfaced.
     private var suggestedInterestIDs: Set<String> = []
@@ -329,6 +330,7 @@ actor FaeScheduler {
     private func runNoiseBudgetReset() async {
         NSLog("FaeScheduler: noise_budget_reset — running")
         proactiveInterjectionCount = 0
+        proactiveDigestEligibleCounts.removeAll()
         NSLog("FaeScheduler: noise_budget_reset — counter reset to 0")
     }
 
@@ -647,6 +649,48 @@ actor FaeScheduler {
         }
     }
 
+    @discardableResult
+    private func dispatchProactiveTask(
+        taskId: String,
+        prompt: String,
+        urgency: ProactiveUrgency,
+        defaultSilent: Bool,
+        throttle: ThrottleDecision,
+        allowedTools: Set<String>
+    ) async -> Bool {
+        guard let handler = proactiveQueryHandler else { return false }
+
+        let mode = await proactiveDispatchMode(taskID: taskId, urgency: urgency)
+        guard mode != .suppress else {
+            NSLog("FaeScheduler: %@ suppressed by proactive policy", taskId)
+            return false
+        }
+
+        let throttleSilent = {
+            if case .silentOnly = throttle { return true }
+            return false
+        }()
+        let silent = defaultSilent || throttleSilent || mode == .digest
+        if !silent {
+            proactiveInterjectionCount += 1
+        }
+
+        NSLog(
+            "FaeScheduler: %@ dispatching (mode=%@, silent=%@)",
+            taskId,
+            mode.rawValue,
+            silent ? "yes" : "no"
+        )
+        await handler(
+            prompt,
+            silent,
+            taskId,
+            allowedTools,
+            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        )
+        return true
+    }
+
     private func runCameraPresenceCheck() async {
         let throttle = AwarenessThrottle.check(
             config: awarenessConfig,
@@ -679,19 +723,14 @@ actor FaeScheduler {
         }
         lastCameraCheckAt = Date()
 
-        guard let handler = proactiveQueryHandler else { return }
-
-        let silent: Bool
-        if case .silentOnly = throttle { silent = true } else { silent = false }
         let prompt = "[PROACTIVE CAMERA OBSERVATION] Check who is at the desk using the camera tool. Follow the proactive-awareness skill instructions."
-
-        NSLog("FaeScheduler: camera_presence_check — firing (silent=%@)", silent ? "yes" : "no")
-        await handler(
-            prompt,
-            silent,
-            "camera_presence_check",
-            ["camera"],
-            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        _ = await dispatchProactiveTask(
+            taskId: "camera_presence_check",
+            prompt: prompt,
+            urgency: .low,
+            defaultSilent: false,
+            throttle: throttle,
+            allowedTools: ["camera"]
         )
     }
 
@@ -733,17 +772,14 @@ actor FaeScheduler {
         }
         lastScreenCheckAt = Date()
 
-        guard let handler = proactiveQueryHandler else { return }
-
         let prompt = "[PROACTIVE SCREEN OBSERVATION] Take a screenshot and note the current screen context. Follow the screen-awareness skill instructions."
-
-        NSLog("FaeScheduler: screen_activity_check — firing")
-        await handler(
-            prompt,
-            true, // Screen observations are always silent.
-            "screen_activity_check",
-            ["screenshot"],
-            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        _ = await dispatchProactiveTask(
+            taskId: "screen_activity_check",
+            prompt: prompt,
+            urgency: .low,
+            defaultSilent: true,
+            throttle: throttle,
+            allowedTools: ["screenshot"]
         )
     }
 
@@ -762,17 +798,14 @@ actor FaeScheduler {
             break
         }
 
-        guard let handler = proactiveQueryHandler else { return }
-
         let prompt = "[OVERNIGHT RESEARCH CYCLE] Research topics the user cares about. Follow the overnight-research skill instructions."
-
-        NSLog("FaeScheduler: overnight_work — firing")
-        await handler(
-            prompt,
-            true, // Always silent — research stored in memory.
-            "overnight_work",
-            ["web_search", "fetch_url", "activate_skill"],
-            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        _ = await dispatchProactiveTask(
+            taskId: "overnight_work",
+            prompt: prompt,
+            urgency: .low,
+            defaultSilent: true,
+            throttle: throttle,
+            allowedTools: ["web_search", "fetch_url", "activate_skill"]
         )
     }
 
@@ -796,20 +829,18 @@ actor FaeScheduler {
             break
         }
 
-        guard let handler = proactiveQueryHandler else { return }
-
-        morningBriefingDelivered = true
-
         let prompt = "[ENHANCED MORNING BRIEFING] [USER_JUST_ARRIVED] Deliver a warm, conversational morning briefing. Follow the morning-briefing-v2 skill instructions."
-
-        NSLog("FaeScheduler: enhanced_morning_briefing — firing")
-        await handler(
-            prompt,
-            false, // Briefing should speak.
-            "enhanced_morning_briefing",
-            ["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"],
-            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        let dispatched = await dispatchProactiveTask(
+            taskId: "enhanced_morning_briefing",
+            prompt: prompt,
+            urgency: .medium,
+            defaultSilent: false,
+            throttle: throttle,
+            allowedTools: ["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"]
         )
+        if dispatched {
+            morningBriefingDelivered = true
+        }
     }
 
     /// Called when user is first detected after quiet hours — triggers morning briefing.

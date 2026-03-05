@@ -8,6 +8,16 @@ import Foundation
 ///
 /// Replaces: `src/memory/jsonl.rs` (MemoryOrchestrator)
 actor MemoryOrchestrator {
+    private struct ProactiveMemorySpec: Sendable {
+        let kind: MemoryKind
+        let source: String
+        let tags: [String]
+        let importanceScore: Float
+        let staleAfterSecs: UInt64?
+        let lookbackHours: Double
+        let recallSources: Set<String>
+    }
+
     private let store: SQLiteMemoryStore
     private let config: FaeConfig.MemoryConfig
     private let embeddingEngine: NeuralEmbeddingEngine?
@@ -34,18 +44,33 @@ actor MemoryOrchestrator {
     // MARK: - Recall
 
     /// Build a memory context string for injection into the LLM system prompt.
-    func recall(query: String) async -> String? {
+    func recall(query: String, proactiveTaskId: String? = nil) async -> String? {
         guard config.enabled else { return nil }
 
         do {
             // Entity-enriched recall: detect person-centric queries first.
             let entityContext = await buildEntityContext(for: query)
+            let proactiveContext = try await buildProactiveContext(
+                taskId: proactiveTaskId,
+                query: query
+            )
 
             let limit = max(config.maxRecallResults, 1)
             let hits = try await store.search(query: query, limit: limit)
             let rerankedHits = await rerankHitsIfPossible(query: query, hits: hits)
 
-            guard !rerankedHits.isEmpty else { return nil }
+            if rerankedHits.isEmpty {
+                guard entityContext != nil || proactiveContext != nil else { return nil }
+
+                var fallbackParts: [String] = []
+                if let entityContext {
+                    fallbackParts.append(entityContext)
+                }
+                if let proactiveContext {
+                    fallbackParts.append(proactiveContext)
+                }
+                return "<memory_context>\n" + fallbackParts.joined(separator: "\n") + "\n</memory_context>"
+            }
 
             let minConfidence: Float = 0.5
             let now = UInt64(Date().timeIntervalSince1970)
@@ -86,11 +111,14 @@ actor MemoryOrchestrator {
                 lines.append(line)
             }
 
-            guard !lines.isEmpty || entityContext != nil else { return nil }
+            guard !lines.isEmpty || entityContext != nil || proactiveContext != nil else { return nil }
 
             var contextParts: [String] = []
             if let entitySection = entityContext {
                 contextParts.append(entitySection)
+            }
+            if let proactiveContext {
+                contextParts.append(proactiveContext)
             }
             if !lines.isEmpty {
                 contextParts.append(lines.joined(separator: "\n"))
@@ -304,6 +332,58 @@ actor MemoryOrchestrator {
         return report
     }
 
+    /// Persist a structured proactive observation so silent scheduler turns remain queryable.
+    func captureProactiveRecord(
+        turnId: String,
+        taskId: String,
+        prompt: String,
+        responseText: String,
+        speakerId: String? = nil,
+        capturedAt: Date = Date()
+    ) async -> MemoryCaptureReport {
+        guard config.enabled else { return MemoryCaptureReport() }
+
+        let trimmed = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let spec = proactiveMemorySpec(for: taskId)
+        else {
+            return MemoryCaptureReport()
+        }
+
+        do {
+            let record = try await store.insertRecord(
+                kind: spec.kind,
+                text: trimmed,
+                confidence: MemoryConstants.factConversationalConfidence,
+                sourceTurnId: turnId,
+                tags: spec.tags,
+                importanceScore: spec.importanceScore,
+                staleAfterSecs: spec.staleAfterSecs,
+                speakerId: speakerId,
+                metadata: proactiveMetadataJSON(
+                    taskId: taskId,
+                    source: spec.source,
+                    prompt: prompt,
+                    capturedAt: capturedAt
+                )
+            )
+
+            if let engine = embeddingEngine, let vs = vectorStore {
+                let recordId = record.id
+                Task {
+                    if let embedding = try? await engine.embed(text: trimmed) {
+                        try? await vs.upsertRecordEmbedding(recordId: recordId, embedding: embedding)
+                    }
+                }
+            }
+
+            return MemoryCaptureReport(episodeId: record.id, extractedCount: 1)
+        } catch {
+            NSLog("MemoryOrchestrator: proactive capture error: %@", error.localizedDescription)
+            return MemoryCaptureReport()
+        }
+    }
+
     // MARK: - Garbage Collection
 
     /// Apply retention policy to episode records.
@@ -377,6 +457,152 @@ actor MemoryOrchestrator {
         guard denom > 0 else { return 0 }
         return dot / denom
     }
+
+    private func buildProactiveContext(taskId: String?, query: String) async throws -> String? {
+        guard let taskId,
+              let spec = proactiveMemorySpec(for: taskId)
+        else {
+            return nil
+        }
+
+        let cutoff = Date().addingTimeInterval(-(spec.lookbackHours * 3600))
+        let queryTokens = Set(tokenizeForSearch(query))
+        let records = try await store.recentRecords(limit: 160)
+            .filter { $0.status == .active }
+            .filter { record in
+                recordDate(record) >= cutoff
+                    && spec.recallSources.contains(metadataValue(for: record, key: "source") ?? "")
+            }
+
+        guard !records.isEmpty else { return nil }
+
+        let lines = records
+            .sorted { lhs, rhs in
+                let lhsScore = proactiveRecallScore(record: lhs, queryTokens: queryTokens)
+                let rhsScore = proactiveRecallScore(record: rhs, queryTokens: queryTokens)
+                if lhsScore == rhsScore {
+                    return lhs.createdAt > rhs.createdAt
+                }
+                return lhsScore > rhsScore
+            }
+            .prefix(5)
+            .map { record in
+                let source = metadataValue(for: record, key: "source") ?? spec.source
+                let timestamp = Self.proactiveTimestampFormatter.string(from: recordDate(record))
+                let sourceLabel = source.replacingOccurrences(of: "_", with: " ")
+                return "- [\(sourceLabel) \(timestamp)] \(record.text)"
+            }
+
+        guard !lines.isEmpty else { return nil }
+        return "<proactive_memory_context task=\"\(taskId)\">\n"
+            + lines.joined(separator: "\n")
+            + "\n</proactive_memory_context>"
+    }
+
+    private func proactiveRecallScore(record: MemoryRecord, queryTokens: Set<String>) -> Int {
+        guard !queryTokens.isEmpty else { return 0 }
+        let recordTokens = Set(tokenizeForSearch(record.text))
+        return queryTokens.intersection(recordTokens).count
+    }
+
+    private func proactiveMemorySpec(for taskId: String) -> ProactiveMemorySpec? {
+        switch taskId {
+        case "camera_presence_check":
+            return ProactiveMemorySpec(
+                kind: .event,
+                source: "presence_observation",
+                tags: ["proactive", "presence", "camera"],
+                importanceScore: 0.55,
+                staleAfterSecs: 86_400,
+                lookbackHours: 24,
+                recallSources: ["presence_observation"]
+            )
+        case "screen_activity_check":
+            return ProactiveMemorySpec(
+                kind: .episode,
+                source: "screen_context",
+                tags: ["proactive", "screen_context"],
+                importanceScore: 0.50,
+                staleAfterSecs: 43_200,
+                lookbackHours: 12,
+                recallSources: ["screen_context"]
+            )
+        case "overnight_work":
+            return ProactiveMemorySpec(
+                kind: .fact,
+                source: "overnight_research",
+                tags: ["proactive", "overnight_research", "research"],
+                importanceScore: 0.78,
+                staleAfterSecs: 604_800,
+                lookbackHours: 72,
+                recallSources: ["overnight_research"]
+            )
+        case "enhanced_morning_briefing":
+            return ProactiveMemorySpec(
+                kind: .episode,
+                source: "morning_briefing",
+                tags: ["proactive", "morning_briefing"],
+                importanceScore: 0.45,
+                staleAfterSecs: 86_400,
+                lookbackHours: 24,
+                recallSources: ["overnight_research", "screen_context", "presence_observation", "morning_briefing"]
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func proactiveMetadataJSON(
+        taskId: String,
+        source: String,
+        prompt: String,
+        capturedAt: Date
+    ) -> String? {
+        let payload: [String: Any] = [
+            "task_id": taskId,
+            "source": source,
+            "captured_at": Self.isoFormatter.string(from: capturedAt),
+            "prompt": String(prompt.prefix(240)),
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
+    }
+
+    private func metadataValue(for record: MemoryRecord, key: String) -> String? {
+        guard let json = record.metadata,
+              let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return dict[key] as? String
+    }
+
+    private func recordDate(_ record: MemoryRecord) -> Date {
+        if let capturedAt = metadataValue(for: record, key: "captured_at"),
+           let date = Self.isoFormatter.date(from: capturedAt)
+        {
+            return date
+        }
+        return Date(timeIntervalSince1970: TimeInterval(record.createdAt))
+    }
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let proactiveTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE HH:mm"
+        return formatter
+    }()
 
     /// Supersede contradicting records for a given tag when new text diverges semantically.
     private func supersedeContradiction(

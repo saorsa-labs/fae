@@ -60,6 +60,31 @@ struct SettingsPersonalityTab: View {
                     .foregroundColor(.secondary)
             }
 
+            Section {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Heartbeat")
+                            .font(.headline)
+                        Text(heartbeatStatusLine)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button("Edit") {
+                        personalityEditor?.showHeartbeatEditor()
+                    }
+                    Button("Reset") {
+                        try? HeartbeatManager.resetToDefault()
+                    }
+                }
+            } header: {
+                Text("Heartbeat")
+            } footer: {
+                Text("Behavioral prompt contract for proactive disclosure and approval style. Scheduler cadence and hard safety gates still come from runtime code and config.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
             // MARK: - Rescue Mode
 
             Section {
@@ -104,6 +129,12 @@ struct SettingsPersonalityTab: View {
             return "Empty (no active directives)"
         }
         return "\(text.count) / 4000 characters"
+    }
+
+    private var heartbeatStatusLine: String {
+        let lines = HeartbeatManager.lineCount
+        let status = HeartbeatManager.isModified ? "modified" : "default"
+        return "\(lines) lines, \(status)"
     }
 
     private func clearDirective() {

@@ -77,4 +77,16 @@ final class VoicePipelineRegressionTests: XCTestCase {
             )
         )
     }
+
+    func testDeferredProactiveQueueCoalescesDuplicateTasks() {
+        let next = PipelineCoordinator.coalescedDeferredProactiveTaskIDs(
+            existing: ["camera_presence_check", "screen_activity_check"],
+            incomingTaskID: "camera_presence_check"
+        )
+
+        XCTAssertEqual(
+            next,
+            ["screen_activity_check", "camera_presence_check"]
+        )
+    }
 }
