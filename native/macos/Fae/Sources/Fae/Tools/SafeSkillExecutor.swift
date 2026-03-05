@@ -14,7 +14,8 @@ enum SafeSkillExecutor {
         scriptPath: String,
         timeoutSeconds: Int,
         memoryLimitKB: Int = 1_048_576,
-        cpuLimitSeconds: Int = 20
+        cpuLimitSeconds: Int = 20,
+        additionalEnvironment: [String: String] = [:]
     ) throws -> SafeSkillProcessHandles {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -29,7 +30,7 @@ enum SafeSkillExecutor {
         ]
 
         let home = NSHomeDirectory()
-        process.environment = [
+        var environment = [
             "PATH": "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
             "HOME": home,
             "USER": NSUserName(),
@@ -37,6 +38,10 @@ enum SafeSkillExecutor {
             "FAE_SKILL_NAME": skillName,
             "FAE_SKILL_TIMEOUT": String(timeoutSeconds),
         ]
+        for (key, value) in additionalEnvironment {
+            environment[key] = value
+        }
+        process.environment = environment
 
         // Restrict cwd to the skill's own scripts directory.
         let scriptURL = URL(fileURLWithPath: scriptPath).standardized.resolvingSymlinksInPath()

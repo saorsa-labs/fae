@@ -213,6 +213,7 @@ actor PipelineCoordinator {
 
     private var lastAssistantStart: Date?
     private var engagedUntil: Date?
+    private var idleRearmTask: Task<Void, Never>?
     /// Throttle for “currently sleeping” hints so we do not spam spoken nudges.
     private var lastSleepHintAt: Date?
     /// Last assistant response text — used to detect echo (mic picking up speaker output).
@@ -756,14 +757,16 @@ actor PipelineCoordinator {
 
     func wake() {
         gateState = .active
-        engagedUntil = Date().addingTimeInterval(
-            Double(config.conversation.directAddressFollowupS)
-        )
+        engagedUntil = Date().addingTimeInterval(Double(effectiveIdleRearmSeconds()))
+        scheduleIdleRearm()
         NSLog("PipelineCoordinator: gate → active")
     }
 
     func sleep() {
         gateState = .idle
+        idleRearmTask?.cancel()
+        idleRearmTask = nil
+        engagedUntil = nil
         if assistantSpeaking || assistantGenerating {
             interrupted = true
             Task { await playback.stop() }
@@ -772,9 +775,9 @@ actor PipelineCoordinator {
     }
 
     func engage() {
-        engagedUntil = Date().addingTimeInterval(
-            Double(config.conversation.directAddressFollowupS)
-        )
+        gateState = .active
+        engagedUntil = Date().addingTimeInterval(Double(effectiveIdleRearmSeconds()))
+        scheduleIdleRearm()
     }
 
     private func effectiveToolMode() -> String {
@@ -786,6 +789,41 @@ actor PipelineCoordinator {
 
     private func effectiveRequireDirectAddress() -> Bool {
         requireDirectAddressLive ?? config.conversation.requireDirectAddress
+    }
+
+    private func effectiveIdleRearmSeconds() -> Int {
+        let configured = max(config.conversation.idleTimeoutS, 0)
+        if configured > 0 { return configured }
+        if effectiveRequireDirectAddress() {
+            return max(config.conversation.directAddressFollowupS, 5)
+        }
+        return 0
+    }
+
+    private func scheduleIdleRearm() {
+        idleRearmTask?.cancel()
+        let timeout = effectiveIdleRearmSeconds()
+        guard timeout > 0 else { return }
+
+        idleRearmTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.sleepAfterIdleTimeout(seconds: timeout)
+        }
+    }
+
+    private func sleepAfterIdleTimeout(seconds: Int) {
+        guard gateState == .active else { return }
+        let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+        guard !assistantSpeaking, !assistantGenerating, !awaitingApproval, !inFollowup else {
+            scheduleIdleRearm()
+            return
+        }
+
+        gateState = .idle
+        engagedUntil = nil
+        idleRearmTask = nil
+        NSLog("PipelineCoordinator: gate → idle (idle timeout %ds)", seconds)
     }
 
     private func effectiveVisionEnabled() -> Bool {
@@ -1159,17 +1197,6 @@ actor PipelineCoordinator {
         previousSpeakerLabel = currentSpeakerLabel
         utterancesSinceOwnerVerified = currentSpeakerIsOwner ? 0 : utterancesSinceOwnerVerified + 1
 
-        // Owner-only listening: when requireOwnerForTools is active, known
-        // non-owner profiles are silently dropped before STT. Unknown speakers
-        // (no match above threshold) still pass — physical device access implies trust.
-        if config.speaker.requireOwnerForTools, currentSpeakerIsKnownNonOwner {
-            NSLog("PipelineCoordinator: dropping %.1fs segment from known non-owner '%@'",
-                  durationSecs, currentSpeakerLabel ?? "?")
-            debugLog(debugConsole, .speaker,
-                     "Dropped: known non-owner \(currentSpeakerLabel ?? "?") — owner-only mode")
-            return
-        }
-
         await refreshDegradedModeIfNeeded(context: "before_stt")
 
         // STT stage.
@@ -1399,9 +1426,7 @@ actor PipelineCoordinator {
             queryText = TextProcessing.extractQueryAroundName(in: text, nameRange: match.range)
             debugLog(debugConsole, .command, "Direct-address extraction: \(queryText)")
             // Refresh follow-up window.
-            engagedUntil = Date().addingTimeInterval(
-                Double(config.conversation.directAddressFollowupS)
-            )
+            engage()
         }
 
         // If assistant is still active, handle based on barge-in setting.
@@ -2004,9 +2029,7 @@ actor PipelineCoordinator {
             let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                 && !ownerProfileExists
-            let includeTools = toolMode != "off"
-                && !(config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner)
-                && !ownerEnrollmentRequired
+            let includeTools = toolMode != "off" && !ownerEnrollmentRequired
 
             let hiddenToolsReason: String? = {
                 guard !includeTools else { return nil }
@@ -2015,9 +2038,6 @@ actor PipelineCoordinator {
                 }
                 if ownerEnrollmentRequired {
                     return "owner_enrollment_required"
-                }
-                if config.speaker.requireOwnerForTools && currentSpeakerIsKnownNonOwner {
-                    return "requireOwnerForTools=true and speaker matched as non-owner (\(currentSpeakerLabel ?? "unknown"))"
                 }
                 return "unknown"
             }()
@@ -2042,6 +2062,8 @@ actor PipelineCoordinator {
                 let ownerDetail: String
                 if currentSpeakerIsOwner {
                     ownerDetail = "ownerVerified=true"
+                } else if currentSpeakerIsKnownNonOwner {
+                    ownerDetail = "speakerNonOwner=\(currentSpeakerLabel ?? "?")"
                 } else if currentSpeakerLabel == nil {
                     ownerDetail = "speakerUnknown"
                 } else {
@@ -2679,9 +2701,7 @@ actor PipelineCoordinator {
                 enqueueTTS(fallback, isFinal: true)
                 await awaitPendingTTS()
                 endAssistantGeneration()
-                engagedUntil = Date().addingTimeInterval(
-                    Double(config.conversation.directAddressFollowupS)
-                )
+                engage()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END fallback reason=\(reasonCode) ===")
                 return
@@ -2725,9 +2745,7 @@ actor PipelineCoordinator {
             endAssistantGeneration()
 
             // Refresh follow-up window.
-            engagedUntil = Date().addingTimeInterval(
-                Double(config.conversation.directAddressFollowupS)
-            )
+            engage()
             activeCapabilityTicket = nil
             debugLog(debugConsole, .qa, "=== TURN END spoken_chars=\(spokenText.count) tool_calls=0 ===")
             return
@@ -2762,9 +2780,7 @@ actor PipelineCoordinator {
             )
 
             endAssistantGeneration()
-            engagedUntil = Date().addingTimeInterval(
-                Double(config.conversation.directAddressFollowupS)
-            )
+            engage()
             activeCapabilityTicket = nil
             debugLog(debugConsole, .qa, "=== TURN END deferred_tools count=\(toolCalls.count) ===")
             return
@@ -4216,6 +4232,11 @@ actor PipelineCoordinator {
         case "manage_skill":
             let action = arguments["action"] as? String ?? "modify"
             summary = "I can \(action) a skill in your local skills library."
+
+        case "delegate_agent":
+            let provider = arguments["provider"] as? String ?? "an external agent"
+            let mode = arguments["mode"] as? String ?? "read_only"
+            summary = "I can delegate this task to \(provider) in \(mode) mode."
 
         case "scheduler_create":
             summary = "I can create a scheduled task that runs automatically later."

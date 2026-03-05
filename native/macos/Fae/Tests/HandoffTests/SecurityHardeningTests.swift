@@ -322,6 +322,7 @@ final class ToolModeFilteringTests: XCTestCase {
         XCTAssertFalse(registry.isToolAllowed("write", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("run_skill", mode: "read_only"))
+        XCTAssertFalse(registry.isToolAllowed("delegate_agent", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("channel_setup", mode: "read_only"))
     }
 
@@ -347,6 +348,7 @@ final class ToolModeFilteringTests: XCTestCase {
         XCTAssertTrue(registry.isToolAllowed("write", mode: "full"))
         XCTAssertTrue(registry.isToolAllowed("bash", mode: "full"))
         XCTAssertTrue(registry.isToolAllowed("self_config", mode: "full"))
+        XCTAssertTrue(registry.isToolAllowed("delegate_agent", mode: "full"))
     }
 
     // MARK: - Schema Filtering
@@ -359,6 +361,7 @@ final class ToolModeFilteringTests: XCTestCase {
     func testFullModeSchemasIncludeAll() {
         let schemas = registry.toolSchemas(for: "full")
         XCTAssertTrue(schemas.contains("## bash\n"))
+        XCTAssertTrue(schemas.contains("## delegate_agent\n"))
         XCTAssertTrue(schemas.contains("## write\n"))
         XCTAssertTrue(schemas.contains("## read\n"))
     }

@@ -491,4 +491,13 @@ extension Notification.Name {
     /// - `request_id: String` — the input request identifier
     /// - `text: String` — the user's response text
     static let faeInputResponse = Notification.Name("faeInputResponse")
+
+    /// Posted after Reset Fae finishes deleting Fae-owned data.
+    static let faeDataResetCompleted = Notification.Name("faeDataResetCompleted")
+
+    /// Posted when Reset Fae fails.
+    ///
+    /// userInfo keys:
+    /// - `error: String` — failure description
+    static let faeDataResetFailed = Notification.Name("faeDataResetFailed")
 }

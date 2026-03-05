@@ -98,9 +98,9 @@ struct FaeConfig: Codable {
     struct ConversationConfig: Codable {
         var wakeWord: String = "hi fae"
         var enabled: Bool = true
-        var idleTimeoutS: Int = 0
-        var requireDirectAddress: Bool = false
-        var directAddressFollowupS: Int = 20
+        var idleTimeoutS: Int = 45
+        var requireDirectAddress: Bool = true
+        var directAddressFollowupS: Int = 30
         var sleepPhrases: [String] = [
             "shut up", "stop fae", "go to sleep",
             "that will do fae", "that'll do fae",

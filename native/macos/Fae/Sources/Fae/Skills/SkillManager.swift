@@ -3,12 +3,12 @@ import Foundation
 /// Manages directory-based skills following the Agent Skills specification.
 ///
 /// Skills are directories containing a `SKILL.md` entry point with YAML frontmatter.
-/// Executable skills have a `scripts/` subdirectory with Python scripts.
+/// Executable skills may include `scripts/`, `references/`, and `assets/`.
 ///
-/// Three tiers:
-/// - **Built-in**: Bundled in `Resources/Skills/` — immutable (can only be disabled).
-/// - **Personal**: User-created in `~/Library/Application Support/fae/skills/`.
-/// - **Community**: Imported from URL (stored alongside personal skills).
+/// Discovery roots:
+/// - Built-in: bundled in `Resources/Skills/`
+/// - Personal: `~/Library/Application Support/fae/skills/`
+/// - Shared/community: `~/.agents/skills/`, `./.agents/skills/`, `~/.fae-forge/tools/`
 actor SkillManager {
     struct ConfigurableFieldDescriptor: Sendable {
         let id: String
@@ -49,6 +49,32 @@ actor SkillManager {
         return appSupport.appendingPathComponent("fae/skills")
     }
 
+    /// User-scoped shared Agent Skills directory.
+    static var sharedSkillsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".agents/skills", isDirectory: true)
+    }
+
+    /// Project-scoped shared Agent Skills directory, when available.
+    static var projectSkillsDirectory: URL? {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .standardized
+            .resolvingSymlinksInPath()
+        return cwd.appendingPathComponent(".agents/skills", isDirectory: true)
+    }
+
+    /// Forge/Toolbox local tool registry output.
+    static var forgeToolsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".fae-forge/tools", isDirectory: true)
+    }
+
+    /// Legacy flat-skill import directory.
+    static var legacySkillsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".fae/skills", isDirectory: true)
+    }
+
     /// Audio input directory for skill file handoff.
     static var audioInputDirectory: URL {
         skillsDirectory.deletingLastPathComponent()
@@ -73,24 +99,51 @@ actor SkillManager {
         ]
     }
 
+    static func discoveryRoots() -> [(url: URL, tier: SkillTier)] {
+        var roots: [(URL, SkillTier)] = [
+            (skillsDirectory, .personal),
+            (sharedSkillsDirectory, .community),
+            (forgeToolsDirectory, .community),
+        ]
+
+        if let projectSkillsDirectory {
+            roots.append((projectSkillsDirectory, .community))
+        }
+
+        roots.append((legacySkillsDirectory, .community))
+
+        var seen: Set<String> = []
+        return roots.filter { entry in
+            let canonical = entry.0.standardized.resolvingSymlinksInPath().path
+            return seen.insert(canonical).inserted
+        }
+    }
+
     // MARK: - Discovery
 
     /// Discover all skills from built-in and personal directories.
     func discoverSkills() -> [SkillMetadata] {
-        var all: [SkillMetadata] = []
+        var merged: [String: SkillMetadata] = [:]
         skillCache.removeAll()
 
         // Built-in skills from app resource bundle.
         if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
-            all.append(contentsOf: scanDirectory(builtinDir, tier: .builtin))
+            merge(
+                scanDirectory(builtinDir, tier: .builtin),
+                into: &merged
+            )
         }
 
-        // Personal skills from user data directory.
-        let personalDir = Self.skillsDirectory
-        all.append(contentsOf: scanDirectory(personalDir, tier: .personal))
+        for (dir, tier) in Self.discoveryRoots() {
+            merge(scanDirectory(dir, tier: tier), into: &merged)
+        }
 
         // Trust-level defaulting: executable skills are disabled unless manifest is valid.
-        all = all.map { validatedMetadata(for: $0) }
+        let all = merged.values
+            .map { validatedMetadata(for: $0) }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
 
         for skill in all {
             skillCache[skill.name] = skill
@@ -180,27 +233,31 @@ actor SkillManager {
     ///
     /// Scans for both legacy flat `.py` files and v2 directory-based skills.
     static func installedSkillNames() -> [String] {
-        let dir = skillsDirectory
         let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.isDirectoryKey]
-        ) else { return [] }
+        var names: Set<String> = []
 
-        var names: [String] = []
+        for (dir, _) in discoveryRoots() {
+            guard let contents = try? fm.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: [.isDirectoryKey]
+            ) else { continue }
 
-        for url in contents {
-            // Legacy flat .py files.
-            if url.pathExtension == "py" {
-                names.append(url.deletingPathExtension().lastPathComponent)
-                continue
-            }
+            for url in contents {
+                if url.pathExtension == "py" {
+                    names.insert(url.deletingPathExtension().lastPathComponent)
+                    continue
+                }
 
-            // Directory-based skills with SKILL.md.
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                let skillMd = url.appendingPathComponent("SKILL.md")
-                if fm.fileExists(atPath: skillMd.path) {
-                    names.append(url.lastPathComponent)
+                if url.pathExtension == "md", url.lastPathComponent != "SKILL.md" {
+                    names.insert(url.deletingPathExtension().lastPathComponent)
+                    continue
+                }
+
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                    let skillMd = url.appendingPathComponent("SKILL.md")
+                    if fm.fileExists(atPath: skillMd.path) {
+                        names.insert(url.lastPathComponent)
+                    }
                 }
             }
         }
@@ -285,7 +342,8 @@ actor SkillManager {
         skillName: String,
         scriptName: String? = nil,
         input: [String: Any],
-        capabilityTicketId: String
+        capabilityTicketId: String,
+        secretBindings: [String: String] = [:]
     ) async throws -> String {
         try Self.validateSkillName(skillName)
 
@@ -340,10 +398,12 @@ actor SkillManager {
         }
 
         let timeoutSeconds = min(max(manifest.timeoutSeconds, 5), 120)
+        let secretEnvironment = try Self.resolveSecretBindings(secretBindings)
         let handles = try SafeSkillExecutor.createProcess(
             skillName: skillName,
             scriptPath: scriptPath,
-            timeoutSeconds: timeoutSeconds
+            timeoutSeconds: timeoutSeconds,
+            additionalEnvironment: secretEnvironment
         )
 
         let process = handles.process
@@ -619,6 +679,12 @@ actor SkillManager {
                     results[skill.name] = .degraded("Missing scripts/ directory")
                     continue
                 }
+
+                let manifestURL = SkillManifestPolicy.manifestURL(for: skill.directoryURL)
+                if !fm.fileExists(atPath: manifestURL.path) {
+                    results[skill.name] = .degraded("Missing MANIFEST.json (running with conservative defaults)")
+                    continue
+                }
             }
 
             results[skill.name] = .healthy
@@ -648,21 +714,45 @@ actor SkillManager {
         return results
     }
 
+    private func merge(_ discovered: [SkillMetadata], into merged: inout [String: SkillMetadata]) {
+        for metadata in discovered {
+            if let existing = merged[metadata.name] {
+                let existingRank = Self.tierPriority(existing.tier)
+                let newRank = Self.tierPriority(metadata.tier)
+                if newRank >= existingRank {
+                    merged[metadata.name] = metadata
+                }
+            } else {
+                merged[metadata.name] = metadata
+            }
+        }
+    }
+
+    private static func tierPriority(_ tier: SkillTier) -> Int {
+        switch tier {
+        case .builtin:
+            return 0
+        case .community:
+            return 1
+        case .personal:
+            return 2
+        }
+    }
+
     private func lookupSkill(named name: String) -> SkillMetadata? {
         guard Self.isSafeSkillName(name) else { return nil }
-
-        // Check personal directory.
-        let personalDir = Self.skillsDirectory.appendingPathComponent(name)
-        let skillMd = personalDir.appendingPathComponent("SKILL.md")
-        if let metadata = SkillParser.parse(skillURL: skillMd, tier: .personal) {
-            return validatedMetadata(for: metadata)
-        }
-
-        // Check built-in directory.
         if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
             let builtinSkillDir = builtinDir.appendingPathComponent(name)
             let builtinMd = builtinSkillDir.appendingPathComponent("SKILL.md")
             if let metadata = SkillParser.parse(skillURL: builtinMd, tier: .builtin) {
+                return validatedMetadata(for: metadata)
+            }
+        }
+
+        for (root, tier) in Self.discoveryRoots() {
+            let skillDir = root.appendingPathComponent(name)
+            let skillMd = skillDir.appendingPathComponent("SKILL.md")
+            if let metadata = SkillParser.parse(skillURL: skillMd, tier: tier) {
                 return validatedMetadata(for: metadata)
             }
         }
@@ -688,6 +778,8 @@ actor SkillManager {
         var adjusted = metadata
         do {
             _ = try loadManifest(for: metadata)
+        } catch SkillError.missingManifest {
+            return adjusted
         } catch {
             adjusted.isEnabled = false
             NSLog("SkillManager: disabling executable skill '%@' — invalid/missing manifest", metadata.name)
@@ -699,9 +791,6 @@ actor SkillManager {
         let manifestURL = SkillManifestPolicy.manifestURL(for: metadata.directoryURL)
 
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            if metadata.type == .executable {
-                throw SkillError.missingManifest(metadata.name)
-            }
             return SkillCapabilityManifest.conservativeDefault(for: metadata.type)
         }
 
@@ -818,7 +907,9 @@ actor SkillManager {
     /// If `scriptName` is provided, looks for `scripts/{scriptName}.py`.
     /// Otherwise returns the first `.py` file found.
     private func findExecutableScript(skillName: String, scriptName: String? = nil) -> String? {
-        guard Self.isSafeSkillName(skillName) else { return nil }
+        guard Self.isSafeSkillName(skillName),
+              let metadata = resolvedSkillMetadata(named: skillName)
+        else { return nil }
         let fm = FileManager.default
 
         func findIn(scriptsDir: URL) -> String? {
@@ -832,25 +923,9 @@ actor SkillManager {
             return scripts.first(where: { $0.pathExtension == "py" })?.path
         }
 
-        // Check personal skills.
-        let personalScripts = Self.skillsDirectory
-            .appendingPathComponent(skillName)
+        let skillScripts = metadata.directoryURL
             .appendingPathComponent("scripts")
-        if let path = findIn(scriptsDir: personalScripts) {
-            return path
-        }
-
-        // Check built-in skills.
-        if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
-            let builtinScripts = builtinDir
-                .appendingPathComponent(skillName)
-                .appendingPathComponent("scripts")
-            if let path = findIn(scriptsDir: builtinScripts) {
-                return path
-            }
-        }
-
-        return nil
+        return findIn(scriptsDir: skillScripts)
     }
 
     private static func validateSkillName(_ name: String) throws {
@@ -924,6 +999,31 @@ actor SkillManager {
     /// Remove obvious secret material from skill input payloads.
     private static func sanitizeSkillInput(_ input: [String: Any]) -> [String: Any] {
         sanitizeAny(input) as? [String: Any] ?? [:]
+    }
+
+    private static func resolveSecretBindings(_ bindings: [String: String]) throws -> [String: String] {
+        var resolved: [String: String] = [:]
+
+        for (envName, keychainKey) in bindings {
+            guard isSafeEnvironmentVariableName(envName) else {
+                throw SkillError.policyViolation("Invalid secret env name '\(envName)'")
+            }
+
+            guard let value = CredentialManager.retrieve(key: keychainKey), !value.isEmpty else {
+                throw SkillError.policyViolation("Missing stored secret '\(keychainKey)'")
+            }
+
+            resolved[envName] = value
+        }
+
+        return resolved
+    }
+
+    private static func isSafeEnvironmentVariableName(_ value: String) -> Bool {
+        let pattern = "^[A-Z][A-Z0-9_]{1,63}$"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(value.startIndex..., in: value)
+        return regex.firstMatch(in: value, options: [], range: range) != nil
     }
 
     private static func sanitizeAny(_ value: Any) -> Any {

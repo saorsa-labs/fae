@@ -8,7 +8,11 @@ struct ThoughtBubbleWindowContent: View {
     @EnvironmentObject private var subtitles: SubtitleStateController
 
     var body: some View {
-        ThoughtBubbleView(text: subtitles.thinkingText, isActive: subtitles.isThinking)
+        ThoughtBubbleView(
+            text: subtitles.thinkingText,
+            isActive: subtitles.isThinking,
+            onClose: { subtitles.dismissThinkingUntilNextTurn() }
+        )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .padding(.bottom, 8)
             .padding(.trailing, 8)
@@ -22,6 +26,7 @@ struct ThoughtBubbleWindowContent: View {
 struct ThoughtBubbleView: View {
     let text: String
     let isActive: Bool
+    var onClose: () -> Void = {}
 
     /// Indigo-ish accent for the thought bubble.
     private static let bubbleColor = Color(
@@ -81,6 +86,17 @@ struct ThoughtBubbleView: View {
             ThoughtCloudShape()
                 .stroke(Self.bubbleColor.opacity(0.45), lineWidth: 1.5)
         )
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 10)
+            .padding(.trailing, 12)
+            .help("Hide thinking for this turn")
+        }
         .clipShape(ThoughtCloudShape())
         .shadow(color: Self.bubbleColor.opacity(0.3), radius: 14, x: 0, y: 6)
     }

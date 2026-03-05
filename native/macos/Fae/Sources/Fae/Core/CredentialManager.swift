@@ -62,6 +62,40 @@ enum CredentialManager {
         SecItemDelete(query as CFDictionary)
     }
 
+    /// Delete all Fae-owned credentials from the Keychain.
+    static func deleteAll() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    /// List stored Fae-owned credential keys without revealing their values.
+    static func listKeys(prefix: String? = nil) -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return [] }
+
+        let items = result as? [[String: Any]] ?? []
+        let allKeys = items.compactMap { $0[kSecAttrAccount as String] as? String }
+
+        if let prefix, !prefix.isEmpty {
+            return allKeys
+                .filter { $0.hasPrefix(prefix) }
+                .sorted()
+        }
+
+        return allKeys.sorted()
+    }
+
     enum CredentialError: LocalizedError {
         case storeFailed(String, OSStatus)
 

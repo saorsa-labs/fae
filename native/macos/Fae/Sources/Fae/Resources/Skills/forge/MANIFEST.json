@@ -17,7 +17,7 @@
     "checksums": {
       "SKILL.md": "533783748bccacd66b7a496dba9e056df93dd040d59044807fb74af4af8839ee",
       "scripts/build.py": "ff8b9f77264cdcd3a73a0fe6a840b6df6a99af9b74e1fc9b2d391c07b2011788",
-      "scripts/release.py": "97e1a42b78f53b49072b0deae61706c616b767925dbe1b95be37aede09048b54",
+      "scripts/release.py": "9bae9a641d5d52b77bf9908e30bbfff94a4e0417d46070d1041a7c78f4a86577",
       "scripts/test.py": "9875313ca4ef3d6e1b750c9037b230be05c9a1f53418c60bd978e64529e8387c",
       "scripts/init.py": "f76293fba15b9a6fc3189bd20a68d5fc99e26428a557949278e12fb514b61dff"
     },

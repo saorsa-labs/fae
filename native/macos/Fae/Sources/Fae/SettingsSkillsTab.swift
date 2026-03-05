@@ -339,37 +339,13 @@ struct SettingsSkillsTab: View {
     // MARK: - Skills Management
 
     private func refreshSkills() {
-        let fm = FileManager.default
-        var all: [SkillMetadata] = []
-
-        // Built-in skills from app bundle.
-        if let builtinDir = Bundle.faeResources.url(forResource: "Skills", withExtension: nil) {
-            all.append(contentsOf: scanSkillDirectory(builtinDir, tier: .builtin, fm: fm))
-        }
-
-        // Personal skills.
-        all.append(contentsOf: scanSkillDirectory(SkillManager.skillsDirectory, tier: .personal, fm: fm))
-
-        discoveredSkills = all.sorted { $0.name < $1.name }
-    }
-
-    private func scanSkillDirectory(_ dir: URL, tier: SkillTier, fm: FileManager) -> [SkillMetadata] {
-        guard let contents = try? fm.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.isDirectoryKey]
-        ) else { return [] }
-
-        var results: [SkillMetadata] = []
-        for url in contents {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
-                continue
-            }
-            let skillMd = url.appendingPathComponent("SKILL.md")
-            if let metadata = SkillParser.parse(skillURL: skillMd, tier: tier) {
-                results.append(metadata)
+        Task {
+            let manager = SkillManager()
+            let all = await manager.discoverSkills()
+            await MainActor.run {
+                discoveredSkills = all.sorted { $0.name < $1.name }
             }
         }
-        return results
     }
 
     private func removeSkill(named name: String) {

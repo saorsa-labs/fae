@@ -20,6 +20,7 @@ WORKSPACE = os.path.join(FORGE_BASE, "workspace")
 TOOLS_DIR = os.path.join(FORGE_BASE, "tools")
 BUNDLES_DIR = os.path.join(FORGE_BASE, "bundles")
 REGISTRY_PATH = os.path.join(FORGE_BASE, "registry.json")
+FAE_SKILLS_DIR = os.path.expanduser("~/Library/Application Support/fae/skills")
 
 
 def find_project(name: str) -> str | None:
@@ -66,6 +67,33 @@ def write_file(path: str, content: str) -> None:
 def copy_file(src: str, dst: str) -> None:
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(src, dst)
+
+
+def activate_for_fae(name: str, tool_dir: str) -> dict:
+    """Expose the released forge tool as a live Fae skill."""
+    os.makedirs(FAE_SKILLS_DIR, exist_ok=True)
+    live_path = os.path.join(FAE_SKILLS_DIR, name)
+
+    if os.path.lexists(live_path):
+        marker = os.path.join(live_path, ".forge-installed")
+        if os.path.islink(live_path):
+            os.unlink(live_path)
+        elif os.path.isdir(live_path) and os.path.exists(marker):
+            shutil.rmtree(live_path, ignore_errors=True)
+        else:
+            return {
+                "activated": False,
+                "activation_error": f"existing skill at {live_path} is not forge-managed",
+            }
+
+    try:
+        os.symlink(tool_dir, live_path)
+        return {"activated": True, "activation_mode": "symlink", "live_path": live_path}
+    except OSError:
+        shutil.copytree(tool_dir, live_path, dirs_exist_ok=True)
+        with open(os.path.join(live_path, ".forge-installed"), "w") as f:
+            f.write(tool_dir + "\n")
+        return {"activated": True, "activation_mode": "copied", "live_path": live_path}
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +611,9 @@ def release_tool(name: str, version: str, sign: bool) -> dict:
     except Exception as e:
         git_info["registry_error"] = str(e)
 
-    return {
+    activation = activate_for_fae(name, tool_dir)
+
+    result = {
         "ok": True,
         "name": name,
         "version": version,
@@ -598,6 +628,8 @@ def release_tool(name: str, version: str, sign: bool) -> dict:
         },
         "message": f"Tool '{name}' v{version} released and installed at {tool_dir}.",
     }
+    result.update(activation)
+    return result
 
 
 def main():

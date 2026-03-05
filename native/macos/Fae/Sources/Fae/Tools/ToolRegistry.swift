@@ -63,6 +63,7 @@ final class ToolRegistry: Sendable {
             ActivateSkillTool(skillManager: sm),
             RunSkillTool(skillManager: sm),
             ManageSkillTool(skillManager: sm),
+            AgentDelegateTool(),
             // User input tool
             InputRequestTool(),
             // Apple integration tools

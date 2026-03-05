@@ -1452,7 +1452,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
         scheduler = nil
         await pipelineCoordinator?.stop()
         pipelineCoordinator = nil
+        memoryOrchestrator = nil
         memoryStore = nil
+        entityStore = nil
+        entityLinker = nil
+        neuralEmbedder = nil
+        vectorStore = nil
+        skillManagerRef = nil
 
         do {
             let faeDir = try Self.faeDirectory()
@@ -1460,10 +1466,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try FileManager.default.removeItem(at: faeDir)
             }
 
-            let customSkillsDir = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".fae/skills", isDirectory: true)
-            if FileManager.default.fileExists(atPath: customSkillsDir.path) {
-                try FileManager.default.removeItem(at: customSkillsDir)
+            let legacySkillsDir = SkillManager.legacySkillsDirectory
+            if FileManager.default.fileExists(atPath: legacySkillsDir.path) {
+                try FileManager.default.removeItem(at: legacySkillsDir)
+            }
+
+            let forgeDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".fae-forge", isDirectory: true)
+            if FileManager.default.fileExists(atPath: forgeDir.path) {
+                try FileManager.default.removeItem(at: forgeDir)
             }
 
             // Clear ALL UserDefaults (@AppStorage values survive directory deletion
@@ -1471,6 +1482,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             if let bundleId = Bundle.main.bundleIdentifier {
                 UserDefaults.standard.removePersistentDomain(forName: bundleId)
             }
+            CredentialManager.deleteAll()
 
             config = FaeConfig()
             hasOwnerSetUp = false
@@ -1479,8 +1491,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
             toolMode = config.toolMode
             try config.save()
             NSLog("FaeCore: data reset complete")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .faeDataResetCompleted, object: nil)
+            }
         } catch {
             NSLog("FaeCore: data reset failed: %@", error.localizedDescription)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .faeDataResetFailed,
+                    object: nil,
+                    userInfo: ["error": error.localizedDescription]
+                )
+            }
         }
     }
 

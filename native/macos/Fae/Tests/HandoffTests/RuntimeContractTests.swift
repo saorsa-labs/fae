@@ -176,6 +176,24 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(CredentialManager.retrieve(key: secretKey), newSecret)
     }
 
+    func testCredentialManagerListsKeysByPrefix() throws {
+        let key = "tests.runtime.\(UUID().uuidString)"
+        let original = CredentialManager.retrieve(key: key)
+
+        defer {
+            if let original {
+                try? CredentialManager.store(key: key, value: original)
+            } else {
+                CredentialManager.delete(key: key)
+            }
+        }
+
+        try CredentialManager.store(key: key, value: "temporary-secret")
+
+        let keys = CredentialManager.listKeys(prefix: "tests.runtime.")
+        XCTAssertTrue(keys.contains(key))
+    }
+
     @MainActor
     func testFaeCorePersistsVisionPatchKeysAndSupportsVisionConfigGet() async throws {
         let url = FaeConfig.configFileURL

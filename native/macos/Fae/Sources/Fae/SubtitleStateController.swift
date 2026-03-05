@@ -51,6 +51,7 @@ final class SubtitleStateController: ObservableObject {
     private var assistantHideTask: Task<Void, Never>?
     private var userHideTask: Task<Void, Never>?
     private var toolHideTask: Task<Void, Never>?
+    private var thinkingDismissedUntilNextTurn = false
 
     // MARK: - Subtitle Updates
 
@@ -140,6 +141,7 @@ final class SubtitleStateController: ObservableObject {
         isAssistantStreaming = false
         isUserPartial = false
         isThinking = false
+        thinkingDismissedUntilNextTurn = false
     }
 
     // MARK: - Thinking Bubble
@@ -148,6 +150,7 @@ final class SubtitleStateController: ObservableObject {
 
     /// Append streaming thinking text to the thought bubble.
     func appendThinkingText(_ text: String) {
+        guard !thinkingDismissedUntilNextTurn else { return }
         thinkHideTask?.cancel()
         isThinking = true
         thinkingText += text
@@ -160,6 +163,11 @@ final class SubtitleStateController: ObservableObject {
 
     /// Signal that thinking is complete — start fade-out timer.
     func finalizeThinking() {
+        guard !thinkingDismissedUntilNextTurn else {
+            thinkingText = ""
+            isThinking = false
+            return
+        }
         isThinking = false
         thinkHideTask?.cancel()
         thinkHideTask = Task {
@@ -174,6 +182,7 @@ final class SubtitleStateController: ObservableObject {
     /// Resets the 10-second auto-vanish timer on each call so the bubble stays
     /// visible while tools are actively firing and disappears 10s after the last one.
     func appendToolActivity(_ text: String) {
+        guard !thinkingDismissedUntilNextTurn else { return }
         thinkHideTask?.cancel()
         isThinking = true
         if !thinkingText.isEmpty {
@@ -200,6 +209,16 @@ final class SubtitleStateController: ObservableObject {
         thinkHideTask = nil
         thinkingText = ""
         isThinking = false
+        thinkingDismissedUntilNextTurn = false
+    }
+
+    /// Hide the current thinking bubble and suppress new thinking/tool updates until the next turn.
+    func dismissThinkingUntilNextTurn() {
+        thinkHideTask?.cancel()
+        thinkHideTask = nil
+        thinkingText = ""
+        isThinking = false
+        thinkingDismissedUntilNextTurn = true
     }
 
     // MARK: - Progress Bar

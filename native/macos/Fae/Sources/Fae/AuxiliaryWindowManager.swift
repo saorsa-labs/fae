@@ -101,14 +101,15 @@ final class AuxiliaryWindowManager: ObservableObject {
     /// `approvalController` is set.
     func observeApprovalController() {
         guard let controller = approvalController else { return }
-        approvalCancellable = Publishers.CombineLatest3(
+        approvalCancellable = Publishers.CombineLatest4(
             controller.$activeApproval,
             controller.$activeInput,
-            controller.$activeToolModeRequest
+            controller.$activeToolModeRequest,
+            controller.$activeGovernanceConfirmation
         )
         .receive(on: RunLoop.main)
-        .sink { [weak self] approval, input, toolMode in
-            if approval != nil || input != nil || toolMode != nil {
+        .sink { [weak self] approval, input, toolMode, governance in
+            if approval != nil || input != nil || toolMode != nil || governance != nil {
                 self?.showApproval()
             } else {
                 self?.hideApproval()
@@ -559,7 +560,7 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     private func makeThoughtBubblePanel(subtitles: SubtitleStateController) -> NSPanel {
         let size = NSSize(width: 300, height: 200)
-        let panel = NSPanel(
+        let panel = InteractivePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .utilityWindow, .nonactivatingPanel],
             backing: .buffered,
@@ -573,7 +574,7 @@ final class AuxiliaryWindowManager: ObservableObject {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.isOpaque = false
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = false
 
         let hosting = NSHostingView(
             rootView: ThoughtBubbleWindowContent()

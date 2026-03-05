@@ -20,6 +20,14 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertNil(config.awareness.consentGrantedAt)
     }
 
+    func testConversationDefaultsRequireWakeAfterIdle() {
+        let config = FaeConfig()
+
+        XCTAssertTrue(config.conversation.requireDirectAddress)
+        XCTAssertEqual(config.conversation.idleTimeoutS, 45)
+        XCTAssertEqual(config.conversation.directAddressFollowupS, 30)
+    }
+
     func testLoadFromInvalidContentReturnsDefaultsWithoutThrowing() throws {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)

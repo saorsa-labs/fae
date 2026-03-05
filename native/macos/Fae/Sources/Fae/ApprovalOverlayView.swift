@@ -45,6 +45,20 @@ struct ApprovalOverlayView: View {
     }
 }
 
+private struct DismissOverlayButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary.opacity(0.9))
+        }
+        .buttonStyle(.plain)
+        .help("Dismiss")
+    }
+}
+
 // MARK: - Approval Card
 
 private struct ApprovalCard: View {
@@ -124,6 +138,11 @@ private struct ApprovalCard: View {
         .padding(14)
         .frame(width: 300)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+            DismissOverlayButton(action: controller.deny)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
@@ -177,6 +196,11 @@ private struct GovernanceConfirmationCard: View {
         .padding(14)
         .frame(width: 320)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+            DismissOverlayButton(action: controller.denyGovernanceRequest)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
@@ -304,6 +328,11 @@ private struct ToolModeCard: View {
         .padding(14)
         .frame(width: 300)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+            DismissOverlayButton(action: controller.dismissToolModeRequest)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
@@ -436,6 +465,11 @@ private struct InputCard: View {
         .padding(14)
         .frame(width: field.isMultiline ? 340 : 260)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+            DismissOverlayButton(action: controller.cancelInput)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
         .onAppear { isFocused = true }
@@ -568,6 +602,11 @@ private struct FormInputCard: View {
         .padding(14)
         .frame(width: hasMultilineField ? 340 : 320)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .topTrailing) {
+            DismissOverlayButton(action: controller.cancelInput)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }

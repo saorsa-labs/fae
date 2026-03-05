@@ -4,7 +4,8 @@ import SwiftUI
 /// Sheet for importing a custom skill from a URL.
 ///
 /// The user pastes a URL, fetches the content, reviews it in a monospaced
-/// editor, and optionally saves it as a `.md` file in `~/.fae/skills/`.
+/// editor, and optionally saves it as a directory-based `SKILL.md` entry in
+/// `~/Library/Application Support/fae/skills/`.
 struct SkillImportView: View {
     @Environment(\.dismiss) private var dismiss
     let commandSender: HostCommandSender?
@@ -155,12 +156,14 @@ struct SkillImportView: View {
         let content = skillContent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !content.isEmpty else { return }
 
-        let skillsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".fae/skills")
+        let skillsDir = SkillManager.skillsDirectory
         do {
             try FileManager.default.createDirectory(at: skillsDir, withIntermediateDirectories: true)
-            let filePath = skillsDir.appendingPathComponent("\(name).md")
-            try content.write(to: filePath, atomically: true, encoding: .utf8)
+            let skillDir = skillsDir.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+            let filePath = skillDir.appendingPathComponent("SKILL.md")
+            let normalized = normalizeSkillMarkdown(name: name, content: content)
+            try normalized.write(to: filePath, atomically: true, encoding: .utf8)
             NSLog("SkillImportView: saved skill to %@", filePath.path)
 
             // Tell backend to reload skills.
@@ -170,5 +173,24 @@ struct SkillImportView: View {
         } catch {
             errorMessage = "Failed to save: \(error.localizedDescription)"
         }
+    }
+
+    private func normalizeSkillMarkdown(name: String, content: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("---") {
+            return trimmed + (trimmed.hasSuffix("\n") ? "" : "\n")
+        }
+
+        return """
+            ---
+            name: \(name)
+            description: Imported skill (update this description if needed).
+            metadata:
+              author: imported
+              version: "1.0"
+            ---
+
+            \(trimmed)
+            """
     }
 }

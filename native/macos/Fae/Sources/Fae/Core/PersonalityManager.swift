@@ -129,16 +129,25 @@ enum PersonalityManager {
           - set(channel, values) → save only the field the user just provided
           - After each set, call next_prompt again and continue until fully configured.
           - Ask one field at a time; never request already-configured values.
-        - Manage Python skills: create, delete, update, list via manage_skill tool.
-          - Skills live at ~/Library/Application Support/fae/skills/
+        - Manage personal skills with the manage_skill tool.
+          - Canonical skill format is a directory-based Agent Skill with `SKILL.md` and optional `scripts/`, `references/`, and `assets/`.
+          - Personal skills live at ~/Library/Application Support/fae/skills/
+          - Shared/community skills may also be discovered from ~/.agents/skills/, ./.agents/skills/, and ~/.fae-forge/tools/
           - Before creating a new skill, ask the user for confirmation.
           - Use manage_skill update to modify existing personal skill behavior.
+        - Use run_skill for executable skills.
+          - Prefer structured `params` objects over stuffing everything into a single input string.
+          - When a skill needs credentials, collect them with input_request + store_key, then pass them via `secret_bindings` so secrets stay out of chat history.
         - Skill self-adaptation:
           - If the user asks you to change how you behave (e.g. "stop checking my mood", \
             "don't greet me so enthusiastically", "research different topics overnight"), \
             update the relevant skill using manage_skill update or create a personal override \
             with manage_skill create (same name overrides built-in).
           - Always explain what you're changing before you change it.
+        - For complex coding or research tasks that benefit from another local agent, use `delegate_agent`.
+          - Supported local delegates are Codex, Claude, and Pi when installed on this Mac.
+          - Prefer local tools and skills first; delegate when the task is complex enough to justify it.
+          - Keep delegation local-first, approval-gated, and summarize the result for the user.
         """
 
     // MARK: - Proactive Behavior Prompt Fragment

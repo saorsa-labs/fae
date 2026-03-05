@@ -6,6 +6,8 @@ struct SettingsAboutTab: View {
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var conversation: ConversationController
     @State private var showResetConfirmation = false
+    @State private var isResetting = false
+    @State private var resetError: String?
     let commandSender: HostCommandSender?
 
     var body: some View {
@@ -56,9 +58,19 @@ struct SettingsAboutTab: View {
                 }
                 .buttonStyle(.bordered)
                 .foregroundStyle(.red)
-                Text("Deletes all conversations, memories, settings, cached models, and stored credentials. Fae will quit and start fresh on next launch.")
+                .disabled(isResetting)
+                Text("Deletes Fae-owned conversations, memories, settings, local skills, forge/tool registry state, and stored credentials. Shared model caches are left untouched.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if isResetting {
+                    ProgressView("Resetting Fae data…")
+                        .controlSize(.small)
+                }
+                if let resetError {
+                    Text(resetError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             }
             .alert("Reset Fae?", isPresented: $showResetConfirmation) {
                 Button("Cancel", role: .cancel) { }
@@ -66,7 +78,7 @@ struct SettingsAboutTab: View {
                     resetAllData()
                 }
             } message: {
-                Text("This will permanently delete all your data including conversations, memories, voice recordings, settings, and credentials. This cannot be undone.")
+                Text("This removes Fae-owned local data including conversations, memories, voice profiles, settings, forge state, and credentials. Shared model downloads are not deleted. This cannot be undone.")
             }
 
             Section("Cross-Device Handoff") {
@@ -95,6 +107,15 @@ struct SettingsAboutTab: View {
             }
         }
         .formStyle(.grouped)
+        .onReceive(NotificationCenter.default.publisher(for: .faeDataResetCompleted)) { _ in
+            isResetting = false
+            resetError = nil
+            NSApplication.shared.terminate(nil)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .faeDataResetFailed)) { notification in
+            isResetting = false
+            resetError = notification.userInfo?["error"] as? String ?? "Reset failed."
+        }
     }
 
     private var appVersion: String {
@@ -106,11 +127,9 @@ struct SettingsAboutTab: View {
     }
 
     private func resetAllData() {
+        isResetting = true
+        resetError = nil
         commandSender?.sendCommand(name: "data.delete_all", payload: [:])
-        // Give the backend a moment to finish deletion, then quit.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NSApplication.shared.terminate(nil)
-        }
     }
 
     private func resetOnboarding() {

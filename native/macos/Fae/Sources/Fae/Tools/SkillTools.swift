@@ -38,10 +38,10 @@ struct ActivateSkillTool: Tool {
 struct RunSkillTool: Tool {
     let name = "run_skill"
     let description = "Run an installed Python skill by name. Use this instead of composing bash commands with skill paths."
-    let parametersSchema = #"{"name": "string (required — skill name)", "script": "string (optional — specific script name for multi-script skills)", "input": "string (optional — input text for the skill)"}"#
+    let parametersSchema = #"{"name":"string (required — skill name)","script":"string (optional — specific script name for multi-script skills)","params":{"type":"object","description":"optional structured parameters forwarded to the skill as request.params"},"input":"string (optional — compatibility shortcut forwarded as params.input when params.input is absent)","secret_bindings":{"type":"object","description":"optional map of ENV_VAR -> keychain key. Secret values are injected into the skill process environment and are never written into the prompt or request JSON"}}"#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .medium
-    let example = #"<tool_call>{"name":"run_skill","arguments":{"name":"voice-tools","script":"voice_quality_check","input":"/path/to/audio.wav"}}</tool_call>"#
+    let example = #"<tool_call>{"name":"run_skill","arguments":{"name":"mesh","script":"discover","params":{"method":"bonjour","timeout":5}}}</tool_call>"#
 
     private let skillManager: SkillManager
 
@@ -64,16 +64,25 @@ struct RunSkillTool: Tool {
 
         let scriptName = input["script"] as? String
         var skillInput: [String: Any] = SkillManager.audioContextForSkill()
-        if let text = input["input"] as? String {
-            skillInput["input"] = text
+        if let params = input["params"] as? [String: Any] {
+            for (key, value) in params {
+                skillInput[key] = value
+            }
         }
+        if let text = input["input"] as? String {
+            if skillInput["input"] == nil {
+                skillInput["input"] = text
+            }
+        }
+        let secretBindings = parseStringMap(input["secret_bindings"]) ?? [:]
 
         do {
             let output = try await skillManager.execute(
                 skillName: skillName,
                 scriptName: scriptName,
                 input: skillInput,
-                capabilityTicketId: capabilityTicket
+                capabilityTicketId: capabilityTicket,
+                secretBindings: secretBindings
             )
             let truncated = output.count > 20_000
                 ? String(output.prefix(20_000)) + "\n[truncated]"
@@ -82,6 +91,16 @@ struct RunSkillTool: Tool {
         } catch {
             return .error("Skill execution failed: \(error.localizedDescription)")
         }
+    }
+
+    private func parseStringMap(_ raw: Any?) -> [String: String]? {
+        guard let rawDict = raw as? [String: Any] else { return nil }
+        var parsed: [String: String] = [:]
+        for (key, value) in rawDict {
+            guard let stringValue = value as? String else { return nil }
+            parsed[key] = stringValue
+        }
+        return parsed
     }
 }
 

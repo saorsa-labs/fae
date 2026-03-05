@@ -559,55 +559,35 @@ actor FaeScheduler {
     }
 
     private func runSkillHealthCheck() async {
-        // Scan skills directory for .py files and verify PEP 723 metadata.
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first
-        guard let skillsDir = appSupport?.appendingPathComponent("fae/skills") else { return }
+        let manager = SkillManager()
+        let results = await manager.healthCheckAll()
+        guard !results.isEmpty else { return }
 
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: skillsDir.path) else { return }
+        var degraded: [String] = []
+        var broken: [String] = []
 
-        do {
-            let contents = try fm.contentsOfDirectory(
-                at: skillsDir,
-                includingPropertiesForKeys: nil
+        for (name, status) in results {
+            switch status {
+            case .healthy:
+                continue
+            case .degraded(let reason):
+                degraded.append("\(name): \(reason)")
+            case .broken(let reason):
+                broken.append("\(name): \(reason)")
+            }
+        }
+
+        if !degraded.isEmpty {
+            NSLog(
+                "FaeScheduler: skill_health_check — degraded skills: %@",
+                degraded.sorted().joined(separator: " | ")
             )
-            let pyFiles = contents.filter { $0.pathExtension == "py" }
-            guard !pyFiles.isEmpty else { return }
-
-            var brokenSkills: [String] = []
-            for file in pyFiles {
-                let text = try String(contentsOf: file, encoding: .utf8)
-                // Check for PEP 723 inline metadata header.
-                if !text.contains("# /// script") {
-                    brokenSkills.append(file.lastPathComponent)
-                }
-            }
-
-            if !brokenSkills.isEmpty {
-                NSLog(
-                    "FaeScheduler: skill_health_check — %d skills missing PEP 723 metadata: %@",
-                    brokenSkills.count,
-                    brokenSkills.joined(separator: ", ")
-                )
-            }
-
-            // Check if uv is available on PATH.
-            let uvProcess = Process()
-            uvProcess.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-            uvProcess.arguments = ["uv"]
-            let pipe = Pipe()
-            uvProcess.standardOutput = pipe
-            uvProcess.standardError = pipe
-            try uvProcess.run()
-            uvProcess.waitUntilExit()
-            if uvProcess.terminationStatus != 0 {
-                NSLog("FaeScheduler: skill_health_check — uv not found on PATH")
-            }
-        } catch {
-            // Silent on errors — this runs every 5 minutes.
-            NSLog("FaeScheduler: skill_health_check — error: %@", error.localizedDescription)
+        }
+        if !broken.isEmpty {
+            NSLog(
+                "FaeScheduler: skill_health_check — broken skills: %@",
+                broken.sorted().joined(separator: " | ")
+            )
         }
     }
 

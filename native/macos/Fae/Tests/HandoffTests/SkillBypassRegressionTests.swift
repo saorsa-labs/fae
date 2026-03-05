@@ -292,4 +292,100 @@ final class SkillBypassRegressionTests: XCTestCase {
 
         XCTAssertFalse(skill.isEnabled, "Invalid settings action/capability mismatch should disable skill")
     }
+
+    func testRunSkillToolForwardsStructuredParamsAndSecretBindings() async throws {
+        let manager = SkillManager()
+        let tool = RunSkillTool(skillManager: manager)
+        let skillName = "exec_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let secretKey = "tests.skill.\(skillName)"
+        let originalSecret = CredentialManager.retrieve(key: secretKey)
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+            if let originalSecret {
+                try? CredentialManager.store(key: secretKey, value: originalSecret)
+            } else {
+                CredentialManager.delete(key: secretKey)
+            }
+        }
+
+        let script = """
+            import json
+            import os
+            import sys
+
+            request = json.loads(sys.stdin.read())
+            params = request.get("params", {})
+            result = {
+                "method": params.get("method"),
+                "timeout": params.get("timeout"),
+                "input": params.get("input"),
+                "skill_name": os.environ.get("FAE_SKILL_NAME"),
+                "secret": os.environ.get("FAE_TEST_SECRET"),
+            }
+            print(json.dumps(result, sort_keys=True))
+            """
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Executable regression test skill",
+            body: "Echo structured params and secret bindings for test verification.",
+            scriptContent: script
+        )
+        try CredentialManager.store(key: secretKey, value: "super-secret-value")
+
+        let result = try await tool.execute(input: [
+            "name": skillName,
+            "capability_ticket": "ticket-123",
+            "params": [
+                "method": "bonjour",
+                "timeout": 5,
+            ],
+            "input": "compat input",
+            "secret_bindings": [
+                "FAE_TEST_SECRET": secretKey,
+            ],
+        ])
+
+        XCTAssertFalse(result.isError, "Unexpected tool error: \(result.output)")
+        let data = try XCTUnwrap(result.output.data(using: .utf8))
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(payload["method"] as? String, "bonjour")
+        XCTAssertEqual(payload["timeout"] as? Int, 5)
+        XCTAssertEqual(payload["input"] as? String, "compat input")
+        XCTAssertEqual(payload["skill_name"] as? String, skillName)
+        XCTAssertEqual(payload["secret"] as? String, "super-secret-value")
+    }
+
+    func testDiscoverSkillsIncludesSharedAgentSkillsDirectory() async throws {
+        let manager = SkillManager()
+        let skillName = "shared_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let skillDir = SkillManager.sharedSkillsDirectory.appendingPathComponent(skillName, isDirectory: true)
+        let skillMD = skillDir.appendingPathComponent("SKILL.md")
+
+        defer { try? FileManager.default.removeItem(at: skillDir) }
+
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        try """
+            ---
+            name: \(skillName)
+            description: Shared Agent Skills discovery regression test.
+            metadata:
+              author: tests
+              version: "1.0"
+            ---
+
+            This skill exists to verify shared `.agents/skills` discovery.
+            """.write(to: skillMD, atomically: true, encoding: .utf8)
+
+        let skills = await manager.discoverSkills()
+        let discovered = skills.first(where: { $0.name == skillName })
+
+        XCTAssertNotNil(discovered, "Expected skill from ~/.agents/skills to be discovered")
+        XCTAssertTrue(SkillManager.installedSkillNames().contains(skillName))
+    }
 }

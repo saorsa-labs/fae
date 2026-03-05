@@ -20,6 +20,7 @@ FORGE_DIR = Path(os.path.expanduser("~/.fae-forge"))
 REGISTRY_PATH = FORGE_DIR / "registry.json"
 TOOLS_DIR = FORGE_DIR / "tools"
 BUNDLES_DIR = FORGE_DIR / "bundles"
+FAE_SKILLS_DIR = Path(os.path.expanduser("~/Library/Application Support/fae/skills"))
 
 # Files that constitute a valid skill layout.
 SKILL_MARKER = "SKILL.md"
@@ -203,6 +204,32 @@ def copy_skill_layout(src: Path, dest: Path) -> None:
             shutil.copy2(item, dst_item)
 
 
+def activate_for_fae(name: str, tool_dir: Path) -> dict:
+    """Expose an installed forge tool as a live Fae skill."""
+    FAE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    live_path = FAE_SKILLS_DIR / name
+
+    if live_path.exists() or live_path.is_symlink():
+        if live_path.is_symlink() or (live_path / ".forge-installed").exists():
+            if live_path.is_dir() and not live_path.is_symlink():
+                shutil.rmtree(live_path, ignore_errors=True)
+            else:
+                live_path.unlink(missing_ok=True)
+        else:
+            return {
+                "activated": False,
+                "activation_error": f"existing skill at {live_path} is not forge-managed",
+            }
+
+    try:
+        live_path.symlink_to(tool_dir, target_is_directory=True)
+        return {"activated": True, "activation_mode": "symlink", "live_path": str(live_path)}
+    except OSError:
+        shutil.copytree(tool_dir, live_path, dirs_exist_ok=True)
+        (live_path / ".forge-installed").write_text(f"{tool_dir}\n", encoding="utf-8")
+        return {"activated": True, "activation_mode": "copied", "live_path": str(live_path)}
+
+
 def install_tool(
     source: str,
     name: str | None = None,
@@ -296,12 +323,15 @@ def install_tool(
         }
         save_registry(registry)
 
+        activation = activate_for_fae(safe_name, dest_dir)
+
         result = {
             "ok": True,
             "name": safe_name,
             "version": meta.get("version", "0.1"),
             "installed_at": str(dest_dir),
         }
+        result.update(activation)
 
         if verification_issues:
             result["verification_warnings"] = verification_issues
