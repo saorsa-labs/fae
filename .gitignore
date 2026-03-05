@@ -3,3 +3,6 @@
 *.DS_Store
 Fae.app/
 .claude/
+/.build/
+/.local/
+*.profraw

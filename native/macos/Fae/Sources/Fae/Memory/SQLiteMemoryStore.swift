@@ -355,7 +355,11 @@ actor SQLiteMemoryStore {
         confidence: Float,
         sourceTurnId: String?,
         tags: [String],
-        note: String
+        note: String,
+        importanceScore: Float? = nil,
+        staleAfterSecs: UInt64? = nil,
+        speakerId: String? = nil,
+        metadata: String? = nil
     ) throws -> MemoryRecord {
         let now = UInt64(Date().timeIntervalSince1970)
         var newRecord = MemoryRecord(
@@ -371,11 +375,23 @@ actor SQLiteMemoryStore {
         )
 
         try dbQueue.write { db in
-            // Get old record's kind
-            if let row = try Row.fetchOne(db, sql: "SELECT kind FROM memory_records WHERE id = ?", arguments: [oldId]) {
-                let kindStr: String = row["kind"]
-                newRecord.kind = MemoryKind(rawValue: kindStr) ?? .fact
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM memory_records WHERE id = ?",
+                arguments: [oldId]
+            ) else {
+                throw NSError(
+                    domain: "SQLiteMemoryStore",
+                    code: 404,
+                    userInfo: [NSLocalizedDescriptionKey: "supersede target not found: \(oldId)"]
+                )
             }
+            let oldRecord = Self.recordFromRow(row)
+            newRecord.kind = oldRecord.kind
+            newRecord.importanceScore = importanceScore ?? oldRecord.importanceScore
+            newRecord.staleAfterSecs = staleAfterSecs ?? oldRecord.staleAfterSecs
+            newRecord.speakerId = speakerId ?? oldRecord.speakerId
+            newRecord.metadata = metadata ?? oldRecord.metadata
             newRecord.id = newMemoryId(prefix: newRecord.kind.rawValue)
 
             // Mark old as superseded
@@ -390,15 +406,17 @@ actor SQLiteMemoryStore {
                 sql: """
                     INSERT INTO memory_records
                         (id, kind, status, text, confidence, source_turn_id, tags, supersedes,
-                         created_at, updated_at, importance_score, stale_after_secs, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         created_at, updated_at, importance_score, stale_after_secs, metadata,
+                         speaker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     newRecord.id, newRecord.kind.rawValue, newRecord.status.rawValue,
                     newRecord.text, Double(newRecord.confidence), newRecord.sourceTurnId,
                     tagsJSON, newRecord.supersedes,
                     newRecord.createdAt, newRecord.updatedAt,
-                    nil as Double?, nil as UInt64?, nil as String?,
+                    newRecord.importanceScore.map { Double($0) }, newRecord.staleAfterSecs,
+                    newRecord.metadata, newRecord.speakerId,
                 ]
             )
 
@@ -499,17 +517,26 @@ actor SQLiteMemoryStore {
     }
 
     /// Find active records with a specific tag.
-    func findActiveByTag(_ tag: String) throws -> [MemoryRecord] {
+    func findActiveByTag(_ tag: String, speakerId: String? = nil) throws -> [MemoryRecord] {
         try dbQueue.read { db in
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
+            let sql: String
+            let arguments: StatementArguments
+            if let speakerId {
+                sql = """
+                    SELECT * FROM memory_records
+                    WHERE status = 'active' AND tags LIKE ? AND speaker_id = ?
+                    ORDER BY updated_at DESC
+                    """
+                arguments = ["%\"\(tag)\"%", speakerId]
+            } else {
+                sql = """
                     SELECT * FROM memory_records
                     WHERE status = 'active' AND tags LIKE ?
                     ORDER BY updated_at DESC
-                    """,
-                arguments: ["%\"\(tag)\"%"]
-            )
+                    """
+                arguments = ["%\"\(tag)\"%"]
+            }
+            let rows = try Row.fetchAll(db, sql: sql, arguments: arguments)
             return rows.map { Self.recordFromRow($0) }
         }
     }

@@ -11,6 +11,8 @@ import Foundation
 actor AudioPlaybackManager {
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    private var graphConfigured = false
+    private var graphConfigurationCount = 0
     private var isPlaying = false
     private var pendingFinal = false
     /// Number of scheduled buffers that have not yet fired completion callbacks.
@@ -47,12 +49,20 @@ actor AudioPlaybackManager {
     // MARK: - Lifecycle
 
     func setup() throws {
-        engine.attach(playerNode)
         let outputFormat = engine.outputNode.outputFormat(forBus: 0)
-        engine.connect(playerNode, to: engine.mainMixerNode, format: outputFormat)
-        try engine.start()
+        if !graphConfigured {
+            engine.attach(playerNode)
+            engine.connect(playerNode, to: engine.mainMixerNode, format: outputFormat)
+            graphConfigured = true
+            graphConfigurationCount += 1
+        }
+        if !engine.isRunning {
+            try engine.start()
+        }
         NSLog("AudioPlaybackManager: engine started (output: %.0f Hz)", outputFormat.sampleRate)
     }
+
+    var debugGraphConfigurationCount: Int { graphConfigurationCount }
 
     // MARK: - Enqueue Audio
 

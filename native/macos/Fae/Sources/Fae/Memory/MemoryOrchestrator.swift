@@ -204,7 +204,11 @@ actor MemoryOrchestrator {
             if let pref = extractPreference(from: lower, fullText: userText) {
                 // Check for contradiction with existing preferences.
                 try await supersedeContradiction(
-                    tag: "preference", newText: pref, sourceTurnId: turnId
+                    tag: "preference",
+                    newText: pref,
+                    sourceTurnId: turnId,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
                 )
                 _ = try await store.insertRecord(
                     kind: .profile,
@@ -375,8 +379,14 @@ actor MemoryOrchestrator {
     }
 
     /// Supersede contradicting records for a given tag when new text diverges semantically.
-    private func supersedeContradiction(tag: String, newText: String, sourceTurnId: String) async throws {
-        let existing = try await store.findActiveByTag(tag)
+    private func supersedeContradiction(
+        tag: String,
+        newText: String,
+        sourceTurnId: String,
+        speakerId: String? = nil,
+        metadata: String? = nil
+    ) async throws {
+        let existing = try await store.findActiveByTag(tag, speakerId: speakerId)
         guard !existing.isEmpty else { return }
 
         guard let engine = embeddingEngine, await engine.isLoaded else {
@@ -403,7 +413,11 @@ actor MemoryOrchestrator {
                         confidence: old.confidence,
                         sourceTurnId: sourceTurnId,
                         tags: old.tags,
-                        note: "contradiction detected (cosine=\(String(format: "%.2f", similarity)))"
+                        note: "contradiction detected (cosine=\(String(format: "%.2f", similarity)))",
+                        importanceScore: old.importanceScore,
+                        staleAfterSecs: old.staleAfterSecs,
+                        speakerId: speakerId ?? old.speakerId,
+                        metadata: metadata ?? old.metadata
                     )
                     NSLog("MemoryOrchestrator: superseded contradicting record %@ (tag=%@, cos=%.2f)",
                           old.id, tag, similarity)
@@ -437,7 +451,7 @@ actor MemoryOrchestrator {
         speakerId: String? = nil,
         metadata: String? = nil
     ) async throws {
-        let existing = try await store.findActiveByTag(tag)
+        let existing = try await store.findActiveByTag(tag, speakerId: speakerId)
 
         if let old = existing.first {
             _ = try await store.supersedeRecord(
@@ -446,7 +460,10 @@ actor MemoryOrchestrator {
                 confidence: confidence,
                 sourceTurnId: sourceTurnId,
                 tags: allTags,
-                note: "updated \(tag)"
+                note: "updated \(tag)",
+                importanceScore: importanceScore,
+                speakerId: speakerId,
+                metadata: metadata
             )
             report.supersededCount += 1
         } else {

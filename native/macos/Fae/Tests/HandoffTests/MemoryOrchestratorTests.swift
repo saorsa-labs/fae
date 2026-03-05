@@ -61,13 +61,18 @@ final class MemoryOrchestratorTests: XCTestCase {
     func testSQLiteSupersedeMarksOldRecordInactiveAndLinksNewRecord() async throws {
         let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
         let store = try SQLiteMemoryStore(path: dbPath)
+        let metadata = #"{"utterance_at":"2026-03-05T12:00:00.000Z"}"#
 
         let old = try await store.insertRecord(
             kind: .fact,
             text: "I like coffee",
             confidence: 0.8,
             sourceTurnId: UUID().uuidString,
-            tags: ["preference"]
+            tags: ["preference"],
+            importanceScore: 0.85,
+            staleAfterSecs: 600,
+            speakerId: "owner",
+            metadata: metadata
         )
 
         let newRecord = try await store.supersedeRecord(
@@ -83,9 +88,42 @@ final class MemoryOrchestratorTests: XCTestCase {
         let oldFromAll = try XCTUnwrap(all.first(where: { $0.id == old.id }))
         XCTAssertEqual(oldFromAll.status, .superseded)
         XCTAssertEqual(newRecord.supersedes, old.id)
+        XCTAssertEqual(newRecord.speakerId, "owner")
+        XCTAssertEqual(newRecord.metadata, metadata)
+        XCTAssertEqual(newRecord.importanceScore ?? 0, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(newRecord.staleAfterSecs, 600)
 
         let active = try await store.listRecords(includeInactive: false)
         XCTAssertTrue(active.contains(where: { $0.id == newRecord.id }))
         XCTAssertFalse(active.contains(where: { $0.id == old.id }))
+    }
+
+    func testProfileCaptureScopesNameRecordsBySpeaker() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
+        let store = try makeStore(path: dbPath)
+        let orchestrator = MemoryOrchestrator(store: store, config: enabledMemoryConfig())
+
+        _ = await orchestrator.capture(
+            turnId: UUID().uuidString,
+            userText: "my name is Alice",
+            assistantText: "Noted",
+            speakerId: "owner"
+        )
+        _ = await orchestrator.capture(
+            turnId: UUID().uuidString,
+            userText: "my name is Bob",
+            assistantText: "Noted",
+            speakerId: "guest"
+        )
+
+        let ownerNames = try await store.findActiveByTag("name", speakerId: "owner")
+        let guestNames = try await store.findActiveByTag("name", speakerId: "guest")
+        let allNames = try await store.findActiveByTag("name")
+
+        XCTAssertEqual(ownerNames.count, 1)
+        XCTAssertEqual(guestNames.count, 1)
+        XCTAssertEqual(allNames.count, 2)
+        XCTAssertTrue(ownerNames[0].text.contains("Alice"))
+        XCTAssertTrue(guestNames[0].text.contains("Bob"))
     }
 }

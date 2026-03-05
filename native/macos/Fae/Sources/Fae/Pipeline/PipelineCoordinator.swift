@@ -276,6 +276,13 @@ actor PipelineCoordinator {
         let forceSuppressThinking: Bool
         let capabilityTicket: CapabilityTicket?
         let explicitUserAuthorization: Bool
+        let generationContext: GenerationContext
+        let originTurnID: String?
+    }
+
+    private struct GenerationContext: Sendable {
+        let systemPrompt: String
+        let nativeTools: [[String: any Sendable]]?
     }
 
     /// In-flight deferred tool tasks keyed by job ID.
@@ -357,12 +364,7 @@ actor PipelineCoordinator {
         self.isRescueMode = rescueMode
 
         // Configure VAD from config.
-        vad.threshold = config.vad.threshold
-        vad.hysteresisRatio = config.vad.hysteresisRatio
-        vad.minSilenceDurationMs = config.vad.minSilenceDurationMs
-        vad.speechPadMs = config.vad.speechPadMs
-        vad.minSpeechDurationMs = config.vad.minSpeechDurationMs
-        vad.maxSpeechDurationMs = config.vad.maxSpeechDurationMs
+        vad.applyConfiguration(config.vad)
     }
 
     // MARK: - Lifecycle
@@ -521,6 +523,14 @@ actor PipelineCoordinator {
                 return
             }
             wake()
+        } else if effectiveRequireDirectAddress() {
+            // Direct-address gating applies to typed text too: when enabled, non-addressed
+            // input is dropped unless we're within the follow-up window.
+            let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+            if !isAddressedToFae(trimmed) && !inFollowup {
+                debugLog(debugConsole, .pipeline, "Text ignored (direct-address required, not addressed): \(trimmed)")
+                return
+            }
         }
 
         // If assistant is active, trigger barge-in.
@@ -691,8 +701,7 @@ actor PipelineCoordinator {
     /// Reset conversation history (for test harness use).
     func resetConversation() async {
         await conversationState.clear()
-        currentSystemPrompt = nil
-        currentNativeTools = nil
+        currentTurnGenerationContext = nil
         NSLog("PipelineCoordinator: conversation history cleared (test reset)")
     }
 
@@ -814,8 +823,7 @@ actor PipelineCoordinator {
 
     private func resetConversationSession(trigger: String, source: String) async {
         sleep()
-        currentSystemPrompt = nil
-        currentNativeTools = nil
+        currentTurnGenerationContext = nil
         engagedUntil = nil
         lastAssistantResponseText = ""
         activeCapabilityTicket = nil
@@ -914,20 +922,17 @@ actor PipelineCoordinator {
 
                 // Skip when echo suppressor is active or barge-in is suppressed
                 // (non-interruptible speakDirect) to prevent false triggers.
-                if vadOutput.speechStarted && !echoSuppressor.isInSuppression && !bargeInSuppressed && !inDenyCooldown {
-                    pendingBargeIn = PendingBargeIn(capturedAt: Date(), lastRms: vadOutput.rms)
-                } else if vadOutput.speechStarted && (echoSuppressor.isInSuppression || bargeInSuppressed || inDenyCooldown) {
-                    // Don't create barge-in candidate during echo suppression, non-interruptible speech, or deny cooldown.
-                    pendingBargeIn = nil
-                }
-                if vadOutput.isSpeech, pendingBargeIn != nil {
-                    pendingBargeIn?.speechSamples += chunk.samples.count
-                    pendingBargeIn?.lastRms = vadOutput.rms
-                    // Accumulate audio for speaker verification (cap at 1s = 16000 samples).
-                    if (pendingBargeIn?.audioSamples.count ?? 0) < 16000 {
-                        pendingBargeIn?.audioSamples.append(contentsOf: chunk.samples)
-                    }
-
+                pendingBargeIn = Self.advancePendingBargeIn(
+                    pending: pendingBargeIn,
+                    speechStarted: vadOutput.speechStarted,
+                    isSpeech: vadOutput.isSpeech,
+                    chunkSamples: chunk.samples,
+                    rms: vadOutput.rms,
+                    echoSuppression: echoSuppressor.isInSuppression,
+                    bargeInSuppressed: bargeInSuppressed,
+                    inDenyCooldown: inDenyCooldown
+                )
+                if vadOutput.isSpeech {
                     // Check barge-in confirmation.
                     let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
                     let confirmSamples = (config.bargeIn.confirmMs * config.audio.inputSampleRate) / 1000
@@ -946,7 +951,6 @@ actor PipelineCoordinator {
             // Adjust VAD silence threshold based on assistant state.
             if assistantSpeaking {
                 vad.setSilenceThresholdMs(config.bargeIn.bargeInSilenceMs)
-                pendingBargeIn = nil  // Clear any pending barge-in during active speech
 
                 // Watchdog: if assistantSpeaking has been true for an unreasonably
                 // long time (>60s), the TTS pipeline is stuck. Force-clear so the
@@ -1875,6 +1879,7 @@ actor PipelineCoordinator {
         isToolFollowUp: Bool,
         turnCount: Int,
         forceSuppressThinking: Bool = false,
+        generationContext providedGenerationContext: GenerationContext? = nil,
         generationID providedGenerationID: UUID? = nil,
         proactiveContext: ProactiveRequestContext? = nil
     ) async {
@@ -1907,6 +1912,7 @@ actor PipelineCoordinator {
             return
         }
 
+        let generationContext: GenerationContext
         if !isToolFollowUp {
             debugLog(debugConsole, .qa, "=== TURN START user=\(userText.prefix(160)) ===")
             interrupted = false
@@ -2005,14 +2011,13 @@ actor PipelineCoordinator {
                 legacySkills = []
             }
             // Build native tool specs for MLX tool calling.
-            // Cached in currentNativeTools for tool follow-up turns.
-            self.currentNativeTools = includeTools
+            let nativeTools = includeTools
                 ? registry.nativeToolSpecs(for: toolMode)
                 : nil
 
             let toolSchemas: String? = {
                 guard includeTools else { return nil }
-                if self.currentNativeTools != nil {
+                if nativeTools != nil {
                     let compact = registry.compactToolSummary(for: toolMode)
                     return compact.isEmpty ? nil : compact
                 }
@@ -2020,7 +2025,7 @@ actor PipelineCoordinator {
                 return full.isEmpty ? nil : full
             }()
 
-            if let specs = self.currentNativeTools {
+            if let specs = nativeTools {
                 debugLog(debugConsole, .pipeline, "Native tool specs: \(specs.count) tools")
             }
 
@@ -2030,7 +2035,7 @@ actor PipelineCoordinator {
             }
 
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
-            let nativeToolsAvailable = self.currentNativeTools != nil
+            let nativeToolsAvailable = nativeTools != nil
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
                 visionCapable: effectiveVisionEnabled(),
@@ -2056,10 +2061,20 @@ actor PipelineCoordinator {
                 systemPrompt += "\n\n" + enrollCtx
                 firstOwnerEnrollmentContext = nil
             }
-            self.currentSystemPrompt = systemPrompt
+            generationContext = GenerationContext(
+                systemPrompt: systemPrompt,
+                nativeTools: nativeTools
+            )
+            currentTurnGenerationContext = generationContext
+        } else if let providedGenerationContext {
+            generationContext = providedGenerationContext
+        } else if let currentTurnGenerationContext {
+            generationContext = currentTurnGenerationContext
+        } else {
+            return
         }
 
-        guard let systemPrompt = self.currentSystemPrompt else { return }
+        let systemPrompt = generationContext.systemPrompt
         let dynamicReservedTokens = max(
             1024,
             Self.estimateTokenCount(for: systemPrompt) + config.llm.maxTokens
@@ -2075,7 +2090,7 @@ actor PipelineCoordinator {
             maxTokens: config.llm.maxTokens,
             repetitionPenalty: config.llm.repeatPenalty,
             suppressThinking: suppressThinking,
-            tools: currentNativeTools
+            tools: generationContext.nativeTools
         )
 
         // Stream tokens.
@@ -2515,6 +2530,7 @@ actor PipelineCoordinator {
                     isToolFollowUp: true,
                     turnCount: turnCount,
                     forceSuppressThinking: true,
+                    generationContext: generationContext,
                     generationID: generationID,
                     proactiveContext: proactiveContext
                 )
@@ -2560,6 +2576,7 @@ actor PipelineCoordinator {
                             isToolFollowUp: true,
                             turnCount: turnCount + 1,
                             forceSuppressThinking: true,
+                            generationContext: generationContext,
                             generationID: generationID,
                             proactiveContext: proactiveContext
                         )
@@ -2672,7 +2689,9 @@ actor PipelineCoordinator {
                 assistantToolMessage: assistantToolMessage,
                 forceSuppressThinking: forceSuppressThinking,
                 capabilityTicket: activeCapabilityTicket,
-                explicitUserAuthorization: explicitUserAuthorizationForTurn
+                explicitUserAuthorization: explicitUserAuthorizationForTurn,
+                generationContext: generationContext,
+                originTurnID: currentTurnID
             )
 
             assistantGenerating = false
@@ -2807,16 +2826,14 @@ actor PipelineCoordinator {
             isToolFollowUp: true,
             turnCount: turnCount + 1,
             forceSuppressThinking: forceSuppressThinking,
+            generationContext: generationContext,
             generationID: generationID,
             proactiveContext: proactiveContext
         )
     }
 
-    /// Cached system prompt for tool follow-up turns (avoids rebuilding each recursion).
-    private var currentSystemPrompt: String?
-
-    /// Cached native tool specs for tool follow-up turns.
-    private var currentNativeTools: [[String: any Sendable]]?
+    /// Snapshot of the current foreground turn's prompt/tool context.
+    private var currentTurnGenerationContext: GenerationContext?
 
     // MARK: - Speech State
 
@@ -3007,11 +3024,51 @@ actor PipelineCoordinator {
         assistantSpeaking
     }
 
+    static func advancePendingBargeIn(
+        pending: PendingBargeIn?,
+        speechStarted: Bool,
+        isSpeech: Bool,
+        chunkSamples: [Float],
+        rms: Float,
+        echoSuppression: Bool,
+        bargeInSuppressed: Bool,
+        inDenyCooldown: Bool
+    ) -> PendingBargeIn? {
+        var next = pending
+        if speechStarted && !echoSuppression && !bargeInSuppressed && !inDenyCooldown {
+            next = PendingBargeIn(capturedAt: Date(), lastRms: rms)
+        } else if speechStarted && (echoSuppression || bargeInSuppressed || inDenyCooldown) {
+            return nil
+        }
+
+        if isSpeech, next != nil {
+            next?.speechSamples += chunkSamples.count
+            next?.lastRms = rms
+            let remainingCapacity = max(0, 16_000 - (next?.audioSamples.count ?? 0))
+            if remainingCapacity > 0 {
+                next?.audioSamples.append(contentsOf: chunkSamples.prefix(remainingCapacity))
+            }
+        }
+
+        return next
+    }
+
     static func shouldAllowBargeInInterrupt(assistantSpeaking: Bool, assistantGenerating: Bool) -> Bool {
         // Intentional: barge-in is an audible interruption affordance.
         // If the model is generating silently, we should not interrupt due to
         // ambient noise or speaker bleed while no speech is active.
         assistantSpeaking
+    }
+
+    static func shouldStartDeferredFollowUp(
+        originTurnID: String?,
+        currentTurnID: String?,
+        assistantSpeaking: Bool,
+        assistantGenerating: Bool
+    ) -> Bool {
+        guard !assistantSpeaking, !assistantGenerating else { return false }
+        guard let originTurnID else { return true }
+        return originTurnID == currentTurnID
     }
 
     /// Owner-verified barge-in: only the owner's voice can interrupt Fae mid-speech.
@@ -3417,7 +3474,9 @@ actor PipelineCoordinator {
         assistantToolMessage: String,
         forceSuppressThinking: Bool,
         capabilityTicket: CapabilityTicket?,
-        explicitUserAuthorization: Bool
+        explicitUserAuthorization: Bool,
+        generationContext: GenerationContext,
+        originTurnID: String?
     ) async {
         let job = DeferredToolJob(
             id: UUID(),
@@ -3426,7 +3485,9 @@ actor PipelineCoordinator {
             assistantToolMessage: assistantToolMessage,
             forceSuppressThinking: forceSuppressThinking,
             capabilityTicket: capabilityTicket,
-            explicitUserAuthorization: explicitUserAuthorization
+            explicitUserAuthorization: explicitUserAuthorization,
+            generationContext: generationContext,
+            originTurnID: originTurnID
         )
 
         await conversationState.addAssistantMessage(job.assistantToolMessage)
@@ -3500,20 +3561,23 @@ actor PipelineCoordinator {
             return
         }
 
-        if currentSystemPrompt == nil {
-            let msg = "I finished the background check, but I need you to ask once more so I can present the result properly."
-            eventBus.send(.assistantText(text: msg, isFinal: true))
-            await speakText(msg, isFinal: true)
-            return
-        }
-
         // Wait for any in-progress speech to finish before starting the
         // follow-up generation.  Without this, the tool-result LLM response
         // can interrupt the acknowledgment message mid-sentence.
-        for _ in 0..<30 {
+        for _ in 0..<60 {
             guard !Task.isCancelled else { return }
-            if !assistantSpeaking { break }
+            if !assistantSpeaking, !assistantGenerating { break }
             try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+        }
+
+        guard Self.shouldStartDeferredFollowUp(
+            originTurnID: job.originTurnID,
+            currentTurnID: currentTurnID,
+            assistantSpeaking: assistantSpeaking,
+            assistantGenerating: assistantGenerating
+        ) else {
+            debugLog(debugConsole, .pipeline, "Deferred tool follow-up dropped: origin turn no longer active")
+            return
         }
 
         explicitUserAuthorizationForTurn = job.explicitUserAuthorization
@@ -3532,7 +3596,8 @@ actor PipelineCoordinator {
             userText: job.userText,
             isToolFollowUp: true,
             turnCount: 1,
-            forceSuppressThinking: job.forceSuppressThinking
+            forceSuppressThinking: job.forceSuppressThinking,
+            generationContext: job.generationContext
         )
     }
 

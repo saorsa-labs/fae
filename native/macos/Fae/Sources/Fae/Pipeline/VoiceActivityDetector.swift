@@ -47,6 +47,17 @@ struct VoiceActivityDetector {
         recalculateThresholds()
     }
 
+    /// Apply the persisted VAD configuration and refresh derived sample thresholds.
+    mutating func applyConfiguration(_ config: FaeConfig.VadConfig) {
+        threshold = config.threshold
+        hysteresisRatio = config.hysteresisRatio
+        minSilenceDurationMs = config.minSilenceDurationMs
+        speechPadMs = config.speechPadMs
+        minSpeechDurationMs = config.minSpeechDurationMs
+        maxSpeechDurationMs = config.maxSpeechDurationMs
+        recalculateThresholds()
+    }
+
     // MARK: - Processing
 
     struct Output {
@@ -138,6 +149,15 @@ struct VoiceActivityDetector {
     mutating func setSilenceThresholdMs(_ ms: Int) {
         minSilenceDurationMs = ms
         silenceSamplesThreshold = (ms * sampleRate) / 1000
+    }
+
+    var debugDerivedThresholds: (
+        preRollMax: Int,
+        silenceSamplesThreshold: Int,
+        minSpeechSamples: Int,
+        maxSpeechSamples: Int
+    ) {
+        (preRollMax, silenceSamplesThreshold, minSpeechSamples, maxSpeechSamples)
     }
 
     // MARK: - Private
