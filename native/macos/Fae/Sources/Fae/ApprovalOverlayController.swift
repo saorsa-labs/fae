@@ -535,6 +535,8 @@ final class ApprovalOverlayController: ObservableObject {
     }
 
     private func handleToolModeUpgradeRequested(_ info: [AnyHashable: Any]) {
+        // Don't pile on — one at a time. If a popup is already showing, skip.
+        guard activeToolModeRequest == nil else { return }
         let reason = info["reason"] as? String ?? "unknown"
         activeToolModeRequest = ToolModeRequest(
             id: UUID().uuidString,

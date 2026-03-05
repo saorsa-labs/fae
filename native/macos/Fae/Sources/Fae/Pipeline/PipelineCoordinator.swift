@@ -1968,8 +1968,10 @@ actor PipelineCoordinator {
             if let hiddenToolsReason {
                 debugLog(debugConsole, .pipeline, "⚠️ Tools HIDDEN from LLM: \(hiddenToolsReason)")
                 NSLog("PipelineCoordinator: tools hidden — %@", hiddenToolsReason)
-                // Show tool-mode upgrade popup (approval overlay, not canvas).
-                if !isToolFollowUp {
+                // Only show tool-mode upgrade popup for actionable reasons (enrollment needed,
+                // non-owner speaker). Do NOT nag when user explicitly set toolMode=off — that
+                // is intentional and showing a popup every turn is disruptive.
+                if !isToolFollowUp && hiddenToolsReason != "toolMode=off" {
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(
                             name: .faeToolModeUpgradeRequested,

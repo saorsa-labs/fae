@@ -771,12 +771,25 @@ execute_step() {
             local escaped_text
             escaped_text=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
             if $VERBOSE; then dim "  speak: '$text' (voice=$voice)"; fi
+            # Map voice name to audio_prompt_path for voice cloning.
+            # Looks for voices/<name>.wav in the Chatterbox directory.
+            local audio_prompt_path voice_prompt_json
+            local chatterbox_dir
+            chatterbox_dir="$(cd "$(dirname "$0")/.." && pwd)/../chatterbox"
+            if [ -f "${chatterbox_dir}/voices/${voice}.wav" ]; then
+                audio_prompt_path="$(cd "${chatterbox_dir}" && pwd)/voices/${voice}.wav"
+                voice_prompt_json=",\"audio_prompt_path\":$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "${audio_prompt_path}")"
+            else
+                voice_prompt_json=""
+            fi
+            local speak_body
+            speak_body="{\"text\":${escaped_text},\"play\":${play_audio}${voice_prompt_json}}"
             local speak_status
             speak_status=$(curl -s -o /dev/null -w "%{http_code}" \
-                --connect-timeout 5 --max-time 30 \
+                --connect-timeout 5 --max-time 60 \
                 -X POST "${CHATTERBOX_URL}/speak" \
                 -H "Content-Type: application/json" \
-                -d "{\"text\":${escaped_text},\"voice\":\"${voice}\",\"play\":${play_audio}}" 2>/dev/null || echo "000")
+                -d "${speak_body}" 2>/dev/null || echo "000")
             if [ "$speak_status" != "200" ]; then
                 yellow "  Warning: Chatterbox /speak returned $speak_status (is Chatterbox running?)"
             fi
