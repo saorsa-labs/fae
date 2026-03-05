@@ -931,7 +931,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.toolMode = value
             persistConfig(reason: "config.patch.tool_mode")
             if let coordinator = pipelineCoordinator {
-                Task { await coordinator.setToolMode(value) }
+                Task {
+                    await coordinator.setToolMode(value)
+                }
             }
 
         case "llm.voice_model_preset":
@@ -1569,6 +1571,27 @@ final class FaeCore: ObservableObject, HostCommandSender {
         return try ToolAnalytics(path: dbPath)
     }
 
+    /// Handle user response from the tool-mode upgrade popup.
+    private func handleToolModeUpgradeResponse(action: String, userInfo: [AnyHashable: Any]) {
+        switch action {
+        case "set_mode":
+            guard let mode = userInfo["mode"] as? String else { return }
+            patchConfig(key: "tool_mode", payload: ["value": mode])
+        case "start_enrollment":
+            if let coordinator = pipelineCoordinator {
+                Task {
+                    await coordinator.injectText(
+                        "Please start voice enrollment for me."
+                    )
+                }
+            }
+        case "open_settings":
+            NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
+        default:
+            break
+        }
+    }
+
     /// Observe scheduler notifications emitted by scheduler tools.
     private func observeSchedulerUpdates() {
         let updateObserver = NotificationCenter.default.addObserver(
@@ -1595,7 +1618,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
             Task { await self.scheduler?.triggerTask(id: taskId) }
         }
 
-        schedulerObservers = [updateObserver, triggerObserver]
+        // Tool-mode upgrade response (user clicked a button on the popup).
+        let toolModeObserver = NotificationCenter.default.addObserver(
+            forName: .faeToolModeUpgradeRespond,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let action = notification.userInfo?["action"] as? String else { return }
+            let userInfo = notification.userInfo ?? [:]
+            Task { @MainActor [weak self] in
+                self?.handleToolModeUpgradeResponse(action: action, userInfo: userInfo)
+            }
+        }
+
+        schedulerObservers = [updateObserver, triggerObserver, toolModeObserver]
     }
 
     deinit {

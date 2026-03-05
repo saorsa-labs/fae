@@ -205,7 +205,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         auxiliaryWindows.debugConsoleController = debugConsole
         auxiliaryWindows.observeThinkingState()
         faeCore.setDebugConsole(debugConsole)
-        debugLog(debugConsole, .qa, "Build marker: speech-prosody-v8")
+        debugLog(debugConsole, .qa, "Build marker: tool-mode-popup-v1")
         onboarding.onPermissionResult = { capability, state in
             guard state == "granted" else { return }
             NotificationCenter.default.post(

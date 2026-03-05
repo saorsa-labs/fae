@@ -101,15 +101,19 @@ final class AuxiliaryWindowManager: ObservableObject {
     /// `approvalController` is set.
     func observeApprovalController() {
         guard let controller = approvalController else { return }
-        approvalCancellable = controller.$activeApproval
-            .receive(on: RunLoop.main)
-            .sink { [weak self] request in
-                if request != nil {
-                    self?.showApproval()
-                } else {
-                    self?.hideApproval()
-                }
+        approvalCancellable = Publishers.CombineLatest3(
+            controller.$activeApproval,
+            controller.$activeInput,
+            controller.$activeToolModeRequest
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] approval, input, toolMode in
+            if approval != nil || input != nil || toolMode != nil {
+                self?.showApproval()
+            } else {
+                self?.hideApproval()
             }
+        }
     }
 
     // MARK: - Focus Main Window
@@ -132,12 +136,25 @@ final class AuxiliaryWindowManager: ObservableObject {
     }
 
     func hideCanvas() {
+        // Always clear stale content immediately so it doesn't flash on next show.
+        canvasController?.clear()
+
         guard isCanvasVisible else {
             canvasPanel?.orderOut(nil)
-            canvasController?.clear()
             return
         }
-        guard !isAnimating else { return }
+        if isAnimating {
+            // A show animation is in progress — force-close immediately rather
+            // than silently dropping the hide request (which caused stale cards).
+            canvasPanel?.orderOut(nil)
+            isCanvasVisible = false
+            isAnimating = false
+            if let orbFrame = orbFrameBeforePanels, let orbWindow = windowState?.window {
+                orbWindow.setFrame(orbFrame, display: true)
+            }
+            orbFrameBeforePanels = nil
+            return
+        }
         animatedHide(panel: canvasPanel)
     }
 
@@ -185,7 +202,7 @@ final class AuxiliaryWindowManager: ObservableObject {
         windowState?.transitionToCompact()
 
         let orbFrame = orbWindow.frame
-        let panelSize = NSSize(width: 260, height: 130)
+        let panelSize = NSSize(width: 340, height: 300)
         // Position ABOVE the orb — always on screen, never below the dock.
         let y = orbFrame.maxY + 8
         let x = orbFrame.midX - panelSize.width / 2
@@ -518,7 +535,7 @@ final class AuxiliaryWindowManager: ObservableObject {
     }
 
     private func makeApprovalPanel(controller: ApprovalOverlayController) -> NSPanel {
-        let size = NSSize(width: 240, height: 120)
+        let size = NSSize(width: 340, height: 300)
         // Use InteractivePanel so approval buttons (Yes/No, Enable Tools) receive clicks.
         // Plain NSPanel with .nonactivatingPanel has canBecomeKey=false → clicks silently dropped.
         let panel = InteractivePanel(

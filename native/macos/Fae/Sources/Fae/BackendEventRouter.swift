@@ -445,6 +445,26 @@ extension Notification.Name {
     /// - `source: String` — `"voice"`, `"button"`, or `"timeout"`
     static let faeApprovalResolved = Notification.Name("faeApprovalResolved")
 
+    // MARK: Tool Mode Upgrade
+
+    /// Posted by PipelineCoordinator when tools are needed but blocked.
+    /// Displays the professional tool-mode popup overlay instead of a canvas card.
+    ///
+    /// userInfo keys:
+    /// - `reason: String` — why tools are blocked (e.g. "toolMode=off", "owner_enrollment_required")
+    static let faeToolModeUpgradeRequested = Notification.Name("faeToolModeUpgradeRequested")
+
+    /// Posted by ApprovalOverlayController when the user responds to a tool-mode popup.
+    ///
+    /// userInfo keys:
+    /// - `action: String` — "set_mode", "start_enrollment", "open_settings", or "dismiss"
+    /// - `mode: String?` — the desired tool mode (when action is "set_mode")
+    static let faeToolModeUpgradeRespond = Notification.Name("faeToolModeUpgradeRespond")
+
+    /// Posted when tool mode changes externally (Settings, voice command) to dismiss
+    /// any pending tool-mode popup.
+    static let faeToolModeUpgradeDismiss = Notification.Name("faeToolModeUpgradeDismiss")
+
     // MARK: Model Loaded
 
     /// Posted when an ML engine successfully loads a model.

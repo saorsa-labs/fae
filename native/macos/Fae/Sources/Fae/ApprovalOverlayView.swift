@@ -18,6 +18,12 @@ struct ApprovalOverlayView: View {
                     insertion: .move(edge: .bottom).combined(with: .opacity),
                     removal: .opacity
                 ))
+            } else if let request = controller.activeToolModeRequest {
+                ToolModeCard(request: request, controller: controller)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .opacity
+                    ))
             } else if let request = controller.activeApproval {
                 ApprovalCard(request: request, controller: controller)
                     .transition(.asymmetric(
@@ -28,6 +34,7 @@ struct ApprovalOverlayView: View {
         }
         .animation(.spring(duration: 0.3), value: controller.activeApproval?.id)
         .animation(.spring(duration: 0.3), value: controller.activeInput?.id)
+        .animation(.spring(duration: 0.3), value: controller.activeToolModeRequest?.id)
     }
 }
 
@@ -115,6 +122,133 @@ private struct ApprovalCard: View {
     }
 }
 
+// MARK: - Tool Mode Card
+
+private struct ToolModeCard: View {
+    let request: ApprovalOverlayController.ToolModeRequest
+    let controller: ApprovalOverlayController
+
+    private var title: String {
+        if request.reason.contains("owner_enrollment_required") {
+            return "Owner Enrollment Required"
+        }
+        if request.reason.contains("non-owner") {
+            return "Speaker Not Authorized"
+        }
+        return "Tool Access Required"
+    }
+
+    private var message: String {
+        if request.reason.contains("owner_enrollment_required") {
+            return "Enroll your voice to enable tool access."
+        }
+        if request.reason.contains("non-owner") {
+            return "Owner-gated tools are blocked for this speaker."
+        }
+        return "I need tool access to help with this request."
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
+
+            Text(message)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            if request.reason.contains("owner_enrollment_required") {
+                // Enrollment case: Dismiss / Start Enrollment
+                HStack(spacing: 8) {
+                    Button(action: { controller.dismissToolModeRequest() }) {
+                        Text("Dismiss")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.secondary)
+                    .keyboardShortcut(.escape, modifiers: [])
+
+                    Button(action: { controller.requestEnrollment() }) {
+                        Text("Start Enrollment")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                    .keyboardShortcut(.return, modifiers: [])
+                }
+            } else if request.reason.contains("non-owner") {
+                // Non-owner case: Dismiss / Read-Only
+                HStack(spacing: 8) {
+                    Button(action: { controller.dismissToolModeRequest() }) {
+                        Text("Dismiss")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.secondary)
+                    .keyboardShortcut(.escape, modifiers: [])
+
+                    Button(action: { controller.upgradeToolMode("read_only") }) {
+                        Text("Read-Only")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.teal)
+                    .keyboardShortcut(.return, modifiers: [])
+                }
+            } else {
+                // Tools off / general case: progressive allow
+                HStack(spacing: 8) {
+                    Button(action: { controller.dismissToolModeRequest() }) {
+                        Text("No Thanks")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.secondary)
+                    .keyboardShortcut(.escape, modifiers: [])
+
+                    Button(action: { controller.upgradeToolMode("read_write") }) {
+                        Text("Read/Write")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.teal)
+
+                    Button(action: { controller.upgradeToolMode("full") }) {
+                        Text("Full Access")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .keyboardShortcut(.return, modifiers: [])
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+    }
+}
+
 // MARK: - Input Card
 
 private struct InputCard: View {
@@ -165,14 +299,34 @@ private struct InputCard: View {
                         field.placeholder.isEmpty ? "Enter value…" : field.placeholder,
                         text: $inputText
                     )
+                    .textFieldStyle(.plain)
+                    .focused($isFocused)
+                    .onSubmit { submitIfValid() }
+                } else if field.isMultiline {
+                    ZStack(alignment: .topLeading) {
+                        if inputText.isEmpty {
+                            Text(field.placeholder.isEmpty ? "Paste or type here…" : field.placeholder)
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundColor(.secondary.opacity(0.5))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 8)
+                        }
+                        TextEditor(text: $inputText)
+                            .font(.system(size: 13, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .focused($isFocused)
+                    }
+                    .frame(height: 100)
                 } else {
                     TextField(
                         field.placeholder.isEmpty ? "Enter value…" : field.placeholder,
                         text: $inputText
                     )
+                    .textFieldStyle(.plain)
+                    .focused($isFocused)
+                    .onSubmit { submitIfValid() }
                 }
             }
-            .textFieldStyle(.plain)
             .font(.system(size: 13, design: .monospaced))
             .foregroundColor(.primary)
             .padding(.horizontal, 10)
@@ -188,8 +342,6 @@ private struct InputCard: View {
                         lineWidth: 1
                     )
             )
-            .focused($isFocused)
-            .onSubmit { submitIfValid() }
 
             HStack(spacing: 10) {
                 Button(action: { controller.cancelInput() }) {
@@ -211,11 +363,18 @@ private struct InputCard: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Self.heather)
                 .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .keyboardShortcut(.return, modifiers: [])
+                .keyboardShortcut(.return, modifiers: field.isMultiline ? [.command] : [])
+            }
+
+            if field.isMultiline {
+                Text("⌘Return to submit")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.6))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(14)
-        .frame(width: 260)
+        .frame(width: field.isMultiline ? 340 : 260)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
@@ -238,6 +397,10 @@ private struct FormInputCard: View {
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
+
+    private var hasMultilineField: Bool {
+        request.fields.contains { $0.isMultiline }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -268,14 +431,29 @@ private struct FormInputCard: View {
                                 field.placeholder.isEmpty ? field.label : field.placeholder,
                                 text: binding(for: field.id)
                             )
+                            .textFieldStyle(.plain)
+                        } else if field.isMultiline {
+                            ZStack(alignment: .topLeading) {
+                                if (values[field.id] ?? "").isEmpty {
+                                    Text(field.placeholder.isEmpty ? "Paste or type here…" : field.placeholder)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .foregroundColor(.secondary.opacity(0.5))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 8)
+                                }
+                                TextEditor(text: binding(for: field.id))
+                                    .font(.system(size: 13, design: .monospaced))
+                                    .scrollContentBackground(.hidden)
+                            }
+                            .frame(height: 100)
                         } else {
                             TextField(
                                 field.placeholder.isEmpty ? field.label : field.placeholder,
                                 text: binding(for: field.id)
                             )
+                            .textFieldStyle(.plain)
                         }
                     }
-                    .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundColor(.primary)
                     .padding(.horizontal, 10)
@@ -317,11 +495,18 @@ private struct FormInputCard: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Self.heather)
-                .keyboardShortcut(.return, modifiers: [])
+                .keyboardShortcut(.return, modifiers: hasMultilineField ? [.command] : [])
+            }
+
+            if hasMultilineField {
+                Text("⌘Return to submit")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.6))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(14)
-        .frame(width: 320)
+        .frame(width: hasMultilineField ? 340 : 320)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)

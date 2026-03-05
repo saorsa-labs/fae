@@ -25,6 +25,9 @@ final class ApprovalOverlayController: ObservableObject {
     /// The currently active input request, if any.
     @Published var activeInput: InputRequest?
 
+    /// The currently active tool-mode upgrade request, if any.
+    @Published var activeToolModeRequest: ToolModeRequest?
+
     /// A pending tool-approval request.
     struct ApprovalRequest: Identifiable {
         /// Unique request identifier (matches backend `request_id`).
@@ -46,6 +49,16 @@ final class ApprovalOverlayController: ObservableObject {
         let regex: String?
         let allowedValues: [String]?
         let mustBeHttps: Bool
+        /// When true, show a multi-line text editor instead of a single-line field.
+        var isMultiline: Bool = false
+    }
+
+    /// A pending tool-mode upgrade request from the pipeline.
+    struct ToolModeRequest: Identifiable {
+        let id: String
+        /// Why tools are blocked: "toolMode=off", "owner_enrollment_required",
+        /// "non-owner", or "tool_not_called".
+        let reason: String
     }
 
     /// A pending input request from the LLM.
@@ -101,6 +114,32 @@ final class ApprovalOverlayController: ObservableObject {
             ) { [weak self] notification in
                 Task { @MainActor in
                     self?.handleInputRequired(notification.userInfo ?? [:])
+                }
+            }
+        )
+
+        // Tool-mode upgrade requested by pipeline.
+        observations.append(
+            center.addObserver(
+                forName: .faeToolModeUpgradeRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleToolModeUpgradeRequested(notification.userInfo ?? [:])
+                }
+            }
+        )
+
+        // Dismiss tool-mode popup when mode changes externally.
+        observations.append(
+            center.addObserver(
+                forName: .faeToolModeUpgradeDismiss,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.activeToolModeRequest = nil
                 }
             }
         )
@@ -244,6 +283,43 @@ final class ApprovalOverlayController: ObservableObject {
         activeInput = nil
     }
 
+    // MARK: - Tool Mode Actions
+
+    /// User chose to upgrade tool mode (e.g. "Read-Only" or "Full Access").
+    func upgradeToolMode(_ mode: String) {
+        NotificationCenter.default.post(
+            name: .faeToolModeUpgradeRespond,
+            object: nil,
+            userInfo: ["action": "set_mode", "mode": mode]
+        )
+        activeToolModeRequest = nil
+    }
+
+    /// User chose to start voice enrollment from the tool-mode popup.
+    func requestEnrollment() {
+        NotificationCenter.default.post(
+            name: .faeToolModeUpgradeRespond,
+            object: nil,
+            userInfo: ["action": "start_enrollment"]
+        )
+        activeToolModeRequest = nil
+    }
+
+    /// User chose to open settings from the tool-mode popup.
+    func openSettingsFromToolMode() {
+        NotificationCenter.default.post(
+            name: .faeToolModeUpgradeRespond,
+            object: nil,
+            userInfo: ["action": "open_settings"]
+        )
+        activeToolModeRequest = nil
+    }
+
+    /// Dismiss the tool-mode popup without taking action.
+    func dismissToolModeRequest() {
+        activeToolModeRequest = nil
+    }
+
     // MARK: - Private
 
     private func handleInputRequired(_ info: [AnyHashable: Any]) {
@@ -253,6 +329,8 @@ final class ApprovalOverlayController: ObservableObject {
         let prompt = info["prompt"] as? String ?? "Input required"
 
         let fields: [InputField]
+        let isMultiline = info["is_multiline"] as? Bool ?? false
+
         if mode == "form", let rawFields = info["fields"] as? [[String: Any]], !rawFields.isEmpty {
             fields = rawFields.compactMap { field in
                 guard let id = field["id"] as? String, !id.isEmpty else { return nil }
@@ -265,6 +343,7 @@ final class ApprovalOverlayController: ObservableObject {
                 let regex = field["regex"] as? String
                 let allowedValues = field["allowed_values"] as? [String]
                 let mustBeHttps = field["must_be_https"] as? Bool ?? false
+                let fieldMultiline = field["is_multiline"] as? Bool ?? isMultiline
                 return InputField(
                     id: id,
                     label: label,
@@ -275,7 +354,8 @@ final class ApprovalOverlayController: ObservableObject {
                     maxLength: maxLength,
                     regex: regex,
                     allowedValues: allowedValues,
-                    mustBeHttps: mustBeHttps
+                    mustBeHttps: mustBeHttps,
+                    isMultiline: fieldMultiline
                 )
             }
         } else {
@@ -292,7 +372,8 @@ final class ApprovalOverlayController: ObservableObject {
                     maxLength: nil,
                     regex: nil,
                     allowedValues: nil,
-                    mustBeHttps: false
+                    mustBeHttps: false,
+                    isMultiline: isMultiline
                 )
             ]
         }
@@ -451,6 +532,14 @@ final class ApprovalOverlayController: ObservableObject {
         default:
             return "Use \(toolName)"
         }
+    }
+
+    private func handleToolModeUpgradeRequested(_ info: [AnyHashable: Any]) {
+        let reason = info["reason"] as? String ?? "unknown"
+        activeToolModeRequest = ToolModeRequest(
+            id: UUID().uuidString,
+            reason: reason
+        )
     }
 
     /// Truncate a string to a maximum length, appending "..." if trimmed.

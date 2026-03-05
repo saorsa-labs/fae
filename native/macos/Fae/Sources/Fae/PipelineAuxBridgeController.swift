@@ -478,4 +478,5 @@ final class PipelineAuxBridgeController: ObservableObject {
     private func handleAudioLevel(rms: Double) {
         audioRMS = rms
     }
+
 }

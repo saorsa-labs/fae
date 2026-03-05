@@ -1122,7 +1122,7 @@ Return ONLY a JSON array of score objects like:
     local llm_output
     # Pipe prompt to LLM CLI, strip terminal escape sequences (OSC+BEL, CSI, etc.)
     local raw_output
-    raw_output=$(echo "$prompt" | "$MODEL" -p 2>/dev/null || echo "")
+    raw_output=$(echo "$prompt" | env -u CLAUDECODE "$MODEL" -p 2>/dev/null || echo "")
     llm_output=$(printf '%s' "$raw_output" | python3 -c "
 import sys, re
 raw = sys.stdin.buffer.read().decode('utf-8', errors='replace')

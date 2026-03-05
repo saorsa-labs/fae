@@ -66,6 +66,7 @@ actor PipelineCoordinator {
     private var computerUseStepCount: Int = 0
     private static let maxComputerUseSteps = 10
 
+
     // MARK: - Debug Console
 
     /// Optional debug console for real-time pipeline visibility.
@@ -108,6 +109,10 @@ actor PipelineCoordinator {
             return
         }
         toolModeLive = mode
+        // Dismiss any pending tool-mode upgrade popup.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .faeToolModeUpgradeDismiss, object: nil)
+        }
     }
 
     /// Live override for direct-address policy.
@@ -1792,93 +1797,6 @@ actor PipelineCoordinator {
         }
     }
 
-    private func blockedToolsActionCard(reason: String, triggerText: String) async -> String {
-        debugLog(debugConsole, .qa, "Building blocked-tools remediation card reason=\(reason)")
-        let snapshot = await buildToolsAndPermissionsSnapshot(triggerText: triggerText)
-
-        let guidance: (title: String, message: String, actions: [String]) = {
-            if reason.contains("toolMode=off") {
-                return (
-                    "Tools are currently off",
-                    "I need tool access to complete this kind of request.",
-                    [
-                        "<a class='chip' href='fae-action://set_tool_mode?value=read_write&source=canvas'>Enable Read/Write</a>",
-                        "<a class='chip' href='fae-action://set_tool_mode?value=full&source=canvas'>Enable Full</a>",
-                    ]
-                )
-            }
-            if reason.contains("owner_enrollment_required") {
-                return (
-                    "Owner enrollment required",
-                    "Your policy requires an enrolled owner voice before tool execution.",
-                    [
-                        "<a class='chip' href='fae-action://start_owner_enrollment?source=canvas'>Start voice enrollment</a>",
-                        "<a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>",
-                    ]
-                )
-            }
-            if reason.contains("non-owner") {
-                return (
-                    "Current speaker is not owner-authorized",
-                    "Owner-gated tools are blocked for this speaker profile.",
-                    [
-                        "<a class='chip' href='fae-action://set_tool_mode?value=read_only&source=canvas'>Switch to Read Only</a>",
-                        "<a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>",
-                    ]
-                )
-            }
-            return (
-                "Tool execution did not run",
-                "I expected to use a tool but didn’t execute one this turn.",
-                [
-                    "<a class='chip' href='fae-action://set_tool_mode?value=full&source=canvas'>Use Full tool mode</a>",
-                    "<a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>",
-                ]
-            )
-        }()
-
-        let permissionChips: String = snapshot.missingPermissionActions.map { action in
-            "<a class='chip' href='fae-action://request_permission?capability=\(action.capability)&source=canvas'>Grant \(action.label)</a>"
-        }.joined(separator: "")
-
-        let permissionPanel: String = permissionChips.isEmpty
-            ? ""
-            : "<p class='hint'>Missing permissions:</p><div class='chips'>\(permissionChips)</div>"
-
-        let actionChips = guidance.actions.joined(separator: "")
-
-        return """
-        <html>
-        <head>
-          <meta name='viewport' content='width=device-width, initial-scale=1' />
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1015; color: #e9e9ef; padding: 18px; line-height: 1.45; }
-            .panel { border: 1px solid #2a2d38; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: #171a23; }
-            .warn { border-color: #87545a; background: #23181d; }
-            .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-            .chip { font-size: 11px; text-decoration: none; color: #e9e9ef; border: 1px solid #3d4354; padding: 5px 9px; border-radius: 999px; background: #202533; }
-            .hint { color: #99a0b6; font-size: 12px; }
-            code { color: #d9c8ea; }
-          </style>
-        </head>
-        <body>
-          <div class='panel warn'>
-            <p><strong>\(guidance.title)</strong></p>
-            <p>\(guidance.message)</p>
-            <div class='chips'>\(actionChips)</div>
-            \(permissionPanel)
-          </div>
-          <div class='panel'>
-            <p><strong>Current mode:</strong> <code>\(snapshot.toolMode)</code> · <strong>Policy:</strong> <code>\(snapshot.policyProfile)</code></p>
-            <p><strong>Speaker:</strong> \(snapshot.speakerState)</p>
-            <p><strong>Owner gate:</strong> \(snapshot.ownerGateEnabled ? "enabled" : "disabled")</p>
-            <p class='hint'>Say: “show tools and permissions” for the full live snapshot.</p>
-          </div>
-        </body>
-        </html>
-        """
-    }
-
     private static func shouldShowCapabilitiesCanvas(triggerText: String, modelResponse: String) -> Bool {
         let lowerTrigger = triggerText.lowercased()
         let lowerResponse = stripThinkContent(modelResponse).lowercased()
@@ -2050,10 +1968,15 @@ actor PipelineCoordinator {
             if let hiddenToolsReason {
                 debugLog(debugConsole, .pipeline, "⚠️ Tools HIDDEN from LLM: \(hiddenToolsReason)")
                 NSLog("PipelineCoordinator: tools hidden — %@", hiddenToolsReason)
+                // Show tool-mode upgrade popup (approval overlay, not canvas).
                 if !isToolFollowUp {
-                    let card = await blockedToolsActionCard(reason: hiddenToolsReason, triggerText: userText)
-                    eventBus.send(.canvasContent(html: card, append: false))
-                    eventBus.send(.canvasVisibility(true))
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(
+                            name: .faeToolModeUpgradeRequested,
+                            object: nil,
+                            userInfo: ["reason": hiddenToolsReason]
+                        )
+                    }
                 }
             } else {
                 let ownerDetail: String
@@ -2667,9 +2590,14 @@ actor PipelineCoordinator {
                 }
 
                 debugLog(debugConsole, .qa, "Tool-backed lookup fallback reason=\(reasonCode)")
-                let card = await blockedToolsActionCard(reason: reasonCode, triggerText: userText)
-                eventBus.send(.canvasContent(html: card, append: false))
-                eventBus.send(.canvasVisibility(true))
+                // Show tool-mode upgrade popup (approval overlay, not canvas).
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .faeToolModeUpgradeRequested,
+                        object: nil,
+                        userInfo: ["reason": reasonCode]
+                    )
+                }
 
                 eventBus.send(.assistantText(text: fallback, isFinal: true))
                 enqueueTTS(fallback, isFinal: true)
@@ -2726,6 +2654,16 @@ actor PipelineCoordinator {
            Self.canRunDeferredToolCalls(toolCalls, registry: registry)
         {
             let assistantToolMessage = Self.stripThinkContent(fullResponse)
+
+            let ack = "I’ll check that in the background and report back as soon as it’s ready."
+            eventBus.send(.assistantText(text: ack, isFinal: true))
+            enqueueTTS(ack, isFinal: true)
+
+            // Prevent audio stutter: do not launch background tool execution while
+            // the acknowledgement is still being spoken.
+            await awaitPendingTTS()
+            await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_deferred_tools")
+
             await startDeferredToolJob(
                 userText: userText,
                 toolCalls: Array(toolCalls.prefix(5)),
@@ -2734,10 +2672,6 @@ actor PipelineCoordinator {
                 capabilityTicket: activeCapabilityTicket,
                 explicitUserAuthorization: explicitUserAuthorizationForTurn
             )
-
-            let ack = "I’ll check that in the background and report back as soon as it’s ready."
-            eventBus.send(.assistantText(text: ack, isFinal: true))
-            enqueueTTS(ack, isFinal: true)
 
             assistantGenerating = false
             eventBus.send(.assistantGenerating(false))
@@ -2763,6 +2697,7 @@ actor PipelineCoordinator {
         // Fallback filler: if the model emitted a bare tool call with no natural
         // preamble, speak a short acknowledgement so users don't hear dead air
         // while tools execute.
+        var didEnqueueToolFiller = false
         if turnCount == 0,
            !isToolFollowUp,
            spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2772,11 +2707,20 @@ actor PipelineCoordinator {
                 recordSpokenText(filler)
                 eventBus.send(.assistantText(text: filler, isFinal: false))
                 enqueueTTS(filler, isFinal: false)
+                didEnqueueToolFiller = true
             }
         }
 
         // Add the assistant's tool-calling message to history (strip think content).
         await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse), tag: proactiveContext?.conversationTag)
+
+        // Prevent synthesis/playback jitter: avoid starting tool execution while
+        // filler/pre-tool speech is still active.
+        if didEnqueueToolFiller || assistantSpeaking || pendingTTSTask != nil {
+            debugLog(debugConsole, .pipeline, "Delaying tool execution until speech drains")
+            await awaitPendingTTS()
+            await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_tool_execution")
+        }
 
         var toolSuccessCount = 0
         var toolFailureCount = 0
@@ -2786,6 +2730,9 @@ actor PipelineCoordinator {
             let callId = UUID().uuidString
             let inputJSON = Self.serializeArguments(call.arguments)
 
+            if assistantSpeaking {
+                debugLog(debugConsole, .pipeline, "⚠️ Tool start while assistantSpeaking=true (\(call.name))")
+            }
             eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))
             NSLog("PipelineCoordinator: executing tool '%@'", call.name)
             let inputPreview = String(inputJSON.prefix(220))
@@ -2923,6 +2870,23 @@ actor PipelineCoordinator {
     private func awaitPendingTTS() async {
         await pendingTTSTask?.value
         pendingTTSTask = nil
+    }
+
+    /// Wait until playback state reports idle (assistantSpeaking=false), or timeout.
+    ///
+    /// Useful before tool execution so heavy work doesn't contend with active speech
+    /// synthesis/playback and cause audible jitter.
+    private func awaitSpeechDrain(timeoutMs: Int, reason: String) async {
+        guard assistantSpeaking else { return }
+        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+
+        while assistantSpeaking, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        if assistantSpeaking {
+            debugLog(debugConsole, .pipeline, "⚠️ Speech drain timeout (\(reason)) after \(timeoutMs)ms")
+        }
     }
 
     /// Blocking TTS — used by `speakDirect`, `speakWithVoice`, and other non-streaming paths
