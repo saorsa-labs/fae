@@ -1,0 +1,1 @@
+native/macos/Fae/Sources/Fae/Resources/HEARTBEAT.md

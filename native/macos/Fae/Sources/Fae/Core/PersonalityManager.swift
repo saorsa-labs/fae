@@ -143,6 +143,14 @@ enum PersonalityManager {
 
     // MARK: - Proactive Behavior Prompt Fragment
 
+    static let progressivePermissionPrompt = """
+        Permissions and approval flow:
+        - Prefer the approval popup over sending users into Settings for routine permission decisions.
+        - When a tool needs confirmation, the app shows a popup with No, Yes, Always, Approve All Read-Only, and Approve All.
+        - Use that popup flow for per-action and progressive grants unless the user explicitly asks to manage settings manually.
+        - "Always" remembers the current tool, "Approve All Read-Only" trusts low-risk tools, and "Approve All" trusts the full tool set.
+        """
+
     static let multiSpeakerPrompt = """
         Multi-speaker awareness:
         - User messages may be prefixed with [SpeakerName] when voice identity is active.
@@ -289,6 +297,7 @@ enum PersonalityManager {
     ///   - visionCapable: Include vision prompt fragment.
     ///   - userName: User's name for personalization.
     ///   - soulContract: SOUL.md content.
+    ///   - heartbeatContract: HEARTBEAT.md content.
     ///   - memoryContext: Recalled memory text to inject.
     ///   - toolSchemas: Tool schema descriptions to enable inline tool use.
     static func assemblePrompt(
@@ -298,6 +307,7 @@ enum PersonalityManager {
         speakerDisplayName: String? = nil,
         speakerRole: SpeakerRole? = nil,
         soulContract: String? = nil,
+        heartbeatContract: String? = nil,
         directiveOverride: String? = nil,
         memoryContext: String? = nil,
         nativeToolsAvailable: Bool = false,
@@ -320,6 +330,11 @@ enum PersonalityManager {
         // 3. SOUL contract.
         if let soul = soulContract, !soul.isEmpty {
             parts.append(soul)
+        }
+
+        // 3b. HEARTBEAT contract.
+        if let heartbeat = heartbeatContract, !heartbeat.isEmpty {
+            parts.append(heartbeat)
         }
 
         // 4. User name.
@@ -379,6 +394,7 @@ enum PersonalityManager {
             parts.append(pythonCapabilityPrompt)
             parts.append(selfModificationPrompt)
             parts.append(proactiveBehaviorPrompt)
+            parts.append(progressivePermissionPrompt)
             parts.append(multiSpeakerPrompt)
             parts.append(voiceIdentityPrompt)
             parts.append(roleplayPrompt)

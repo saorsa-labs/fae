@@ -2035,6 +2035,9 @@ actor PipelineCoordinator {
             }
 
             let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
+            let heartbeat = isRescueMode
+                ? HeartbeatManager.defaultHeartbeat()
+                : HeartbeatManager.loadHeartbeat()
             let nativeToolsAvailable = nativeTools != nil
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
@@ -2043,6 +2046,7 @@ actor PipelineCoordinator {
                 speakerDisplayName: currentSpeakerDisplayName,
                 speakerRole: currentSpeakerRole,
                 soulContract: soul,
+                heartbeatContract: heartbeat,
                 directiveOverride: isRescueMode ? "" : nil,
                 nativeToolsAvailable: nativeToolsAvailable,
                 toolSchemas: toolSchemas,

@@ -36,6 +36,7 @@ Behavioral truth sources:
 
 - `Prompts/system_prompt.md`
 - `SOUL.md`
+- `HEARTBEAT.md`
 - `docs/guides/Memory.md`
 
 Implementation touchpoints:
@@ -110,6 +111,7 @@ Proactive automation must stay useful and quiet:
 - Collapse repetitive, non-urgent events.
 - Reserve immediate interruption for urgent events.
 - Keep low-value maintenance details off the main conversation surface.
+- Prefer progressive disclosure and the approval popup over sending users into Settings for ordinary setup or permission decisions.
 
 ---
 

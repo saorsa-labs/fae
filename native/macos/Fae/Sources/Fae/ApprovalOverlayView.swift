@@ -57,7 +57,7 @@ private struct ApprovalCard: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
-            Text("Say yes, no, or always.")
+            Text("Say yes, no, or always, or use the buttons below.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 

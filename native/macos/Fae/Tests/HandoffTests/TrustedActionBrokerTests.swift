@@ -135,6 +135,30 @@ final class TrustedActionBrokerTests: XCTestCase {
         }
     }
 
+    func testBalancedChannelSetupRequestsConfirm() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["channel_setup"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(
+                toolName: "channel_setup",
+                risk: .high,
+                requiresApproval: true,
+                explicitUserAuthorization: true,
+                profile: .balanced
+            )
+        )
+
+        if case .confirm(let prompt, let reason) = decision {
+            XCTAssertEqual(reason.code, .explicitApprovalRequired)
+            XCTAssertTrue(prompt.message.contains("test"))
+        } else {
+            XCTFail("Expected confirm for channel_setup")
+        }
+    }
+
     func testAutonomousMediumWithExplicitIntentAllows() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["run_skill"],

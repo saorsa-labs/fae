@@ -20,8 +20,10 @@ Primary policy:
 
 - Instruction skills: manifest optional, conservative defaults allowed.
 - Executable skills: valid `MANIFEST.json` required for execution.
+- Executable skills: valid `MANIFEST.json` also required before `activate_skill` may inject the skill body into prompt context.
 - Configurable skills: should define `settings` contract when they expose user-facing setup.
 - Legacy flat `.py` skills: treated as non-compliant until migrated.
+- Progressive disclosure is the default: prompt inventory exposes only skill metadata until a skill is explicitly activated.
 
 ## Why this migration exists
 
@@ -32,6 +34,7 @@ With manifest + settings contracts:
 - Fae can discover configurable capabilities automatically,
 - ask plain-English missing-field prompts,
 - launch guided forms from chat,
+- persist channel settings from the contract itself instead of channel-specific switch statements,
 - render settings status from one source of truth,
 - and let users request more changes directly.
 

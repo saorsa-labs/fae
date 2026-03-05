@@ -62,6 +62,7 @@ let package = Package(
                 .copy("Resources/Models"),
                 .copy("Resources/default.metallib"),
                 .copy("Resources/SOUL.md"),
+                .copy("Resources/HEARTBEAT.md"),
                 .copy("Resources/Voices/fae.wav"),
                 .copy("Resources/App/AppIconFace.jpg"),
             ],

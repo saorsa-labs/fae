@@ -209,45 +209,33 @@ struct ChannelSetupTool: Tool {
     }
 
     private func applyValues(channel: String, values: [String: Any]) async -> ToolResult {
-        guard let patcher = await MainActor.run(body: { SelfConfigTool.configPatcher }) else {
-            return .error("Channel configuration bridge unavailable")
-        }
-
-        let mapping = fieldMapping(for: channel)
-        guard !mapping.isEmpty else {
-            return .error("Channel '\(channel)' does not support persisted credential fields")
+        let manager = SkillManager()
+        let descriptors = await manager.configurableSkills(kind: "channel")
+        guard let descriptor = findDescriptor(channel, in: descriptors) else {
+            return .error("Channel '\(channel)' settings contract unavailable")
         }
 
         var applied: [String] = []
-        for (field, value) in values {
-            let normalizedField = canonicalFieldID(field)
-            guard let configKey = mapping[normalizedField] else {
-                continue
-            }
+        let fieldsByCanonicalID = Dictionary(
+            uniqueKeysWithValues: descriptor.fields.map { (canonicalFieldID($0.id), $0) }
+        )
 
-            let payloadValue: Any
-            if normalizedField == "allowedchannelids" || normalizedField == "allowednumbers" {
-                if let list = value as? [String] {
-                    payloadValue = list
-                } else if let csv = value as? String {
-                    let list = csv
-                        .split(separator: ",")
-                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }
-                    payloadValue = list
-                } else {
+        do {
+            for (field, value) in values {
+                let normalizedField = canonicalFieldID(field)
+                guard let descriptorField = fieldsByCanonicalID[normalizedField] else {
                     continue
                 }
-            } else if let stringValue = value as? String {
-                payloadValue = stringValue
-            } else {
-                payloadValue = "\(value)"
-            }
 
-            await MainActor.run {
-                patcher(configKey, payloadValue)
+                try ChannelSettingsStore.setValue(
+                    channelKey: descriptor.key,
+                    field: descriptorField,
+                    rawValue: normalizedPersistedValue(fieldID: normalizedField, value: value)
+                )
+                applied.append(descriptorField.id)
             }
-            applied.append(field)
+        } catch {
+            return .error("Failed to save channel settings: \(error.localizedDescription)")
         }
 
         if applied.isEmpty {
@@ -260,37 +248,45 @@ struct ChannelSetupTool: Tool {
     }
 
     private func disconnect(channel: String) async -> ToolResult {
-        guard let patcher = await MainActor.run(body: { SelfConfigTool.configPatcher }) else {
-            return .error("Channel configuration bridge unavailable")
+        let manager = SkillManager()
+        let descriptors = await manager.configurableSkills(kind: "channel")
+        guard let descriptor = findDescriptor(channel, in: descriptors) else {
+            return .error("Channel '\(channel)' settings contract unavailable")
         }
 
-        let fields = fieldMapping(for: channel)
-        if fields.isEmpty {
-            if channel == "imessage" {
-                return .success("iMessage uses local routing and has no persisted credential fields to clear.")
-            }
-            return .error("Unsupported channel '\(channel)'")
+        do {
+            try ChannelSettingsStore.clearChannel(
+                channelKey: descriptor.key,
+                fields: descriptor.fields
+            )
+        } catch {
+            return .error("Failed to disconnect \(channel): \(error.localizedDescription)")
         }
 
-        for configKey in fields.values {
-            await MainActor.run {
-                patcher(configKey, "")
-            }
+        if descriptor.fields.isEmpty {
+            return .success("\(descriptor.displayName) has no persisted fields to clear.")
         }
 
-        return .success("Disconnected \(channel). All mapped channel fields were cleared.")
+        return .success("Disconnected \(descriptor.displayName). All contract-backed fields were cleared.")
     }
 
-    private func findChannel(
-        _ requested: String,
-        in channels: [SettingsCapabilityManifest.ChannelCapability]
-    ) -> SettingsCapabilityManifest.ChannelCapability? {
-        let key = normalizeChannelKey(requested)
-        return channels.first(where: {
-            normalizeChannelKey($0.key) == key ||
-                normalizeChannelKey($0.displayName) == key ||
-                normalizeChannelKey($0.skillName) == key
-        })
+    private func normalizedPersistedValue(fieldID: String, value: Any) -> Any {
+        if fieldID == "allowedchannelids" || fieldID == "allowednumbers" {
+            if let list = value as? [String] {
+                return list
+            }
+            if let csv = value as? String {
+                return csv
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }
+        }
+
+        if let stringValue = value as? String {
+            return stringValue
+        }
+        return "\(value)"
     }
 
     private func findDescriptor(
@@ -343,29 +339,15 @@ struct ChannelSetupTool: Tool {
         defaults.set(current + 1, forKey: key)
     }
 
-    private func fieldMapping(for channel: String) -> [String: String] {
-        switch channel {
-        case "discord":
-            return [
-                "bottoken": "channels.discord.bot_token",
-                "guildid": "channels.discord.guild_id",
-                "allowedchannelids": "channels.discord.allowed_channel_ids",
-            ]
-
-        case "whatsapp":
-            return [
-                "accesstoken": "channels.whatsapp.access_token",
-                "phonenumberid": "channels.whatsapp.phone_number_id",
-                "verifytoken": "channels.whatsapp.verify_token",
-                "allowednumbers": "channels.whatsapp.allowed_numbers",
-            ]
-
-        case "imessage":
-            // Local iMessage currently has no persisted credential fields.
-            return [:]
-
-        default:
-            return [:]
-        }
+    private func findChannel(
+        _ requested: String,
+        in channels: [SettingsCapabilityManifest.ChannelCapability]
+    ) -> SettingsCapabilityManifest.ChannelCapability? {
+        let key = normalizeChannelKey(requested)
+        return channels.first(where: {
+            normalizeChannelKey($0.key) == key ||
+                normalizeChannelKey($0.displayName) == key ||
+                normalizeChannelKey($0.skillName) == key
+        })
     }
 }

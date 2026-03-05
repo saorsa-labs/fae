@@ -118,6 +118,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         // Ensure user has a copy of SOUL.md on first launch.
         SoulManager.ensureUserCopy()
+        HeartbeatManager.ensureUserCopy()
 
         // Initialize vault (non-blocking — backup failures are logged but not fatal).
         let vault = GitVaultManager()

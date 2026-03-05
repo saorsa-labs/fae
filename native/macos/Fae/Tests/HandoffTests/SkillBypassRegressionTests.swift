@@ -90,6 +90,38 @@ final class SkillBypassRegressionTests: XCTestCase {
         XCTAssertFalse(tampered.isEnabled, "Tampered executable skill should be disabled")
     }
 
+    func testActivateSkillRejectsTamperedExecutableSkill() async throws {
+        let manager = SkillManager()
+        let skillName = "tamper_activate_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+        }
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Skill for activation hardening regression test",
+            body: "This skill body is valid before tampering.",
+            scriptContent: "print('hello')"
+        )
+
+        let initialActivation = await manager.activate(skillName: skillName)
+        XCTAssertNotNil(initialActivation)
+
+        let scriptURL = SkillManager.skillsDirectory
+            .appendingPathComponent(skillName)
+            .appendingPathComponent("scripts")
+            .appendingPathComponent("\(skillName).py")
+        try "print('tampered')".write(to: scriptURL, atomically: true, encoding: .utf8)
+
+        let activated = await manager.activate(skillName: skillName)
+        XCTAssertNil(activated, "Tampered executable skill should not activate into prompt context")
+        let activatedContext = await manager.activatedContext()
+        XCTAssertNil(activatedContext, "Tampered executable skill should be removed from activated context cache")
+    }
+
     func testValidSettingsContractKeepsExecutableSkillEnabled() async throws {
         let manager = SkillManager()
         let skillName = "settings_ok_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"

@@ -115,6 +115,60 @@ final class SettingsCapabilityManifestTests: XCTestCase {
         XCTAssertEqual(discord?.missingFields, [])
     }
 
+    func testBuildManifestReadsContractBackedValuesForCustomChannel() async throws {
+        let manager = SkillManager()
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let skillName = "channel_matrix_\(suffix)"
+        let channelKey = "matrix\(suffix)"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "homeserver_url",
+                store: .configStore
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "access_token",
+                store: .secretStore
+            )
+        }
+
+        try await createChannelSkill(
+            manager: manager,
+            skillName: skillName,
+            channelKey: channelKey,
+            displayName: "Matrix",
+            requiredFields: ["homeserver_url", "access_token"]
+        )
+
+        try ChannelSettingsStore.setValue(
+            channelKey: channelKey,
+            fieldID: "homeserver_url",
+            store: .configStore,
+            rawValue: "https://matrix.example.com"
+        )
+        try ChannelSettingsStore.setValue(
+            channelKey: channelKey,
+            fieldID: "access_token",
+            store: .secretStore,
+            rawValue: "matrix-secret-token"
+        )
+
+        var config = FaeConfig()
+        config.channels.enabled = true
+
+        let manifest = await SettingsCapabilityManifestBuilder.build(config: config, skillManager: manager)
+        let matrix = manifest.channels.first(where: { $0.key == channelKey && $0.skillName == skillName })
+
+        XCTAssertNotNil(matrix)
+        XCTAssertEqual(matrix?.state, .configured)
+        XCTAssertEqual(matrix?.missingFields, [])
+    }
+
     private func createChannelSkill(
         manager: SkillManager,
         skillName: String,

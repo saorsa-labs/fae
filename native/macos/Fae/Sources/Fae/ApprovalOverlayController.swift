@@ -5,7 +5,7 @@ import Foundation
 /// When the Rust backend emits `"approval.requested"`, `BackendEventRouter`
 /// translates it into `.faeApprovalRequested`. This controller observes that
 /// notification and exposes the active request as a published property so the
-/// SwiftUI overlay can display Yes/No buttons.
+/// SwiftUI overlay can display the progressive approval buttons.
 ///
 /// Approval can be resolved via:
 /// 1. **Voice** — the coordinator parses "yes"/"no"/"always" and emits `"approval.resolved"`.

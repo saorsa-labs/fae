@@ -128,6 +128,7 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         "read", "write", "edit", "bash", "self_config",
         "web_search", "fetch_url", "input_request",
         "activate_skill", "run_skill", "manage_skill",
+        "channel_setup",
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
         "roleplay",

@@ -18,6 +18,7 @@ actor SkillManager {
         let placeholder: String?
         let type: SkillSettingsFieldType
         let sensitive: Bool
+        let store: SkillSettingsStore
         let validation: SkillSettingsValidation?
     }
 
@@ -29,6 +30,7 @@ actor SkillManager {
         let isEnabled: Bool
         let tier: SkillTier
         let actionNames: [String]
+        let supportsDisconnect: Bool
         let requiredFieldIDs: [String]
         let fields: [ConfigurableFieldDescriptor]
     }
@@ -88,18 +90,7 @@ actor SkillManager {
         all.append(contentsOf: scanDirectory(personalDir, tier: .personal))
 
         // Trust-level defaulting: executable skills are disabled unless manifest is valid.
-        all = all.map { skill in
-            var adjusted = skill
-            if skill.type == .executable {
-                do {
-                    _ = try loadManifest(for: skill)
-                } catch {
-                    adjusted.isEnabled = false
-                    NSLog("SkillManager: disabling executable skill '%@' — invalid/missing manifest", skill.name)
-                }
-            }
-            return adjusted
-        }
+        all = all.map { validatedMetadata(for: $0) }
 
         for skill in all {
             skillCache[skill.name] = skill
@@ -157,6 +148,7 @@ actor SkillManager {
                     placeholder: $0.placeholder,
                     type: $0.type,
                     sensitive: $0.sensitive ?? ($0.type == .secret),
+                    store: $0.store ?? (($0.sensitive ?? ($0.type == .secret)) ? .secretStore : .configStore),
                     validation: $0.validation
                 )
             }
@@ -174,6 +166,7 @@ actor SkillManager {
                     isEnabled: skill.isEnabled,
                     tier: skill.tier,
                     actionNames: actionNames,
+                    supportsDisconnect: settings.actions.disconnect != nil,
                     requiredFieldIDs: requiredFieldIDs,
                     fields: fields
                 )
@@ -222,10 +215,18 @@ actor SkillManager {
     /// Returns the body text for injection into the LLM context.
     func activate(skillName: String) -> String? {
         if let cached = activatedBodies[skillName] {
+            guard let metadata = resolvedSkillMetadata(named: skillName),
+                  metadata.isEnabled
+            else {
+                activatedBodies.removeValue(forKey: skillName)
+                return nil
+            }
             return cached
         }
 
-        guard let metadata = skillCache[skillName] ?? lookupSkill(named: skillName) else {
+        guard let metadata = resolvedSkillMetadata(named: skillName),
+              metadata.isEnabled
+        else {
             return nil
         }
 
@@ -252,7 +253,22 @@ actor SkillManager {
     /// All currently activated skill bodies for injection into context.
     func activatedContext() -> String? {
         guard !activatedBodies.isEmpty else { return nil }
-        return activatedBodies.map { "[\($0.key) skill instructions]\n\($0.value)" }
+
+        var activeEntries: [(String, String)] = []
+        for skillName in activatedBodies.keys.sorted() {
+            guard let metadata = resolvedSkillMetadata(named: skillName),
+                  metadata.isEnabled,
+                  let body = activatedBodies[skillName]
+            else {
+                activatedBodies.removeValue(forKey: skillName)
+                continue
+            }
+            activeEntries.append((skillName, body))
+        }
+
+        guard !activeEntries.isEmpty else { return nil }
+        return activeEntries
+            .map { "[\($0.0) skill instructions]\n\($0.1)" }
             .joined(separator: "\n\n")
     }
 
@@ -281,7 +297,7 @@ actor SkillManager {
             throw SkillError.blockedNetworkTarget(url, reason)
         }
 
-        guard let metadata = skillCache[skillName] ?? lookupSkill(named: skillName) else {
+        guard let metadata = resolvedSkillMetadata(named: skillName) else {
             throw SkillError.notFound(skillName)
         }
 
@@ -639,7 +655,7 @@ actor SkillManager {
         let personalDir = Self.skillsDirectory.appendingPathComponent(name)
         let skillMd = personalDir.appendingPathComponent("SKILL.md")
         if let metadata = SkillParser.parse(skillURL: skillMd, tier: .personal) {
-            return metadata
+            return validatedMetadata(for: metadata)
         }
 
         // Check built-in directory.
@@ -647,11 +663,36 @@ actor SkillManager {
             let builtinSkillDir = builtinDir.appendingPathComponent(name)
             let builtinMd = builtinSkillDir.appendingPathComponent("SKILL.md")
             if let metadata = SkillParser.parse(skillURL: builtinMd, tier: .builtin) {
-                return metadata
+                return validatedMetadata(for: metadata)
             }
         }
 
         return nil
+    }
+
+    private func resolvedSkillMetadata(named name: String) -> SkillMetadata? {
+        guard let metadata = skillCache[name] ?? lookupSkill(named: name) else {
+            return nil
+        }
+
+        let validated = validatedMetadata(for: metadata)
+        skillCache[name] = validated
+        return validated
+    }
+
+    private func validatedMetadata(for metadata: SkillMetadata) -> SkillMetadata {
+        guard metadata.type == .executable else {
+            return metadata
+        }
+
+        var adjusted = metadata
+        do {
+            _ = try loadManifest(for: metadata)
+        } catch {
+            adjusted.isEnabled = false
+            NSLog("SkillManager: disabling executable skill '%@' — invalid/missing manifest", metadata.name)
+        }
+        return adjusted
     }
 
     private func loadManifest(for metadata: SkillMetadata) throws -> SkillCapabilityManifest {

@@ -19,6 +19,7 @@ struct SettingsCapabilityManifest: Codable, Sendable {
         let requiredFields: [String]
         let missingFields: [String]
         let actionNames: [String]
+        let supportsDisconnect: Bool
     }
 
     let generatedAt: Date
@@ -34,7 +35,7 @@ enum SettingsCapabilityManifestBuilder {
         let channelSkills = await skillManager.configurableSkills(kind: "channel")
 
         let channels = channelSkills.map { descriptor -> SettingsCapabilityManifest.ChannelCapability in
-            let missing = missingFields(for: descriptor.requiredFieldIDs, key: descriptor.key, config: config)
+            let missing = missingFields(for: descriptor.fields, key: descriptor.key, config: config)
             let state: SettingsCapabilityManifest.ChannelCapability.State
             if !config.channels.enabled {
                 state = .globalDisabled
@@ -54,7 +55,8 @@ enum SettingsCapabilityManifestBuilder {
                 state: state,
                 requiredFields: descriptor.requiredFieldIDs,
                 missingFields: missing,
-                actionNames: descriptor.actionNames
+                actionNames: descriptor.actionNames,
+                supportsDisconnect: descriptor.supportsDisconnect
             )
         }
 
@@ -66,43 +68,22 @@ enum SettingsCapabilityManifestBuilder {
     }
 
     private static func missingFields(
-        for requiredFields: [String],
+        for fields: [SkillManager.ConfigurableFieldDescriptor],
         key: String,
         config: FaeConfig
     ) -> [String] {
+        let requiredFields = fields.filter(\.required)
         guard !requiredFields.isEmpty else { return [] }
 
-        let keyLower = key.lowercased()
-        return requiredFields.filter { field in
-            let value = fieldValue(channelKey: keyLower, fieldID: field, config: config)
+        return requiredFields.compactMap { field in
+            let value = ChannelSettingsStore.value(
+                channelKey: key,
+                field: field,
+                config: config
+            )
             return value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-        }
-    }
-
-    private static func fieldValue(
-        channelKey: String,
-        fieldID: String,
-        config: FaeConfig
-    ) -> String? {
-        switch (channelKey, fieldID.lowercased()) {
-        case ("discord", "bot_token"), ("discord", "bottoken"):
-            return CredentialManager.retrieve(key: "channels.discord.bot_token")
-                ?? config.channels.discord.botToken
-        case ("discord", "guild_id"), ("discord", "guildid"):
-            return config.channels.discord.guildId
-
-        case ("whatsapp", "access_token"), ("whatsapp", "accesstoken"):
-            return CredentialManager.retrieve(key: "channels.whatsapp.access_token")
-                ?? config.channels.whatsapp.accessToken
-        case ("whatsapp", "phone_number_id"), ("whatsapp", "phonenumberid"):
-            return config.channels.whatsapp.phoneNumberId
-        case ("whatsapp", "verify_token"), ("whatsapp", "verifytoken"):
-            return CredentialManager.retrieve(key: "channels.whatsapp.verify_token")
-                ?? config.channels.whatsapp.verifyToken
-
-        // iMessage generally has no required API credential fields in local mode.
-        default:
-            return nil
+                ? field.id
+                : nil
         }
     }
 }

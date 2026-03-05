@@ -136,10 +136,9 @@ struct SettingsChannelsTab: View {
                 }
                 .buttonStyle(.bordered)
 
-                if supportsDisconnect(channelKey: channel.key) {
+                if supportsDisconnect(channel: channel) {
                     Button("Disconnect") {
-                        disconnectChannel(channel.key)
-                        Task { await refreshCapabilities() }
+                        disconnectChannel(channel)
                     }
                     .buttonStyle(.bordered)
                     .foregroundStyle(.red)
@@ -171,38 +170,35 @@ struct SettingsChannelsTab: View {
             .clipShape(Capsule())
     }
 
-    private func supportsDisconnect(channelKey: String) -> Bool {
-        switch channelKey.lowercased() {
-        case "discord", "whatsapp":
-            true
-        default:
-            false
+    private func supportsDisconnect(channel: SettingsCapabilityManifest.ChannelCapability) -> Bool {
+        channel.supportsDisconnect
+    }
+
+    private func disconnectChannel(_ channel: SettingsCapabilityManifest.ChannelCapability) {
+        Task {
+            let manager = SkillManager()
+            let descriptors = await manager.configurableSkills(kind: "channel")
+            guard let descriptor = descriptors.first(where: {
+                normalizeChannelKey($0.key) == normalizeChannelKey(channel.key) ||
+                    normalizeChannelKey($0.name) == normalizeChannelKey(channel.skillName)
+            }) else {
+                return
+            }
+
+            try? ChannelSettingsStore.clearChannel(
+                channelKey: descriptor.key,
+                fields: descriptor.fields
+            )
+            await refreshCapabilities()
         }
     }
 
-    private func disconnectChannel(_ channelKey: String) {
-        let keys: [String]
-        switch channelKey.lowercased() {
-        case "discord":
-            keys = [
-                "channels.discord.bot_token",
-                "channels.discord.guild_id",
-                "channels.discord.allowed_channel_ids",
-            ]
-        case "whatsapp":
-            keys = [
-                "channels.whatsapp.access_token",
-                "channels.whatsapp.phone_number_id",
-                "channels.whatsapp.verify_token",
-                "channels.whatsapp.allowed_numbers",
-            ]
-        default:
-            keys = []
-        }
-
-        for key in keys {
-            commandSender?.sendCommand(name: "config.patch", payload: ["key": key, "value": ""])
-        }
+    private func normalizeChannelKey(_ raw: String) -> String {
+        raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
     }
 
     @MainActor
