@@ -98,6 +98,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Pending query continuations keyed by command name.
     private var pendingQueries: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
 
+    /// Text queued for injection while the pipeline is still loading.
+    /// Drained once `pipelineCoordinator` becomes non-nil and pipeline reaches `.running`.
+    private var pendingTextInjections: [String] = []
+
     // MARK: - Lifecycle
 
     func start() throws {
@@ -346,6 +350,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 pipelineState = .running
                 eventBus.send(.runtimeState(.started))
                 NSLog("FaeCore: pipeline started")
+
+                // Drain any text that was queued while models were loading.
+                if !pendingTextInjections.isEmpty {
+                    NSLog("FaeCore: draining %d queued text injections", pendingTextInjections.count)
+                    for text in pendingTextInjections {
+                        await coordinator.injectText(text)
+                    }
+                    pendingTextInjections.removeAll()
+                }
 
                 // Owner enrollment check — hydrate hasOwnerSetUp from the speaker
                 // profile store (the single source of truth for owner status).
@@ -624,6 +637,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 }
 
                 NSLog("FaeCore: onboarding reset — all profiles cleared, config reset")
+
+                // Restart pipeline so enrollment flow re-triggers (new coordinator
+                // checks hasOwnerProfile → false → runSkillDrivenEnrollment).
+                NSLog("FaeCore: restarting pipeline for re-enrollment")
+                await pipelineCoordinator?.stop()
+                pipelineCoordinator = nil
+                await scheduler?.stop()
+                scheduler = nil
+                pipelineState = .stopped
+                try? start()
             }
 
         case "onboarding.advance":
@@ -819,7 +842,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
     // MARK: - Commands
 
     func injectText(_ text: String) {
-        Task { await pipelineCoordinator?.injectText(text) }
+        if let coordinator = pipelineCoordinator {
+            Task { await coordinator.injectText(text) }
+        } else {
+            // Pipeline still loading — queue for delivery when ready.
+            pendingTextInjections.append(text)
+            NSLog("FaeCore: queued text injection (%d queued) — pipeline not ready", pendingTextInjections.count)
+        }
     }
 
     /// Speak text directly via TTS without going through the LLM.
@@ -1422,8 +1451,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try FileManager.default.removeItem(at: customSkillsDir)
             }
 
-            // Clear UserDefaults keys so the startup canvas and onboarding replay.
-            UserDefaults.standard.removeObject(forKey: "fae.hasShownStartupCanvas")
+            // Clear ALL UserDefaults (@AppStorage values survive directory deletion
+            // since they live in ~/Library/Preferences/, not in the fae data dir).
+            if let bundleId = Bundle.main.bundleIdentifier {
+                UserDefaults.standard.removePersistentDomain(forName: bundleId)
+            }
 
             config = FaeConfig()
             hasOwnerSetUp = false

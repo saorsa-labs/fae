@@ -580,6 +580,17 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     func showIntroCanvas() {
         canvasController.setContent(IntroCrawl.fullHTML)
         auxiliaryWindows.showCanvas()
+
+        // Auto-close the canvas after the 45s CSS crawl animation finishes
+        // so it doesn't leave a stale black screen.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 50_000_000_000)
+            guard let self else { return }
+            if !self.canvasController.isActivityMode {
+                self.canvasController.clear()
+                self.auxiliaryWindows.hideCanvas()
+            }
+        }
     }
 
     func requestPermissionsForFirstLaunch() {

@@ -99,7 +99,7 @@ struct FaeConfig: Codable {
         var wakeWord: String = "hi fae"
         var enabled: Bool = true
         var idleTimeoutS: Int = 0
-        var requireDirectAddress: Bool = true
+        var requireDirectAddress: Bool = false
         var directAddressFollowupS: Int = 20
         var sleepPhrases: [String] = [
             "shut up", "stop fae", "go to sleep",

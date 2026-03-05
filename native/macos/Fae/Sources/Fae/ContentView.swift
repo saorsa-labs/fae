@@ -105,11 +105,10 @@ struct ContentView: View {
             // Subtle separator
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
 
-            // Zone 3: Input — pinned at bottom, hidden until pipeline ready
-            if pipelineAux.isPipelineReady {
-                InputBarView()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+            // Zone 3: Input — pinned at bottom, always visible so users
+            // can type while models load. Text is queued until pipeline starts.
+            InputBarView()
+                .transition(.move(edge: .bottom).combined(with: .opacity))
         }
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .opacity(viewLoaded ? 1 : 0)

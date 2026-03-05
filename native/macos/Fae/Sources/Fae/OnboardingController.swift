@@ -133,7 +133,11 @@ final class OnboardingController: ObservableObject {
 
     // MARK: - Permission Requests
 
-    /// Request microphone access. If already determined, opens System Settings.
+    /// Request microphone access.
+    ///
+    /// If not yet determined, shows the system permission dialog.
+    /// If already granted, records the state silently.
+    /// If denied/restricted, does NOT auto-open System Settings (avoids UX surprise).
     func requestMicrophone() {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         if status == .notDetermined {
@@ -145,12 +149,17 @@ final class OnboardingController: ObservableObject {
                 onPermissionResult?("microphone", state)
             }
         } else {
-            openPrivacySettings("Microphone")
+            let state = status == .authorized ? "granted" : "denied"
+            permissionStates["microphone"] = state
+            onPermissionResult?("microphone", state)
         }
     }
 
-    /// Request contacts access. If already determined, opens System Settings.
-    /// On grant, also reads the user's own contact card to extract their first name.
+    /// Request contacts access.
+    ///
+    /// If not yet determined, shows the system permission dialog.
+    /// If already authorized, reads the Me Card silently.
+    /// If denied/restricted, records the state without opening System Settings.
     func requestContacts() {
         let authStatus = CNContactStore.authorizationStatus(for: .contacts)
         if authStatus == .notDetermined {
@@ -167,12 +176,21 @@ final class OnboardingController: ObservableObject {
                     }
                 }
             }
+        } else if authStatus == .authorized {
+            contactsGranted = true
+            permissionStates["contacts"] = "granted"
+            onPermissionResult?("contacts", "granted")
+            readMeCard(store: CNContactStore())
         } else {
-            openPrivacySettings("Contacts")
+            permissionStates["contacts"] = "denied"
+            onPermissionResult?("contacts", "denied")
         }
     }
 
-    /// Request calendar access. If already determined, opens System Settings.
+    /// Request calendar access.
+    ///
+    /// If not yet determined, shows the system permission dialog.
+    /// If already determined, records the current state silently.
     func requestCalendar() {
         let calStatus = EKEventStore.authorizationStatus(for: .event)
         if calStatus == .notDetermined {
@@ -197,11 +215,17 @@ final class OnboardingController: ObservableObject {
                 }
             }
         } else {
-            openPrivacySettings("Calendars")
+            let granted = calStatus == .authorized || calStatus == .fullAccess
+            let state = granted ? "granted" : "denied"
+            permissionStates["calendar"] = state
+            onPermissionResult?("calendar", state)
         }
     }
 
-    /// Request reminders access. If already determined, opens System Settings.
+    /// Request reminders access.
+    ///
+    /// If not yet determined, shows the system permission dialog.
+    /// If already determined, records the current state silently.
     func requestReminders() {
         let remStatus = EKEventStore.authorizationStatus(for: .reminder)
         if remStatus == .notDetermined {
@@ -226,7 +250,10 @@ final class OnboardingController: ObservableObject {
                 }
             }
         } else {
-            openPrivacySettings("Reminders")
+            let granted = remStatus == .authorized || remStatus == .fullAccess
+            let state = granted ? "granted" : "denied"
+            permissionStates["reminders"] = state
+            onPermissionResult?("reminders", state)
         }
     }
 
