@@ -300,6 +300,14 @@ actor SpeakerProfileStore {
         persist()
     }
 
+    /// Remove all speaker profiles (for full onboarding reset / first-contact testing).
+    func clearAllProfiles() {
+        let count = profiles.count
+        profiles.removeAll()
+        persist()
+        NSLog("SpeakerProfileStore: cleared all %d profiles", count)
+    }
+
     /// Promote an existing profile to owner role.
     ///
     /// Returns true if a profile was promoted, false otherwise.

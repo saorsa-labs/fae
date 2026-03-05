@@ -604,10 +604,26 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         case "onboarding.reset":
             Task {
-                await speakerProfileStore.clearOwnerProfile()
+                // Clear ALL speaker profiles (owner, fae_self, guests) for clean first-contact.
+                await speakerProfileStore.clearAllProfiles()
                 await pipelineCoordinator?.setFirstOwnerEnrollmentActive(false)
                 hasOwnerSetUp = false
-                NSLog("FaeCore: onboarding reset — owner profile cleared")
+
+                // Reset enrollment-related config to defaults.
+                var configChanged = false
+                if config.speaker.requireOwnerForTools {
+                    config.speaker.requireOwnerForTools = false
+                    configChanged = true
+                }
+                if config.awareness.consentGrantedAt != nil {
+                    config.awareness.consentGrantedAt = nil
+                    configChanged = true
+                }
+                if configChanged {
+                    persistConfig(reason: "onboarding_reset")
+                }
+
+                NSLog("FaeCore: onboarding reset — all profiles cleared, config reset")
             }
 
         case "onboarding.advance":
