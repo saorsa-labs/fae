@@ -157,21 +157,23 @@ struct SettingsToolsTab: View {
             }
 
             Section("Tool Approvals") {
-                Toggle("Approve All Read-Only", isOn: $approveAllReadonly)
+                Toggle("Allow All Read-Only", isOn: $approveAllReadonly)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .onChange(of: approveAllReadonly) {
+                        refreshToolSnapshot()
                         Task { await ApprovedToolsStore.shared.setApproveAllReadonly(approveAllReadonly) }
                     }
                 Text("Auto-approve all low-risk tools (read, search, list).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
-                Toggle("Approve All", isOn: $approveAllEnabled)
+                Toggle("Allow All In Current Mode", isOn: $approveAllEnabled)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .onChange(of: approveAllEnabled) {
+                        refreshToolSnapshot()
                         Task { await ApprovedToolsStore.shared.setApproveAll(approveAllEnabled) }
                     }
-                Text("Auto-approve all tools. File checkpoints still apply.")
+                Text("Skip approval popups for any tool already allowed by the current tool mode. File checkpoints still apply.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -205,7 +207,7 @@ struct SettingsToolsTab: View {
                 .tint(.red)
                 .disabled(approvedTools.isEmpty && !approveAllReadonly && !approveAllEnabled)
 
-                Text("Tools approved via the \"Always\" button appear here. Revoke any time.")
+                Text("Popup approvals granted via \"Always\" or the global allow toggles appear here. Revoke any time.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -296,11 +298,17 @@ struct SettingsToolsTab: View {
         approvedTools = await store.approvedToolNames()
         approveAllReadonly = await store.isApproveAllReadonly()
         approveAllEnabled = await store.isApproveAll()
+        refreshToolSnapshot()
     }
 
     private func refreshToolSnapshot() {
         let config = FaeConfig.load()
         let registry = ToolRegistry.buildDefault()
+        let approvalSnapshot = ApprovedToolsStore.ApprovalSnapshot(
+            approvedTools: approvedTools,
+            approveAllReadonly: approveAllReadonly,
+            approveAll: approveAllEnabled
+        )
         toolSnapshot = CapabilitySnapshotService.buildSnapshot(
             triggerText: "settings.tools",
             toolMode: toolMode,
@@ -313,6 +321,7 @@ struct SettingsToolsTab: View {
             requireDirectAddress: config.conversation.requireDirectAddress,
             visionEnabled: config.vision.enabled,
             voiceIdentityLock: config.tts.voiceIdentityLock,
+            approvalSnapshot: approvalSnapshot,
             registry: registry
         )
     }

@@ -1,11 +1,17 @@
 import Foundation
 
-/// Persists user-granted tool approvals ("Always", "Approve All Read-Only", "Approve All").
+/// Persists user-granted tool approvals ("Always", "Allow All Read-Only", "Allow All In Current Mode").
 ///
 /// Storage: `~/Library/Application Support/fae/approved_tools.json`
 ///
 /// Thread-safe via actor isolation. All mutations are persisted immediately.
 actor ApprovedToolsStore {
+
+    struct ApprovalSnapshot: Sendable {
+        let approvedTools: [String]
+        let approveAllReadonly: Bool
+        let approveAll: Bool
+    }
 
     /// Singleton shared instance.
     static let shared = ApprovedToolsStore()
@@ -56,12 +62,12 @@ actor ApprovedToolsStore {
         data.tools[toolName] != nil
     }
 
-    /// Check whether "Approve All Read-Only" is enabled.
+    /// Check whether "Allow All Read-Only" is enabled.
     func isApproveAllReadonly() -> Bool {
         data.approveAllReadonly
     }
 
-    /// Check whether "Approve All" is enabled.
+    /// Check whether "Allow All In Current Mode" is enabled.
     func isApproveAll() -> Bool {
         data.approveAll
     }
@@ -85,6 +91,14 @@ actor ApprovedToolsStore {
         Array(data.tools.keys).sorted()
     }
 
+    func approvalSnapshot() -> ApprovalSnapshot {
+        ApprovalSnapshot(
+            approvedTools: approvedToolNames(),
+            approveAllReadonly: data.approveAllReadonly,
+            approveAll: data.approveAll
+        )
+    }
+
     // MARK: - Mutations
 
     /// Approve a specific tool forever ("Always").
@@ -94,13 +108,13 @@ actor ApprovedToolsStore {
         persist()
     }
 
-    /// Enable "Approve All Read-Only" (all low-risk tools auto-approved).
+    /// Enable "Allow All Read-Only" (all low-risk tools auto-approved).
     func setApproveAllReadonly(_ enabled: Bool) {
         data.approveAllReadonly = enabled
         persist()
     }
 
-    /// Enable "Approve All" (all tools auto-approved).
+    /// Enable "Allow All In Current Mode" (all tools auto-approved within current mode gates).
     func setApproveAll(_ enabled: Bool) {
         data.approveAll = enabled
         persist()

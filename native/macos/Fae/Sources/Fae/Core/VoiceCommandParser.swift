@@ -11,7 +11,7 @@ enum VoiceCommandParser {
         case no                   // Deny this request
         case always               // Auto-approve this tool name forever
         case approveAllReadOnly   // Auto-approve all low-risk tools
-        case approveAll           // Full autonomous mode
+        case approveAll           // Auto-approve all tools already allowed in the current mode
     }
 
     /// Voice command types that Fae recognizes.
@@ -161,13 +161,15 @@ enum VoiceCommandParser {
         // isn't swallowed by the shorter "approve all" substring.
         let approveAllReadOnlyPhrases = ["approve all reads", "trust all read tools",
                                          "approve all read only", "trust read tools",
-                                         "approve read only"]
+                                         "approve read only", "allow all read only",
+                                         "allow all read-only"]
         for phrase in approveAllReadOnlyPhrases {
             if lower.contains(phrase) { return .approveAllReadOnly }
         }
 
         let approveAllPhrases = ["approve all", "trust everything", "approve everything",
-                                 "allow everything"]
+                                 "allow everything", "allow all in this mode",
+                                 "allow all in current mode"]
         for phrase in approveAllPhrases {
             if lower.contains(phrase) { return .approveAll }
         }

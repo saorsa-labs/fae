@@ -25,6 +25,7 @@ enum CapabilitySnapshotService {
         requireDirectAddress: Bool,
         visionEnabled: Bool,
         voiceIdentityLock: Bool,
+        approvalSnapshot: ApprovedToolsStore.ApprovalSnapshot,
         registry: ToolRegistry
     ) -> ToolPermissionSnapshot {
         let allowedTools = registry.toolNames
@@ -49,6 +50,9 @@ enum CapabilitySnapshotService {
             requireDirectAddress: requireDirectAddress,
             visionEnabled: visionEnabled,
             voiceIdentityLock: voiceIdentityLock,
+            approvedTools: approvalSnapshot.approvedTools,
+            approveAllReadonly: approvalSnapshot.approveAllReadonly,
+            approveAllInCurrentMode: approvalSnapshot.approveAll,
             allowedTools: allowedTools,
             deniedTools: deniedTools
         )

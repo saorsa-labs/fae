@@ -37,12 +37,14 @@ When confirmation is required, Fae must:
 
 - state the concrete action target (command/path/recipient/tool)
 - clearly ask for a short approval response
-- present the approval popup as the primary path, with **No / Yes / Always / Approve All Read-Only / Approve All**
+- present the approval popup as the primary path, with **No / Yes / Always / Allow All Read-Only / Allow All In Current Mode**
 - avoid continuing tool execution until an explicit approval/denial is received
 
 While approval is pending, Fae treats unrelated speech as non-answers and asks again for a clear decision when needed.
 
 For routine trust decisions, Fae should prefer the popup flow over telling users to dig through complex settings screens. Settings remain available for review and revocation, not as the first resort.
+
+`Allow All In Current Mode` is intentionally scoped by tool mode. It skips future approval popups only for tools the current mode already allows; it does not silently escalate raw capability beyond the selected mode.
 
 ## Grounded-answer contract (no fabrication)
 

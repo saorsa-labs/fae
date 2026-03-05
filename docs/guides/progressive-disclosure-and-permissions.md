@@ -22,13 +22,14 @@ Fae should earn context and trust in small steps.
   - `No`
   - `Yes`
   - `Always`
-  - `Approve All Read-Only`
-  - `Approve All`
+  - `Allow All Read-Only`
+  - `Allow All In Current Mode`
 - `Always` remembers a single tool.
-- `Approve All Read-Only` trusts low-risk tools globally.
-- `Approve All` trusts the whole tool set until revoked.
+- `Allow All Read-Only` trusts low-risk tools globally.
+- `Allow All In Current Mode` skips future approval popups only for tools already allowed by the current tool mode.
+- High-risk capability changes triggered from canvas or conversation should confirm through the same popup surface rather than a separate blocking settings dialog.
 
 ## Settings
 
 - Settings remain important for audit, review, and revocation.
-- Settings are not the primary path for ordinary one-off approvals or first-run channel setup.
+- Settings are not the primary path for ordinary one-off approvals, first-run channel setup, or routine permission grants.

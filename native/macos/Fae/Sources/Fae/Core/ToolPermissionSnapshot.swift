@@ -23,6 +23,9 @@ struct ToolPermissionSnapshot: Sendable {
     let requireDirectAddress: Bool
     let visionEnabled: Bool
     let voiceIdentityLock: Bool
+    let approvedTools: [String]
+    let approveAllReadonly: Bool
+    let approveAllInCurrentMode: Bool
     let allowedTools: [String]
     let deniedTools: [String]
 
@@ -98,6 +101,16 @@ struct ToolPermissionSnapshot: Sendable {
             return "<div class='chips'>\(chips)</div>"
         }()
 
+        let approvalSummary = """
+        <div class='panel'>
+          <p><strong>Progressive approvals</strong></p>
+          <p><strong>Always-approved tools:</strong> \(approvedTools.isEmpty ? "none" : approvedTools.map { "<code>\($0)</code>" }.joined(separator: ", "))</p>
+          <p><strong>Allow all read-only:</strong> \(approveAllReadonly ? "enabled" : "disabled")</p>
+          <p><strong>Allow all in current mode:</strong> \(approveAllInCurrentMode ? "enabled" : "disabled")</p>
+          <p class='hint'>These grants skip future approval popups only for tools already allowed by the current tool mode.</p>
+        </div>
+        """
+
         return """
         <html>
         <head>
@@ -142,6 +155,9 @@ struct ToolPermissionSnapshot: Sendable {
             <p>Screen Recording: \(badge(permissions.screenRecording))</p>
             \(permissionActions)
           </div>
+
+          <h2>Approval popup state</h2>
+          \(approvalSummary)
 
           <h2>Allowed tools (\(allowedTools.count))</h2>
           <div class='panel'>

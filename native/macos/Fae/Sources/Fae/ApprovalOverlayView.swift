@@ -24,6 +24,12 @@ struct ApprovalOverlayView: View {
                         insertion: .move(edge: .bottom).combined(with: .opacity),
                         removal: .opacity
                     ))
+            } else if let request = controller.activeGovernanceConfirmation {
+                GovernanceConfirmationCard(request: request, controller: controller)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .opacity
+                    ))
             } else if let request = controller.activeApproval {
                 ApprovalCard(request: request, controller: controller)
                     .transition(.asymmetric(
@@ -35,6 +41,7 @@ struct ApprovalOverlayView: View {
         .animation(.spring(duration: 0.3), value: controller.activeApproval?.id)
         .animation(.spring(duration: 0.3), value: controller.activeInput?.id)
         .animation(.spring(duration: 0.3), value: controller.activeToolModeRequest?.id)
+        .animation(.spring(duration: 0.3), value: controller.activeGovernanceConfirmation?.id)
     }
 }
 
@@ -57,7 +64,7 @@ private struct ApprovalCard: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
-            Text("Say yes, no, or always, or use the buttons below.")
+            Text("Say yes, no, always, allow all read-only, or allow all in this mode.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
@@ -93,10 +100,10 @@ private struct ApprovalCard: View {
                 .tint(.blue)
             }
 
-            // Row 2: Escalation — Approve All Read-Only / Approve All
+            // Row 2: Escalation — Allow All Read-Only / Allow All In Current Mode
             HStack(spacing: 8) {
                 Button(action: { controller.approveAllReadOnly() }) {
-                    Text("Approve All Read-Only")
+                    Text("Allow All Read-Only")
                         .font(.system(size: 10, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
@@ -105,7 +112,7 @@ private struct ApprovalCard: View {
                 .tint(.teal)
 
                 Button(action: { controller.approveAll() }) {
-                    Text("Approve All")
+                    Text("Allow All In Mode")
                         .font(.system(size: 10, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
@@ -116,6 +123,59 @@ private struct ApprovalCard: View {
         }
         .padding(14)
         .frame(width: 300)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+    }
+}
+
+// MARK: - Governance Confirmation Card
+
+private struct GovernanceConfirmationCard: View {
+    let request: ApprovalOverlayController.GovernanceConfirmationRequest
+    let controller: ApprovalOverlayController
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(request.title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
+
+            Text(request.message)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.primary)
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            Text("Use the popup to confirm. Settings are for review and revocation.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Button(action: { controller.denyGovernanceRequest() }) {
+                    Text("Cancel")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+                .tint(.secondary)
+                .keyboardShortcut(.escape, modifiers: [])
+
+                Button(action: { controller.confirmGovernanceRequest() }) {
+                    Text(request.confirmLabel)
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .keyboardShortcut(.return, modifiers: [])
+            }
+        }
+        .padding(14)
+        .frame(width: 320)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)

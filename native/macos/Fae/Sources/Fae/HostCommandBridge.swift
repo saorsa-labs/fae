@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 /// Protocol for sending host commands to the Rust backend.
@@ -13,12 +12,19 @@ protocol HostCommandSender: AnyObject {
 /// logged so they remain observable in Console.app during development.
 @MainActor
 final class HostCommandBridge: ObservableObject {
+    private struct PendingGovernanceConfirmation {
+        let id: String
+        let action: String
+        let userInfo: [String: Any]
+    }
+
     weak var sender: HostCommandSender?
     weak var debugConsole: DebugConsoleController?
     /// Direct reference for spoken acknowledgments (e.g., "tools enabled").
     weak var faeCore: FaeCore?
 
     private var observations: [NSObjectProtocol] = []
+    private var pendingGovernanceConfirmations: [String: PendingGovernanceConfirmation] = [:]
 
     init() {
         let center = NotificationCenter.default
@@ -191,104 +197,37 @@ final class HostCommandBridge: ObservableObject {
                 queue: .main
             ) { [weak self] notification in
                 guard let action = notification.userInfo?["action"] as? String else { return }
-                let source = notification.userInfo?["source"] as? String ?? "unknown"
+                let userInfo = (notification.userInfo ?? [:]).reduce(into: [String: Any]()) { partialResult, entry in
+                    guard let key = entry.key as? String else { return }
+                    partialResult[key] = entry.value
+                }
 
                 Task { @MainActor in
                     guard let self else { return }
                     Self.incrementAuditCounter("fae.governance.total")
+                    let source = userInfo["source"] as? String ?? "unknown"
                     debugLog(self.debugConsole, .governance, "Inbound action=\(action) source=\(source)")
-
-                    switch action {
-                    case "set_tool_mode":
-                        guard let value = notification.userInfo?["value"] as? String else {
-                            Self.incrementAuditCounter("fae.governance.invalid")
-                            return
-                        }
-                        if value == "full_no_approval",
-                           source.contains("canvas"),
-                           !self.confirmHighRiskAction(
-                               title: "Allow full autonomy without approvals?",
-                               message: "Fae will be able to run high-risk tool actions without confirmation prompts."
-                           )
-                        {
-                            debugLog(self.debugConsole, .approval, "Governance prompt rejected: set_tool_mode full_no_approval")
-                            Self.incrementAuditCounter("fae.governance.cancelled")
-                            return
-                        }
-                        NSLog("HostCommandBridge: governance action set_tool_mode=%@ source=%@", value, source)
-                        self.dispatch(
-                            "config.patch",
-                            payload: [
-                                "key": "tool_mode",
-                                "value": value,
-                                "source": source,
-                            ]
-                        )
-                        Self.incrementAuditCounter("fae.governance.set_tool_mode")
-
-                        // Spoken acknowledgment so the user knows the change took effect.
-                        let label = Self.toolModeLabel(value)
-                        self.faeCore?.speakDirect("Got it — \(label).")
-
-                    case "set_setting":
-                        guard let key = notification.userInfo?["key"] as? String,
-                              let rawValue = notification.userInfo?["value"]
-                        else {
-                            Self.incrementAuditCounter("fae.governance.invalid")
-                            return
-                        }
-
-                        if self.shouldConfirmSettingMutation(key: key, value: rawValue, source: source),
-                           !self.confirmHighRiskAction(
-                               title: "Confirm high-impact setting change",
-                               message: "Apply \(key) now? This changes Fae’s authority or identity safeguards."
-                           )
-                        {
-                            debugLog(self.debugConsole, .approval, "Governance prompt rejected: set_setting \(key)")
-                            Self.incrementAuditCounter("fae.governance.cancelled")
-                            return
-                        }
-
-                        NSLog("HostCommandBridge: governance action set_setting key=%@ source=%@", key, source)
-                        self.dispatch(
-                            "config.patch",
-                            payload: [
-                                "key": key,
-                                "value": rawValue,
-                                "source": source,
-                            ]
-                        )
-                        Self.incrementAuditCounter("fae.governance.set_setting")
-
-                    case "request_permission":
-                        let capability = (notification.userInfo?["capability"] as? String)
-                            ?? (notification.userInfo?["value"] as? String)
-                            ?? ""
-                        guard !capability.isEmpty else {
-                            Self.incrementAuditCounter("fae.governance.invalid")
-                            return
-                        }
-                        NSLog("HostCommandBridge: governance action request_permission capability=%@ source=%@", capability, source)
-                        NotificationCenter.default.post(
-                            name: .faeCapabilityRequested,
-                            object: nil,
-                            userInfo: ["capability": capability, "reason": "governance_\(source)", "jit": true]
-                        )
-                        Self.incrementAuditCounter("fae.governance.request_permission")
-
-                    case "open_settings":
-                        debugLog(self.debugConsole, .governance, "Posting faeOpenSettingsRequested from governance bridge")
-                        NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
-                        Self.incrementAuditCounter("fae.governance.open_settings")
-
-                    case "start_owner_enrollment":
-                        self.dispatch("speaker.start_enrollment", payload: [:])
-                        Self.incrementAuditCounter("fae.governance.start_owner_enrollment")
-
-                    default:
-                        NSLog("HostCommandBridge: unknown governance action '%@'", action)
-                        Self.incrementAuditCounter("fae.governance.unknown")
-                    }
+                    self.processGovernanceAction(
+                        action: action,
+                        userInfo: userInfo,
+                        allowPopupConfirmation: true
+                    )
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
+                forName: .faeGovernanceConfirmationRespond,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let requestID = notification.userInfo?["request_id"] as? String else { return }
+                let approved = notification.userInfo?["approved"] as? Bool ?? false
+                Task { @MainActor in
+                    self?.handleGovernanceConfirmationResponse(
+                        requestID: requestID,
+                        approved: approved
+                    )
                 }
             }
         )
@@ -320,6 +259,108 @@ final class HostCommandBridge: ObservableObject {
         }
     }
 
+    private func processGovernanceAction(
+        action: String,
+        userInfo: [String: Any],
+        allowPopupConfirmation: Bool
+    ) {
+        let source = userInfo["source"] as? String ?? "unknown"
+
+        switch action {
+        case "set_tool_mode":
+            guard let value = userInfo["value"] as? String else {
+                Self.incrementAuditCounter("fae.governance.invalid")
+                return
+            }
+            if allowPopupConfirmation,
+               value == "full_no_approval",
+               source.contains("canvas")
+            {
+                requestGovernanceConfirmation(
+                    action: action,
+                    userInfo: userInfo,
+                    title: "Allow full autonomy without approvals?",
+                    message: "Fae will be able to run high-risk tool actions without confirmation prompts.",
+                    confirmLabel: "Allow Without Popups"
+                )
+                return
+            }
+
+            NSLog("HostCommandBridge: governance action set_tool_mode=%@ source=%@", value, source)
+            dispatch(
+                "config.patch",
+                payload: [
+                    "key": "tool_mode",
+                    "value": value,
+                    "source": source,
+                ]
+            )
+            Self.incrementAuditCounter("fae.governance.set_tool_mode")
+            faeCore?.speakDirect("Got it. \(Self.toolModeLabel(value)).")
+
+        case "set_setting":
+            guard let key = userInfo["key"] as? String,
+                  let rawValue = userInfo["value"]
+            else {
+                Self.incrementAuditCounter("fae.governance.invalid")
+                return
+            }
+
+            if allowPopupConfirmation,
+               shouldConfirmSettingMutation(key: key, value: rawValue, source: source)
+            {
+                requestGovernanceConfirmation(
+                    action: action,
+                    userInfo: userInfo,
+                    title: "Confirm high-impact setting change",
+                    message: "Apply \(key) now? This changes Fae's authority or identity safeguards.",
+                    confirmLabel: "Apply Change"
+                )
+                return
+            }
+
+            NSLog("HostCommandBridge: governance action set_setting key=%@ source=%@", key, source)
+            dispatch(
+                "config.patch",
+                payload: [
+                    "key": key,
+                    "value": rawValue,
+                    "source": source,
+                ]
+            )
+            Self.incrementAuditCounter("fae.governance.set_setting")
+
+        case "request_permission":
+            let capability = (userInfo["capability"] as? String)
+                ?? (userInfo["value"] as? String)
+                ?? ""
+            guard !capability.isEmpty else {
+                Self.incrementAuditCounter("fae.governance.invalid")
+                return
+            }
+            NSLog("HostCommandBridge: governance action request_permission capability=%@ source=%@", capability, source)
+            NotificationCenter.default.post(
+                name: .faeCapabilityRequested,
+                object: nil,
+                userInfo: ["capability": capability, "reason": "governance_\(source)", "jit": true]
+            )
+            Self.incrementAuditCounter("fae.governance.request_permission")
+
+        case "open_settings":
+            debugLog(debugConsole, .governance, "Posting faeOpenSettingsRequested from governance bridge")
+            NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
+            Self.incrementAuditCounter("fae.governance.open_settings")
+
+        case "start_owner_enrollment":
+            dispatch("speaker.start_enrollment", payload: [:])
+            Self.incrementAuditCounter("fae.governance.start_owner_enrollment")
+
+        default:
+            NSLog("HostCommandBridge: unknown governance action '%@'", action)
+            Self.incrementAuditCounter("fae.governance.unknown")
+        }
+    }
+
     private func shouldConfirmSettingMutation(key: String, value: Any, source: String) -> Bool {
         guard source.contains("canvas") else { return false }
         switch key {
@@ -332,14 +373,44 @@ final class HostCommandBridge: ObservableObject {
         }
     }
 
-    private func confirmHighRiskAction(title: String, message: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "Confirm")
-        alert.addButton(withTitle: "Cancel")
-        alert.alertStyle = .warning
-        return alert.runModal() == .alertFirstButtonReturn
+    private func requestGovernanceConfirmation(
+        action: String,
+        userInfo: [String: Any],
+        title: String,
+        message: String,
+        confirmLabel: String
+    ) {
+        let requestID = UUID().uuidString
+        pendingGovernanceConfirmations[requestID] = PendingGovernanceConfirmation(
+            id: requestID,
+            action: action,
+            userInfo: userInfo
+        )
+        NotificationCenter.default.post(
+            name: .faeGovernanceConfirmationRequested,
+            object: nil,
+            userInfo: [
+                "request_id": requestID,
+                "title": title,
+                "message": message,
+                "confirm_label": confirmLabel,
+            ]
+        )
+    }
+
+    private func handleGovernanceConfirmationResponse(requestID: String, approved: Bool) {
+        guard let pending = pendingGovernanceConfirmations.removeValue(forKey: requestID) else { return }
+        if approved {
+            processGovernanceAction(
+                action: pending.action,
+                userInfo: pending.userInfo,
+                allowPopupConfirmation: false
+            )
+            return
+        }
+
+        debugLog(debugConsole, .approval, "Governance popup rejected: \(pending.action)")
+        Self.incrementAuditCounter("fae.governance.cancelled")
     }
 
     private func summarizePayload(_ payload: [String: Any]) -> String {
@@ -358,12 +429,12 @@ final class HostCommandBridge: ObservableObject {
     /// Human-friendly label for a tool_mode value.
     private static func toolModeLabel(_ mode: String) -> String {
         switch mode {
-        case "full":              return "tools are enabled with approval"
-        case "full_no_approval":  return "tools are fully enabled"
-        case "read_only":         return "tools are set to read-only"
-        case "read_write":        return "tools are set to read-write"
-        case "off":               return "tools are turned off"
-        default:                  return "tool mode updated"
+        case "full":             return "Tools are enabled with approval prompts"
+        case "full_no_approval": return "Tools are fully enabled without approval prompts"
+        case "read_only":        return "Tools are set to read-only"
+        case "read_write":       return "Tools are set to read-write"
+        case "off":              return "Tools are turned off"
+        default:                 return "Tool mode updated"
         }
     }
 }

@@ -146,9 +146,9 @@ enum PersonalityManager {
     static let progressivePermissionPrompt = """
         Permissions and approval flow:
         - Prefer the approval popup over sending users into Settings for routine permission decisions.
-        - When a tool needs confirmation, the app shows a popup with No, Yes, Always, Approve All Read-Only, and Approve All.
+        - When a tool needs confirmation, the app shows a popup with No, Yes, Always, Allow All Read-Only, and Allow All In Current Mode.
         - Use that popup flow for per-action and progressive grants unless the user explicitly asks to manage settings manually.
-        - "Always" remembers the current tool, "Approve All Read-Only" trusts low-risk tools, and "Approve All" trusts the full tool set.
+        - "Always" remembers the current tool, "Allow All Read-Only" trusts low-risk tools, and "Allow All In Current Mode" skips prompts only for tools already allowed by the current tool mode.
         """
 
     static let multiSpeakerPrompt = """

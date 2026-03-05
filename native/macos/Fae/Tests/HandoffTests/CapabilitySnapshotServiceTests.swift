@@ -19,6 +19,11 @@ final class CapabilitySnapshotServiceTests: XCTestCase {
             screenRecording: false,
             camera: true
         )
+        let approvalSnapshot = ApprovedToolsStore.ApprovalSnapshot(
+            approvedTools: ["read"],
+            approveAllReadonly: true,
+            approveAll: false
+        )
 
         let snapshot = CapabilitySnapshotService.buildSnapshot(
             triggerText: "test",
@@ -32,12 +37,16 @@ final class CapabilitySnapshotServiceTests: XCTestCase {
             requireDirectAddress: false,
             visionEnabled: false,
             voiceIdentityLock: true,
+            approvalSnapshot: approvalSnapshot,
             registry: registry
         )
 
         XCTAssertEqual(snapshot.policyProfile, "more_cautious")
         XCTAssertTrue(snapshot.allowedTools.contains("read"))
         XCTAssertTrue(snapshot.deniedTools.contains("write"))
+        XCTAssertEqual(snapshot.approvedTools, ["read"])
+        XCTAssertTrue(snapshot.approveAllReadonly)
+        XCTAssertFalse(snapshot.approveAllInCurrentMode)
         XCTAssertTrue(snapshot.missingPermissionActions.contains(where: { $0.capability == "contacts" }))
         XCTAssertTrue(snapshot.missingPermissionActions.contains(where: { $0.capability == "screen_recording" }))
     }

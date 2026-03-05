@@ -9,7 +9,7 @@ import Foundation
 ///
 /// Approval can be resolved via:
 /// 1. **Voice** — the coordinator parses "yes"/"no"/"always" and emits `"approval.resolved"`.
-/// 2. **Button** — the user taps No/Yes/Always/Approve All Read-Only/Approve All, which posts `.faeApprovalRespond`.
+/// 2. **Button** — the user taps No/Yes/Always/Allow All Read-Only/Allow All In Current Mode, which posts `.faeApprovalRespond`.
 /// 3. **Timeout** — the coordinator auto-denies after 20s and emits `"approval.resolved"`.
 ///
 /// In all cases, `.faeApprovalResolved` dismisses the overlay.
@@ -27,6 +27,9 @@ final class ApprovalOverlayController: ObservableObject {
 
     /// The currently active tool-mode upgrade request, if any.
     @Published var activeToolModeRequest: ToolModeRequest?
+
+    /// The currently active governance confirmation request, if any.
+    @Published var activeGovernanceConfirmation: GovernanceConfirmationRequest?
 
     /// A pending tool-approval request.
     struct ApprovalRequest: Identifiable {
@@ -59,6 +62,13 @@ final class ApprovalOverlayController: ObservableObject {
         /// Why tools are blocked: "toolMode=off", "owner_enrollment_required",
         /// "non-owner", or "tool_not_called".
         let reason: String
+    }
+
+    struct GovernanceConfirmationRequest: Identifiable {
+        let id: String
+        let title: String
+        let message: String
+        let confirmLabel: String
     }
 
     /// A pending input request from the LLM.
@@ -140,6 +150,33 @@ final class ApprovalOverlayController: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor in
                     self?.activeToolModeRequest = nil
+                }
+            }
+        )
+
+        observations.append(
+            center.addObserver(
+                forName: .faeGovernanceConfirmationRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleGovernanceConfirmationRequested(notification.userInfo ?? [:])
+                }
+            }
+        )
+
+        observations.append(
+            center.addObserver(
+                forName: .faeGovernanceConfirmationRespond,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let requestID = notification.userInfo?["request_id"] as? String ?? ""
+                Task { @MainActor in
+                    if self?.activeGovernanceConfirmation?.id == requestID {
+                        self?.activeGovernanceConfirmation = nil
+                    }
                 }
             }
         )
@@ -233,7 +270,7 @@ final class ApprovalOverlayController: ObservableObject {
         activeApproval = nil
     }
 
-    /// Approve all tools permanently (autonomous mode).
+    /// Approve all tools currently allowed by the selected tool mode.
     func approveAll() {
         guard let request = activeApproval else { return }
         NotificationCenter.default.post(
@@ -318,6 +355,26 @@ final class ApprovalOverlayController: ObservableObject {
     /// Dismiss the tool-mode popup without taking action.
     func dismissToolModeRequest() {
         activeToolModeRequest = nil
+    }
+
+    func confirmGovernanceRequest() {
+        guard let request = activeGovernanceConfirmation else { return }
+        NotificationCenter.default.post(
+            name: .faeGovernanceConfirmationRespond,
+            object: nil,
+            userInfo: ["request_id": request.id, "approved": true]
+        )
+        activeGovernanceConfirmation = nil
+    }
+
+    func denyGovernanceRequest() {
+        guard let request = activeGovernanceConfirmation else { return }
+        NotificationCenter.default.post(
+            name: .faeGovernanceConfirmationRespond,
+            object: nil,
+            userInfo: ["request_id": request.id, "approved": false]
+        )
+        activeGovernanceConfirmation = nil
     }
 
     // MARK: - Private
@@ -544,6 +601,20 @@ final class ApprovalOverlayController: ObservableObject {
         )
     }
 
+    private func handleGovernanceConfirmationRequested(_ info: [AnyHashable: Any]) {
+        guard activeGovernanceConfirmation == nil else { return }
+        let requestID = info["request_id"] as? String ?? UUID().uuidString
+        let title = info["title"] as? String ?? "Confirm change"
+        let message = info["message"] as? String ?? "Apply this change now?"
+        let confirmLabel = info["confirm_label"] as? String ?? "Confirm"
+        activeGovernanceConfirmation = GovernanceConfirmationRequest(
+            id: requestID,
+            title: title,
+            message: message,
+            confirmLabel: confirmLabel
+        )
+    }
+
     /// Truncate a string to a maximum length, appending "..." if trimmed.
     private static func truncate(_ text: String, to maxLength: Int) -> String {
         if text.count > maxLength {
@@ -563,4 +634,7 @@ extension Notification.Name {
     /// - `request_id` — the approval request identifier
     /// - `approved: Bool` — whether the tool was approved
     static let faeApprovalRespond = Notification.Name("faeApprovalRespond")
+
+    static let faeGovernanceConfirmationRequested = Notification.Name("faeGovernanceConfirmationRequested")
+    static let faeGovernanceConfirmationRespond = Notification.Name("faeGovernanceConfirmationRespond")
 }
