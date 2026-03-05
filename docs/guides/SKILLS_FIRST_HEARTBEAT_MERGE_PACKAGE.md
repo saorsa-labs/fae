@@ -54,6 +54,16 @@ This branch introduces a pre-launch architecture shift where proactive coaching 
   - cooldown/target/enabled.
 - Added heartbeat keys to `self_config` adjustable settings.
 
+### 7) Post-review hardening
+- Replaced recursive busy retry with a bounded iterative retry loop in `runSkillsHeartbeat()`.
+- Tightened heartbeat engagement scoring:
+  - user-interaction callback now passes `userText`,
+  - progression only increments on likely nudge engagement (topic overlap + engagement language).
+- Reduced prompt pollution by excluding `capability-coach` skill instructions from non-heartbeat turns.
+- Scheduler policy alignment:
+  - `skills_heartbeat` added to scheduler broker allowlist,
+  - heartbeat tool allowlist drops `self_config` to match deny policy.
+
 ## Migration Notes
 
 - Existing configs load safely; defaults are provided for all heartbeat keys.

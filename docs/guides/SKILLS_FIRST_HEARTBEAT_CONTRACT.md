@@ -34,7 +34,7 @@ Decoded payload: `HeartbeatRunDecision`
 
 - `status`: `ok | nudge | alert | teach`
 - `message`: optional spoken text
-- `nudgeTopic`: optional capability/topic
+- `nudgeTopic`: capability/topic identifier (strongly recommended when `status != ok`)
 - `suggestedStage`: optional progression stage
 - `canvasIntent`: optional typed canvas intent
 

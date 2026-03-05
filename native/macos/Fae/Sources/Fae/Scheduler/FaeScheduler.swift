@@ -745,7 +745,7 @@ actor FaeScheduler {
                 prompt,
                 isSilentTarget,
                 "skills_heartbeat",
-                ["activate_skill", "read", "self_config", "web_search", "fetch_url"],
+                ["activate_skill", "read", "web_search", "fetch_url"],
                 true
             )
 
