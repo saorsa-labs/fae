@@ -128,10 +128,12 @@ actor SpeakerProfileStore {
     /// Match an embedding against enrolled profiles.
     ///
     /// Returns the best match above `threshold`, or `nil` if no profile matches.
-    func match(embedding: [Float], threshold: Float) -> MatchResult? {
+    /// Use `excludingRoles` to skip certain profiles (e.g. `.faeSelf` for echo
+    /// detection, which should be checked separately).
+    func match(embedding: [Float], threshold: Float, excludingRoles: Set<SpeakerRole> = []) -> MatchResult? {
         var best: MatchResult?
 
-        for profile in profiles {
+        for profile in profiles where !excludingRoles.contains(profile.role) {
             let sim = Self.cosineSimilarity(embedding, profile.centroid)
             if sim >= threshold, sim > (best?.similarity ?? 0) {
                 best = MatchResult(
@@ -145,6 +147,14 @@ actor SpeakerProfileStore {
         }
 
         return best
+    }
+
+    /// Check whether the embedding matches the fae_self profile above `threshold`.
+    /// Used for echo detection — separate from general speaker matching.
+    func matchesFaeSelf(embedding: [Float], threshold: Float) -> Float? {
+        guard let faeSelf = profiles.first(where: { $0.role == .faeSelf }) else { return nil }
+        let sim = Self.cosineSimilarity(embedding, faeSelf.centroid)
+        return sim >= threshold ? sim : nil
     }
 
     /// Check whether the embedding matches the owner profile above `threshold`.

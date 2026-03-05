@@ -1001,9 +1001,17 @@ actor PipelineCoordinator {
                 )
 
                 let hasOwner = await store.hasOwnerProfile()
+
+                // Two-pass matching: human profiles first, then fae_self echo check.
+                // fae_self is excluded from general matching because voice cloning
+                // makes its embeddings nearly identical to the owner's voice — it
+                // would always win the match and prevent the owner from being recognized.
+
+                // Pass 1: match against human profiles (exclude fae_self).
                 if hasOwner, let match = await store.match(
                     embedding: embedding,
-                    threshold: config.speaker.threshold
+                    threshold: config.speaker.threshold,
+                    excludingRoles: [.faeSelf]
                 ) {
                     currentSpeakerLabel = match.label
                     currentSpeakerDisplayName = match.displayName
@@ -1011,8 +1019,8 @@ actor PipelineCoordinator {
                     currentSpeakerIsOwner = match.role == .owner
                     currentSpeakerIsKnownNonOwner = match.role != .owner
 
-                    // Progressive enrollment: strengthen known profiles (skip fae_self).
-                    if config.speaker.progressiveEnrollment, match.role != .faeSelf {
+                    // Progressive enrollment: strengthen known profiles.
+                    if config.speaker.progressiveEnrollment {
                         await store.enrollIfBelowMax(
                             label: match.label,
                             embedding: embedding,
@@ -1027,8 +1035,21 @@ actor PipelineCoordinator {
                     NSLog("PipelineCoordinator: no owner voice enrolled yet — awaiting voice_identity enrollment")
                     debugLog(debugConsole, .speaker, "Owner not enrolled yet; speaker left as unknown")
                 } else {
-                    NSLog("PipelineCoordinator: speaker not recognized")
-                    debugLog(debugConsole, .speaker, "Not recognized (no match above threshold \(String(format: "%.2f", config.speaker.threshold)))")
+                    // Pass 2: no human match — check fae_self for echo detection.
+                    // Only reject if echo suppressor is still active (duration-proportional).
+                    if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: config.speaker.threshold) {
+                        if echoSuppressor.isInSuppression {
+                            NSLog("PipelineCoordinator: dropping %.1fs segment (fae_self sim=%.3f, echo suppressor active)", durationSecs, faeSelfSim)
+                            debugLog(debugConsole, .pipeline, "Echo rejected (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)), suppressor active)")
+                            return
+                        }
+                        // Echo suppressor expired — real person with voice similar to TTS.
+                        NSLog("PipelineCoordinator: fae_self match sim=%.3f ignored (echo suppressor expired)", faeSelfSim)
+                        debugLog(debugConsole, .speaker, "fae_self sim=\(String(format: "%.3f", faeSelfSim)) outside echo window — passing as unknown")
+                    } else {
+                        NSLog("PipelineCoordinator: speaker not recognized")
+                        debugLog(debugConsole, .speaker, "Not recognized (no match above threshold \(String(format: "%.2f", config.speaker.threshold)))")
+                    }
                 }
             } catch {
                 NSLog("PipelineCoordinator: speaker embed failed: %@", error.localizedDescription)
@@ -1036,34 +1057,6 @@ actor PipelineCoordinator {
             }
         } else {
             debugLog(debugConsole, .speaker, "Speaker encoder not loaded — owner verification skipped")
-        }
-
-        // Self-echo rejection: if the segment matches Fae's own voice AND we are
-        // near an echo window, drop it. Outside the echo window the mic is hearing
-        // a real person — since TTS clones the owner's voice, the fae_self profile
-        // is nearly identical to the owner profile and would false-positive on real
-        // speech if we rejected unconditionally.
-        if currentSpeakerLabel == "fae_self" {
-            // Use segment onset time (not current time) to check proximity to
-            // assistant speech. A long echo segment processed seconds later would
-            // fail a Date()-based check but its onset was during/near playback.
-            let timeSinceSpeech = lastAssistantStart.map { segment.capturedAt.timeIntervalSince($0) } ?? .infinity
-            let recentlySpoke = timeSinceSpeech < 10
-            if recentlySpoke {
-                NSLog("PipelineCoordinator: dropping %.1fs segment (matched Fae's own voice, near echo window)", durationSecs)
-                debugLog(debugConsole, .pipeline, "Echo rejected (voice match fae_self, recent speech)")
-                return
-            }
-            // Outside echo window — real person speaking. The fae_self match is a
-            // false positive (encoder similarity too high). Clear speaker identity and
-            // let the speech through as unknown — physical device access implies trust.
-            NSLog("PipelineCoordinator: fae_self match ignored (no recent assistant speech)")
-            debugLog(debugConsole, .speaker, "fae_self false positive outside echo window — passing through as unknown")
-            currentSpeakerLabel = nil
-            currentSpeakerDisplayName = nil
-            currentSpeakerRole = nil
-            currentSpeakerIsOwner = false
-            currentSpeakerIsKnownNonOwner = false
         }
 
         // Liveness enforcement: reject speech with low liveness score in enforce mode.
