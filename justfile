@@ -139,13 +139,36 @@ test-deterministic: test-serve
 test-deterministic-quick:
     bash scripts/test-comprehensive.sh --skip-build --skip-llm
 
+# Run voice pipeline tests only (Fae + Chatterbox must be running)
+test-voice model="claude":
+    bash scripts/test-comprehensive.sh --skip-build --phase 11 --model {{model}}
+
+# Run voice pipeline tests deterministic only (no LLM scoring)
+test-voice-quick:
+    bash scripts/test-comprehensive.sh --skip-build --phase 11 --skip-llm
+
+# Run onboarding tests (Fae must be running)
+test-onboarding model="claude":
+    bash scripts/test-comprehensive.sh --skip-build --phase 12 --model {{model}}
+
+# Run tests with audio recording (captures Fae's TTS for quality analysis)
+test-record model="claude":
+    bash scripts/test-with-recording.sh --model {{model}}
+
+# Run deterministic tests with audio recording
+test-record-quick:
+    bash scripts/test-with-recording.sh --skip-llm
+
 # Show latest comprehensive test report
 test-report:
     python3 scripts/test-report-viewer.py
 
 # List all test phases
 test-phases:
-    @ls -1 tests/comprehensive/specs/*.yaml 2>/dev/null | while read f; do echo "  $$(basename $$f)"; done
+    #!/usr/bin/env bash
+    for f in tests/comprehensive/specs/*.yaml; do
+        echo "  $(basename "$f")"
+    done
 
 # Set Fae config via test server (key=value)
 test-config key value:

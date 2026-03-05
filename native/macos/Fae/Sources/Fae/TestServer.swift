@@ -273,13 +273,15 @@ final class TestServer {
             ]
         }
 
-        // Query speaking state from FaeCore → PipelineCoordinator (async actor call).
+        // Query speaking and deferred tool state from PipelineCoordinator (async actor calls).
         Task { @MainActor [weak self] in
             let isSpeaking = await self?.faeCore?.isSpeaking() ?? false
+            let hasDeferredTools = await self?.faeCore?.hasPendingDeferredTools() ?? false
             self?.sendResponse(connection: connection, status: 200, body: [
                 "messages": serialized,
                 "isGenerating": isGenerating,
                 "isSpeaking": isSpeaking,
+                "hasDeferredTools": hasDeferredTools,
                 "streamingText": streamingText,
                 "count": messages.count,
             ])
@@ -430,19 +432,25 @@ final class TestServer {
     // MARK: - Reset Endpoint
 
     private func handleReset(connection: NWConnection) {
-        // Clear conversation UI
-        conversation?.clearMessages()
-        conversation?.streamingText = ""
-        conversation?.isGenerating = false
-        conversation?.isStreaming = false
-
-        // Clear debug events
-        debugConsole?.clear()
-
-        // Clear pipeline conversation history (awaited to prevent race with next inject)
         Task { @MainActor [weak self] in
-            await self?.faeCore?.resetConversationAsync()
-            self?.sendResponse(connection: connection, status: 200, body: [
+            guard let self else { return }
+
+            // 1. Cancel and await full stop (generation + TTS playback + deferred tools)
+            await self.faeCore?.cancelAndWait()
+
+            // 3. Clear conversation UI
+            self.conversation?.clearMessages()
+            self.conversation?.streamingText = ""
+            self.conversation?.isGenerating = false
+            self.conversation?.isStreaming = false
+
+            // 4. Clear debug events
+            self.debugConsole?.clear()
+
+            // 5. Reset pipeline conversation history
+            await self.faeCore?.resetConversationAsync()
+
+            self.sendResponse(connection: connection, status: 200, body: [
                 "ok": true,
                 "cleared": ["conversation", "events", "history"],
             ])

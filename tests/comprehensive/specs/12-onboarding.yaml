@@ -1,0 +1,79 @@
+phase: "12-onboarding"
+name: "Onboarding"
+description: "Post-reset onboarding flow — validates fresh-launch detection, enrollment, and capabilities"
+tests:
+  - id: "onboard-001"
+    name: "Fresh launch detects no owner"
+    class: deterministic
+    timeout_s: 30
+    setup:
+      # Reset to simulate fresh state
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "returns_200"
+        check: "status_code == 200"
+      - name: "has_owner_status"
+        check: "body.hasOwnerSetUp != null"
+    pass_threshold: 1.0
+
+  - id: "onboard-002"
+    name: "Enrollment starts on introduction"
+    class: deterministic
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, my name is Jarvis"
+      - "Hi Fae, I'm Jarvis"
+      - "Hello Fae, my name is Jarvis"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "acknowledges_name"
+        check: "assistant_response_contains_any(['Jarvis', 'jarvis', 'nice to meet', 'hello', 'Hi'])"
+    pass_threshold: 1.0
+
+  - id: "onboard-003"
+    name: "Capabilities query"
+    class: llm_scored
+    timeout_s: 200
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what can you do?"
+      - "Fae, what are your capabilities?"
+      - "Fae, tell me what you're able to help with"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "lists_capabilities"
+        check: "llm_judge('Does this response describe multiple capabilities or features the assistant can help with?', assistant_response) >= 0.7"
+    pass_threshold: 1.0

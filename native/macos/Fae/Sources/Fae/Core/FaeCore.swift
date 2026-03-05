@@ -380,7 +380,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 // Listen for enrollment_complete to update hasOwnerSetUp.
                 self.observeEnrollmentComplete()
             } catch {
-                NSLog("FaeCore: failed to start pipeline: %@", error.localizedDescription)
+                let errMsg = "FaeCore: failed to start pipeline: \(error.localizedDescription)"
+                NSLog("%@", errMsg)
+                debugLog(debugConsoleRef, .pipeline, errMsg)
                 pipelineState = .error
                 eventBus.send(.runtimeState(.error))
             }
@@ -441,6 +443,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
         Task { await pipelineCoordinator?.cancel() }
     }
 
+    /// Cancel and await full stop — including playback + deferred tools (test harness use).
+    func cancelAndWait() async {
+        await pipelineCoordinator?.cancelAndWait()
+    }
+
     /// Clear pipeline conversation history (for test harness use).
     func resetConversation() {
         Task { await pipelineCoordinator?.resetConversation() }
@@ -449,6 +456,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Clear pipeline conversation history and await completion (for test harness use).
     func resetConversationAsync() async {
         await pipelineCoordinator?.resetConversation()
+    }
+
+    /// Whether any deferred (background) tool jobs are still running (test harness use).
+    func hasPendingDeferredTools() async -> Bool {
+        await pipelineCoordinator?.hasPendingDeferredTools ?? false
     }
 
     /// Toggle barge-in on/off, persist to config, and update the live pipeline.

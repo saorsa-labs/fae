@@ -1,0 +1,134 @@
+phase: "11-voice-pipeline"
+name: "Voice Pipeline"
+description: "End-to-end voice tests via Chatterbox TTS — audio plays through speakers, Fae's mic picks it up, full pipeline processes it"
+tests:
+  - id: "voice-001"
+    name: "Voice greeting reaches pipeline"
+    class: deterministic
+    timeout_s: 120
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "conversation.require_direct_address", "value": "false"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "speak"
+        text: "Hello Fae, can you hear me?"
+        voice: "jarvis"
+      # Wait for Fae to process the audio and generate a response
+      - action: "wait_generation"
+        max_wait_s: 90
+      - action: "wait_speech"
+        max_wait_s: 30
+      - action: "collect_events"
+    criteria:
+      - name: "transcription_event"
+        check: "events_contain_kind('Transcription')"
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+    pass_threshold: 1.0
+
+  - id: "voice-002"
+    name: "Voice math accuracy"
+    class: deterministic
+    timeout_s: 120
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "speak"
+        text: "Fae, what is seven times eight?"
+        voice: "jarvis"
+      - action: "wait_generation"
+        max_wait_s: 90
+      - action: "wait_speech"
+        max_wait_s: 30
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "correct_answer"
+        check: "assistant_response_contains('56')"
+    pass_threshold: 1.0
+
+  - id: "voice-003"
+    name: "Voice multi-turn memory"
+    class: deterministic
+    timeout_s: 300
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      # Turn 1: introduce name
+      - action: "speak"
+        text: "Fae, my name is Jarvis"
+        voice: "jarvis"
+      - action: "wait_generation"
+        max_wait_s: 90
+      - action: "wait_speech"
+        max_wait_s: 30
+      # Turn 2: ask for recall
+      - action: "speak"
+        text: "Fae, what is my name?"
+        voice: "jarvis"
+      - action: "wait_generation"
+        max_wait_s: 90
+      - action: "wait_speech"
+        max_wait_s: 30
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "recalls_name"
+        check: "assistant_response_contains('Jarvis')"
+    pass_threshold: 1.0
+
+  - id: "voice-004"
+    name: "Echo suppression — Fae does not self-trigger"
+    class: deterministic
+    timeout_s: 120
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      # Inject a question that produces a spoken response
+      - action: "inject"
+        text: "Fae, say hello and tell me something nice"
+      - action: "wait_generation"
+        max_wait_s: 90
+      # Wait for TTS to finish playing through speakers
+      - action: "wait_speech"
+        max_wait_s: 30
+      # Now wait a few seconds — if echo suppression fails, Fae will
+      # transcribe her own voice and start a new generation
+      - action: "sleep"
+        duration_ms: 8000
+      - action: "http_get"
+        url: "/conversation"
+    criteria:
+      # Should have exactly 2 messages (1 user + 1 assistant), not 4+
+      # (which would indicate self-triggering from echo)
+      - name: "no_self_trigger"
+        check: "body.count == 2"
+    pass_threshold: 1.0

@@ -21,6 +21,9 @@ SPEC_DIR="$PROJECT_DIR/tests/comprehensive/specs"
 REPORT_DIR="$PROJECT_DIR/tests/comprehensive/reports"
 AGENT_PROMPT="$PROJECT_DIR/tests/comprehensive/agent-prompt.md"
 FAE_URL="http://127.0.0.1:7433"
+CHATTERBOX_URL="http://127.0.0.1:8000"
+RECORDING_PID=""
+RECORDING_FILE=""
 
 # Defaults
 MODEL="claude"
@@ -232,7 +235,22 @@ fae_wait_generation() {
         return 1  # Timed out waiting for generation to finish
     fi
 
-    # Phase 3: Wait for TTS speech to FINISH (isSpeaking=false).
+    # Phase 3: Wait for deferred tool jobs to FINISH (hasDeferredTools=false).
+    # Read-only tools (read, web_search, etc.) run in background after generation ends.
+    local deferred_wait=0
+    local deferred_max=60
+    while [ "$deferred_wait" -lt "$deferred_max" ]; do
+        fae_get "/conversation"
+        local deferred
+        deferred=$(echo "$HTTP_BODY" | jq -r '.hasDeferredTools' 2>/dev/null || echo "false")
+        if [ "$deferred" = "false" ]; then
+            break
+        fi
+        sleep 2
+        deferred_wait=$((deferred_wait + 2))
+    done
+
+    # Phase 4: Wait for TTS speech to FINISH (isSpeaking=false).
     # LLM generation ends before TTS playback — without this, next test
     # injects while Fae is still speaking, causing echo/interruption.
     local speech_wait=0
@@ -737,6 +755,90 @@ execute_step() {
             if [ -n "$cmd" ]; then
                 if $VERBOSE; then dim "  bash: $cmd"; fi
                 eval "$cmd" 2>/dev/null || yellow "  Warning: bash command failed: $cmd"
+            fi
+            ;;
+        speak)
+            # Speak text through Chatterbox TTS → speakers → Fae's mic (full voice pipeline)
+            local text voice play_audio
+            text=$(echo "$step_json" | jq -r '.text // empty')
+            voice=$(echo "$step_json" | jq -r '.voice // "jarvis"')
+            play_audio=$(echo "$step_json" | jq -r '.play // true')
+            if [ -z "$text" ]; then
+                yellow "  Warning: speak step has no text"
+                return
+            fi
+            PHRASING_USED="$text"
+            local escaped_text
+            escaped_text=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
+            if $VERBOSE; then dim "  speak: '$text' (voice=$voice)"; fi
+            local speak_status
+            speak_status=$(curl -s -o /dev/null -w "%{http_code}" \
+                --connect-timeout 5 --max-time 30 \
+                -X POST "${CHATTERBOX_URL}/speak" \
+                -H "Content-Type: application/json" \
+                -d "{\"text\":${escaped_text},\"voice\":\"${voice}\",\"play\":${play_audio}}" 2>/dev/null || echo "000")
+            if [ "$speak_status" != "200" ]; then
+                yellow "  Warning: Chatterbox /speak returned $speak_status (is Chatterbox running?)"
+            fi
+            ;;
+        record_audio_start)
+            # Start recording system audio via screencapture
+            local output_path
+            output_path=$(echo "$step_json" | jq -r '.path // "/tmp/fae-test-audio.mov"')
+            if [ -n "$RECORDING_PID" ]; then
+                yellow "  Warning: recording already in progress (PID $RECORDING_PID)"
+                return
+            fi
+            if $VERBOSE; then dim "  record_audio_start: $output_path"; fi
+            screencapture -v "$output_path" &
+            RECORDING_PID=$!
+            RECORDING_FILE="$output_path"
+            sleep 1  # Let recording initialize
+            ;;
+        record_audio_stop)
+            # Stop the active audio recording
+            if [ -z "$RECORDING_PID" ]; then
+                yellow "  Warning: no active recording to stop"
+                return
+            fi
+            if $VERBOSE; then dim "  record_audio_stop: PID=$RECORDING_PID"; fi
+            kill "$RECORDING_PID" 2>/dev/null || true
+            wait "$RECORDING_PID" 2>/dev/null || true
+            RECORDING_PID=""
+            if [ -n "$RECORDING_FILE" ] && [ -f "$RECORDING_FILE" ]; then
+                local size
+                size=$(du -h "$RECORDING_FILE" | cut -f1)
+                dim "    Recording saved: $RECORDING_FILE ($size)"
+            fi
+            RECORDING_FILE=""
+            ;;
+        screenshot)
+            # Take a screenshot for visual validation
+            local output_path
+            output_path=$(echo "$step_json" | jq -r '.path // "/tmp/fae-test-screenshot.png"')
+            if $VERBOSE; then dim "  screenshot: $output_path"; fi
+            screencapture -x "$output_path" 2>/dev/null || yellow "  Warning: screenshot failed"
+            if [ -f "$output_path" ]; then
+                dim "    Screenshot saved: $output_path"
+            fi
+            ;;
+        wait_speech)
+            # Wait for Fae to finish speaking (isSpeaking==false), separate from generation
+            local max_wait
+            max_wait=$(echo "$step_json" | jq -r '.max_wait_s // 30')
+            local elapsed=0
+            while [ "$elapsed" -lt "$max_wait" ]; do
+                fae_get "/conversation"
+                local speaking
+                speaking=$(echo "$HTTP_BODY" | jq -r '.isSpeaking' 2>/dev/null || echo "false")
+                if [ "$speaking" = "false" ]; then
+                    break
+                fi
+                sleep 1
+                elapsed=$((elapsed + 1))
+            done
+            if [ "$elapsed" -ge "$max_wait" ]; then
+                yellow "  Warning: speech timed out after ${max_wait}s"
             fi
             ;;
         *)

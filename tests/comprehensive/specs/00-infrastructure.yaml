@@ -40,8 +40,8 @@ tests:
         check: "body.modelLabel != null"
       - name: "has_thinkingEnabled"
         check: "body.thinkingEnabled != null"
-      - name: "has_isOnboarded"
-        check: "body.isOnboarded != null"
+      - name: "has_hasOwnerSetUp"
+        check: "body.hasOwnerSetUp != null"
     pass_threshold: 1.0
 
   - id: "infra-003"

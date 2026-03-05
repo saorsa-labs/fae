@@ -15,9 +15,12 @@ actor ToolAnalytics {
             atPath: dir, withIntermediateDirectories: true
         )
 
-        dbQueue = try DatabaseQueue(path: path)
-        try dbQueue.write { db in
+        var config = Configuration()
+        config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA journal_mode = WAL")
+        }
+        dbQueue = try DatabaseQueue(path: path, configuration: config)
+        try dbQueue.write { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS tool_usage (
                     id          TEXT PRIMARY KEY,

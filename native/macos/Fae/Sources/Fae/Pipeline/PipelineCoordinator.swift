@@ -276,6 +276,9 @@ actor PipelineCoordinator {
     /// In-flight deferred tool tasks keyed by job ID.
     private var deferredToolTasks: [UUID: Task<Void, Never>] = [:]
 
+    /// Whether any deferred tool jobs are currently running (test harness use).
+    var hasPendingDeferredTools: Bool { !deferredToolTasks.isEmpty }
+
     // MARK: - Capability Tickets
 
     /// Task-scoped capability grant consumed by the broker.
@@ -437,6 +440,23 @@ actor PipelineCoordinator {
 
         Task { await playback.stop() }
         NSLog("PipelineCoordinator: cancelled by user")
+    }
+
+    /// Cancel and await full stop — including playback + deferred tools (test harness use).
+    func cancelAndWait() async {
+        interrupted = true
+        pendingGovernanceAction = nil
+        computerUseStepCount = 0
+
+        let activeTTSTask = pendingTTSTask
+        pendingTTSTask = nil
+        activeTTSTask?.cancel()
+        await activeTTSTask?.value
+
+        cancelDeferredToolJobs()
+        await playback.stop()
+        assistantSpeaking = false
+        NSLog("PipelineCoordinator: cancelAndWait complete")
     }
 
     private func cancelDeferredToolJobs() {
@@ -3468,6 +3488,8 @@ actor PipelineCoordinator {
 
             let callId = UUID().uuidString
             let inputJSON = Self.serializeArguments(call.arguments)
+            let inputPreview = String(inputJSON.prefix(100))
+            debugLog(debugConsole, .toolCall, "id=\(callId.prefix(8)) name=\(call.name) args=\(inputPreview) [deferred]")
             eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))
 
             let result = await executeTool(
@@ -3484,6 +3506,8 @@ actor PipelineCoordinator {
                 toolSuccessCount += 1
             }
 
+            let outputPreview = String(result.output.prefix(100))
+            debugLog(debugConsole, .toolResult, "id=\(callId.prefix(8)) name=\(call.name) status=\(result.isError ? "error" : "ok") output=\(outputPreview) [deferred]")
             eventBus.send(.toolResult(
                 id: callId,
                 name: call.name,

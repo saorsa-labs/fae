@@ -27,12 +27,13 @@ actor SQLiteMemoryStore {
                 throw NSError(domain: "CSQLiteVecCore", code: Int(rc),
                               userInfo: [NSLocalizedDescriptionKey: "sqlite-vec register failed: \(rc)"])
             }
+            // WAL + foreign keys must be set outside a transaction (per-connection pragmas).
+            try db.execute(sql: "PRAGMA journal_mode = WAL")
+            try db.execute(sql: "PRAGMA foreign_keys = ON")
         }
 
         dbQueue = try DatabaseQueue(path: path, configuration: config)
         try dbQueue.write { db in
-            try db.execute(sql: "PRAGMA journal_mode = WAL")
-            try db.execute(sql: "PRAGMA foreign_keys = ON")
             try Self.applySchema(db)
         }
 

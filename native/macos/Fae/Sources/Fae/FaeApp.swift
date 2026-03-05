@@ -161,19 +161,22 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            guard !terminationInFlight else { return }
+            guard !terminationInFlight else {
+                // Double-quit: always allow — never grey out Quit menu
+                sender.reply(toApplicationShouldTerminate: true)
+                return
+            }
             terminationInFlight = true
             debugLog(debugConsole, .qa, "Application termination requested — draining pipeline")
 
             let drained = await faeCore.stopAndWait(timeoutSeconds: 8.0)
 
             terminationInFlight = false
-            if drained {
-                sender.reply(toApplicationShouldTerminate: true)
-            } else {
-                debugLog(debugConsole, .qa, "Termination aborted: pipeline did not quiesce before timeout")
-                sender.reply(toApplicationShouldTerminate: false)
+            if !drained {
+                NSLog("FaeAppDelegate: pipeline did not quiesce — force-quitting")
             }
+            // Always allow termination — a stuck pipeline should never trap the user
+            sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
     }
