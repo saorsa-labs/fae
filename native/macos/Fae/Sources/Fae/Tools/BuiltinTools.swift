@@ -202,7 +202,7 @@ struct SelfConfigTool: Tool {
             case float(min: Float, max: Float)
             case bool
             case int(min: Int, max: Int)
-            case string(allowed: [String]? = nil)
+            case string(allowed: [String])
         }
 
         let valueType: ValueType
@@ -232,12 +232,9 @@ struct SelfConfigTool: Tool {
                 return nil
             case .string(let allowed):
                 guard let s = coerceString(value) else {
-                    if let allowed {
-                        return "Expected one of: \(allowed.joined(separator: ", "))"
-                    }
-                    return "Expected a non-empty string"
+                    return "Expected one of: \(allowed.joined(separator: ", "))"
                 }
-                if let allowed, !allowed.contains(s) {
+                guard allowed.contains(s) else {
                     return "Invalid value '\(s)'. Allowed: \(allowed.joined(separator: ", "))"
                 }
                 return nil
@@ -360,38 +357,6 @@ struct SelfConfigTool: Tool {
         "awareness.pause_on_thermal_pressure": SettingSpec(
             valueType: .bool,
             description: "Pause proactive observations under high thermal pressure"
-        ),
-        "scheduler.heartbeat_enabled": SettingSpec(
-            valueType: .bool,
-            description: "Enable skills-first heartbeat orchestration"
-        ),
-        "scheduler.heartbeat_every_minutes": SettingSpec(
-            valueType: .int(min: 5, max: 240),
-            description: "Heartbeat cadence in minutes (5-240)"
-        ),
-        "scheduler.heartbeat_target": SettingSpec(
-            valueType: .string(allowed: ["none", "voice", "canvas"]),
-            description: "Heartbeat delivery target (none, voice, canvas)"
-        ),
-        "scheduler.heartbeat_active_start": SettingSpec(
-            valueType: .string(),
-            description: "Heartbeat active window start (HH:MM local time)"
-        ),
-        "scheduler.heartbeat_active_end": SettingSpec(
-            valueType: .string(),
-            description: "Heartbeat active window end (HH:MM local time)"
-        ),
-        "scheduler.heartbeat_ack_token": SettingSpec(
-            valueType: .string(),
-            description: "No-op ack token used by heartbeat responses"
-        ),
-        "scheduler.heartbeat_ack_max_chars": SettingSpec(
-            valueType: .int(min: 0, max: 2000),
-            description: "Max trailing characters allowed when parsing heartbeat ack"
-        ),
-        "scheduler.heartbeat_teach_cooldown_minutes": SettingSpec(
-            valueType: .int(min: 15, max: 720),
-            description: "Minimum minutes between proactive teaching nudges"
         ),
     ]
 
@@ -549,14 +514,6 @@ struct SelfConfigTool: Tool {
         lines.append("  awareness.consent_granted = \(config.awareness.consentGrantedAt != nil) — Explicit consent for camera/screen awareness")
         lines.append("  awareness.camera_enabled = \(config.awareness.cameraEnabled) — Camera awareness")
         lines.append("  awareness.screen_enabled = \(config.awareness.screenEnabled) — Screen awareness")
-        lines.append("  scheduler.heartbeat_enabled = \(config.scheduler.heartbeatEnabled) — Skills-first heartbeat")
-        lines.append("  scheduler.heartbeat_every_minutes = \(config.scheduler.heartbeatEveryMinutes) — Heartbeat cadence (minutes)")
-        lines.append("  scheduler.heartbeat_target = \(config.scheduler.heartbeatTarget) — Heartbeat delivery target")
-        lines.append("  scheduler.heartbeat_active_start = \(config.scheduler.heartbeatActiveStart) — Active window start")
-        lines.append("  scheduler.heartbeat_active_end = \(config.scheduler.heartbeatActiveEnd) — Active window end")
-        lines.append("  scheduler.heartbeat_ack_token = \(config.scheduler.heartbeatAckToken) — No-op acknowledgment token")
-        lines.append("  scheduler.heartbeat_ack_max_chars = \(config.scheduler.heartbeatAckMaxChars) — Ack parser trailing-char limit")
-        lines.append("  scheduler.heartbeat_teach_cooldown_minutes = \(config.scheduler.heartbeatTeachCooldownMinutes) — Teaching cooldown")
         return lines.joined(separator: "\n")
     }
 }

@@ -250,16 +250,9 @@ actor SkillManager {
     }
 
     /// All currently activated skill bodies for injection into context.
-    ///
-    /// `excludingSkills` allows callers to suppress high-context skills on turns
-    /// where they are not relevant (e.g. heartbeat-only coaching instructions).
-    func activatedContext(excludingSkills: Set<String> = []) -> String? {
-        let filtered = activatedBodies
-            .filter { !excludingSkills.contains($0.key) }
-            .sorted { $0.key < $1.key }
-
-        guard !filtered.isEmpty else { return nil }
-        return filtered.map { "[\($0.key) skill instructions]\n\($0.value)" }
+    func activatedContext() -> String? {
+        guard !activatedBodies.isEmpty else { return nil }
+        return activatedBodies.map { "[\($0.key) skill instructions]\n\($0.value)" }
             .joined(separator: "\n\n")
     }
 

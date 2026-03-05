@@ -58,8 +58,8 @@ struct ThoughtBubbleView: View {
                     .foregroundColor(.white.opacity(0.85))
                     .lineSpacing(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 16)
                     .id("bottom")
             }
             .onChange(of: text) { _, _ in
@@ -70,45 +70,51 @@ struct ThoughtBubbleView: View {
         }
         .frame(maxWidth: 270, maxHeight: 150)
         .background(
-            ThoughtBubbleShape(cornerRadius: 20, tailSize: 0)
-                .fill(Self.bubbleColor.opacity(0.10))
+            ThoughtCloudShape()
+                .fill(Self.bubbleColor.opacity(0.15))
                 .background(
-                    ThoughtBubbleShape(cornerRadius: 20, tailSize: 0)
-                        .fill(.ultraThinMaterial.opacity(0.6))
+                    ThoughtCloudShape()
+                        .fill(.ultraThinMaterial.opacity(0.65))
                 )
         )
         .overlay(
-            ThoughtBubbleShape(cornerRadius: 20, tailSize: 0)
-                .stroke(Self.bubbleColor.opacity(0.3), lineWidth: 1)
+            ThoughtCloudShape()
+                .stroke(Self.bubbleColor.opacity(0.45), lineWidth: 1.5)
         )
-        .clipShape(ThoughtBubbleShape(cornerRadius: 20, tailSize: 0))
-        .shadow(color: Self.bubbleColor.opacity(0.2), radius: 12, x: 0, y: 4)
+        .clipShape(ThoughtCloudShape())
+        .shadow(color: Self.bubbleColor.opacity(0.3), radius: 14, x: 0, y: 6)
     }
 
     // MARK: - Trailing Circles
 
     /// Three descending circles like a cartoon thought trail, pointing toward the orb.
     private var trailingCircles: some View {
-        HStack(spacing: 5) {
+        HStack(alignment: .bottom, spacing: 5) {
             Circle()
-                .fill(Self.bubbleColor.opacity(0.10))
-                .overlay(Circle().stroke(Self.bubbleColor.opacity(0.15), lineWidth: 0.5))
-                .frame(width: 12, height: 12)
-                .shadow(color: Self.bubbleColor.opacity(0.1), radius: 3)
+                .fill(Self.bubbleColor.opacity(0.30))
+                .overlay(Circle().stroke(Self.bubbleColor.opacity(0.45), lineWidth: 1))
+                .frame(width: 13, height: 13)
+                .shadow(color: Self.bubbleColor.opacity(0.2), radius: 4)
+                .scaleEffect(isActive ? 1.05 : 0.9)
+                .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: isActive)
 
             Circle()
-                .fill(Self.bubbleColor.opacity(0.08))
-                .overlay(Circle().stroke(Self.bubbleColor.opacity(0.12), lineWidth: 0.5))
-                .frame(width: 8, height: 8)
-                .shadow(color: Self.bubbleColor.opacity(0.08), radius: 2)
-                .offset(y: 4)
+                .fill(Self.bubbleColor.opacity(0.22))
+                .overlay(Circle().stroke(Self.bubbleColor.opacity(0.35), lineWidth: 0.8))
+                .frame(width: 9, height: 9)
+                .shadow(color: Self.bubbleColor.opacity(0.15), radius: 3)
+                .scaleEffect(isActive ? 1.05 : 0.9)
+                .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true).delay(0.2), value: isActive)
+                .offset(y: 3)
 
             Circle()
-                .fill(Self.bubbleColor.opacity(0.06))
-                .overlay(Circle().stroke(Self.bubbleColor.opacity(0.10), lineWidth: 0.5))
-                .frame(width: 5, height: 5)
-                .shadow(color: Self.bubbleColor.opacity(0.06), radius: 1)
-                .offset(y: 8)
+                .fill(Self.bubbleColor.opacity(0.15))
+                .overlay(Circle().stroke(Self.bubbleColor.opacity(0.25), lineWidth: 0.6))
+                .frame(width: 6, height: 6)
+                .shadow(color: Self.bubbleColor.opacity(0.1), radius: 2)
+                .scaleEffect(isActive ? 1.05 : 0.9)
+                .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true).delay(0.4), value: isActive)
+                .offset(y: 6)
         }
     }
 
@@ -127,16 +133,66 @@ struct ThoughtBubbleView: View {
     }
 }
 
-// MARK: - Thought Bubble Shape
+// MARK: - Thought Cloud Shape
 
-/// Rounded rectangle shape for the thought cloud.
-struct ThoughtBubbleShape: Shape {
-    let cornerRadius: CGFloat
-    let tailSize: CGFloat
+/// Comic-book cloud shape: convex bumps along every edge like a cartoon thought bubble.
+///
+/// Each edge is divided into equal-width arcs that protrude outward, creating the
+/// classic bumpy cloud silhouette. Adjacent arcs share tangent endpoints so the
+/// path is continuous with no gaps or connector lines on each individual edge.
+/// Small implicit line segments appear only at the four corners between edges,
+/// which is imperceptible at normal sizes.
+struct ThoughtCloudShape: Shape {
+    /// Radius of each individual bump arc. Smaller values → more, tighter bumps.
+    var bumpRadius: CGFloat = 15
 
     func path(in rect: CGRect) -> Path {
-        // Simple rounded rectangle — the "thought" feel comes from the
-        // trailing circles rather than a pointed tail.
-        Path(roundedRect: rect, cornerRadius: cornerRadius, style: .continuous)
+        let r = bumpRadius
+
+        // Compute the number of bumps per edge so each arc exactly fills its slot
+        // (arc diameter = step width/height, ensuring tangent joins between bumps).
+        let nTop = max(3, Int((rect.width / (r * 2)).rounded()))
+        let nBottom = max(3, nTop - 1)  // slightly different count breaks the uniform grid
+        let nSide = max(2, Int((rect.height / (r * 2)).rounded()))
+
+        let hStep = rect.width / CGFloat(nTop)
+        let bStep = rect.width / CGFloat(nBottom)
+        let vStep = rect.height / CGFloat(nSide)
+
+        var path = Path()
+
+        // Clockwise in SwiftUI (y-down): bumps go outward on each edge.
+
+        // Top edge → left to right, bumps protrude upward (toward minY).
+        path.move(to: CGPoint(x: rect.minX + hStep * 0.5 - r, y: rect.minY + r))
+        for i in 0..<nTop {
+            path.addArc(
+                center: CGPoint(x: rect.minX + hStep * (CGFloat(i) + 0.5), y: rect.minY + r),
+                radius: r, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: true)
+        }
+
+        // Right edge ↓, bumps protrude rightward (toward maxX).
+        for i in 0..<nSide {
+            path.addArc(
+                center: CGPoint(x: rect.maxX - r, y: rect.minY + vStep * (CGFloat(i) + 0.5)),
+                radius: r, startAngle: .degrees(270), endAngle: .degrees(90), clockwise: true)
+        }
+
+        // Bottom edge ← right to left, bumps protrude downward (toward maxY).
+        for i in 0..<nBottom {
+            path.addArc(
+                center: CGPoint(x: rect.maxX - bStep * (CGFloat(i) + 0.5), y: rect.maxY - r),
+                radius: r, startAngle: .degrees(0), endAngle: .degrees(180), clockwise: true)
+        }
+
+        // Left edge ↑ bottom to top, bumps protrude leftward (toward minX).
+        for i in 0..<nSide {
+            path.addArc(
+                center: CGPoint(x: rect.minX + r, y: rect.maxY - vStep * (CGFloat(i) + 0.5)),
+                radius: r, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: true)
+        }
+
+        path.closeSubpath()
+        return path
     }
 }

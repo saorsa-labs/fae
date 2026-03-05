@@ -264,48 +264,4 @@ final class TrustedActionBrokerTests: XCTestCase {
             XCTFail("Expected allow for scheduler allowlisted tool")
         }
     }
-
-    func testSchedulerSkillsHeartbeatAllowsReadTool() async {
-        let broker = DefaultTrustedActionBroker(
-            knownTools: ["read"],
-            speakerConfig: FaeConfig.SpeakerConfig()
-        )
-
-        let decision = await broker.evaluate(
-            makeIntent(
-                toolName: "read",
-                source: .scheduler,
-                schedulerTaskId: "skills_heartbeat",
-                schedulerConsentGranted: true
-            )
-        )
-
-        if case .allow(let reason) = decision {
-            XCTAssertEqual(reason.code, .schedulerAutoAllowed)
-        } else {
-            XCTFail("Expected allow for skills_heartbeat read tool")
-        }
-    }
-
-    func testSchedulerSkillsHeartbeatStillDeniesSelfConfig() async {
-        let broker = DefaultTrustedActionBroker(
-            knownTools: ["self_config"],
-            speakerConfig: FaeConfig.SpeakerConfig()
-        )
-
-        let decision = await broker.evaluate(
-            makeIntent(
-                toolName: "self_config",
-                source: .scheduler,
-                schedulerTaskId: "skills_heartbeat",
-                schedulerConsentGranted: true
-            )
-        )
-
-        if case .deny(let reason) = decision {
-            XCTAssertEqual(reason.code, .noExplicitRule)
-        } else {
-            XCTFail("Expected deny for scheduler self_config")
-        }
-    }
 }

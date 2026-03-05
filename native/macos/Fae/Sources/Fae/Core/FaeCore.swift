@@ -295,8 +295,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         memoryStore: memoryStore,
                         entityStore: entityStore,
                         vectorStore: vectorStore,
-                        embeddingEngine: neuralEmbedder,
-                        config: config.scheduler
+                        embeddingEngine: neuralEmbedder
                     )
 
                     // Wire persistence store for scheduler state.
@@ -309,8 +308,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         await coordinator?.speakDirect(text)
                     }
                     await sched.setProactiveQueryHandler { [weak coordinator] prompt, silent, taskId, allowedTools, consentGranted in
-                        guard let coordinator else { return false }
-                        return await coordinator.injectProactiveQuery(
+                        await coordinator?.injectProactiveQuery(
                             prompt: prompt,
                             silent: silent,
                             taskId: taskId,
@@ -318,12 +316,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                             consentGranted: consentGranted
                         )
                     }
-                    await coordinator.setUserInteractionHandler { [weak sched] userText in
+                    await coordinator.setUserInteractionHandler { [weak sched] in
                         await sched?.checkMorningBriefingFallback()
-                        await sched?.recordHeartbeatInteraction(userText: userText)
-                    }
-                    await coordinator.setHeartbeatDecisionHandler { [weak sched] decision, delivered in
-                        await sched?.recordHeartbeatDecision(decision, delivered: delivered)
                     }
                     await coordinator.setProactivePresenceHandler { [weak sched] userPresent in
                         guard userPresent else { return }
@@ -536,12 +530,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
             _ = await skillManager.activate(skillName: "morning-briefing-v2")
         } else {
             await skillManager.deactivate(skillName: "morning-briefing-v2")
-        }
-
-        if config.scheduler.heartbeatEnabled {
-            _ = await skillManager.activate(skillName: "capability-coach")
-        } else {
-            await skillManager.deactivate(skillName: "capability-coach")
         }
     }
 
@@ -914,14 +902,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     private func refreshAwarenessRuntime(restartSchedulerTasks: Bool) {
         let awareness = config.awareness
-        let schedulerConfig = config.scheduler
         let schedulerRef = scheduler
         let skillManagerRef = skillManagerRef
 
         Task {
             if let schedulerRef {
                 await schedulerRef.setAwarenessConfig(awareness)
-                await schedulerRef.setSchedulerConfig(schedulerConfig)
                 if restartSchedulerTasks {
                     await schedulerRef.restartAwarenessTasks()
                 }
@@ -1230,77 +1216,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
             persistConfig(reason: "config.patch.awareness.pause_on_thermal_pressure")
             refreshAwarenessRuntime(restartSchedulerTasks: false)
 
-        case "scheduler.heartbeat_enabled":
-            guard let enabled = value as? Bool else { return }
-            config.scheduler.heartbeatEnabled = enabled
-            persistConfig(reason: "config.patch.scheduler.heartbeat_enabled")
-            refreshAwarenessRuntime(restartSchedulerTasks: false)
-
-        case "scheduler.heartbeat_every_minutes":
-            let parsedMins: Int?
-            if let v = value as? Int { parsedMins = v }
-            else if let v = value as? Double { parsedMins = Int(v) }
-            else { parsedMins = nil }
-            guard let minutes = parsedMins, (5 ... 240).contains(minutes) else { return }
-            config.scheduler.heartbeatEveryMinutes = minutes
-            persistConfig(reason: "config.patch.scheduler.heartbeat_every_minutes")
-            Task { await scheduler?.setSchedulerConfig(config.scheduler) }
-
-        case "scheduler.heartbeat_target":
-            guard let target = value as? String,
-                  ["none", "voice", "canvas"].contains(target)
-            else { return }
-            config.scheduler.heartbeatTarget = target
-            persistConfig(reason: "config.patch.scheduler.heartbeat_target")
-            Task { await scheduler?.setSchedulerConfig(config.scheduler) }
-
-        case "scheduler.heartbeat_active_start":
-            guard let start = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  Self.parseSchedulerClockTime(start) != nil
-            else { return }
-            config.scheduler.heartbeatActiveStart = start
-            persistConfig(reason: "config.patch.scheduler.heartbeat_active_start")
-            Task { await scheduler?.setSchedulerConfig(config.scheduler) }
-
-        case "scheduler.heartbeat_active_end":
-            guard let end = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  Self.parseSchedulerClockTime(end) != nil
-            else { return }
-            config.scheduler.heartbeatActiveEnd = end
-            persistConfig(reason: "config.patch.scheduler.heartbeat_active_end")
-            Task { await scheduler?.setSchedulerConfig(config.scheduler) }
-
-        case "scheduler.heartbeat_ack_token":
-            guard let token = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !token.isEmpty,
-                  token.count <= 64,
-                  !token.contains("\n"),
-                  !token.contains("\r")
-            else { return }
-            config.scheduler.heartbeatAckToken = token
-            persistConfig(reason: "config.patch.scheduler.heartbeat_ack_token")
-            Task { await scheduler?.setSchedulerConfig(config.scheduler) }
-
-        case "scheduler.heartbeat_ack_max_chars":
-            let parsedMaxChars: Int?
-            if let v = value as? Int { parsedMaxChars = v }
-            else if let v = value as? Double { parsedMaxChars = Int(v) }
-            else { parsedMaxChars = nil }
-            guard let maxChars = parsedMaxChars, (0 ... 2000).contains(maxChars) else { return }
-            config.scheduler.heartbeatAckMaxChars = maxChars
-            persistConfig(reason: "config.patch.scheduler.heartbeat_ack_max_chars")
-            Task { await scheduler?.setSchedulerConfig(config.scheduler) }
-
-        case "scheduler.heartbeat_teach_cooldown_minutes":
-            let parsedCooldown: Int?
-            if let v = value as? Int { parsedCooldown = v }
-            else if let v = value as? Double { parsedCooldown = Int(v) }
-            else { parsedCooldown = nil }
-            guard let mins = parsedCooldown, (15 ... 720).contains(mins) else { return }
-            config.scheduler.heartbeatTeachCooldownMinutes = mins
-            persistConfig(reason: "config.patch.scheduler.heartbeat_teach_cooldown_minutes")
-            Task { await scheduler?.setSchedulerConfig(config.scheduler) }
-
         default:
             NSLog("FaeCore: ignoring unknown config key '%@'", key)
         }
@@ -1358,19 +1273,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     // MARK: - Private Helpers
-
-    private static func parseSchedulerClockTime(_ value: String) -> Int? {
-        let parts = value.split(separator: ":")
-        guard parts.count == 2,
-              let h = Int(parts[0]),
-              let m = Int(parts[1]),
-              (0 ... 23).contains(h),
-              (0 ... 59).contains(m)
-        else {
-            return nil
-        }
-        return h * 60 + m
-    }
 
     private func sanitizedString(_ value: Any?) -> String? {
         guard let raw = value as? String else { return nil }

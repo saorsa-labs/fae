@@ -156,33 +156,4 @@ final class FaeConfigTests: XCTestCase {
         let config = FaeConfig.load(from: fileURL)
         XCTAssertFalse(config.tts.voiceIdentityLock)
     }
-
-    func testSchedulerHeartbeatKeysParseSnakeCase() throws {
-        let tempRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
-        let fileURL = tempRoot.appendingPathComponent("config.toml")
-
-        let content = """
-        [scheduler]
-        heartbeat_enabled = true
-        heartbeat_every_minutes = 45
-        heartbeat_target = "canvas"
-        heartbeat_active_start = "08:00"
-        heartbeat_active_end = "20:00"
-        heartbeat_ack_token = "HEARTBEAT_OK"
-        heartbeat_ack_max_chars = 120
-        heartbeat_teach_cooldown_minutes = 90
-        """
-        try content.write(to: fileURL, atomically: true, encoding: .utf8)
-
-        let config = FaeConfig.load(from: fileURL)
-        XCTAssertTrue(config.scheduler.heartbeatEnabled)
-        XCTAssertEqual(config.scheduler.heartbeatEveryMinutes, 45)
-        XCTAssertEqual(config.scheduler.heartbeatTarget, "canvas")
-        XCTAssertEqual(config.scheduler.heartbeatActiveStart, "08:00")
-        XCTAssertEqual(config.scheduler.heartbeatActiveEnd, "20:00")
-        XCTAssertEqual(config.scheduler.heartbeatAckMaxChars, 120)
-        XCTAssertEqual(config.scheduler.heartbeatTeachCooldownMinutes, 90)
-    }
 }

@@ -170,6 +170,9 @@ final class SubtitleStateController: ObservableObject {
     }
 
     /// Append tool call activity to the thinking bubble so users see what Fae is doing.
+    ///
+    /// Resets the 10-second auto-vanish timer on each call so the bubble stays
+    /// visible while tools are actively firing and disappears 10s after the last one.
     func appendToolActivity(_ text: String) {
         thinkHideTask?.cancel()
         isThinking = true
@@ -181,6 +184,13 @@ final class SubtitleStateController: ObservableObject {
         if thinkingText.count > 400 {
             let start = thinkingText.index(thinkingText.endIndex, offsetBy: -350)
             thinkingText = "\u{2026}" + String(thinkingText[start...])
+        }
+        // Auto-vanish 10s after the last tool event (debounced: each tool call resets the timer).
+        thinkHideTask = Task {
+            try? await Task.sleep(for: .seconds(10.0))
+            guard !Task.isCancelled else { return }
+            thinkingText = ""
+            isThinking = false
         }
     }
 
