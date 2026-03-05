@@ -270,6 +270,81 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
+    func testFaeCorePersistsSchedulerHeartbeatPatchKeys() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_enabled", "value": true]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_every_minutes", "value": 25]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_target", "value": "canvas"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_active_start", "value": "09:15"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_active_end", "value": "19:45"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_ack_token", "value": "HEARTBEAT_IDLE"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_ack_max_chars", "value": 64]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        // Invalid HH:MM should be ignored and preserve previous value.
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "scheduler.heartbeat_active_start", "value": "99:99"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertTrue(reloaded.scheduler.heartbeatEnabled)
+        XCTAssertEqual(reloaded.scheduler.heartbeatEveryMinutes, 25)
+        XCTAssertEqual(reloaded.scheduler.heartbeatTarget, "canvas")
+        XCTAssertEqual(reloaded.scheduler.heartbeatActiveStart, "09:15")
+        XCTAssertEqual(reloaded.scheduler.heartbeatActiveEnd, "19:45")
+        XCTAssertEqual(reloaded.scheduler.heartbeatAckToken, "HEARTBEAT_IDLE")
+        XCTAssertEqual(reloaded.scheduler.heartbeatAckMaxChars, 64)
+    }
+
+    @MainActor
     func testFaeCorePersistsVoiceIdentityLockAndExposesTTSRuntimeFields() async throws {
         let url = FaeConfig.configFileURL
         let fm = FileManager.default

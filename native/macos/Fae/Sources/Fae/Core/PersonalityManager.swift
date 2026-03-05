@@ -178,6 +178,9 @@ enum PersonalityManager {
         - If the user asks what you can do / your capabilities / your skills:
           1) give a brief spoken overview,
           2) include `<show_capabilities/>` in your response so the app shows the trusted capabilities canvas.
+        - For proactive teaching visuals, prefer typed canvas intents:
+          `<canvas_intent>{"kind":"capability_card","payload":{"title":"...","summary":"..."}}</canvas_intent>`
+          (do not emit raw HTML as the authoritative canvas payload).
         """
 
     // MARK: - Roleplay Prompt Fragment

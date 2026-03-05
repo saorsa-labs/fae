@@ -82,6 +82,8 @@ private func defaultBuiltinTasks() -> [SchedulerTask] {
                        scheduleType: "weekly", scheduleParams: ["day": "sunday", "hour": "10", "minute": "0"], action: "stale_relationships"),
         SchedulerTask(id: "skill_health_check", name: "Skill Health Check", kind: "builtin", enabled: true,
                        scheduleType: "interval", scheduleParams: ["minutes": "5"], action: "skill_health_check"),
+        SchedulerTask(id: "skills_heartbeat", name: "Skills Heartbeat", kind: "builtin", enabled: true,
+                       scheduleType: "interval", scheduleParams: ["minutes": "30"], action: "skills_heartbeat"),
     ]
 }
 

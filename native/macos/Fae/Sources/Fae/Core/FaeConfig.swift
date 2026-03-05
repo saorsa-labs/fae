@@ -178,6 +178,23 @@ struct FaeConfig: Codable {
     struct SchedulerConfig: Codable {
         var morningBriefingHour: Int = 8
         var skillProposalsHour: Int = 11
+
+        /// Skills-first heartbeat lane (periodic proactive batched checks).
+        var heartbeatEnabled: Bool = true
+        /// Heartbeat cadence in minutes.
+        var heartbeatEveryMinutes: Int = 30
+        /// Delivery target: "none" (default), "voice", or "canvas".
+        var heartbeatTarget: String = "none"
+        /// Optional active-hours gate start (HH:MM, local time).
+        var heartbeatActiveStart: String = "07:00"
+        /// Optional active-hours gate end (HH:MM, local time).
+        var heartbeatActiveEnd: String = "22:00"
+        /// No-op ack token used by heartbeat output suppression.
+        var heartbeatAckToken: String = HeartbeatContract.defaultAckToken
+        /// Maximum chars allowed around ack token before output is suppressed.
+        var heartbeatAckMaxChars: Int = HeartbeatContract.defaultAckMaxChars
+        /// Minimum minutes between proactive teaching nudges.
+        var heartbeatTeachCooldownMinutes: Int = 180
     }
 
     // MARK: - Skills
@@ -758,6 +775,30 @@ struct FaeConfig: Codable {
                 case "skillProposalsHour":
                     guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.scheduler.skillProposalsHour = v
+                case "heartbeatEnabled", "heartbeat_enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatEnabled = v
+                case "heartbeatEveryMinutes", "heartbeat_every_minutes":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatEveryMinutes = max(1, v)
+                case "heartbeatTarget", "heartbeat_target":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatTarget = v
+                case "heartbeatActiveStart", "heartbeat_active_start":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatActiveStart = v
+                case "heartbeatActiveEnd", "heartbeat_active_end":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatActiveEnd = v
+                case "heartbeatAckToken", "heartbeat_ack_token":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatAckToken = v
+                case "heartbeatAckMaxChars", "heartbeat_ack_max_chars":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatAckMaxChars = max(0, v)
+                case "heartbeatTeachCooldownMinutes", "heartbeat_teach_cooldown_minutes":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.scheduler.heartbeatTeachCooldownMinutes = max(1, v)
                 default: break
                 }
             case "speaker":
@@ -872,6 +913,14 @@ struct FaeConfig: Codable {
         lines.append("[scheduler]")
         lines.append("morningBriefingHour = \(scheduler.morningBriefingHour)")
         lines.append("skillProposalsHour = \(scheduler.skillProposalsHour)")
+        lines.append("heartbeatEnabled = \(scheduler.heartbeatEnabled ? "true" : "false")")
+        lines.append("heartbeatEveryMinutes = \(scheduler.heartbeatEveryMinutes)")
+        lines.append("heartbeatTarget = \(encodeString(scheduler.heartbeatTarget))")
+        lines.append("heartbeatActiveStart = \(encodeString(scheduler.heartbeatActiveStart))")
+        lines.append("heartbeatActiveEnd = \(encodeString(scheduler.heartbeatActiveEnd))")
+        lines.append("heartbeatAckToken = \(encodeString(scheduler.heartbeatAckToken))")
+        lines.append("heartbeatAckMaxChars = \(scheduler.heartbeatAckMaxChars)")
+        lines.append("heartbeatTeachCooldownMinutes = \(scheduler.heartbeatTeachCooldownMinutes)")
         lines.append("")
 
         lines.append("[vision]")

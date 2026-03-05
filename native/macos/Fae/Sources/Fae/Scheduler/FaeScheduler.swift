@@ -46,7 +46,8 @@ actor FaeScheduler {
 
     /// Closure to inject a proactive query into the pipeline — set by FaeCore.
     /// Parameters: (prompt, silent, taskId, allowedTools, consentGranted).
-    private var proactiveQueryHandler: (@Sendable (String, Bool, String, Set<String>, Bool) async -> Void)?
+    /// Returns true when queued/accepted, false when skipped (e.g. assistant busy).
+    private var proactiveQueryHandler: (@Sendable (String, Bool, String, Set<String>, Bool) async -> Bool)?
 
     /// Current awareness configuration — updated by FaeCore on config changes.
     private var awarenessConfig: FaeConfig.AwarenessConfig = FaeConfig.AwarenessConfig()
@@ -59,6 +60,20 @@ actor FaeScheduler {
 
     /// Tracks which interests have already had skill proposals surfaced.
     private var suggestedInterestIDs: Set<String> = []
+
+    // MARK: - Skills-First Heartbeat State
+
+    /// Last successful heartbeat run timestamp.
+    private var lastHeartbeatRunAt: Date?
+
+    /// Pending heartbeat retries when proactive queue is busy.
+    private var pendingHeartbeatRetryCount: Int = 0
+
+    /// Persisted progression state for capability teaching.
+    private var capabilityProgress = CapabilityProgressState()
+
+    /// UserDefaults key for persisted capability progression state.
+    private static let capabilityProgressDefaultsKey = "fae.scheduler.capability_progress.v1"
 
     // MARK: - Awareness Tracking State
 
@@ -99,6 +114,13 @@ actor FaeScheduler {
         self.vectorStore = vectorStore
         self.embeddingEngine = embeddingEngine
         self.config = config
+
+        // Best-effort restore of progression state used by skills-first coaching.
+        if let data = UserDefaults.standard.data(forKey: Self.capabilityProgressDefaultsKey),
+           let restored = try? JSONDecoder().decode(CapabilityProgressState.self, from: data)
+        {
+            self.capabilityProgress = restored
+        }
     }
 
     /// Set the speak handler (must be called before start for morning briefings to work).
@@ -113,7 +135,7 @@ actor FaeScheduler {
 
     /// Set the proactive query handler (must be called before start for awareness tasks to work).
     func setProactiveQueryHandler(
-        _ handler: @escaping @Sendable (String, Bool, String, Set<String>, Bool) async -> Void
+        _ handler: @escaping @Sendable (String, Bool, String, Set<String>, Bool) async -> Bool
     ) {
         proactiveQueryHandler = handler
     }
@@ -121,6 +143,12 @@ actor FaeScheduler {
     /// Update awareness configuration (called by FaeCore on config changes).
     func setAwarenessConfig(_ config: FaeConfig.AwarenessConfig) {
         awarenessConfig = config
+    }
+
+    /// Update scheduler configuration (called by FaeCore on config changes).
+    func setSchedulerConfig(_ schedulerConfig: FaeConfig.SchedulerConfig) {
+        config = schedulerConfig
+        restartHeartbeatTaskIfNeeded()
     }
 
     /// Record that the user was seen (called from camera presence observations).
@@ -193,6 +221,9 @@ actor FaeScheduler {
         scheduleRepeating("scheduler_tick", interval: 60) { [weak self] in
             await self?.runDailyChecks()
         }
+
+        // Skills-first heartbeat lane (batched proactive + teaching orchestration).
+        restartHeartbeatTaskIfNeeded()
 
         // Awareness tasks — only scheduled when awareness is enabled.
         if awarenessConfig.enabled, awarenessConfig.consentGrantedAt != nil {
@@ -647,6 +678,268 @@ actor FaeScheduler {
         }
     }
 
+    private func restartHeartbeatTaskIfNeeded() {
+        if let timer = timers.removeValue(forKey: "skills_heartbeat") {
+            timer.cancel()
+        }
+
+        guard isRunning, config.heartbeatEnabled else { return }
+
+        let interval = TimeInterval(max(5, config.heartbeatEveryMinutes) * 60)
+        scheduleRepeating("skills_heartbeat", interval: interval) { [weak self] in
+            await self?.runSkillsHeartbeat()
+        }
+    }
+
+    private func runSkillsHeartbeat() async {
+        guard config.heartbeatEnabled else { return }
+        guard let handler = proactiveQueryHandler else { return }
+
+        if !isWithinHeartbeatActiveHours(Date()) {
+            NSLog("FaeScheduler: skills_heartbeat skipped — outside active hours")
+            incrementHeartbeatMetric("skipped_outside_hours")
+            return
+        }
+
+        let iso = ISO8601DateFormatter().string(from: Date())
+        let quietMode = AwarenessThrottle.isQuietHours()
+        let cooldownRemaining = heartbeatTeachCooldownRemainingMinutes()
+        let cooldownActive = cooldownRemaining > 0
+        let noiseBudgetAvailable = proactiveInterjectionCount < 2
+
+        let effectiveTarget: String = {
+            if quietMode || cooldownActive || !noiseBudgetAvailable {
+                return "none"
+            }
+            return config.heartbeatTarget
+        }()
+
+        if effectiveTarget == "none" {
+            if quietMode { incrementHeartbeatMetric("delivery_muted_quiet_hours") }
+            if cooldownActive { incrementHeartbeatMetric("delivery_muted_cooldown") }
+            if !noiseBudgetAvailable { incrementHeartbeatMetric("delivery_muted_noise_budget") }
+        }
+
+        let envelope = HeartbeatRunEnvelope(
+            runID: UUID().uuidString,
+            timestampISO8601: iso,
+            deliveryTarget: effectiveTarget,
+            quietMode: quietMode,
+            checklist: heartbeatChecklist(),
+            recentContext: await heartbeatRecentContextLines(),
+            progress: capabilityProgress,
+            ack: HeartbeatAckPolicy(
+                token: config.heartbeatAckToken,
+                ackMaxChars: config.heartbeatAckMaxChars
+            )
+        )
+
+        let prompt = buildHeartbeatPrompt(envelope: envelope)
+        let isSilentTarget = effectiveTarget == "none"
+
+        let accepted = await handler(
+            prompt,
+            isSilentTarget,
+            "skills_heartbeat",
+            ["activate_skill", "read", "self_config", "web_search", "fetch_url"],
+            true
+        )
+
+        if !accepted {
+            pendingHeartbeatRetryCount += 1
+            incrementHeartbeatMetric("deferred_busy")
+            let retries = pendingHeartbeatRetryCount
+            if retries <= 3 {
+                let delaySecs = min(30, retries * 5)
+                NSLog("FaeScheduler: skills_heartbeat deferred — assistant busy (retry %d in %ds)", retries, delaySecs)
+                try? await Task.sleep(nanoseconds: UInt64(delaySecs) * 1_000_000_000)
+                await runSkillsHeartbeat()
+            } else {
+                NSLog("FaeScheduler: skills_heartbeat dropped after retries")
+                incrementHeartbeatMetric("dropped_after_retries")
+                pendingHeartbeatRetryCount = 0
+            }
+            return
+        }
+
+        pendingHeartbeatRetryCount = 0
+        lastHeartbeatRunAt = Date()
+        incrementHeartbeatMetric("accepted")
+    }
+
+    private func heartbeatChecklist() -> [String] {
+        [
+            "Read capability-coach skill instructions and run progressive coaching logic.",
+            "If nothing needs attention, respond with \(config.heartbeatAckToken).",
+            "If action is needed, include a <heartbeat_result>{json}</heartbeat_result> decision payload.",
+            "Prefer one high-signal teaching nudge at most.",
+            "If a visual demo is useful, include a <canvas_intent>{json}</canvas_intent> block.",
+        ]
+    }
+
+    private func heartbeatRecentContextLines() async -> [String] {
+        var lines: [String] = []
+        if let lastHeartbeatRunAt {
+            lines.append("last_heartbeat_at=\(ISO8601DateFormatter().string(from: lastHeartbeatRunAt))")
+        }
+        lines.append("progress_stage=\(capabilityProgress.stage.rawValue)")
+        lines.append("successful_nudges=\(capabilityProgress.successfulNudges)")
+        lines.append("dismissed_nudges=\(capabilityProgress.dismissedNudges)")
+        let cooldown = heartbeatTeachCooldownRemainingMinutes()
+        lines.append("teach_cooldown_remaining_minutes=\(cooldown)")
+        lines.append("noise_budget_remaining=\(max(0, 2 - proactiveInterjectionCount))")
+        return lines
+    }
+
+    private func heartbeatTeachCooldownRemainingMinutes(now: Date = Date()) -> Int {
+        guard let iso = capabilityProgress.lastNudgeAtISO8601,
+              let last = ISO8601DateFormatter().date(from: iso)
+        else {
+            return 0
+        }
+        let elapsed = Int(now.timeIntervalSince(last) / 60)
+        let remaining = config.heartbeatTeachCooldownMinutes - elapsed
+        return max(0, remaining)
+    }
+
+    private func markHeartbeatNudgeIssued(topic: String?) {
+        let nowISO = ISO8601DateFormatter().string(from: Date())
+        capabilityProgress.lastNudgeAtISO8601 = nowISO
+        capabilityProgress.lastNudgeTopic = topic
+        persistCapabilityProgress()
+    }
+
+    private func persistCapabilityProgress() {
+        if let data = try? JSONEncoder().encode(capabilityProgress) {
+            UserDefaults.standard.set(data, forKey: Self.capabilityProgressDefaultsKey)
+        }
+    }
+
+    private func incrementHeartbeatMetric(_ suffix: String) {
+        let key = "fae.heartbeat.\(suffix)"
+        let defaults = UserDefaults.standard
+        defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
+    }
+
+    func recordHeartbeatInteraction() {
+        // Any user interaction shortly after a nudge is treated as positive engagement.
+        guard let iso = capabilityProgress.lastNudgeAtISO8601,
+              let last = ISO8601DateFormatter().date(from: iso)
+        else { return }
+
+        if Date().timeIntervalSince(last) <= 600 {
+            capabilityProgress.successfulNudges += 1
+            if capabilityProgress.successfulNudges % 3 == 0 {
+                let nextStage = capabilityProgress.stage.next
+                if nextStage != capabilityProgress.stage {
+                    capabilityProgress.stage = nextStage
+                    capabilityProgress.lastStageChangeAtISO8601 = ISO8601DateFormatter().string(from: Date())
+                    incrementHeartbeatMetric("stage_advanced")
+                }
+            }
+            persistCapabilityProgress()
+        }
+    }
+
+    func recordHeartbeatDecision(_ decision: HeartbeatRunDecision, delivered: Bool) {
+        incrementHeartbeatMetric("status_\(decision.status.rawValue)")
+
+        if let suggested = decision.suggestedStage,
+           shouldAdvance(from: capabilityProgress.stage, to: suggested)
+        {
+            capabilityProgress.stage = suggested
+            capabilityProgress.lastStageChangeAtISO8601 = ISO8601DateFormatter().string(from: Date())
+            incrementHeartbeatMetric("stage_suggested_advance")
+        }
+
+        if decision.status != .ok {
+            if delivered {
+                proactiveInterjectionCount += 1
+                incrementHeartbeatMetric("teaching_nudge")
+                markHeartbeatNudgeIssued(topic: decision.nudgeTopic)
+            } else {
+                capabilityProgress.dismissedNudges += 1
+                incrementHeartbeatMetric("nudge_not_delivered")
+            }
+        }
+
+        persistCapabilityProgress()
+    }
+
+    private func shouldAdvance(from current: CapabilityProgressStage, to suggested: CapabilityProgressStage) -> Bool {
+        guard let currentIndex = CapabilityProgressStage.allCases.firstIndex(of: current),
+              let suggestedIndex = CapabilityProgressStage.allCases.firstIndex(of: suggested)
+        else {
+            return false
+        }
+        return suggestedIndex > currentIndex
+    }
+
+    private func buildHeartbeatPrompt(envelope: HeartbeatRunEnvelope) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let envelopeJSON: String
+        if let data = try? encoder.encode(envelope),
+           let str = String(data: data, encoding: .utf8)
+        {
+            envelopeJSON = str
+        } else {
+            envelopeJSON = "{}"
+        }
+
+        return """
+        [SKILLS-FIRST HEARTBEAT RUN]
+        Activate and follow the `capability-coach` skill.
+
+        Contract:
+        - Use this envelope as authoritative run context.
+        - If no action is needed, reply with \(config.heartbeatAckToken).
+        - If action is needed, include one decision block:
+          <heartbeat_result>{"schemaVersion":1,"status":"nudge|teach|alert|ok","message":"...","nudgeTopic":"...","suggestedStage":"discovering|guidedUse|habitForming|advancedAutomation|powerUser"}</heartbeat_result>
+        - Keep any user-facing text concise and high-signal.
+        - For visuals, emit at most one typed payload block:
+          <canvas_intent>{"kind":"capability_card","payload":{...}}</canvas_intent>
+
+        HEARTBEAT_ENVELOPE_JSON:
+        \(envelopeJSON)
+        """
+    }
+
+    private func isWithinHeartbeatActiveHours(_ date: Date) -> Bool {
+        let cal = Calendar.current
+        let current = cal.component(.hour, from: date) * 60 + cal.component(.minute, from: date)
+
+        guard let start = Self.parseHourMinute(config.heartbeatActiveStart),
+              let end = Self.parseHourMinute(config.heartbeatActiveEnd)
+        else {
+            return true
+        }
+
+        if start == end {
+            return false
+        }
+
+        if start < end {
+            return current >= start && current < end
+        }
+
+        // Wrap-around window (e.g. 22:00-07:00)
+        return current >= start || current < end
+    }
+
+    private static func parseHourMinute(_ value: String) -> Int? {
+        let parts = value.split(separator: ":")
+        guard parts.count == 2,
+              let h = Int(parts[0]),
+              let m = Int(parts[1]),
+              (0 ... 23).contains(h),
+              (0 ... 59).contains(m)
+        else {
+            return nil
+        }
+        return h * 60 + m
+    }
+
     private func runCameraPresenceCheck() async {
         let throttle = AwarenessThrottle.check(
             config: awarenessConfig,
@@ -686,7 +979,7 @@ actor FaeScheduler {
         let prompt = "[PROACTIVE CAMERA OBSERVATION] Check who is at the desk using the camera tool. Follow the proactive-awareness skill instructions."
 
         NSLog("FaeScheduler: camera_presence_check — firing (silent=%@)", silent ? "yes" : "no")
-        await handler(
+        _ = await handler(
             prompt,
             silent,
             "camera_presence_check",
@@ -738,7 +1031,7 @@ actor FaeScheduler {
         let prompt = "[PROACTIVE SCREEN OBSERVATION] Take a screenshot and note the current screen context. Follow the screen-awareness skill instructions."
 
         NSLog("FaeScheduler: screen_activity_check — firing")
-        await handler(
+        _ = await handler(
             prompt,
             true, // Screen observations are always silent.
             "screen_activity_check",
@@ -767,7 +1060,7 @@ actor FaeScheduler {
         let prompt = "[OVERNIGHT RESEARCH CYCLE] Research topics the user cares about. Follow the overnight-research skill instructions."
 
         NSLog("FaeScheduler: overnight_work — firing")
-        await handler(
+        _ = await handler(
             prompt,
             true, // Always silent — research stored in memory.
             "overnight_work",
@@ -803,7 +1096,7 @@ actor FaeScheduler {
         let prompt = "[ENHANCED MORNING BRIEFING] [USER_JUST_ARRIVED] Deliver a warm, conversational morning briefing. Follow the morning-briefing-v2 skill instructions."
 
         NSLog("FaeScheduler: enhanced_morning_briefing — firing")
-        await handler(
+        _ = await handler(
             prompt,
             false, // Briefing should speak.
             "enhanced_morning_briefing",
@@ -860,7 +1153,8 @@ actor FaeScheduler {
             await runDailyIfNeeded("morning_briefing") { await runMorningBriefing() }
         }
         // skill_proposals: configurable hour (default 11:00)
-        if hour == config.skillProposalsHour, minute < 2 {
+        // When skills heartbeat is enabled, proposals are driven by heartbeat coaching.
+        if hour == config.skillProposalsHour, minute < 2, !config.heartbeatEnabled {
             await runDailyIfNeeded("skill_proposals") { await runSkillProposals() }
         }
         // stale_relationships: weekly on Sunday at 10:00.
@@ -926,6 +1220,7 @@ actor FaeScheduler {
         case "screen_activity_check":  await runScreenActivityCheck()
         case "overnight_work":         await runOvernightWork()
         case "enhanced_morning_briefing": await runEnhancedMorningBriefing()
+        case "skills_heartbeat": await runSkillsHeartbeat()
         default:
             NSLog("FaeScheduler: unknown task id '%@'", id)
         }
@@ -1029,7 +1324,7 @@ actor FaeScheduler {
             "morning_briefing", "noise_budget_reset", "skill_proposals",
             "stale_relationships", "skill_health_check", "embedding_reindex",
             "vault_backup", "camera_presence_check", "screen_activity_check",
-            "overnight_work", "enhanced_morning_briefing",
+            "overnight_work", "enhanced_morning_briefing", "skills_heartbeat",
         ]
         ids.formUnion(builtinIDs)
 

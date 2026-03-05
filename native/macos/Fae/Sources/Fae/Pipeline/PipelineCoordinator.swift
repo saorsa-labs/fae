@@ -311,6 +311,9 @@ actor PipelineCoordinator {
     /// Called after proactive screen observations to decide whether to persist context.
     private var proactiveScreenContextHandler: (@Sendable (String) async -> Bool)?
 
+    /// Called after skills heartbeat turns to update scheduler progression/telemetry.
+    private var heartbeatDecisionHandler: (@Sendable (HeartbeatRunDecision, Bool) async -> Void)?
+
     // MARK: - Init
 
     init(
@@ -578,6 +581,11 @@ actor PipelineCoordinator {
         proactiveScreenContextHandler = handler
     }
 
+    /// Register a callback fired after skills-heartbeat decisions are parsed.
+    func setHeartbeatDecisionHandler(_ handler: @escaping @Sendable (HeartbeatRunDecision, Bool) async -> Void) {
+        heartbeatDecisionHandler = handler
+    }
+
     // MARK: - Proactive Query Injection
 
     /// Inject a scheduler-initiated proactive query into the LLM pipeline.
@@ -598,11 +606,11 @@ actor PipelineCoordinator {
         taskId: String,
         allowedTools: Set<String>,
         consentGranted: Bool
-    ) async {
+    ) async -> Bool {
         // Never interrupt an active conversation or generation.
         guard !assistantGenerating, !assistantSpeaking else {
             NSLog("PipelineCoordinator: proactive query skipped — assistant busy")
-            return
+            return false
         }
 
         let proactiveTag = "\(taskId)-\(Int(Date().timeIntervalSince1970 * 1000))"
@@ -638,6 +646,7 @@ actor PipelineCoordinator {
         )
 
         await conversationState.removeMessages(taggedWith: proactiveTag)
+        return true
     }
 
     /// Test speaker match: record 2 seconds, embed, match against profiles.
@@ -1866,6 +1875,79 @@ actor PipelineCoordinator {
         debugLog(debugConsole, .qa, "Capabilities canvas opened from trusted template")
     }
 
+    private func maybeShowTypedCanvasIntent(modelResponse: String) -> Bool {
+        guard let intent = parseCanvasIntent(from: modelResponse) else { return false }
+        let html = trustedCanvasIntentHTML(intent)
+        eventBus.send(.canvasContent(html: html, append: false))
+        eventBus.send(.canvasVisibility(true))
+        debugLog(debugConsole, .qa, "Typed canvas intent rendered kind=\(intent.kind)")
+        return true
+    }
+
+    private func parseCanvasIntent(from text: String) -> HeartbeatCanvasIntent? {
+        guard let json = extractTaggedBlock(text: text, tag: "canvas_intent") else { return nil }
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(HeartbeatCanvasIntent.self, from: data)
+    }
+
+    private func extractTaggedBlock(text: String, tag: String) -> String? {
+        let startTag = "<\(tag)>"
+        let endTag = "</\(tag)>"
+        guard let start = text.range(of: startTag),
+              let end = text.range(of: endTag),
+              start.upperBound <= end.lowerBound
+        else { return nil }
+        return String(text[start.upperBound ..< end.lowerBound])
+    }
+
+    private func trustedCanvasIntentHTML(_ intent: HeartbeatCanvasIntent) -> String {
+        let title = escapeHTML(intent.payload["title"] ?? "Fae update")
+        let summary = escapeHTML(intent.payload["summary"] ?? "")
+        let detail = escapeHTML(intent.payload["detail"] ?? "")
+
+        let badge: String
+        switch intent.kind {
+        case "capability_card": badge = "Capability"
+        case "mini_tutorial": badge = "Tutorial"
+        case "chart": badge = "Chart"
+        case "table": badge = "Table"
+        case "app_preview": badge = "App Preview"
+        default: badge = "Update"
+        }
+
+        return """
+        <html>
+        <head>
+          <meta name='viewport' content='width=device-width, initial-scale=1' />
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1015; color: #e9e9ef; padding: 18px; line-height: 1.45; }
+            .panel { border: 1px solid #2a2d38; border-radius: 10px; padding: 12px; margin-bottom: 10px; background: #171a23; }
+            .badge { display:inline-block; font-size:11px; border:1px solid #3d4354; border-radius: 999px; padding: 3px 8px; margin-bottom: 8px; color:#b6bdd4; }
+            .title { font-weight: 600; margin-bottom: 6px; }
+            .hint { color: #99a0b6; font-size: 12px; margin-top: 8px; }
+          </style>
+        </head>
+        <body>
+          <div class='panel'>
+            <div class='badge'>\(badge)</div>
+            <div class='title'>\(title)</div>
+            <div>\(summary)</div>
+            \(detail.isEmpty ? "" : "<p class='hint'>\(detail)</p>")
+          </div>
+        </body>
+        </html>
+        """
+    }
+
+    private func escapeHTML(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
     /// Unified LLM generation with inline tool execution.
     ///
     /// Streams tokens to TTS. If the model outputs `<tool_call>` markup, executes the
@@ -2506,6 +2588,34 @@ actor PipelineCoordinator {
 
             let spokenText = spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines)
             let visibleResponse = fullResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+            let heartbeatDecision: HeartbeatRunDecision? = {
+                guard proactiveContext?.taskId == "skills_heartbeat" else { return nil }
+                return HeartbeatDecisionParser.parse(
+                    text: visibleResponse,
+                    ackToken: config.scheduler.heartbeatAckToken,
+                    ackMaxChars: config.scheduler.heartbeatAckMaxChars
+                )
+            }()
+
+            if proactiveContext?.taskId == "skills_heartbeat",
+               HeartbeatDecisionParser.isAckOnly(
+                   visibleResponse,
+                   token: config.scheduler.heartbeatAckToken,
+                   ackMaxChars: config.scheduler.heartbeatAckMaxChars
+               )
+            {
+                debugLog(debugConsole, .pipeline, "Heartbeat no-op ack suppressed")
+                let defaults = UserDefaults.standard
+                defaults.set(defaults.integer(forKey: "fae.heartbeat.ack_suppressed") + 1, forKey: "fae.heartbeat.ack_suppressed")
+                if let heartbeatDecision {
+                    await heartbeatDecisionHandler?(heartbeatDecision, false)
+                }
+                assistantGenerating = false
+                eventBus.send(.assistantGenerating(false))
+                activeCapabilityTicket = nil
+                return
+            }
+
             if spokenText.isEmpty && visibleResponse.isEmpty && !options.suppressThinking && !forceSuppressThinking {
                 debugLog(debugConsole, .pipeline, "No visible response after thinking block — retrying with thinking disabled")
                 await generateWithTools(
@@ -2633,7 +2743,32 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .llmThink, "[suppressed non-spoken output] \(String(fullResponse.prefix(160)))")
             }
 
+            let renderedTypedCanvas = maybeShowTypedCanvasIntent(modelResponse: fullResponse)
             maybeShowCapabilitiesCanvas(triggerText: userText, modelResponse: fullResponse)
+
+            if proactiveContext?.taskId == "skills_heartbeat" {
+                let delivered = !spokenText.isEmpty || renderedTypedCanvas
+                let decisionForMetrics: HeartbeatRunDecision? = {
+                    if let heartbeatDecision {
+                        return heartbeatDecision
+                    }
+                    if delivered {
+                        let defaults = UserDefaults.standard
+                        defaults.set(defaults.integer(forKey: "fae.heartbeat.schema_miss") + 1, forKey: "fae.heartbeat.schema_miss")
+                        return HeartbeatRunDecision(
+                            status: .nudge,
+                            message: spokenText.isEmpty ? "heartbeat_canvas_only" : spokenText,
+                            nudgeTopic: nil,
+                            suggestedStage: nil,
+                            canvasIntent: nil
+                        )
+                    }
+                    return nil
+                }()
+                if let decisionForMetrics {
+                    await heartbeatDecisionHandler?(decisionForMetrics, delivered)
+                }
+            }
 
             assistantGenerating = false
             eventBus.send(.assistantGenerating(false))
