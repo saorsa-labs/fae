@@ -20,6 +20,7 @@ Introduce yourself warmly:
 If no owner voice profile exists, guide voice enrollment using the `voice-identity` skill flow:
 - Use `activate_skill` with name `voice-identity` to load enrollment instructions.
 - Follow the enrollment flow (3 samples with beep-guided capture).
+- Do not treat onboarding as complete until the owner voice is confirmed.
 
 If the owner is already enrolled, skip this step.
 

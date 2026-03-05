@@ -145,7 +145,7 @@ actor PipelineCoordinator {
 
     private var mode: PipelineMode = .conversation
     private var degradedMode: PipelineDegradedMode?
-    private var gateState: GateState = .active
+    private var gateState: GateState = .idle
     private var vad = VoiceActivityDetector()
     private var echoSuppressor = EchoSuppressor()
     private var thinkTagStripper = TextProcessing.ThinkTagStripper()
@@ -1174,6 +1174,7 @@ actor PipelineCoordinator {
         }
 
         // Liveness enforcement: reject speech with low liveness score in enforce mode.
+        let ownerProfileExistsForLiveness = await speakerProfileStore?.hasOwnerProfile() ?? false
         if config.voiceIdentity.enabled,
            config.voiceIdentity.mode == "enforce",
            config.speaker.livenessThreshold > 0,
@@ -1183,7 +1184,15 @@ actor PipelineCoordinator {
         {
             NSLog("PipelineCoordinator: rejecting speech — liveness score %.3f below threshold %.2f",
                   liveness.score, config.speaker.livenessThreshold)
-            await speakDirect("I'm not sure that's a live voice. Could you speak directly to me?")
+            if VoiceConversationPolicy.shouldOfferSleepHint(
+                ownerProfileExists: ownerProfileExistsForLiveness,
+                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                speakerRole: currentSpeakerRole
+            ) {
+                await speakDirect("I'm not sure that's a live voice. Could you speak directly to me?")
+            } else {
+                debugLog(debugConsole, .speaker, "Dropping low-liveness speech from non-conversational speaker")
+            }
             return
         }
 
@@ -1222,6 +1231,21 @@ actor PipelineCoordinator {
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
+            let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+            let speakerAllowsConversation = VoiceConversationPolicy.allowsConversation(
+                ownerProfileExists: ownerProfileExists,
+                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                speakerRole: currentSpeakerRole
+            )
+
+            if (awaitingApproval || pendingGovernanceAction != nil) && !speakerAllowsConversation {
+                debugLog(
+                    debugConsole,
+                    .speaker,
+                    "Ignoring approval/governance reply from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                )
+                return
+            }
 
             // Approval gate — while a tool approval is pending, only approval responses
             // are accepted. This prevents unrelated chatter/noise from being routed to the LLM.
@@ -1324,32 +1348,28 @@ actor PipelineCoordinator {
                 return
             }
 
-            eventBus.send(.transcription(text: text, isFinal: true))
-
-            if isConversationStopTrigger(text) {
-                await resetConversationSession(trigger: text, source: "voice")
-                return
-            }
-
-            let voiceCommand = VoiceCommandParser.parse(text)
-            debugLog(debugConsole, .command, "Parsed voice command: \(String(describing: voiceCommand))")
-            let voiceCommandStarted = Date()
-            let handledVoiceCommand = await handleVoiceCommandIfNeeded(voiceCommand, originalText: text)
-            let voiceCommandLatencyMs = Int(Date().timeIntervalSince(voiceCommandStarted) * 1000)
-            recordVoiceCommandMetrics(
-                command: String(describing: voiceCommand),
-                handled: handledVoiceCommand,
-                latencyMs: voiceCommandLatencyMs
-            )
-            if handledVoiceCommand {
-                debugLog(debugConsole, .command, "Handled voice command in \(voiceCommandLatencyMs)ms")
-                return
-            }
-
             if let wakeStore = wakeWordProfileStore {
                 wakeAliases = await wakeStore.allAliases()
             }
-            let wakeMatch = wakeAddressMatch(in: text, logDecision: true)
+            var wakeMatch = wakeAddressMatch(in: text, logDecision: true)
+            let wakeStrength = wakeMatch.map { match in
+                match.kind == .exact ? VoiceConversationWakeStrength.exact : .fuzzy
+            }
+            if !VoiceConversationPolicy.shouldHonorWakeMatch(
+                ownerProfileExists: ownerProfileExists,
+                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                speakerRole: currentSpeakerRole,
+                wakeStrength: wakeStrength
+            ) {
+                if wakeMatch != nil, ownerProfileExists, !firstOwnerEnrollmentActive {
+                    debugLog(
+                        debugConsole,
+                        .speaker,
+                        "Ignoring wake match from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                    )
+                }
+                wakeMatch = nil
+            }
             let addressedToFae = wakeMatch != nil
             if addressedToFae {
                 await learnWakeAliasIfNeeded(rawText: rawText)
@@ -1360,6 +1380,11 @@ actor PipelineCoordinator {
                     debugLog(debugConsole, .command, "Ignored while sleeping (not addressed): \(text)")
                     let words = text.split(whereSeparator: { $0.isWhitespace }).count
                     if words >= 4,
+                       VoiceConversationPolicy.shouldOfferSleepHint(
+                           ownerProfileExists: ownerProfileExists,
+                           firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                           speakerRole: currentSpeakerRole
+                       ),
                        (lastSleepHintAt == nil || Date().timeIntervalSince(lastSleepHintAt!) > 20)
                     {
                         lastSleepHintAt = Date()
@@ -1384,6 +1409,37 @@ actor PipelineCoordinator {
             let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
             if !awaitingApproval && !inFollowup && !addressedToFae && wordCount <= 2 {
                 debugLog(debugConsole, .pipeline, "Dropped short idle utterance: \"\(text)\"")
+                return
+            }
+
+            guard speakerAllowsConversation else {
+                debugLog(
+                    debugConsole,
+                    .speaker,
+                    "Ignored speech from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                )
+                return
+            }
+
+            eventBus.send(.transcription(text: text, isFinal: true))
+
+            if isConversationStopTrigger(text) {
+                await resetConversationSession(trigger: text, source: "voice")
+                return
+            }
+
+            let voiceCommand = VoiceCommandParser.parse(text)
+            debugLog(debugConsole, .command, "Parsed voice command: \(String(describing: voiceCommand))")
+            let voiceCommandStarted = Date()
+            let handledVoiceCommand = await handleVoiceCommandIfNeeded(voiceCommand, originalText: text)
+            let voiceCommandLatencyMs = Int(Date().timeIntervalSince(voiceCommandStarted) * 1000)
+            recordVoiceCommandMetrics(
+                command: String(describing: voiceCommand),
+                handled: handledVoiceCommand,
+                latencyMs: voiceCommandLatencyMs
+            )
+            if handledVoiceCommand {
+                debugLog(debugConsole, .command, "Handled voice command in \(voiceCommandLatencyMs)ms")
                 return
             }
 
@@ -2710,15 +2766,27 @@ actor PipelineCoordinator {
             if !spokenText.isEmpty {
                 await conversationState.addAssistantMessage(spokenText, tag: proactiveContext?.conversationTag)
 
-                // Memory capture.
-                let turnId = newMemoryId(prefix: "turn")
-                _ = await memoryOrchestrator?.capture(
-                    turnId: turnId,
-                    userText: userText,
-                    assistantText: spokenText,
-                    speakerId: currentSpeakerLabel,
-                    utteranceTimestamp: currentUtteranceTimestamp
-                )
+                let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+                if VoiceConversationPolicy.shouldPersistSpeechMemory(
+                    ownerProfileExists: ownerProfileExists,
+                    firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                    speakerRole: currentSpeakerRole
+                ) {
+                    let turnId = newMemoryId(prefix: "turn")
+                    _ = await memoryOrchestrator?.capture(
+                        turnId: turnId,
+                        userText: userText,
+                        assistantText: spokenText,
+                        speakerId: currentSpeakerLabel,
+                        utteranceTimestamp: currentUtteranceTimestamp
+                    )
+                } else {
+                    debugLog(
+                        debugConsole,
+                        .memory,
+                        "Skipped speech memory capture for non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                    )
+                }
 
                 // Sentiment → orb feeling.
                 if let feeling = SentimentClassifier.classify(spokenText) {

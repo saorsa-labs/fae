@@ -542,6 +542,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         coordinator: PipelineCoordinator,
         skillManager: SkillManager
     ) async {
+        _ = await skillManager.activate(skillName: "first-launch-onboarding")
         // Activate the voice-identity skill so its full instructions load into context.
         _ = await skillManager.activate(skillName: "voice-identity")
 
@@ -566,10 +567,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Prime the LLM with one-shot enrollment context (discarded after first turn).
         let enrollmentContext = """
             ENROLLMENT CONTEXT (one-time, not for the user to see):
-            No primary user is enrolled. The voice-identity skill is now active. \
-            Follow the skill's first-launch enrollment instructions. \
+            No primary user is enrolled. The first-launch-onboarding and voice-identity skills are now active. \
+            Follow the onboarding flow from the voice-enrollment step onward. \
             Use the voice_identity tool to collect voice samples and enroll the user as owner. \
             Include wake-name tuning by asking for a few "Hey Fae" samples via collect_wake_samples. \
+            Onboarding is not complete until the owner voice is confirmed. \
             Be warm and conversational — this is their very first interaction with Fae.
             """
         await coordinator.setFirstOwnerEnrollmentContext(enrollmentContext)
@@ -625,8 +627,21 @@ final class FaeCore: ObservableObject, HostCommandSender {
             handleOnboardingGetState(commandName: name)
 
         case "onboarding.complete":
-            hasOwnerSetUp = true
-            NSLog("FaeCore: onboarding complete")
+            Task { [weak self] in
+                guard let self else { return }
+                let hasOwnerProfile = await self.speakerProfileStore.hasOwnerProfile()
+                let isComplete = VoiceConversationPolicy.shouldCompleteOnboarding(
+                    hasOwnerProfile: hasOwnerProfile
+                )
+                await MainActor.run {
+                    self.hasOwnerSetUp = isComplete
+                }
+                if isComplete {
+                    NSLog("FaeCore: onboarding complete (owner enrolled)")
+                } else {
+                    NSLog("FaeCore: onboarding completion ignored — owner voice not enrolled yet")
+                }
+            }
 
         case "onboarding.reset":
             Task {
@@ -1246,11 +1261,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 guard let self else { return }
                 self.hasOwnerSetUp = true
                 Task { await self.pipelineCoordinator?.setFirstOwnerEnrollmentActive(false) }
+                var configChanged = false
+                if !self.config.voiceIdentity.enabled {
+                    self.config.voiceIdentity.enabled = true
+                    configChanged = true
+                    NSLog("FaeCore: auto-enabled voiceIdentity after enrollment")
+                }
                 // Owner enrolled — auto-enable owner-only tool gating.
                 if !self.config.speaker.requireOwnerForTools {
                     self.config.speaker.requireOwnerForTools = true
-                    self.persistConfig(reason: "owner_enrolled_auto_require_tools")
+                    configChanged = true
                     NSLog("FaeCore: auto-enabled requireOwnerForTools after enrollment")
+                }
+                if configChanged {
+                    self.persistConfig(reason: "owner_enrolled_auto_voice_identity")
                 }
                 self.refreshAwarenessRuntime(restartSchedulerTasks: false)
                 NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true")
@@ -1335,6 +1359,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
             if config.speaker.requireOwnerForTools && !hasOwner {
                 debugLog(debugConsoleRef, .qa, "⚠️ Setup audit: owner required for tools but no owner profile enrolled")
                 NSLog("FaeCore: setup audit warning — requireOwnerForTools=true but no owner voice profile is enrolled")
+            }
+
+            if hasOwner && !config.voiceIdentity.enabled {
+                debugLog(debugConsoleRef, .qa, "Setup audit repair: enabling voice identity because an owner profile exists")
+                NSLog("FaeCore: setup audit repair — enabling voice identity because an owner profile exists")
+                config.voiceIdentity.enabled = true
+                persistConfig(reason: "setup.audit.enable_voice_identity")
             }
 
             if config.voiceIdentity.approvalRequiresMatch && !config.voiceIdentity.enabled {

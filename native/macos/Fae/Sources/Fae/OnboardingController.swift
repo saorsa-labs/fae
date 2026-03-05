@@ -319,7 +319,6 @@ final class OnboardingController: ObservableObject {
             )
         }
 
-        isComplete = true
         onOnboardingComplete?()
         NotificationCenter.default.post(
             name: .faeOnboardingComplete,

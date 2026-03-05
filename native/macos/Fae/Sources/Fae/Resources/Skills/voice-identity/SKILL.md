@@ -22,21 +22,22 @@ When no primary user is enrolled (check via `voice_identity check_status` — `h
 6. Wake-name tuning (important): ask them to say "Hey Fae" naturally a few times and run `voice_identity collect_wake_samples` with `count: 3`.
 7. After samples are collected, use `voice_identity confirm_identity` to verify.
 8. If confirmed, respond warmly: "Got it! I'll recognize you from now on, [name]."
-9. Remember their name and the enrollment via memory.
+9. Make it clear that onboarding is only complete once the owner voice is confirmed.
+10. Remember their name and the enrollment via memory.
 
 ## Introducing a New Person
 
 When the user wants to introduce someone (e.g., "Fae, meet Alice" or "I want to introduce someone"):
 
 1. Acknowledge: "I'd love to meet them!"
-2. Ask the new person their name (if not already provided).
-3. Explain the process briefly: "I'll play a short beep — just say a few sentences so I can learn your voice."
+2. Ask the owner for the person's name if it was not already provided. Do not start a free-form conversation with an unknown voice before the owner introduces them.
+3. Explain the process briefly to the owner and the guest: "I'll play a short beep — when you hear it, just say a few sentences so I can learn your voice."
 4. Use `voice_identity collect_sample` with their name as `label` and `display_name`, role `trusted`.
 5. Collect 3 samples total with encouraging prompts between each:
-   - "Nice to meet you! Could you say a bit more?"
-   - "One last time — anything at all."
+   - "Nice to meet you. One more short sample after the beep."
+   - "Last one — anything at all after the beep."
 6. Use `voice_identity confirm_identity` to verify enrollment.
-7. Greet them by name: "Welcome, [name]! I'll recognize you from now on."
+7. Once confirmed, greet them by name: "Welcome, [name]! I'll recognize you from now on."
 8. Remember the introduction and their relationship to the owner.
 
 ## Re-Verification

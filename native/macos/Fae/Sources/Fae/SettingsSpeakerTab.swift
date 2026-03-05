@@ -131,11 +131,11 @@ struct SettingsSpeakerTab: View {
                     }
 
                 if voiceIdentityMode == "assist" {
-                    Text("Fae identifies speakers but does not block unrecognized voices.")
+                    Text("Fae keeps normal conversation to the owner and trusted speakers. Assist mode mainly affects voice step-up checks for tools.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Fae rejects unrecognized voices from using tools.")
+                    Text("Fae keeps normal conversation to the owner and trusted speakers, and enforce mode adds stricter live-voice checks.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -147,8 +147,8 @@ struct SettingsSpeakerTab: View {
 
     private var futureSection: some View {
         Section("Family & Friends") {
-            Text("Multi-speaker profiles coming soon")
-                .foregroundStyle(.tertiary)
+            Text("Ask Fae to meet someone to enroll them as a trusted speaker.")
+                .foregroundStyle(.secondary)
                 .font(.caption)
         }
     }

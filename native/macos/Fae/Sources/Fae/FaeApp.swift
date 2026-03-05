@@ -280,6 +280,13 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        faeCore.$hasOwnerSetUp
+            .receive(on: RunLoop.main)
+            .sink { [weak onboarding] hasOwnerSetUp in
+                onboarding?.isComplete = hasOwnerSetUp
+            }
+            .store(in: &cancellables)
+
         // Wire rescue mode reference to FaeCore.
         faeCore.rescueMode = rescueMode
 
@@ -624,9 +631,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("Fae: contacts access not granted or Me Card not found")
             }
 
-            // Enrollment completion is now handled by FaeCore's enrollment_complete
-            // observer — no need to wait here. hasOwnerSetUp updates reactively.
-            self.onboarding.isComplete = true
         }
     }
 
