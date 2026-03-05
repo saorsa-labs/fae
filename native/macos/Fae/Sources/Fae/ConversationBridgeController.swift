@@ -164,9 +164,12 @@ final class ConversationBridgeController: ObservableObject {
 
     private func handleUserTranscription(text: String) {
         subtitleState?.showUserMessage(text)
-        // Buffer it — only commit to conversation when the coordinator confirms it was accepted
-        // (via AssistantGenerating { active: true }). Noise drops never trigger that event.
-        pendingUserTranscription = text
+        // Show the user bubble immediately — don't wait for AssistantGenerating.
+        // The old approach buffered until generation started, creating a perceptible
+        // delay where the user spoke but saw no bubble. Noise drops that slip through
+        // the echo suppressor are rare and harmless as conversation history entries.
+        conversationController?.appendMessage(role: .user, content: text)
+        pendingUserTranscription = nil
     }
 
     private func handleAssistantSentence(text: String, isFinal: Bool) {
