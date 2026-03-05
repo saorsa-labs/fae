@@ -712,27 +712,33 @@ struct FetchURLTool: Tool {
 struct InputRequestTool: Tool {
     let name = "input_request"
     let description = """
-        Request text input from the user. Use for API keys, passwords, or any sensitive \
-        information you need but shouldn't store. The user will see a secure input card \
-        near the orb. Returns the entered text, or a cancellation notice if dismissed.
+        Request text input from the user via a floating card near the orb. \
+        Use for API keys, passwords, URLs, SSH keys, config snippets, or any \
+        information the user needs to provide. Customise the card title, prompt, \
+        placeholder, and input style to match the conversation context. \
+        Returns the entered text, or a cancellation notice if dismissed.
         """
-    let parametersSchema = #"{"prompt": "string (required) — what you need and why", "placeholder": "string (optional)", "secure": "boolean (optional) — true for passwords/keys", "min_length": "integer (optional)", "regex": "string (optional)", "store_key": "string (optional) — persist secure input to keychain under this key"}"#
+    let parametersSchema = #"{"prompt": "string (required) — what you need and why", "title": "string (optional) — card header, e.g. 'API Key Required'", "placeholder": "string (optional) — hint text inside the field", "secure": "boolean (optional) — true for passwords/keys (dots instead of text)", "multiline": "boolean (optional) — true for multi-line input (SSH keys, config, code)", "min_length": "integer (optional)", "regex": "string (optional)", "store_key": "string (optional) — persist secure input to keychain under this key"}"#
     let requiresApproval = false
     let riskLevel: ToolRiskLevel = .low
-    let example = #"<tool_call>{"name":"input_request","arguments":{"prompt":"Enter your OpenAI API key to continue","placeholder":"sk-...","secure":true,"store_key":"channels.discord.bot_token"}}</tool_call>"#
+    let example = #"<tool_call>{"name":"input_request","arguments":{"prompt":"Enter your OpenAI API key to continue","title":"API Key Required","placeholder":"sk-...","secure":true,"store_key":"channels.discord.bot_token"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         let prompt = input["prompt"] as? String ?? "Please enter a value"
+        let title = input["title"] as? String
         let placeholder = input["placeholder"] as? String ?? ""
         let secure = input["secure"] as? Bool ?? false
+        let multiline = input["multiline"] as? Bool ?? false
         let minLength = input["min_length"] as? Int ?? 0
         let regexPattern = input["regex"] as? String
         let storeKey = input["store_key"] as? String
 
         let text = await InputRequestBridge.shared.request(
             prompt: prompt,
+            title: title,
             placeholder: placeholder,
-            isSecure: secure
+            isSecure: secure,
+            isMultiline: multiline
         )
 
         guard let value = text, !value.isEmpty else {
@@ -827,22 +833,32 @@ actor InputRequestBridge {
     /// Post a single-field input request to the UI and suspend until the user responds.
     ///
     /// - Returns: The user's text, or nil if cancelled or timed out.
-    func request(prompt: String, placeholder: String, isSecure: Bool) async -> String? {
+    func request(
+        prompt: String,
+        title: String? = nil,
+        placeholder: String = "",
+        isSecure: Bool = false,
+        isMultiline: Bool = false
+    ) async -> String? {
         let requestId = UUID().uuidString
 
         return await withCheckedContinuation { continuation in
             textContinuations[requestId] = continuation
 
+            var info: [String: Any] = [
+                "request_id": requestId,
+                "prompt": prompt,
+                "placeholder": placeholder,
+                "is_secure": isSecure,
+                "is_multiline": isMultiline,
+                "mode": "text",
+            ]
+            if let title { info["title"] = title }
+
             NotificationCenter.default.post(
                 name: .faeInputRequired,
                 object: nil,
-                userInfo: [
-                    "request_id": requestId,
-                    "prompt": prompt,
-                    "placeholder": placeholder,
-                    "is_secure": isSecure,
-                    "mode": "text",
-                ]
+                userInfo: info
             )
 
             Task { [requestId] in

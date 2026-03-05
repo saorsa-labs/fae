@@ -17,6 +17,7 @@ import Network
 /// - `POST /approve`       — `{"approved":true}` → resolve pending tool approval
 /// - `GET  /approvals`     — List pending approval requests
 /// - `POST /reset`         — Clear conversation, events, and pipeline history
+/// - `POST /test-input`    — Trigger input-required overlay (testing only)
 @MainActor
 final class TestServer {
     private var listener: NWListener?
@@ -161,6 +162,8 @@ final class TestServer {
             handleApprovals(connection: connection)
         case ("POST", "/reset"):
             handleReset(connection: connection)
+        case ("POST", "/test-input"):
+            handleTestInput(body: body, connection: connection)
         default:
             sendResponse(connection: connection, status: 404, body: ["error": "not found", "path": path])
         }
@@ -455,6 +458,47 @@ final class TestServer {
                 "cleared": ["conversation", "events", "history"],
             ])
         }
+    }
+
+    // MARK: - Test Input Endpoint
+
+    /// POST /test-input — Trigger input-required overlay for testing.
+    ///
+    /// Optional JSON body:
+    /// - `title`: Card header (default: "Fae needs your input")
+    /// - `prompt`: Description text (default: "Please provide the requested information")
+    /// - `is_secure`: Show SecureField (default: false)
+    /// - `is_multiline`: Show multi-line TextEditor (default: false)
+    /// - `placeholder`: Input placeholder text (default: "")
+    /// - `mode`: "text" (single field) or "form" (multiple fields)
+    /// - `fields`: Array of field objects for form mode
+    private func handleTestInput(body: Data?, connection: NWConnection) {
+        let json: [String: Any]
+        if let body, let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            json = parsed
+        } else {
+            json = [:]
+        }
+
+        let requestId = UUID().uuidString
+        var info: [String: Any] = [
+            "request_id": requestId,
+            "title": json["title"] as? String ?? "Fae needs your input",
+            "prompt": json["prompt"] as? String ?? "Please provide the requested information",
+        ]
+
+        if let isSecure = json["is_secure"] as? Bool { info["is_secure"] = isSecure }
+        if let isMultiline = json["is_multiline"] as? Bool { info["is_multiline"] = isMultiline }
+        if let placeholder = json["placeholder"] as? String { info["placeholder"] = placeholder }
+        if let mode = json["mode"] as? String { info["mode"] = mode }
+        if let fields = json["fields"] { info["fields"] = fields }
+
+        NotificationCenter.default.post(name: .faeInputRequired, object: nil, userInfo: info)
+
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "request_id": requestId,
+        ])
     }
 
     // MARK: - Response Helpers
