@@ -3,6 +3,9 @@
 *.DS_Store
 Fae.app/
 .claude/
-/.build/
-/.local/
+
+# Build and local tool artifacts
+.build/
+.local/
 *.profraw
+*.xcresult
