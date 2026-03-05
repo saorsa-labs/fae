@@ -64,9 +64,11 @@ struct ThoughtBubbleView: View {
                     .foregroundColor(.white.opacity(0.88))
                     .lineSpacing(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 28)
-                    .padding(.top, 22)
-                    .padding(.bottom, 18)
+                    // Padding calibrated so all four text corners stay inside the blob.
+                    // The side bulge lobes cover from y≈23 upward with 40 px horizontal margin.
+                    .padding(.horizontal, 40)
+                    .padding(.top, 28)
+                    .padding(.bottom, 26)
                     .id("bottom")
             }
             .onChange(of: text) { _, _ in
@@ -85,7 +87,7 @@ struct ThoughtBubbleView: View {
                     .fill(Self.bubbleColor.opacity(0.16))
             }
         }
-        // Close button — top-right, inside the blob's rightmost lobe.
+        // Close button — positioned inside the large central lobe (not topTrailing which is outside the blob).
         .overlay(alignment: .topTrailing) {
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
@@ -93,8 +95,8 @@ struct ThoughtBubbleView: View {
                     .foregroundStyle(.white.opacity(0.75))
             }
             .buttonStyle(.plain)
-            .padding(.top, 10)
-            .padding(.trailing, 14)
+            .padding(.top, 12)
+            .padding(.trailing, 48)
             .help("Hide thinking for this turn")
         }
         .clipShape(ThoughtCloudBlobShape())
@@ -151,29 +153,32 @@ struct ThoughtBubbleView: View {
 
 // MARK: - ThoughtCloudBlobShape
 
-/// Organic thought-bubble cloud: an irregular blob of nine overlapping circles
-/// that produces the classic comic-book thought-bubble silhouette.
+/// Organic thought-bubble cloud with a text-safe interior.
 ///
-/// Each lobe is defined as (cx, cy) fractions of the bounding rect and r as a
-/// fraction of rect.width — calibrated for a 240×135 (≈1.78:1) frame so the
-/// union of all circles fills the bounding box edge-to-edge.
+/// Architecture: one large central body + two side bulges guarantee the text
+/// area (40 px horizontal, 28 px top, 26 px bottom inset) is *always* inside
+/// the filled region.  Four small top/bottom bumps add the cloud silhouette on
+/// top of that solid core.
 ///
-/// SwiftUI's default nonzero winding-fill rule fills every overlapping region
-/// as solid — no holes, no internal artefacts, clean union.
-/// Because there is no explicit stroke, no internal-circle lines appear.
+/// Verified geometry (240×135 frame, cx/cy as fractions of rect dims, r as
+/// fraction of rect.width):
+///   • Text corners (40,28) and (200,28) → inside side bulges (r≈44 px) ✓
+///   • Text corners (40,109) and (200,109) → inside side bulges ✓
+///   • Close button (≈182,22) → inside central lobe (r≈86 px) ✓
+///
+/// SwiftUI's nonzero winding-fill rule produces a solid union — no holes,
+/// no internal artefacts, no stroked circle outlines.
 struct ThoughtCloudBlobShape: Shape {
 
     private static let lobes: [(cx: CGFloat, cy: CGFloat, r: CGFloat)] = [
-        // (cx, cy as fraction of rect dimensions, r as fraction of rect.width)
-        (0.500, 0.593, 0.217),  // main body — largest, low-center
-        (0.308, 0.467, 0.171),  // left-upper lobe
-        (0.700, 0.444, 0.158),  // right-upper lobe
-        (0.125, 0.556, 0.117),  // far-left lobe  (reaches left edge at 240px)
-        (0.863, 0.533, 0.138),  // far-right lobe (reaches right edge at 240px)
-        (0.433, 0.222, 0.117),  // top center-left bump
-        (0.625, 0.193, 0.108),  // top center-right bump (reaches top edge)
-        (0.317, 0.763, 0.096),  // bottom-left lobe
-        (0.679, 0.741, 0.092),  // bottom-right lobe
+        // cx, cy as fraction of rect dims; r as fraction of rect.width
+        (0.500, 0.480, 0.360),  // LARGE central body — guarantees text-area coverage
+        (0.175, 0.500, 0.185),  // left side bulge  (reaches left edge)
+        (0.825, 0.500, 0.185),  // right side bulge (reaches right edge)
+        (0.370, 0.115, 0.130),  // top-left cloud bump  (reaches top edge)
+        (0.630, 0.095, 0.115),  // top-right cloud bump (reaches top edge)
+        (0.325, 0.870, 0.095),  // bottom-left cloud bump  (reaches bottom edge)
+        (0.675, 0.855, 0.095),  // bottom-right cloud bump (reaches bottom edge)
     ]
 
     func path(in rect: CGRect) -> Path {
