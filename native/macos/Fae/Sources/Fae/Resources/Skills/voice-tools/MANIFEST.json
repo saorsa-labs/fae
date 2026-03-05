@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files"
+  ],
+  "riskTier": "medium",
+  "timeoutSeconds": 30,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "ebe04764e573f14192c69c43c84052a56827c8be22294245edece216eddfa708",
+      "scripts/audio_normalize.py": "ba07fc0c91175d90bf4398a3f84b216b92ed95097482219098cf7ebb2c3a1c7e",
+      "scripts/prepare_voice_sample.py": "4043ca8aebf7849a754b3335f2c8b8732f82624abd7562967bb10518f68a0d92",
+      "scripts/voice_compare.py": "861c254c43706aab2977c0f07db78ed9dbad3b05ca0556a17d617157b3eee4d4",
+      "scripts/voice_quality_check.py": "ca41e062ac65a7948065c65128aebc2693e83be91c4c5f93346a4977e1066285"
+    },
+    "signature": null
+  }
+}

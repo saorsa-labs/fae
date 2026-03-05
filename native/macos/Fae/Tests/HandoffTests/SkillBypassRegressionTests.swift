@@ -204,6 +204,20 @@ final class SkillBypassRegressionTests: XCTestCase {
         XCTAssertEqual(found?.key, "discord")
     }
 
+    func testBuiltInExecutableSkillsHaveValidManifests() async {
+        let manager = SkillManager()
+        let skills = await manager.discoverSkills()
+
+        for skillName in ["forge", "toolbox", "voice-tools"] {
+            guard let skill = skills.first(where: { $0.name == skillName }) else {
+                XCTFail("Expected built-in skill \(skillName) to be discovered")
+                continue
+            }
+            XCTAssertEqual(skill.type, .executable)
+            XCTAssertTrue(skill.isEnabled, "Expected built-in skill \(skillName) to be enabled")
+        }
+    }
+
     func testInvalidSettingsActionDisablesExecutableSkill() async throws {
         let manager = SkillManager()
         let skillName = "settings_bad_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"

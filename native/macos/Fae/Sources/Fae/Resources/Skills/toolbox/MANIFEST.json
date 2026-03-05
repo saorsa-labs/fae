@@ -4,8 +4,7 @@
     "execute"
   ],
   "allowedTools": [
-    "bash",
-    "read"
+    "run_skill"
   ],
   "allowedDomains": [],
   "dataClasses": [
