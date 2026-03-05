@@ -303,7 +303,7 @@ actor PipelineCoordinator {
     }
 
     /// Called on user-initiated turns to let scheduler run morning fallback checks.
-    private var userInteractionHandler: (@Sendable () async -> Void)?
+    private var userInteractionHandler: (@Sendable (String) async -> Void)?
 
     /// Called after proactive camera observations to update scheduler presence state.
     private var proactivePresenceHandler: (@Sendable (Bool) async -> Void)?
@@ -567,7 +567,7 @@ actor PipelineCoordinator {
     }
 
     /// Register a callback fired on each user-initiated turn.
-    func setUserInteractionHandler(_ handler: @escaping @Sendable () async -> Void) {
+    func setUserInteractionHandler(_ handler: @escaping @Sendable (String) async -> Void) {
         userInteractionHandler = handler
     }
 
@@ -1392,7 +1392,7 @@ actor PipelineCoordinator {
         }
 
         if proactiveContext == nil {
-            await userInteractionHandler?()
+            await userInteractionHandler?(queryText)
         }
 
         // Unified pipeline: LLM decides when to use tools via <tool_call> markup.
@@ -2125,7 +2125,11 @@ actor PipelineCoordinator {
                 skillDescriptions: skillDescs
             )
             // Inject activated skill instructions into context.
-            if let activatedCtx = await skillManager?.activatedContext() {
+            // Keep heartbeat coaching instructions out of regular conversation turns.
+            let excludedSkills: Set<String> = proactiveContext?.taskId == "skills_heartbeat"
+                ? []
+                : ["capability-coach"]
+            if let activatedCtx = await skillManager?.activatedContext(excludingSkills: excludedSkills) {
                 systemPrompt += "\n\n" + activatedCtx
             }
             if let context = memoryContext {

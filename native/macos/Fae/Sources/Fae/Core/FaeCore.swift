@@ -318,9 +318,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                             consentGranted: consentGranted
                         )
                     }
-                    await coordinator.setUserInteractionHandler { [weak sched] in
+                    await coordinator.setUserInteractionHandler { [weak sched] userText in
                         await sched?.checkMorningBriefingFallback()
-                        await sched?.recordHeartbeatInteraction()
+                        await sched?.recordHeartbeatInteraction(userText: userText)
                     }
                     await coordinator.setHeartbeatDecisionHandler { [weak sched] decision, delivered in
                         await sched?.recordHeartbeatDecision(decision, delivered: delivered)

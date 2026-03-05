@@ -737,34 +737,46 @@ actor FaeScheduler {
         let prompt = buildHeartbeatPrompt(envelope: envelope)
         let isSilentTarget = effectiveTarget == "none"
 
-        let accepted = await handler(
-            prompt,
-            isSilentTarget,
-            "skills_heartbeat",
-            ["activate_skill", "read", "self_config", "web_search", "fetch_url"],
-            true
-        )
+        let maxRetries = 3
+        var retries = 0
 
-        if !accepted {
-            pendingHeartbeatRetryCount += 1
+        while true {
+            let accepted = await handler(
+                prompt,
+                isSilentTarget,
+                "skills_heartbeat",
+                ["activate_skill", "read", "self_config", "web_search", "fetch_url"],
+                true
+            )
+
+            if accepted {
+                pendingHeartbeatRetryCount = 0
+                lastHeartbeatRunAt = Date()
+                incrementHeartbeatMetric("accepted")
+                return
+            }
+
+            retries += 1
+            pendingHeartbeatRetryCount = retries
             incrementHeartbeatMetric("deferred_busy")
-            let retries = pendingHeartbeatRetryCount
-            if retries <= 3 {
-                let delaySecs = min(30, retries * 5)
-                NSLog("FaeScheduler: skills_heartbeat deferred — assistant busy (retry %d in %ds)", retries, delaySecs)
-                try? await Task.sleep(nanoseconds: UInt64(delaySecs) * 1_000_000_000)
-                await runSkillsHeartbeat()
-            } else {
+
+            guard retries <= maxRetries else {
                 NSLog("FaeScheduler: skills_heartbeat dropped after retries")
                 incrementHeartbeatMetric("dropped_after_retries")
                 pendingHeartbeatRetryCount = 0
+                return
             }
-            return
-        }
 
-        pendingHeartbeatRetryCount = 0
-        lastHeartbeatRunAt = Date()
-        incrementHeartbeatMetric("accepted")
+            let delaySecs = min(30, retries * 5)
+            NSLog("FaeScheduler: skills_heartbeat deferred — assistant busy (retry %d in %ds)", retries, delaySecs)
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delaySecs) * 1_000_000_000)
+            } catch {
+                NSLog("FaeScheduler: skills_heartbeat retry cancelled")
+                pendingHeartbeatRetryCount = 0
+                return
+            }
+        }
     }
 
     private func heartbeatChecklist() -> [String] {
@@ -821,24 +833,69 @@ actor FaeScheduler {
         defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
     }
 
-    func recordHeartbeatInteraction() {
-        // Any user interaction shortly after a nudge is treated as positive engagement.
+    func recordHeartbeatInteraction(userText: String) {
+        // Count as positive engagement only when text plausibly follows up
+        // on the most recent heartbeat nudge.
         guard let iso = capabilityProgress.lastNudgeAtISO8601,
               let last = ISO8601DateFormatter().date(from: iso)
         else { return }
 
-        if Date().timeIntervalSince(last) <= 600 {
-            capabilityProgress.successfulNudges += 1
-            if capabilityProgress.successfulNudges % 3 == 0 {
-                let nextStage = capabilityProgress.stage.next
-                if nextStage != capabilityProgress.stage {
-                    capabilityProgress.stage = nextStage
-                    capabilityProgress.lastStageChangeAtISO8601 = ISO8601DateFormatter().string(from: Date())
-                    incrementHeartbeatMetric("stage_advanced")
+        guard Date().timeIntervalSince(last) <= 600 else { return }
+
+        guard isLikelyHeartbeatEngagement(
+            userText: userText,
+            topic: capabilityProgress.lastNudgeTopic
+        ) else {
+            incrementHeartbeatMetric("interaction_unrelated")
+            return
+        }
+
+        capabilityProgress.successfulNudges += 1
+        if capabilityProgress.successfulNudges % 3 == 0 {
+            let nextStage = capabilityProgress.stage.next
+            if nextStage != capabilityProgress.stage {
+                capabilityProgress.stage = nextStage
+                capabilityProgress.lastStageChangeAtISO8601 = ISO8601DateFormatter().string(from: Date())
+                incrementHeartbeatMetric("stage_advanced")
+            }
+        }
+        persistCapabilityProgress()
+    }
+
+    private func isLikelyHeartbeatEngagement(userText: String, topic: String?) -> Bool {
+        let normalized = userText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+
+        if let topic,
+           !topic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            let normalizedTopic = topic.lowercased()
+            if normalized.contains(normalizedTopic) {
+                return true
+            }
+
+            let topicTerms = Set(normalizedTopic.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+                .filter { $0.count >= 4 })
+            let textTerms = Set(normalized.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+                .filter { $0.count >= 4 })
+
+            if !topicTerms.isEmpty {
+                let overlap = topicTerms.intersection(textTerms)
+                let ratio = Double(overlap.count) / Double(topicTerms.count)
+                if ratio >= 0.5 {
+                    return true
                 }
             }
-            persistCapabilityProgress()
         }
+
+        let engagementMarkers = [
+            "yes", "yeah", "yep", "sure", "okay", "ok", "sounds good",
+            "let's do", "show me", "tell me more", "how do i", "help me",
+            "do that", "try that", "walk me through", "can you show",
+        ]
+        return engagementMarkers.contains { normalized.contains($0) }
     }
 
     func recordHeartbeatDecision(_ decision: HeartbeatRunDecision, delivered: Bool) {
