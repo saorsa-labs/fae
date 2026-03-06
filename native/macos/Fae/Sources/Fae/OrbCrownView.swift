@@ -92,29 +92,7 @@ struct OrbCrownView: View {
                 }
             }
 
-            VStack {
-                HStack {
-                    Spacer()
-                    Button {
-                        NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
-                    } label: {
-                        Image(systemName: "rectangle.3.group.bubble.left.fill")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 40, height: 40)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open Work with Fae")
-                    .padding(.trailing, 12)
-                    .padding(.top, 10)
-                }
-                Spacer()
-            }
+
         }
         .frame(height: 300)
     }

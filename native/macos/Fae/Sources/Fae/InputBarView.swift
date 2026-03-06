@@ -41,6 +41,7 @@ struct InputBarView: View {
             // Action pills
             HStack(spacing: 8) {
                 thinkingTogglePill
+                coworkPill
             }
         }
         .padding(.horizontal, 16)
@@ -226,6 +227,35 @@ struct InputBarView: View {
         }
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.2), value: faeCore.thinkingEnabled)
+    }
+
+    // MARK: - Co-Work Pill
+
+    private var coworkPill: some View {
+        Button(action: {
+            NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
+        }) {
+            HStack(spacing: 5) {
+                Image(systemName: "rectangle.3.group.bubble.left.fill")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.45))
+                Text("Work with Fae")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.45))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Open Work with Fae")
     }
 
     // MARK: - Submit
