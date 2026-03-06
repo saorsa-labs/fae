@@ -1221,9 +1221,9 @@ actor PipelineCoordinator {
         publishVoiceAttention(
             stage: "wake",
             decision: "detected",
-            reason: "acoustic_segment_match",
+            reason: "acoustic_segment_match_consensus",
             wakeSource: "acoustic",
-            wakeScore: detection.similarity,
+            wakeScore: detection.consensusSimilarity,
             rms: VoiceActivityDetector.computeRMS(prefix)
         )
         return detection
@@ -1276,14 +1276,14 @@ actor PipelineCoordinator {
         debugLog(
             debugConsole,
             .command,
-            "Acoustic wake detected sim=\(String(format: "%.3f", detection.similarity)) templates=\(detection.templateCount)"
+            "Acoustic wake detected sim=\(String(format: "%.3f", detection.similarity)) consensus=\(String(format: "%.3f", detection.consensusSimilarity)) support=\(detection.supportCount)/\(detection.templateCount)"
         )
         publishVoiceAttention(
             stage: "wake",
             decision: "detected",
-            reason: "acoustic_prefix_match",
+            reason: "acoustic_prefix_match_consensus",
             wakeSource: "acoustic",
-            wakeScore: detection.similarity,
+            wakeScore: detection.consensusSimilarity,
             rms: vadOutput.rms
         )
     }

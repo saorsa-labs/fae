@@ -19,12 +19,17 @@ struct WakeWordAcousticDetector {
         let similarity: Float
         let templateCount: Int
         let durationSeconds: Float
+        let supportCount: Int
+        let consensusSimilarity: Float
+        let effectiveThreshold: Float
     }
 
+    static let minTemplateCount = 2
     static let minDurationSeconds: Float = 0.35
     static let maxDurationSeconds: Float = 1.80
     private static let targetFrames = 48
     private static let silenceFloor: Float = 0.008
+    private static let supportWindow: Float = 0.035
 
     static func makeTemplate(samples: [Float], sampleRate: Int) -> Template? {
         guard let prepared = prepare(samples: samples, sampleRate: sampleRate) else { return nil }
@@ -43,15 +48,29 @@ struct WakeWordAcousticDetector {
         templates: [Template],
         threshold: Float
     ) -> Detection? {
+        guard templates.count >= minTemplateCount else { return nil }
         guard let prepared = prepare(samples: samples, sampleRate: sampleRate) else { return nil }
-        guard let similarity = bestSimilarity(embedding: prepared.embedding, templates: templates) else {
-            return nil
-        }
-        guard similarity >= threshold else { return nil }
+
+        let similarities = allSimilarities(embedding: prepared.embedding, templates: templates)
+        guard let best = similarities.first else { return nil }
+
+        let supportCutoff = best - supportWindow
+        let supportCount = similarities.filter { $0 >= supportCutoff }.count
+        let consensusWindow = similarities.prefix(min(3, similarities.count))
+        let consensusSimilarity = consensusWindow.reduce(Float.zero, +) / Float(consensusWindow.count)
+        let shortPrefixBoost: Float = prepared.durationSeconds < 0.55 ? 0.02 : 0.0
+        let effectiveThreshold = min(threshold + shortPrefixBoost, 0.95)
+
+        guard best >= effectiveThreshold else { return nil }
+        guard supportCount >= minTemplateCount else { return nil }
+
         return Detection(
-            similarity: similarity,
+            similarity: best,
             templateCount: templates.count,
-            durationSeconds: prepared.durationSeconds
+            durationSeconds: prepared.durationSeconds,
+            supportCount: supportCount,
+            consensusSimilarity: consensusSimilarity,
+            effectiveThreshold: effectiveThreshold
         )
     }
 
@@ -61,12 +80,14 @@ struct WakeWordAcousticDetector {
     }
 
     private static func bestSimilarity(embedding: [Float], templates: [Template]) -> Float? {
-        guard !templates.isEmpty else { return nil }
-        var best: Float = -.greatestFiniteMagnitude
-        for template in templates where template.embedding.count == embedding.count {
-            best = max(best, cosineSimilarity(embedding, template.embedding))
-        }
-        return best.isFinite ? best : nil
+        allSimilarities(embedding: embedding, templates: templates).first
+    }
+
+    private static func allSimilarities(embedding: [Float], templates: [Template]) -> [Float] {
+        templates
+            .filter { $0.embedding.count == embedding.count }
+            .map { cosineSimilarity(embedding, $0.embedding) }
+            .sorted(by: >)
     }
 
     private static func prepare(samples: [Float], sampleRate: Int) -> (embedding: [Float], durationSeconds: Float)? {

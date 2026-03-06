@@ -50,7 +50,7 @@ struct SettingsModelsPerformanceTab: View {
     @AppStorage("ttsVoiceIdentityLock") private var voiceIdentityLock: Bool = true
     @AppStorage("bargeInEnabled") private var bargeInEnabled: Bool = true
     @AppStorage("acousticWakeEnabled") private var acousticWakeEnabled: Bool = true
-    @AppStorage("acousticWakeThreshold") private var acousticWakeThreshold: Double = 0.78
+    @AppStorage("acousticWakeThreshold") private var acousticWakeThreshold: Double = 0.82
 
     // MARK: - System Info
     @State private var systemRAM: String = "—"
@@ -462,7 +462,7 @@ struct SettingsModelsPerformanceTab: View {
                         Spacer()
                         Text("\(wakeTemplateCount)")
                             .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(wakeTemplateCount > 0 ? .green : .secondary)
+                            .foregroundStyle(wakeTemplateCount >= WakeWordAcousticDetector.minTemplateCount ? .green : (wakeTemplateCount == 1 ? .orange : .secondary))
                     }
 
                     if acousticWakeEnabled {
@@ -486,8 +486,10 @@ struct SettingsModelsPerformanceTab: View {
 
                     Text(
                         wakeTemplateCount == 0
-                            ? "Acoustic wake detection uses your own 'Hey Fae' samples. Ask Fae to tune your wake phrase if you want audio-level wakeups before STT."
-                            : "Uses your enrolled wake-phrase audio as a pre-STT wake detector. Text wake matching still stays on as a fallback."
+                            ? "Acoustic wake detection uses your own ‘Hey Fae’ samples. Ask Fae to tune your wake phrase if you want audio-level wakeups before STT."
+                            : wakeTemplateCount == 1
+                                ? "Fae has one wake sample and is still learning. Add at least one more clean sample so the detector can require agreement across multiple examples."
+                                : "Uses your enrolled wake-phrase audio as a pre-STT wake detector with multi-sample agreement for fewer false positives. Text wake matching still stays on as a fallback."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)

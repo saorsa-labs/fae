@@ -140,7 +140,7 @@ struct FaeConfig: Codable {
         var requireDirectAddress: Bool = true
         var directAddressFollowupS: Int = 30
         var acousticWakeEnabled: Bool = true
-        var acousticWakeThreshold: Float = 0.78
+        var acousticWakeThreshold: Float = 0.82
         var sleepPhrases: [String] = [
             "shut up", "stop fae", "go to sleep",
             "that will do fae", "that'll do fae",

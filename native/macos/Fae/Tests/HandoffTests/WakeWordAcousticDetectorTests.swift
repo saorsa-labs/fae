@@ -5,14 +5,18 @@ final class WakeWordAcousticDetectorTests: XCTestCase {
 
     func testDetectorMatchesSameWakePhrase() throws {
         let samples = Self.syntheticWakePhrase()
-        let template = try XCTUnwrap(
+        let variant = Self.syntheticWakePhraseVariant()
+        let templateA = try XCTUnwrap(
             WakeWordAcousticDetector.makeTemplate(samples: samples, sampleRate: 24_000)
+        )
+        let templateB = try XCTUnwrap(
+            WakeWordAcousticDetector.makeTemplate(samples: variant, sampleRate: 24_000)
         )
 
         let detection = WakeWordAcousticDetector.bestDetection(
             samples: samples,
             sampleRate: 24_000,
-            templates: [template],
+            templates: [templateA, templateB],
             threshold: 0.70
         )
 
@@ -22,18 +26,63 @@ final class WakeWordAcousticDetectorTests: XCTestCase {
 
     func testDetectorRejectsDifferentPhrase() throws {
         let wake = Self.syntheticWakePhrase()
+        let wakeVariant = Self.syntheticWakePhraseVariant()
         let other = Self.syntheticNonWakePhrase()
+        let templateA = try XCTUnwrap(
+            WakeWordAcousticDetector.makeTemplate(samples: wake, sampleRate: 24_000)
+        )
+        let templateB = try XCTUnwrap(
+            WakeWordAcousticDetector.makeTemplate(samples: wakeVariant, sampleRate: 24_000)
+        )
+
+        let detection = WakeWordAcousticDetector.bestDetection(
+            samples: other,
+            sampleRate: 24_000,
+            templates: [templateA, templateB],
+            threshold: 0.70
+        )
+
+        XCTAssertNil(detection)
+    }
+
+    func testDetectorRequiresAtLeastTwoTemplates() throws {
+        let wake = Self.syntheticWakePhrase()
         let template = try XCTUnwrap(
             WakeWordAcousticDetector.makeTemplate(samples: wake, sampleRate: 24_000)
         )
 
-        let similarity = WakeWordAcousticDetector.bestSimilarity(
-            samples: other,
+        let detection = WakeWordAcousticDetector.bestDetection(
+            samples: wake,
             sampleRate: 24_000,
-            templates: [template]
-        ) ?? 0
+            templates: [template],
+            threshold: 0.70
+        )
 
-        XCTAssertLessThan(similarity, 0.88)
+        XCTAssertNil(detection)
+    }
+
+    func testDetectorReportsConsensusAcrossTemplates() throws {
+        let wake = Self.syntheticWakePhrase()
+        let variant = Self.syntheticWakePhraseVariant()
+        let templateA = try XCTUnwrap(
+            WakeWordAcousticDetector.makeTemplate(samples: wake, sampleRate: 24_000)
+        )
+        let templateB = try XCTUnwrap(
+            WakeWordAcousticDetector.makeTemplate(samples: variant, sampleRate: 24_000)
+        )
+
+        let detection = try XCTUnwrap(
+            WakeWordAcousticDetector.bestDetection(
+                samples: wake,
+                sampleRate: 24_000,
+                templates: [templateA, templateB],
+                threshold: 0.70
+            )
+        )
+
+        XCTAssertGreaterThanOrEqual(detection.supportCount, 2)
+        XCTAssertGreaterThanOrEqual(detection.consensusSimilarity, 0.70)
+        XCTAssertGreaterThanOrEqual(detection.effectiveThreshold, 0.70)
     }
 
     static func syntheticWakePhrase(sampleRate: Int = 24_000) -> [Float] {
@@ -41,6 +90,14 @@ final class WakeWordAcousticDetectorTests: XCTestCase {
             sampleRate: sampleRate,
             tones: [420, 640, 520],
             durations: [0.18, 0.20, 0.16]
+        )
+    }
+
+    static func syntheticWakePhraseVariant(sampleRate: Int = 24_000) -> [Float] {
+        syntheticPhrase(
+            sampleRate: sampleRate,
+            tones: [432, 628, 512],
+            durations: [0.19, 0.19, 0.17]
         )
     }
 

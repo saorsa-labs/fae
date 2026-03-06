@@ -28,7 +28,7 @@ struct SettingsDiagnosticsTab: View {
     @State private var section: Section = .voice
     @State private var wakeTemplateCount: Int = 0
     @State private var acousticWakeEnabled: Bool = true
-    @State private var acousticWakeThreshold: Double = 0.78
+    @State private var acousticWakeThreshold: Double = 0.82
     @State private var loadedVoiceConfig: Bool = false
     @State private var isRefreshingVoiceConfig: Bool = false
 
@@ -50,12 +50,24 @@ struct SettingsDiagnosticsTab: View {
 
     private var detectorStatusText: String {
         guard acousticWakeEnabled else { return "Disabled" }
-        return wakeTemplateCount > 0 ? "Armed" : "Needs samples"
+        if wakeTemplateCount >= WakeWordAcousticDetector.minTemplateCount {
+            return "Armed"
+        }
+        if wakeTemplateCount == 1 {
+            return "Learning"
+        }
+        return "Needs samples"
     }
 
     private var detectorStatusColor: Color {
         if !acousticWakeEnabled { return .secondary }
-        return wakeTemplateCount > 0 ? .green : .orange
+        if wakeTemplateCount >= WakeWordAcousticDetector.minTemplateCount {
+            return .green
+        }
+        if wakeTemplateCount == 1 {
+            return .yellow
+        }
+        return .orange
     }
 
     private var listeningStateText: String {
@@ -318,8 +330,10 @@ struct SettingsDiagnosticsTab: View {
 
                 Text(
                     wakeTemplateCount == 0
-                        ? "No acoustic wake samples are enrolled yet. Text wake matching still works, but a few 'Hey Fae' samples will unlock pre-STT wake detection."
-                        : "Acoustic wake runs before STT and stays conservative. Lower the threshold slightly if it misses genuine wake attempts; raise it if TV or nearby voices slip through."
+                        ? "No acoustic wake samples are enrolled yet. Text wake matching still works, but you’ll want at least two clean ‘Hey Fae’ samples before the audio wake detector can arm itself."
+                        : wakeTemplateCount == 1
+                            ? "Fae has one wake sample and is still learning. Add one or two more clean samples so wake matches need consistent agreement instead of a single lucky hit."
+                            : "Acoustic wake now requires agreement across multiple wake samples before it fires. Lower the threshold slightly if genuine wake attempts miss; raise it if TV or nearby voices still slip through."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
