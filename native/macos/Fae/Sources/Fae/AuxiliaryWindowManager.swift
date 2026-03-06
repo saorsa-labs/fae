@@ -476,29 +476,15 @@ final class AuxiliaryWindowManager: ObservableObject {
         canvasPanelDelegate = delegate
         let panel = makeUtilityPanel(size: canvasSize, title: "Canvas", delegate: delegate)
 
-        // Glass background: clear panel so NSVisualEffectView shows through.
+        // Clear panel — SwiftUI .ultraThinMaterial in CanvasWindowView handles the glass,
+        // matching the main window exactly (same material, same rendering path).
         panel.backgroundColor = .clear
+        panel.isOpaque = false
 
         guard let controller = canvasController else { return panel }
         guard let panelContentView = panel.contentView else { return panel }
 
-        // Frosted glass layer using .sidebar material with dark appearance.
-        // No tint overlay — .sidebar + darkAqua provides a natural dark glass.
-        let effectView = NSVisualEffectView()
-        effectView.material = .sidebar
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
-        effectView.appearance = NSAppearance(named: .darkAqua)
-        effectView.translatesAutoresizingMaskIntoConstraints = false
-        panelContentView.addSubview(effectView)
-        NSLayoutConstraint.activate([
-            effectView.topAnchor.constraint(equalTo: panelContentView.topAnchor),
-            effectView.bottomAnchor.constraint(equalTo: panelContentView.bottomAnchor),
-            effectView.leadingAnchor.constraint(equalTo: panelContentView.leadingAnchor),
-            effectView.trailingAnchor.constraint(equalTo: panelContentView.trailingAnchor),
-        ])
-
-        // SwiftUI content on top of glass — fully transparent so blur shows.
+        // SwiftUI content — CanvasWindowView applies .ultraThinMaterial background.
         let canvasView = CanvasWindowView(
             canvasController: controller,
             onClose: { [weak self] in self?.hideCanvas() }

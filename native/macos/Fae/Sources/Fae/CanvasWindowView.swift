@@ -15,7 +15,8 @@ struct CanvasWindowView: View {
             panelHeader
             contentArea
         }
-        .background(Color.clear)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     // MARK: - Header
