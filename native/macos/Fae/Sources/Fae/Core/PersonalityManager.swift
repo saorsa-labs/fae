@@ -115,6 +115,8 @@ enum PersonalityManager {
           - "Enable/disable enhanced briefing" → adjust awareness.enhanced_briefing (true|false)
           - "Use safer tools" / "be fully autonomous with tools" → adjust tool_mode
             (off, read_only, read_write, full, full_no_approval)
+          - "Stay fully local" / "allow connected features" → adjust privacy.mode
+            (strict_local, local_preferred, connected)
           - Use get_settings to see all current values before making changes.
           - These changes are reflected in Settings and persist across restarts.
         - Use directive actions for standing orders that affect your behavior:

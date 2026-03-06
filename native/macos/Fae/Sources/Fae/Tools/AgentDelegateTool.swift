@@ -26,6 +26,15 @@ struct AgentDelegateTool: Tool {
         let model = input["model"] as? String
         let secretBindings = parseStringMap(input["secret_bindings"]) ?? [:]
 
+        let delegationScan = SensitiveContentPolicy.scan(
+            [prompt, appendSystemPrompt ?? ""].joined(separator: "\n")
+        )
+        if delegationScan.shouldBlockDelegation {
+            return .error(
+                "This task appears to include sensitive information. Delegation is blocked so the sensitive parts stay local to Fae."
+            )
+        }
+
         let workdir: URL
         if let rawPath = input["workdir"] as? String, !rawPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let expanded = NSString(string: rawPath).expandingTildeInPath

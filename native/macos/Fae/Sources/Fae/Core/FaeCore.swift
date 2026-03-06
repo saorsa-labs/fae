@@ -287,6 +287,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let bargeInPref = UserDefaults.standard.object(forKey: "bargeInEnabled") as? Bool
                     ?? config.bargeIn.enabled
                 await coordinator.setBargeInEnabled(bargeInPref)
+                await coordinator.setPrivacyMode(config.privacy.mode)
 
                 // Wire SelfConfigTool's configPatcher to this FaeCore instance.
                 SelfConfigTool.configPatcher = { [weak self] key, value in
@@ -395,6 +396,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 // Listen for enrollment_complete to update hasOwnerSetUp.
                 self.observeEnrollmentComplete()
+                // Listen for mic mute toggle from the UI mic button.
+                self.observeMicMuteToggle()
             } catch {
                 let errMsg = "FaeCore: failed to start pipeline: \(error.localizedDescription)"
                 NSLog("%@", errMsg)
@@ -905,7 +908,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         let registry = ToolRegistry.buildDefault()
         let tools = registry.allTools
-            .filter { registry.isToolAllowed($0.name, mode: toolMode) }
+            .filter { registry.isToolAllowed($0.name, mode: toolMode, privacyMode: config.privacy.mode) }
             .sorted { $0.name < $1.name }
             .map {
                 CoworkToolSummary(
@@ -1026,6 +1029,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
             if let coordinator = pipelineCoordinator {
                 Task {
                     await coordinator.setToolMode(value)
+                }
+            }
+
+        case "privacy.mode":
+            guard let value = value as? String,
+                  ["strict_local", "local_preferred", "connected"].contains(value)
+            else { return }
+            config.privacy.mode = value
+            persistConfig(reason: "config.patch.privacy.mode")
+            if let coordinator = pipelineCoordinator {
+                Task {
+                    await coordinator.setPrivacyMode(value)
                 }
             }
 
@@ -1355,6 +1370,26 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 }
                 self.refreshAwarenessRuntime(restartSchedulerTasks: false)
                 NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true")
+            }
+        }
+    }
+
+    /// Observe the mic mute toggle posted by `ConversationController.toggleListening()`.
+    ///
+    /// Routes the `faeConversationGateSet` notification directly to
+    /// `PipelineCoordinator.setMicMuted()` so the audio capture is actually
+    /// silenced — the HostCommandBridge path drops it (no backend sender).
+    private var micMuteObserver: NSObjectProtocol?
+    private func observeMicMuteToggle() {
+        guard micMuteObserver == nil else { return }
+        micMuteObserver = NotificationCenter.default.addObserver(
+            forName: .faeConversationGateSet,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let active = notification.userInfo?["active"] as? Bool else { return }
+            Task { [weak self] in
+                await self?.pipelineCoordinator?.setMicMuted(!active)
             }
         }
     }
@@ -1824,6 +1859,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             return [
                 "payload": [
                     "tool_mode": config.toolMode,
+                ] as [String: Any],
+            ]
+        case "privacy":
+            return [
+                "payload": [
+                    "privacy": [
+                        "mode": config.privacy.mode,
+                    ] as [String: Any],
                 ] as [String: Any],
             ]
         case "channels":

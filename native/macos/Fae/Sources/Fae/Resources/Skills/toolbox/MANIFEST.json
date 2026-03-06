@@ -8,10 +8,13 @@
   ],
   "allowedDomains": [],
   "dataClasses": [
-    "local_files"
+    "local_files",
+    "network"
   ],
   "riskTier": "low",
   "timeoutSeconds": 30,
+  "allowNetwork": true,
+  "allowSubprocess": true,
   "integrity": {
     "algorithm": "sha256",
     "checksums": {

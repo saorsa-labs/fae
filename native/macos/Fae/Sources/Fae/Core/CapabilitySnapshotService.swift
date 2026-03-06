@@ -16,6 +16,7 @@ enum CapabilitySnapshotService {
     static func buildSnapshot(
         triggerText: String,
         toolMode: String,
+        privacyMode: String,
         speakerState: String,
         ownerGateEnabled: Bool,
         ownerProfileExists: Bool,
@@ -29,11 +30,11 @@ enum CapabilitySnapshotService {
         registry: ToolRegistry
     ) -> ToolPermissionSnapshot {
         let allowedTools = registry.toolNames
-            .filter { registry.isToolAllowed($0, mode: toolMode) }
+            .filter { registry.isToolAllowed($0, mode: toolMode, privacyMode: privacyMode) }
             .sorted()
 
         let deniedTools = registry.toolNames
-            .filter { !registry.isToolAllowed($0, mode: toolMode) }
+            .filter { !registry.isToolAllowed($0, mode: toolMode, privacyMode: privacyMode) }
             .sorted()
 
         return ToolPermissionSnapshot(

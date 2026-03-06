@@ -18,6 +18,7 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertTrue(config.vision.enabled)
         XCTAssertTrue(config.awareness.enabled)
         XCTAssertNil(config.awareness.consentGrantedAt)
+        XCTAssertEqual(config.privacy.mode, "local_preferred")
     }
 
     func testConversationDefaultsRequireWakeAfterIdle() {
@@ -84,6 +85,7 @@ final class FaeConfigTests: XCTestCase {
         original.bargeIn.minRms = 0.12
 
         original.memory.maxRecallResults = 11
+        original.privacy.mode = "strict_local"
 
         try original.save(to: fileURL)
 
@@ -115,6 +117,7 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(loaded.bargeIn.minRms, 0.12, accuracy: 0.0001)
 
         XCTAssertEqual(loaded.memory.maxRecallResults, 11)
+        XCTAssertEqual(loaded.privacy.mode, "strict_local")
     }
 
     func testRecommendedVLMModelAcceptsCurrentPresetNames() {

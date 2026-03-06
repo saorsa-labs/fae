@@ -351,6 +351,14 @@ final class ToolModeFilteringTests: XCTestCase {
         XCTAssertTrue(registry.isToolAllowed("delegate_agent", mode: "full"))
     }
 
+    func testStrictLocalPrivacyModeBlocksNetworkAndDelegationTools() {
+        XCTAssertFalse(registry.isToolAllowed("delegate_agent", mode: "full", privacyMode: "strict_local"))
+        XCTAssertFalse(registry.isToolAllowed("web_search", mode: "full", privacyMode: "strict_local"))
+        XCTAssertFalse(registry.isToolAllowed("fetch_url", mode: "full", privacyMode: "strict_local"))
+        XCTAssertTrue(registry.isToolAllowed("read", mode: "full", privacyMode: "strict_local"))
+        XCTAssertTrue(registry.isToolAllowed("write", mode: "full", privacyMode: "strict_local"))
+    }
+
     // MARK: - Schema Filtering
 
     func testOffModeSchemasAreEmpty() {

@@ -312,6 +312,7 @@ struct SettingsToolsTab: View {
         toolSnapshot = CapabilitySnapshotService.buildSnapshot(
             triggerText: "settings.tools",
             toolMode: toolMode,
+            privacyMode: config.privacy.mode,
             speakerState: "Speaker unknown",
             ownerGateEnabled: config.speaker.requireOwnerForTools,
             ownerProfileExists: false,

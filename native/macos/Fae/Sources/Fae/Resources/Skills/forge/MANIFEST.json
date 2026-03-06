@@ -12,6 +12,8 @@
   ],
   "riskTier": "high",
   "timeoutSeconds": 120,
+  "allowNetwork": false,
+  "allowSubprocess": true,
   "integrity": {
     "algorithm": "sha256",
     "checksums": {

@@ -18,12 +18,13 @@ enum CapabilityTicketIssuer {
     /// Scope is bounded by the active tool mode and expires automatically.
     static func issue(
         mode: String,
+        privacyMode: String = "local_preferred",
         registry: ToolRegistry,
         ttlSeconds: TimeInterval = 300
     ) -> CapabilityTicket {
         let now = Date()
         let allowed = Set(
-            registry.toolNames.filter { registry.isToolAllowed($0, mode: mode) }
+            registry.toolNames.filter { registry.isToolAllowed($0, mode: mode, privacyMode: privacyMode) }
         )
 
         return CapabilityTicket(

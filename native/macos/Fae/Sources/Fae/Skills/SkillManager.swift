@@ -399,6 +399,8 @@ actor SkillManager {
             throw SkillError.notFound(skillName)
         }
 
+        try Self.validateExecutableScriptPolicy(scriptPath: scriptPath, manifest: manifest)
+
         // Build JSON-RPC request with secret-sanitized params.
         let sanitizedInput = Self.sanitizeSkillInput(input)
         let request: [String: Any] = [
@@ -986,6 +988,53 @@ actor SkillManager {
             )
         }
     }
+
+    private static func validateExecutableScriptPolicy(
+        scriptPath: String,
+        manifest: SkillCapabilityManifest
+    ) throws {
+        let content = try String(contentsOfFile: scriptPath, encoding: .utf8).lowercased()
+
+        if manifest.allowNetwork != true,
+           networkIndicators.contains(where: { content.contains($0) })
+        {
+            throw SkillError.policyViolation(
+                "Executable skill requests raw network access but MANIFEST.json does not allow it"
+            )
+        }
+
+        if manifest.allowSubprocess != true,
+           subprocessIndicators.contains(where: { content.contains($0) })
+        {
+            throw SkillError.policyViolation(
+                "Executable skill requests subprocess access but MANIFEST.json does not allow it"
+            )
+        }
+    }
+
+    private static let networkIndicators: [String] = [
+        "import socket",
+        "from socket import",
+        "import urllib",
+        "from urllib",
+        "urllib.request",
+        "urllib3",
+        "import requests",
+        "from requests",
+        "import httpx",
+        "import aiohttp",
+        "import websockets",
+        "http.client",
+    ]
+
+    private static let subprocessIndicators: [String] = [
+        "import subprocess",
+        "from subprocess import",
+        "subprocess.",
+        "os.system(",
+        "pty.spawn(",
+        "import pexpect",
+    ]
 
     /// Conservative skill-name validation to prevent path traversal and
     /// ambiguous filesystem behavior.

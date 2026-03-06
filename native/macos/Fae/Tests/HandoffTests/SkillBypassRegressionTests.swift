@@ -152,6 +152,8 @@ final class SkillBypassRegressionTests: XCTestCase {
             dataClasses: ["local_files"],
             riskTier: .medium,
             timeoutSeconds: 30,
+            allowNetwork: false,
+            allowSubprocess: false,
             integrity: integrity,
             settings: SkillSettingsContract(
                 version: 1,
@@ -246,6 +248,8 @@ final class SkillBypassRegressionTests: XCTestCase {
             dataClasses: ["local_files"],
             riskTier: .medium,
             timeoutSeconds: 30,
+            allowNetwork: false,
+            allowSubprocess: false,
             integrity: SkillManifestPolicy.buildIntegrity(for: skillDir),
             settings: SkillSettingsContract(
                 version: 1,
@@ -291,6 +295,39 @@ final class SkillBypassRegressionTests: XCTestCase {
         }
 
         XCTAssertFalse(skill.isEnabled, "Invalid settings action/capability mismatch should disable skill")
+    }
+
+    func testExecutableSkillWithRawNetworkImportsIsRejectedWithoutManifestAllowance() async throws {
+        let manager = SkillManager()
+        let skillName = "network_guard_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+        }
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Network policy guard regression test",
+            body: "This skill should fail because it imports urllib without network permission.",
+            scriptContent: "import urllib\nprint('nope')"
+        )
+
+        do {
+            _ = try await manager.execute(
+                skillName: skillName,
+                scriptName: nil,
+                input: [:],
+                capabilityTicketId: UUID().uuidString
+            )
+            XCTFail("Expected network policy violation")
+        } catch {
+            XCTAssertTrue(
+                error.localizedDescription.localizedCaseInsensitiveContains("network"),
+                "Unexpected error: \(error)"
+            )
+        }
     }
 
     func testRunSkillToolForwardsStructuredParamsAndSecretBindings() async throws {

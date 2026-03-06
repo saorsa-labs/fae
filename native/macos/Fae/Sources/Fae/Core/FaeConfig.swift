@@ -20,6 +20,7 @@ struct FaeConfig: Codable {
     var skills: SkillsConfig = SkillsConfig()
     var vision: VisionConfig = VisionConfig()
     var awareness: AwarenessConfig = AwarenessConfig()
+    var privacy: PrivacyConfig = PrivacyConfig()
     var userName: String?
     var licenseAccepted: Bool = false
     var toolMode: String = "full"
@@ -224,6 +225,15 @@ struct FaeConfig: Codable {
         var pauseOnThermalPressure: Bool = true
         /// ISO8601 timestamp of explicit user consent. Nil means never consented.
         var consentGrantedAt: String? = nil
+    }
+
+    // MARK: - Privacy
+
+    struct PrivacyConfig: Codable {
+        /// strict_local: no network, no delegation, no remote services.
+        /// local_preferred: local-first with optional connected features.
+        /// connected: enable connected features when allowed by tool mode.
+        var mode: String = "local_preferred"
     }
 
     // MARK: - Model Selection
@@ -502,6 +512,13 @@ struct FaeConfig: Codable {
                         throw ParseError.malformedValue(key: key, value: rawValue)
                     }
                     config.toolMode = v
+                default: break
+                }
+            case "privacy":
+                switch key {
+                case "mode":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.privacy.mode = v
                 default: break
                 }
             case "audio":
@@ -801,6 +818,10 @@ struct FaeConfig: Codable {
         lines.append("userName = \(encodeStringOrNil(userName))")
         lines.append("licenseAccepted = \(licenseAccepted ? "true" : "false")")
         lines.append("toolMode = \(encodeString(toolMode))")
+        lines.append("")
+
+        lines.append("[privacy]")
+        lines.append("mode = \(encodeString(privacy.mode))")
         lines.append("")
 
         lines.append("[audio]")

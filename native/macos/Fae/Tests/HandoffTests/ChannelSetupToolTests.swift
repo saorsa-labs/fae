@@ -206,6 +206,8 @@ final class ChannelSetupToolTests: XCTestCase {
             dataClasses: ["local_files"],
             riskTier: .medium,
             timeoutSeconds: 30,
+            allowNetwork: false,
+            allowSubprocess: false,
             integrity: SkillManifestPolicy.buildIntegrity(for: skillDir),
             settings: SkillSettingsContract(
                 version: 1,

@@ -98,9 +98,21 @@ actor PipelineCoordinator {
         bargeInEnabledLive = enabled
     }
 
+    /// Mute or unmute the microphone capture in response to the UI mic button.
+    ///
+    /// Sets `AudioCaptureManager.isMuted` so incoming chunks are dropped before
+    /// reaching the VAD/STT pipeline. This is a live toggle — no pipeline restart needed.
+    func setMicMuted(_ muted: Bool) async {
+        await capture.setMuted(muted)
+        NSLog("PipelineCoordinator: mic %@", muted ? "muted" : "unmuted")
+    }
+
     /// Live override for tool mode — set by FaeCore when the user changes tool settings.
     /// `nil` means fall back to `config.toolMode`.
     private var toolModeLive: String?
+
+    /// Live override for privacy mode.
+    private var privacyModeLive: String?
 
     /// Update the tool mode without restarting the pipeline.
     func setToolMode(_ mode: String) {
@@ -113,6 +125,10 @@ actor PipelineCoordinator {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .faeToolModeUpgradeDismiss, object: nil)
         }
+    }
+
+    func setPrivacyMode(_ mode: String) {
+        privacyModeLive = mode
     }
 
     /// Live override for direct-address policy.
@@ -818,6 +834,13 @@ actor PipelineCoordinator {
             return "read_only"
         }
         return toolModeLive ?? config.toolMode
+    }
+
+    private func effectivePrivacyMode() -> String {
+        if isRescueMode {
+            return "strict_local"
+        }
+        return privacyModeLive ?? config.privacy.mode
     }
 
     private func effectiveRequireDirectAddress() -> Bool {
@@ -1869,6 +1892,7 @@ actor PipelineCoordinator {
         return CapabilitySnapshotService.buildSnapshot(
             triggerText: triggerText,
             toolMode: mode,
+            privacyMode: effectivePrivacyMode(),
             speakerState: speakerState,
             ownerGateEnabled: config.speaker.requireOwnerForTools,
             ownerProfileExists: ownerProfileExists,
@@ -2110,8 +2134,10 @@ actor PipelineCoordinator {
 
             // Issue a short-lived capability ticket for this turn.
             let toolMode = effectiveToolMode()
+            let privacyMode = effectivePrivacyMode()
             activeCapabilityTicket = CapabilityTicketIssuer.issue(
                 mode: toolMode,
+                privacyMode: privacyMode,
                 registry: registry
             )
 
@@ -2187,16 +2213,28 @@ actor PipelineCoordinator {
             }
             // Build native tool specs for MLX tool calling.
             let nativeTools = includeTools
-                ? registry.nativeToolSpecs(for: toolMode, limitedTo: visibleToolNames)
+                ? registry.nativeToolSpecs(
+                    for: toolMode,
+                    privacyMode: privacyMode,
+                    limitedTo: visibleToolNames
+                )
                 : nil
 
             let toolSchemas: String? = {
                 guard includeTools else { return nil }
                 if nativeTools != nil {
-                    let compact = registry.compactToolSummary(for: toolMode, limitedTo: visibleToolNames)
+                    let compact = registry.compactToolSummary(
+                        for: toolMode,
+                        privacyMode: privacyMode,
+                        limitedTo: visibleToolNames
+                    )
                     return compact.isEmpty ? nil : compact
                 }
-                let full = registry.toolSchemas(for: toolMode, limitedTo: visibleToolNames)
+                let full = registry.toolSchemas(
+                    for: toolMode,
+                    privacyMode: privacyMode,
+                    limitedTo: visibleToolNames
+                )
                 return full.isEmpty ? nil : full
             }()
 
@@ -3857,6 +3895,7 @@ actor PipelineCoordinator {
         // can make additional tool calls (e.g. a second web_search).
         activeCapabilityTicket = CapabilityTicketIssuer.issue(
             mode: effectiveToolMode(),
+            privacyMode: effectivePrivacyMode(),
             registry: registry
         )
 
@@ -3880,10 +3919,11 @@ actor PipelineCoordinator {
     ) async -> ToolResult {
         // Tool mode enforcement — reject tools not allowed in current mode.
         let toolMode = effectiveToolMode()
-        debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(toolMode)")
-        guard registry.isToolAllowed(call.name, mode: toolMode) else {
-            debugLog(debugConsole, .toolResult, "Blocked by mode: \(call.name) mode=\(toolMode)")
-            return .error("Tool '\(call.name)' is not available in current mode (\(toolMode))")
+        let privacyMode = effectivePrivacyMode()
+        debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(toolMode) privacy=\(privacyMode)")
+        guard registry.isToolAllowed(call.name, mode: toolMode, privacyMode: privacyMode) else {
+            debugLog(debugConsole, .toolResult, "Blocked by mode/privacy: \(call.name) mode=\(toolMode) privacy=\(privacyMode)")
+            return .error("Tool '\(call.name)' is not available in current mode/privacy policy (\(toolMode), \(privacyMode))")
         }
 
         if let proactiveContext,

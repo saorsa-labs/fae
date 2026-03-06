@@ -137,16 +137,24 @@ final class ToolRegistry: Sendable {
     /// - `read_write`: read tools + write/edit/self_config + scheduler mutation
     /// - `full`: all tools (with approval for writes)
     /// - `full_no_approval`: all tools
-    func toolSchemas(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> String {
-        let allowed = filteredTools(for: mode, limitedTo: allowedNames)
+    func toolSchemas(
+        for mode: String,
+        privacyMode: String = "local_preferred",
+        limitedTo allowedNames: Set<String>? = nil
+    ) -> String {
+        let allowed = filteredTools(for: mode, privacyMode: privacyMode, limitedTo: allowedNames)
         return schemaString(for: allowed)
     }
 
     /// Compact tool summary for prompt context when native tool specs are also supplied.
     ///
     /// Keeps prompt tokens low while still exposing high-level capability surface.
-    func compactToolSummary(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> String {
-        let allowed = filteredTools(for: mode, limitedTo: allowedNames)
+    func compactToolSummary(
+        for mode: String,
+        privacyMode: String = "local_preferred",
+        limitedTo allowedNames: Set<String>? = nil
+    ) -> String {
+        let allowed = filteredTools(for: mode, privacyMode: privacyMode, limitedTo: allowedNames)
 
         guard !allowed.isEmpty else { return "" }
 
@@ -157,7 +165,11 @@ final class ToolRegistry: Sendable {
     }
 
     /// Check whether a tool is allowed in the given mode.
-    func isToolAllowed(_ name: String, mode: String) -> Bool {
+    func isToolAllowed(_ name: String, mode: String, privacyMode: String = "local_preferred") -> Bool {
+        if privacyMode == "strict_local", Self.strictLocalDeniedTools.contains(name) {
+            return false
+        }
+
         switch mode {
         case "off":
             return false
@@ -197,23 +209,38 @@ final class ToolRegistry: Sendable {
         "click", "type_text", "scroll",
     ]
 
+    /// Tools disabled when privacy mode is strict_local.
+    private static let strictLocalDeniedTools: Set<String> = [
+        "delegate_agent",
+        "web_search",
+        "fetch_url",
+    ]
+
     /// Native tool specs for MLX tool calling, filtered by mode.
     ///
     /// Returns `nil` when tools are disabled (`off` mode) so the caller
     /// can distinguish "no tools" from "empty tool list".
-    func nativeToolSpecs(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> [ToolSpec]? {
+    func nativeToolSpecs(
+        for mode: String,
+        privacyMode: String = "local_preferred",
+        limitedTo allowedNames: Set<String>? = nil
+    ) -> [ToolSpec]? {
         guard mode != "off" else { return nil }
-        let allowed = filteredTools(for: mode, limitedTo: allowedNames)
+        let allowed = filteredTools(for: mode, privacyMode: privacyMode, limitedTo: allowedNames)
         guard !allowed.isEmpty else { return nil }
         return allowed.sorted { $0.name < $1.name }.map { $0.toolSpec }
     }
 
     // MARK: - Private
 
-    private func filteredTools(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> [any Tool] {
+    private func filteredTools(
+        for mode: String,
+        privacyMode: String = "local_preferred",
+        limitedTo allowedNames: Set<String>? = nil
+    ) -> [any Tool] {
         tools.values
             .filter { tool in
-                guard isToolAllowed(tool.name, mode: mode) else { return false }
+                guard isToolAllowed(tool.name, mode: mode, privacyMode: privacyMode) else { return false }
                 guard let allowedNames else { return true }
                 return allowedNames.contains(tool.name)
             }

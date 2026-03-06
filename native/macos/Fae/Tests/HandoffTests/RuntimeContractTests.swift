@@ -195,6 +195,37 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
+    func testFaeCorePersistsPrivacyModePatch() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "privacy.mode", "value": "strict_local"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertEqual(reloaded.privacy.mode, "strict_local")
+
+        let response = await core.queryCommand(name: "config.get", payload: ["key": "privacy"])
+        let payload = response?["payload"] as? [String: Any]
+        let privacy = payload?["privacy"] as? [String: Any]
+        XCTAssertEqual(privacy?["mode"] as? String, "strict_local")
+    }
+
+    @MainActor
     func testFaeCorePersistsVisionPatchKeysAndSupportsVisionConfigGet() async throws {
         let url = FaeConfig.configFileURL
         let fm = FileManager.default

@@ -310,6 +310,10 @@ struct SelfConfigTool: Tool {
             valueType: .string(allowed: ["off", "read_only", "read_write", "full", "full_no_approval"]),
             description: "Maximum tool authority level"
         ),
+        "privacy.mode": SettingSpec(
+            valueType: .string(allowed: ["strict_local", "local_preferred", "connected"]),
+            description: "Privacy boundary for networking and delegation"
+        ),
         "vision.enabled": SettingSpec(
             valueType: .bool,
             description: "Enable vision tools (screenshot, camera, read_screen). Requires restart."
@@ -718,7 +722,7 @@ struct InputRequestTool: Tool {
         placeholder, and input style to match the conversation context. \
         Returns the entered text, or a cancellation notice if dismissed.
         """
-    let parametersSchema = #"{"prompt": "string (required) — what you need and why", "title": "string (optional) — card header, e.g. 'API Key Required'", "placeholder": "string (optional) — hint text inside the field", "secure": "boolean (optional) — true for passwords/keys (dots instead of text)", "multiline": "boolean (optional) — true for multi-line input (SSH keys, config, code)", "min_length": "integer (optional)", "regex": "string (optional)", "store_key": "string (optional) — persist secure input to keychain under this key"}"#
+    let parametersSchema = #"{"prompt": "string (required) — what you need and why", "title": "string (optional) — card header, e.g. 'API Key Required'", "placeholder": "string (optional) — hint text inside the field", "secure": "boolean (optional) — true for passwords/keys (dots instead of text)", "multiline": "boolean (optional) — true for multi-line input (SSH keys, config, code)", "min_length": "integer (optional)", "regex": "string (optional)", "store_key": "string (optional) — persist secure input to keychain under this key", "return_to_model": "boolean (optional) — when secure=true, defaults to false so raw secrets stay out of model context"}"#
     let requiresApproval = false
     let riskLevel: ToolRiskLevel = .low
     let example = #"<tool_call>{"name":"input_request","arguments":{"prompt":"Enter your OpenAI API key to continue","title":"API Key Required","placeholder":"sk-...","secure":true,"store_key":"channels.discord.bot_token"}}</tool_call>"#
@@ -732,6 +736,7 @@ struct InputRequestTool: Tool {
         let minLength = input["min_length"] as? Int ?? 0
         let regexPattern = input["regex"] as? String
         let storeKey = input["store_key"] as? String
+        let returnToModel = input["return_to_model"] as? Bool ?? !secure
 
         let text = await InputRequestBridge.shared.request(
             prompt: prompt,
@@ -768,6 +773,10 @@ struct InputRequestTool: Tool {
             } catch {
                 return .error("Failed to store secure input: \(error.localizedDescription)")
             }
+        }
+
+        if secure && !returnToModel {
+            return .success("[secure input captured locally and withheld from model context]")
         }
 
         return .success(value)

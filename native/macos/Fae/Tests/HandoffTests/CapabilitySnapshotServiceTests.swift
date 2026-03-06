@@ -28,6 +28,7 @@ final class CapabilitySnapshotServiceTests: XCTestCase {
         let snapshot = CapabilitySnapshotService.buildSnapshot(
             triggerText: "test",
             toolMode: "read_only",
+            privacyMode: "local_preferred",
             speakerState: "Speaker unknown",
             ownerGateEnabled: false,
             ownerProfileExists: false,

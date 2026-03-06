@@ -154,14 +154,18 @@ actor MemoryOrchestrator {
         }
 
         var report = MemoryCaptureReport()
+        let userSensitivity = SensitiveContentPolicy.scan(userText)
+        let assistantSensitivity = SensitiveContentPolicy.scan(assistantText)
+        let sanitizedUserText = SensitiveContentPolicy.redactForStorage(userText)
+        let sanitizedAssistantText = SensitiveContentPolicy.redactForStorage(assistantText)
 
         do {
             // 1. Always insert episode record.
             let episodeText: String
-            if assistantText.isEmpty {
-                episodeText = "User: \(userText)"
+            if sanitizedAssistantText.isEmpty {
+                episodeText = "User: \(sanitizedUserText)"
             } else {
-                episodeText = "User: \(userText)\nAssistant: \(assistantText)"
+                episodeText = "User: \(sanitizedUserText)\nAssistant: \(sanitizedAssistantText)"
             }
             let episode = try await store.insertRecord(
                 kind: .episode,
@@ -187,18 +191,23 @@ actor MemoryOrchestrator {
                 }
             }
 
-            let lower = userText.lowercased()
+            let lower = sanitizedUserText.lowercased()
+            let shouldSuppressStructuredExtraction = userSensitivity.shouldSuppressStructuredExtraction
+                || assistantSensitivity.shouldSuppressStructuredExtraction
+            if shouldSuppressStructuredExtraction {
+                NSLog("MemoryOrchestrator: suppressing structured extraction for sensitive turn")
+            }
 
             // 2. Parse forget commands.
-            if lower.hasPrefix("forget ") {
-                let query = String(userText.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+            if !shouldSuppressStructuredExtraction, lower.hasPrefix("forget ") {
+                let query = String(sanitizedUserText.dropFirst(7)).trimmingCharacters(in: .whitespaces)
                 let forgotCount = try await forgetMatching(query: query)
                 report.forgottenCount += forgotCount
             }
 
             // 3. Parse "remember ..." commands.
-            if lower.hasPrefix("remember ") {
-                let fact = String(userText.dropFirst(9)).trimmingCharacters(in: .whitespaces)
+            if !shouldSuppressStructuredExtraction, lower.hasPrefix("remember ") {
+                let fact = String(sanitizedUserText.dropFirst(9)).trimmingCharacters(in: .whitespaces)
                 if !fact.isEmpty {
                     _ = try await store.insertRecord(
                         kind: .fact,
@@ -215,7 +224,9 @@ actor MemoryOrchestrator {
             }
 
             // 4. Parse name statements.
-            if let name = extractName(from: lower, fullText: userText) {
+            if !shouldSuppressStructuredExtraction,
+               let name = extractName(from: lower, fullText: sanitizedUserText)
+            {
                 try await upsertProfile(
                     tag: "name",
                     text: "Primary user name is \(name).",
@@ -229,7 +240,9 @@ actor MemoryOrchestrator {
             }
 
             // 5. Parse preference statements.
-            if let pref = extractPreference(from: lower, fullText: userText) {
+            if !shouldSuppressStructuredExtraction,
+               let pref = extractPreference(from: lower, fullText: sanitizedUserText)
+            {
                 // Check for contradiction with existing preferences.
                 try await supersedeContradiction(
                     tag: "preference",
@@ -252,7 +265,9 @@ actor MemoryOrchestrator {
             }
 
             // 6. Parse interest statements.
-            if let interest = extractInterest(from: lower, fullText: userText) {
+            if !shouldSuppressStructuredExtraction,
+               let interest = extractInterest(from: lower, fullText: sanitizedUserText)
+            {
                 _ = try await store.insertRecord(
                     kind: .interest,
                     text: interest,
@@ -267,7 +282,9 @@ actor MemoryOrchestrator {
             }
 
             // 7. Parse commitment statements (deadlines, promises).
-            if let commitment = extractCommitment(from: lower, fullText: userText) {
+            if !shouldSuppressStructuredExtraction,
+               let commitment = extractCommitment(from: lower, fullText: sanitizedUserText)
+            {
                 _ = try await store.insertRecord(
                     kind: .commitment,
                     text: commitment,
@@ -283,7 +300,9 @@ actor MemoryOrchestrator {
             }
 
             // 8. Parse event mentions (birthdays, anniversaries, dates).
-            if let event = extractEvent(from: lower, fullText: userText) {
+            if !shouldSuppressStructuredExtraction,
+               let event = extractEvent(from: lower, fullText: sanitizedUserText)
+            {
                 _ = try await store.insertRecord(
                     kind: .event,
                     text: event,
@@ -299,7 +318,9 @@ actor MemoryOrchestrator {
             }
 
             // 9. Parse person mentions (relationships, people).
-            if let person = extractPerson(from: lower, fullText: userText) {
+            if !shouldSuppressStructuredExtraction,
+               let person = extractPerson(from: lower, fullText: sanitizedUserText)
+            {
                 let personRecord = try await store.insertRecord(
                     kind: .person,
                     text: person,
@@ -343,8 +364,11 @@ actor MemoryOrchestrator {
     ) async -> MemoryCaptureReport {
         guard config.enabled else { return MemoryCaptureReport() }
 
-        let trimmed = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scan = SensitiveContentPolicy.scan(responseText)
+        let trimmed = SensitiveContentPolicy.redactForStorage(responseText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
+              !scan.shouldSuppressStructuredExtraction,
               let spec = proactiveMemorySpec(for: taskId)
         else {
             return MemoryCaptureReport()

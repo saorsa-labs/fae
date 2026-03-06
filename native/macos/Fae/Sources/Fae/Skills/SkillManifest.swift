@@ -19,6 +19,10 @@ struct SkillCapabilityManifest: Codable, Sendable {
     let dataClasses: [String]
     let riskTier: SkillRiskTier
     let timeoutSeconds: Int
+    /// Optional static policy guard for scripts that import raw network APIs.
+    var allowNetwork: Bool? = nil
+    /// Optional static policy guard for scripts that spawn subprocesses or shells.
+    var allowSubprocess: Bool? = nil
     let integrity: SkillIntegrityManifest?
     /// Optional settings contract used by conversational setup and Settings UI.
     let settings: SkillSettingsContract?
@@ -36,6 +40,8 @@ struct SkillCapabilityManifest: Codable, Sendable {
                 dataClasses: ["none"],
                 riskTier: .low,
                 timeoutSeconds: 15,
+                allowNetwork: false,
+                allowSubprocess: false,
                 integrity: nil,
                 settings: nil
             )
@@ -49,6 +55,8 @@ struct SkillCapabilityManifest: Codable, Sendable {
                 dataClasses: ["local_files"],
                 riskTier: .medium,
                 timeoutSeconds: 30,
+                allowNetwork: false,
+                allowSubprocess: false,
                 integrity: nil,
                 settings: nil
             )
@@ -64,6 +72,8 @@ struct SkillCapabilityManifest: Codable, Sendable {
             dataClasses: dataClasses,
             riskTier: riskTier,
             timeoutSeconds: timeoutSeconds,
+            allowNetwork: allowNetwork,
+            allowSubprocess: allowSubprocess,
             integrity: integrity,
             settings: settings
         )
