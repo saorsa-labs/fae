@@ -23,9 +23,12 @@ enum SafeSkillExecutor {
         let escaped = shellEscape(scriptPath)
         process.arguments = [
             "-c",
-            "ulimit -t \(cpuLimitSeconds); "
-                + "ulimit -v \(memoryLimitKB); "
-                + "ulimit -n 64; "
+            // ulimit calls are best-effort — some CI/sandbox environments don't support
+            // certain setrlimit resource types (e.g. RLIMIT_AS on macOS 14 GitHub runners).
+            // Use '|| true' so a failed ulimit never aborts skill execution.
+            "ulimit -t \(cpuLimitSeconds) 2>/dev/null || true; "
+                + "ulimit -v \(memoryLimitKB) 2>/dev/null || true; "
+                + "ulimit -n 64 2>/dev/null || true; "
                 + "exec /usr/bin/env uv run --script \(escaped)",
         ]
 
