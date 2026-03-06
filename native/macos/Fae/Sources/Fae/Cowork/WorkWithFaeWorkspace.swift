@@ -250,6 +250,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var name: String
     var agentID: String
+    var sortOrder: Int
     var policy: WorkWithFaeWorkspacePolicy
     var state: WorkWithFaeWorkspaceState
     var createdAt: Date
@@ -259,6 +260,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         id: UUID = UUID(),
         name: String,
         agentID: String,
+        sortOrder: Int = 0,
         policy: WorkWithFaeWorkspacePolicy = .default,
         state: WorkWithFaeWorkspaceState = .empty,
         createdAt: Date = Date(),
@@ -267,6 +269,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         self.id = id
         self.name = name
         self.agentID = agentID
+        self.sortOrder = sortOrder
         self.policy = policy
         self.state = state
         self.createdAt = createdAt
@@ -277,6 +280,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         case id
         case name
         case agentID
+        case sortOrder
         case policy
         case state
         case createdAt
@@ -288,6 +292,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         agentID = try container.decode(String.self, forKey: .agentID)
+        sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
         policy = try container.decodeIfPresent(WorkWithFaeWorkspacePolicy.self, forKey: .policy) ?? .default
         state = try container.decode(WorkWithFaeWorkspaceState.self, forKey: .state)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
@@ -299,10 +304,47 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         try container.encode(id, forKey: .id)
         try container.encode(name, forKey: .name)
         try container.encode(agentID, forKey: .agentID)
+        try container.encode(sortOrder, forKey: .sortOrder)
         try container.encode(policy, forKey: .policy)
         try container.encode(state, forKey: .state)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
+    }
+}
+
+struct WorkWithFaeWorkspaceSetupState: Equatable, Sendable {
+    struct Step: Identifiable, Equatable, Sendable {
+        let id: String
+        let title: String
+        let detail: String
+        let isComplete: Bool
+        let isOptional: Bool
+    }
+
+    let steps: [Step]
+
+    var completionCount: Int {
+        steps.filter(\.isComplete).count
+    }
+
+    var completedRequiredCount: Int {
+        steps.filter { !$0.isOptional && $0.isComplete }.count
+    }
+
+    var totalRequiredCount: Int {
+        steps.filter { !$0.isOptional }.count
+    }
+
+    var isFreshWorkspace: Bool {
+        completedRequiredCount == 0
+    }
+
+    var isReadyForGroundedWork: Bool {
+        completedRequiredCount == totalRequiredCount
+    }
+
+    var nextStep: Step? {
+        steps.first(where: { !$0.isComplete })
     }
 }
 
@@ -313,7 +355,7 @@ struct WorkWithFaeWorkspaceRegistry: Codable, Sendable {
 
     static var `default`: WorkWithFaeWorkspaceRegistry {
         let localAgent = WorkWithFaeAgentProfile.faeLocal
-        let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: localAgent.id)
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: localAgent.id, sortOrder: 0)
         return WorkWithFaeWorkspaceRegistry(
             selectedWorkspaceID: workspace.id,
             workspaces: [workspace],
@@ -360,7 +402,7 @@ enum WorkWithFaeWorkspaceStore {
         }
         if let legacyState = try? decoder.decode(WorkWithFaeWorkspaceState.self, from: data) {
             let localAgent = WorkWithFaeAgentProfile.faeLocal
-            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: localAgent.id, state: legacyState)
+            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: localAgent.id, sortOrder: 0, state: legacyState)
             return WorkWithFaeWorkspaceRegistry(
                 selectedWorkspaceID: workspace.id,
                 workspaces: [workspace],
@@ -396,7 +438,7 @@ enum WorkWithFaeWorkspaceStore {
         }
 
         if registry.workspaces.isEmpty {
-            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: normalized(registry).agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id, state: state)
+            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: normalized(registry).agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id, sortOrder: 0, state: state)
             registry.workspaces = [workspace]
             registry.selectedWorkspaceID = workspace.id
         }
@@ -508,6 +550,7 @@ enum WorkWithFaeWorkspaceStore {
         let duplicate = WorkWithFaeWorkspaceRecord(
             name: duplicatedWorkspaceName(from: workspace.name, existingNames: copy.workspaces.map(\.name)),
             agentID: workspace.agentID,
+            sortOrder: copy.workspaces.count,
             policy: workspace.policy,
             state: workspace.state
         )
@@ -537,6 +580,30 @@ enum WorkWithFaeWorkspaceStore {
                 ? copy.workspaces[index].id
                 : copy.workspaces.last?.id
         }
+        copy.workspaces = reindexed(copy.workspaces)
+        return normalized(copy)
+    }
+
+    static func registryByMovingWorkspace(
+        workspaceID: UUID,
+        beforeWorkspaceID: UUID?,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        guard let sourceIndex = copy.workspaces.firstIndex(where: { $0.id == workspaceID }) else {
+            return copy
+        }
+
+        let movingWorkspace = copy.workspaces.remove(at: sourceIndex)
+        if let beforeWorkspaceID,
+           let rawTargetIndex = copy.workspaces.firstIndex(where: { $0.id == beforeWorkspaceID })
+        {
+            copy.workspaces.insert(movingWorkspace, at: rawTargetIndex)
+        } else {
+            copy.workspaces.append(movingWorkspace)
+        }
+
+        copy.workspaces = reindexed(copy.workspaces)
         return normalized(copy)
     }
 
@@ -633,6 +700,53 @@ enum WorkWithFaeWorkspaceStore {
             .map { $0 }
     }
 
+    static func setupState(
+        for workspace: WorkWithFaeWorkspaceRecord,
+        agents: [WorkWithFaeAgentProfile]
+    ) -> WorkWithFaeWorkspaceSetupState {
+        let hasFolder = workspace.state.selectedDirectoryPath != nil
+        let hasContext = !workspace.state.attachments.isEmpty || !workspace.state.indexedFiles.isEmpty
+        let hasRemoteSpecialist = agents.contains(where: { !$0.isTrustedLocal })
+        let compareParticipants = consensusAgents(
+            selectedAgentID: workspace.agentID,
+            agents: agents,
+            policy: workspace.policy,
+            limit: 4
+        )
+        let canCompare = compareParticipants.count > 1
+
+        return WorkWithFaeWorkspaceSetupState(steps: [
+            .init(
+                id: "folder",
+                title: hasFolder ? "Folder connected" : "Choose a folder",
+                detail: hasFolder ? "Fae can scan the workspace tree for grounding." : "Point Work with Fae at the project or notes folder you want her to understand.",
+                isComplete: hasFolder,
+                isOptional: false
+            ),
+            .init(
+                id: "context",
+                title: hasContext ? "Context added" : "Add focused context",
+                detail: hasContext ? "Attachments or indexed files are ready for grounded answers." : "Drop files, paste text, or add screenshots to steer the current session.",
+                isComplete: hasContext,
+                isOptional: false
+            ),
+            .init(
+                id: "specialist",
+                title: hasRemoteSpecialist ? "Specialist ready" : "Add a specialist agent",
+                detail: hasRemoteSpecialist ? "You can bring in another model when you want a second opinion." : "Optional: connect OpenAI, Anthropic, or another backend for broader comparison.",
+                isComplete: hasRemoteSpecialist,
+                isOptional: true
+            ),
+            .init(
+                id: "compare",
+                title: canCompare ? "Compare enabled" : "Turn on compare",
+                detail: canCompare ? "This workspace can fan out across multiple agents when needed." : "Optional: compare drafts across Fae Local and a specialist to gather multiple answers.",
+                isComplete: canCompare,
+                isOptional: true
+            ),
+        ])
+    }
+
     static func normalized(_ registry: WorkWithFaeWorkspaceRegistry) -> WorkWithFaeWorkspaceRegistry {
         var copy = registry
         copy.agents = copy.agents.map { agent in
@@ -649,10 +763,16 @@ enum WorkWithFaeWorkspaceStore {
             copy.agents.insert(WorkWithFaeAgentProfile.faeLocal, at: 0)
         }
         if copy.workspaces.isEmpty {
-            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: copy.agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id)
+            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: copy.agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id, sortOrder: 0)
             copy.workspaces = [workspace]
             copy.selectedWorkspaceID = workspace.id
         }
+        copy.workspaces = reindexed(copy.workspaces.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder {
+                return lhs.sortOrder < rhs.sortOrder
+            }
+            return lhs.createdAt < rhs.createdAt
+        })
         if copy.selectedWorkspaceID == nil || !copy.workspaces.contains(where: { $0.id == copy.selectedWorkspaceID }) {
             copy.selectedWorkspaceID = copy.workspaces.first?.id
         }
@@ -669,6 +789,14 @@ enum WorkWithFaeWorkspaceStore {
             return mutable
         }
         return copy
+    }
+
+    private static func reindexed(_ workspaces: [WorkWithFaeWorkspaceRecord]) -> [WorkWithFaeWorkspaceRecord] {
+        workspaces.enumerated().map { index, workspace in
+            var mutable = workspace
+            mutable.sortOrder = index
+            return mutable
+        }
     }
 
     private static func duplicatedWorkspaceName(from baseName: String, existingNames: [String]) -> String {

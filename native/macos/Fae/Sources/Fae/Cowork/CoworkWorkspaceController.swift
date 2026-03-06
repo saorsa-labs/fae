@@ -52,7 +52,10 @@ final class CoworkWorkspaceController: ObservableObject {
 
     var workspaces: [WorkWithFaeWorkspaceRecord] {
         workspaceRegistry.workspaces.sorted { lhs, rhs in
-            lhs.updatedAt > rhs.updatedAt
+            if lhs.sortOrder != rhs.sortOrder {
+                return lhs.sortOrder < rhs.sortOrder
+            }
+            return lhs.updatedAt > rhs.updatedAt
         }
     }
 
@@ -79,6 +82,31 @@ final class CoworkWorkspaceController: ObservableObject {
 
     var selectedWorkspacePolicy: WorkWithFaeWorkspacePolicy {
         selectedWorkspace?.policy ?? .default
+    }
+
+    var selectedWorkspaceSetupState: WorkWithFaeWorkspaceSetupState {
+        guard let selectedWorkspace else {
+            return WorkWithFaeWorkspaceSetupState(steps: [])
+        }
+        return WorkWithFaeWorkspaceStore.setupState(for: selectedWorkspace, agents: agents)
+    }
+
+    var canMoveSelectedWorkspaceUp: Bool {
+        guard let selectedID = selectedWorkspace?.id,
+              let index = workspaces.firstIndex(where: { $0.id == selectedID })
+        else {
+            return false
+        }
+        return index > 0
+    }
+
+    var canMoveSelectedWorkspaceDown: Bool {
+        guard let selectedID = selectedWorkspace?.id,
+              let index = workspaces.firstIndex(where: { $0.id == selectedID })
+        else {
+            return false
+        }
+        return index < workspaces.count - 1
     }
 
     var executionAgent: WorkWithFaeAgentProfile? {
@@ -303,6 +331,7 @@ final class CoworkWorkspaceController: ObservableObject {
         let workspace = WorkWithFaeWorkspaceRecord(
             name: trimmed,
             agentID: selectedAgent?.id ?? WorkWithFaeAgentProfile.faeLocal.id,
+            sortOrder: (workspaceRegistry.workspaces.map(\.sortOrder).max() ?? -1) + 1,
             policy: selectedWorkspace?.policy ?? .default
         )
         workspaceRegistry.workspaces.append(workspace)
@@ -359,6 +388,40 @@ final class CoworkWorkspaceController: ObservableObject {
         persistWorkspaceRegistry()
         applySelectedWorkspaceState()
         prependActivity(title: "Workspace deleted", detail: deletedName, tone: .warning)
+    }
+
+    func moveWorkspace(_ workspace: WorkWithFaeWorkspaceRecord, before targetWorkspace: WorkWithFaeWorkspaceRecord?) {
+        let originalOrder = workspaces.map(\.id)
+        workspaceRegistry = WorkWithFaeWorkspaceStore.registryByMovingWorkspace(
+            workspaceID: workspace.id,
+            beforeWorkspaceID: targetWorkspace?.id,
+            in: workspaceRegistry
+        )
+        guard workspaces.map(\.id) != originalOrder else { return }
+        persistWorkspaceRegistry()
+        applySelectedWorkspaceState()
+        prependActivity(title: "Workspace reordered", detail: workspace.name, tone: .neutral)
+    }
+
+    func moveSelectedWorkspaceUp() {
+        guard let selectedWorkspace,
+              let index = workspaces.firstIndex(where: { $0.id == selectedWorkspace.id }),
+              index > 0
+        else {
+            return
+        }
+        moveWorkspace(selectedWorkspace, before: workspaces[index - 1])
+    }
+
+    func moveSelectedWorkspaceDown() {
+        guard let selectedWorkspace,
+              let index = workspaces.firstIndex(where: { $0.id == selectedWorkspace.id }),
+              index < workspaces.count - 1
+        else {
+            return
+        }
+        let destination = (index + 2) < workspaces.count ? workspaces[index + 2] : nil
+        moveWorkspace(selectedWorkspace, before: destination)
     }
 
     func updateWorkspaceRemoteExecution(_ remoteExecution: WorkWithFaeRemoteExecutionPolicy) {

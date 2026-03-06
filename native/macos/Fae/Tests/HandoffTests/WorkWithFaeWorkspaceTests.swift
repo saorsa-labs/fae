@@ -264,6 +264,61 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.name, "One")
     }
 
+    func testRegistryByMovingWorkspaceReordersAndReindexes() {
+        let first = WorkWithFaeWorkspaceRecord(name: "One", agentID: WorkWithFaeAgentProfile.faeLocal.id, sortOrder: 0)
+        let second = WorkWithFaeWorkspaceRecord(name: "Two", agentID: WorkWithFaeAgentProfile.faeLocal.id, sortOrder: 1)
+        let third = WorkWithFaeWorkspaceRecord(name: "Three", agentID: WorkWithFaeAgentProfile.faeLocal.id, sortOrder: 2)
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: second.id,
+            workspaces: [first, second, third],
+            agents: [.faeLocal]
+        )
+
+        let updated = WorkWithFaeWorkspaceStore.registryByMovingWorkspace(
+            workspaceID: third.id,
+            beforeWorkspaceID: first.id,
+            in: registry
+        )
+
+        XCTAssertEqual(updated.workspaces.map(\.name), ["Three", "One", "Two"])
+        XCTAssertEqual(updated.workspaces.map(\.sortOrder), [0, 1, 2])
+    }
+
+    func testSetupStateMarksFreshWorkspaceUntilFolderAndContextExist() {
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: WorkWithFaeAgentProfile.faeLocal.id)
+        let fresh = WorkWithFaeWorkspaceStore.setupState(for: workspace, agents: [.faeLocal])
+
+        XCTAssertTrue(fresh.isFreshWorkspace)
+        XCTAssertFalse(fresh.isReadyForGroundedWork)
+        XCTAssertEqual(fresh.completedRequiredCount, 0)
+        XCTAssertEqual(fresh.totalRequiredCount, 2)
+        XCTAssertEqual(fresh.nextStep?.id, "folder")
+
+        let readyWorkspace = WorkWithFaeWorkspaceRecord(
+            name: "Main workspace",
+            agentID: WorkWithFaeAgentProfile.faeLocal.id,
+            state: WorkWithFaeWorkspaceState(
+                selectedDirectoryPath: "/tmp/project",
+                indexedFiles: [
+                    WorkWithFaeFileEntry(
+                        id: "/tmp/project/README.md",
+                        relativePath: "README.md",
+                        absolutePath: "/tmp/project/README.md",
+                        kind: "text",
+                        sizeBytes: 12,
+                        modifiedAt: nil
+                    )
+                ],
+                attachments: []
+            )
+        )
+        let ready = WorkWithFaeWorkspaceStore.setupState(for: readyWorkspace, agents: [.faeLocal])
+
+        XCTAssertFalse(ready.isFreshWorkspace)
+        XCTAssertTrue(ready.isReadyForGroundedWork)
+        XCTAssertEqual(ready.completedRequiredCount, 2)
+    }
+
     func testConsensusAgentsPrefersSelectedThenLocalThenOthers() {
         let local = WorkWithFaeAgentProfile.faeLocal
         let selected = WorkWithFaeAgentProfile(

@@ -30,6 +30,7 @@ struct CoworkWorkspaceView: View {
     @State private var showingDeleteWorkspaceAlert = false
     @State private var newWorkspaceName = ""
     @State private var renameWorkspaceName = ""
+    @State private var draggedWorkspaceID: UUID?
     @State private var editingAgentID: String?
     @State private var newAgentName = ""
     @State private var newAgentBackendPresetID = "openai"
@@ -100,6 +101,9 @@ struct CoworkWorkspaceView: View {
         }
         .onChange(of: controller.latestConsensusResults.count) {
             showConsensusDetails = false
+        }
+        .onChange(of: controller.workspaces.map(\.id)) {
+            draggedWorkspaceID = nil
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: controller.selectedWorkspace?.id)
         .animation(.easeInOut(duration: 0.24), value: controller.selectedSection)
@@ -353,6 +357,10 @@ struct CoworkWorkspaceView: View {
                                 action: controller.clearWorkspaceDirectory
                             )
                         }
+                    }
+
+                    if !controller.selectedWorkspaceSetupState.steps.isEmpty {
+                        workspaceSetupCard
                     }
                 }
             }
@@ -788,7 +796,9 @@ struct CoworkWorkspaceView: View {
     }
 
     private var emptyConversationState: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        let setupState = controller.selectedWorkspaceSetupState
+
+        return VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 14) {
                 Image(nsImage: CoworkArtwork.orb)
                     .resizable()
@@ -798,39 +808,72 @@ struct CoworkWorkspaceView: View {
                     .shadow(color: CoworkPalette.heather.opacity(0.22), radius: 10, y: 5)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Start by choosing a folder or adding a few files.")
+                    Text(setupState.isFreshWorkspace ? "Start this workspace in about a minute." : "Your workspace is ready for grounded help.")
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white)
 
-                    Text("Work with Fae keeps local project context close at hand. Select a workspace, drop files or images, paste something in, or ask Fae to look at your screen.")
+                    Text(setupState.isFreshWorkspace
+                         ? "Choose a folder, add a little context, and Work with Fae will feel immediately more grounded. You can add specialists later without losing Fae Local as your trusted base."
+                         : "Work with Fae keeps local project context close at hand. Select a workspace, drop files or images, paste something in, or ask Fae to look at your screen.")
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.white.opacity(0.68))
                 }
             }
 
             HStack(spacing: 12) {
-                luxuryPromptCard(
-                    title: "Summarize this workspace",
-                    subtitle: "Get oriented quickly with a grounded overview.",
-                    icon: "sparkles.rectangle.stack"
-                ) {
-                    controller.useQuickPrompt("Summarize this workspace and tell me where I should start.")
-                }
+                if setupState.isFreshWorkspace {
+                    luxuryPromptCard(
+                        title: "Choose a folder",
+                        subtitle: "Let Fae scan the project or notes you want to work in.",
+                        icon: "folder"
+                    ) {
+                        controller.chooseWorkspaceDirectory()
+                    }
 
-                luxuryPromptCard(
-                    title: "Find key files",
-                    subtitle: "Ask Fae which files matter most right now.",
-                    icon: "doc.text.magnifyingglass"
-                ) {
-                    controller.useQuickPrompt("Given this workspace context, identify the most important files for the task at hand.")
-                }
+                    luxuryPromptCard(
+                        title: "Add a few files",
+                        subtitle: "Drop docs, code, screenshots, or pasted notes into this workspace.",
+                        icon: "paperclip"
+                    ) {
+                        controller.addAttachmentsViaPicker()
+                    }
 
-                luxuryPromptCard(
-                    title: "Look at my screen",
-                    subtitle: "Use vision to understand what is in front of me.",
-                    icon: "rectangle.on.rectangle"
-                ) {
-                    controller.inspectScreen()
+                    luxuryPromptCard(
+                        title: controller.agents.count > 1 ? "Compare answers" : "Add a specialist",
+                        subtitle: controller.agents.count > 1 ? "Bring in multiple agents when you want a second opinion." : "Optional: connect another backend for compare mode later.",
+                        icon: controller.agents.count > 1 ? "square.stack.3d.up" : "person.badge.plus"
+                    ) {
+                        if controller.agents.count > 1 {
+                            controller.updateWorkspaceCompareBehavior(.alwaysCompare)
+                        } else {
+                            prepareNewAgentForm()
+                            showingAddAgentSheet = true
+                        }
+                    }
+                } else {
+                    luxuryPromptCard(
+                        title: "Summarize this workspace",
+                        subtitle: "Get oriented quickly with a grounded overview.",
+                        icon: "sparkles.rectangle.stack"
+                    ) {
+                        controller.useQuickPrompt("Summarize this workspace and tell me where I should start.")
+                    }
+
+                    luxuryPromptCard(
+                        title: "Find key files",
+                        subtitle: "Ask Fae which files matter most right now.",
+                        icon: "doc.text.magnifyingglass"
+                    ) {
+                        controller.useQuickPrompt("Given this workspace context, identify the most important files for the task at hand.")
+                    }
+
+                    luxuryPromptCard(
+                        title: "Look at my screen",
+                        subtitle: "Use vision to understand what is in front of me.",
+                        icon: "rectangle.on.rectangle"
+                    ) {
+                        controller.inspectScreen()
+                    }
                 }
             }
         }
@@ -1093,7 +1136,7 @@ struct CoworkWorkspaceView: View {
                     .padding(.horizontal, 18)
                     .padding(.top, 18)
 
-                    sidebarSectionHeader(title: "Workspaces", subtitle: "Switch focus without losing context") {
+                    sidebarSectionHeader(title: "Workspaces", subtitle: "Switch focus without losing context — drag to reorder") {
                         newWorkspaceName = ""
                         showingAddWorkspaceSheet = true
                     }
@@ -1103,6 +1146,10 @@ struct CoworkWorkspaceView: View {
                         LazyVStack(spacing: 8) {
                             ForEach(controller.workspaces) { workspace in
                                 workspaceButton(for: workspace)
+                            }
+
+                            if draggedWorkspaceID != nil {
+                                workspaceDropTail
                             }
                         }
                     }
@@ -1134,6 +1181,15 @@ struct CoworkWorkspaceView: View {
                                         Button("Duplicate workspace") {
                                             controller.duplicateSelectedWorkspace()
                                         }
+                                        Divider()
+                                        Button("Move up") {
+                                            controller.moveSelectedWorkspaceUp()
+                                        }
+                                        .disabled(!controller.canMoveSelectedWorkspaceUp)
+                                        Button("Move down") {
+                                            controller.moveSelectedWorkspaceDown()
+                                        }
+                                        .disabled(!controller.canMoveSelectedWorkspaceDown)
                                         Divider()
                                         Button("Delete workspace", role: .destructive) {
                                             showingDeleteWorkspaceAlert = true
@@ -1367,6 +1423,111 @@ struct CoworkWorkspaceView: View {
         }
     }
 
+    private var workspaceSetupCard: some View {
+        let setupState = controller.selectedWorkspaceSetupState
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(setupState.isFreshWorkspace ? "Get this workspace ready" : "Workspace readiness")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(setupState.isReadyForGroundedWork
+                         ? "Grounded context is ready. Add a specialist any time you want comparisons."
+                         : (setupState.nextStep?.detail ?? "Add a little context so Fae can start grounded work."))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.66))
+                        .lineLimit(3)
+                }
+
+                Spacer()
+
+                Text("\(setupState.completedRequiredCount)/\(max(setupState.totalRequiredCount, 1))")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(setupState.steps) { step in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: step.isComplete ? "checkmark.circle.fill" : (step.isOptional ? "circle.dashed" : "circle"))
+                            .foregroundStyle(step.isComplete ? CoworkPalette.mint : (step.isOptional ? CoworkPalette.heather : Color.white.opacity(0.55)))
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(step.title)
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                if step.isOptional {
+                                    capsule(text: "Optional", accent: CoworkPalette.heather)
+                                }
+                            }
+                            Text(step.detail)
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.54))
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+
+            FlowLayout(spacing: 8) {
+                quickActionPill(title: controller.workspaceState.selectedDirectoryPath == nil ? "Choose folder" : "Change folder", accent: CoworkPalette.heather) {
+                    controller.chooseWorkspaceDirectory()
+                }
+                quickActionPill(title: "Add files", accent: CoworkPalette.cyan) {
+                    controller.addAttachmentsViaPicker()
+                }
+                if controller.agents.count <= 1 {
+                    quickActionPill(title: "Add agent", accent: CoworkPalette.amber) {
+                        prepareNewAgentForm()
+                        showingAddAgentSheet = true
+                    }
+                } else if !controller.canCompareAcrossAgents {
+                    quickActionPill(title: "Enable compare", accent: CoworkPalette.amber) {
+                        controller.updateWorkspaceCompareBehavior(.alwaysCompare)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    private var workspaceDropTail: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color.white.opacity(0.035))
+            .frame(height: 28)
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(CoworkPalette.heather.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [6, 6]))
+                    .overlay {
+                        Text("Drop here to move to the end")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.6))
+                    }
+            }
+            .onDrop(of: [UTType.text.identifier], isTargeted: nil) { _ in
+                guard let draggedWorkspaceID,
+                      let workspace = controller.workspaces.first(where: { $0.id == draggedWorkspaceID })
+                else {
+                    return false
+                }
+                controller.moveWorkspace(workspace, before: nil)
+                self.draggedWorkspaceID = nil
+                return true
+            }
+    }
+
     private func workspaceButton(for workspace: WorkWithFaeWorkspaceRecord) -> some View {
         let isSelected = controller.selectedWorkspace?.id == workspace.id
         let agent = controller.agents.first(where: { $0.id == workspace.agentID })
@@ -1378,6 +1539,9 @@ struct CoworkWorkspaceView: View {
         } label: {
             VStack(alignment: .leading, spacing: isSelected ? 8 : 4) {
                 HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(0.28))
                     Text(workspace.name)
                         .font(.system(size: isSelected ? 14 : 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white)
@@ -1431,8 +1595,24 @@ struct CoworkWorkspaceView: View {
                     .matchedGeometryEffect(id: "workspace-row-\(workspace.id.uuidString)", in: workspaceSelectionAnimation)
             )
             .scaleEffect(isSelected ? 1.0 : 0.985)
+            .opacity(draggedWorkspaceID == workspace.id ? 0.72 : 1)
         }
         .buttonStyle(.plain)
+        .onDrag {
+            draggedWorkspaceID = workspace.id
+            return NSItemProvider(object: workspace.id.uuidString as NSString)
+        }
+        .onDrop(of: [UTType.text.identifier], isTargeted: nil) { _ in
+            guard let draggedWorkspaceID,
+                  draggedWorkspaceID != workspace.id,
+                  let draggedWorkspace = controller.workspaces.first(where: { $0.id == draggedWorkspaceID })
+            else {
+                return false
+            }
+            controller.moveWorkspace(draggedWorkspace, before: workspace)
+            self.draggedWorkspaceID = nil
+            return true
+        }
     }
 
     private func sidebarButton(for section: CoworkWorkspaceSection) -> some View {
@@ -2415,6 +2595,9 @@ struct CoworkWorkspaceView: View {
     private var currentWorkspaceSubtitle: String {
         if let path = controller.workspaceState.selectedDirectoryPath {
             return path
+        }
+        if controller.selectedWorkspaceSetupState.isFreshWorkspace {
+            return "Fresh workspace. Choose a folder or add a few files to make Fae's answers feel grounded right away."
         }
         if controller.remoteAgentBlockedByPolicy {
             return "Strict local only is active here. Remote agents stay attached but idle until you re-enable remote execution."
