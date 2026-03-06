@@ -576,7 +576,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         )
 
         // Brief spoken intro — Fae then takes over via the skill.
-        let intro = "Hi, I'm Fae. I'd love to learn your voice so I can recognise you. Just talk to me naturally and I'll guide you through it."
+        let intro = "Hey. Let’s get your voice set up so I know it’s you. Talk to me naturally and I’ll guide you through it."
         await coordinator.speakDirect(intro)
 
         // Open follow-up window so user can respond without "Fae" prefix.
@@ -836,8 +836,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         case "data.delete_all":
+            let includeVault = payload["include_vault"] as? Bool ?? false
             Task {
-                await resetAllData()
+                await resetAllData(includeVault: includeVault)
             }
 
         default:
@@ -1590,7 +1591,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
-    private func resetAllData() async {
+    private func resetAllData(includeVault: Bool) async {
         await scheduler?.stop()
         scheduler = nil
         await pipelineCoordinator?.stop()
@@ -1620,6 +1621,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try FileManager.default.removeItem(at: forgeDir)
             }
 
+            if includeVault {
+                let vaultDir = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".fae-vault", isDirectory: true)
+                if FileManager.default.fileExists(atPath: vaultDir.path) {
+                    try FileManager.default.removeItem(at: vaultDir)
+                }
+            }
+
             // Clear ALL UserDefaults (@AppStorage values survive directory deletion
             // since they live in ~/Library/Preferences/, not in the fae data dir).
             if let bundleId = Bundle.main.bundleIdentifier {
@@ -1633,7 +1642,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             userName = nil
             toolMode = config.toolMode
             try config.save()
-            NSLog("FaeCore: data reset complete")
+            NSLog("FaeCore: data reset complete includeVault=%@", includeVault ? "true" : "false")
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .faeDataResetCompleted, object: nil)
             }

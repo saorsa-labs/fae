@@ -847,13 +847,23 @@ actor PipelineCoordinator {
         requireDirectAddressLive ?? config.conversation.requireDirectAddress
     }
 
-    private func effectiveIdleRearmSeconds() -> Int {
-        let configured = max(config.conversation.idleTimeoutS, 0)
-        if configured > 0 { return configured }
-        if effectiveRequireDirectAddress() {
-            return max(config.conversation.directAddressFollowupS, 5)
+    static func idleRearmSeconds(
+        requireDirectAddress: Bool,
+        idleTimeoutS: Int,
+        directAddressFollowupS: Int
+    ) -> Int {
+        if requireDirectAddress {
+            return max(directAddressFollowupS, 5)
         }
-        return 0
+        return max(idleTimeoutS, 0)
+    }
+
+    private func effectiveIdleRearmSeconds() -> Int {
+        Self.idleRearmSeconds(
+            requireDirectAddress: effectiveRequireDirectAddress(),
+            idleTimeoutS: config.conversation.idleTimeoutS,
+            directAddressFollowupS: config.conversation.directAddressFollowupS
+        )
     }
 
     private func scheduleIdleRearm() {

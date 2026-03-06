@@ -89,4 +89,23 @@ final class VoicePipelineRegressionTests: XCTestCase {
             ["screen_activity_check", "camera_presence_check"]
         )
     }
+
+    func testDirectAddressUsesFollowupWindowInsteadOfIdleTimeout() {
+        XCTAssertEqual(
+            PipelineCoordinator.idleRearmSeconds(
+                requireDirectAddress: true,
+                idleTimeoutS: 45,
+                directAddressFollowupS: 12
+            ),
+            12
+        )
+        XCTAssertEqual(
+            PipelineCoordinator.idleRearmSeconds(
+                requireDirectAddress: false,
+                idleTimeoutS: 45,
+                directAddressFollowupS: 12
+            ),
+            45
+        )
+    }
 }

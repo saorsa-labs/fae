@@ -53,13 +53,16 @@ struct SettingsAboutTab: View {
             }
 
             Section("Data") {
-                Button("Reset Fae...") {
+                Button("Reset Fae Data…") {
                     showResetConfirmation = true
                 }
                 .buttonStyle(.bordered)
                 .foregroundStyle(.red)
                 .disabled(isResetting)
-                Text("Deletes Fae-owned conversations, memories, settings, local skills, forge/tool registry state, and stored credentials. Shared model caches are left untouched.")
+                Text("Choose between a normal app-data reset or a fuller erase that also removes Fae's external vault backup. Shared model caches are left untouched.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("Note: on modern SSDs, deletion removes Fae-owned files from their normal locations but cannot guarantee secure overwrite.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if isResetting {
@@ -72,13 +75,16 @@ struct SettingsAboutTab: View {
                         .foregroundStyle(.red)
                 }
             }
-            .alert("Reset Fae?", isPresented: $showResetConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete All Data", role: .destructive) {
-                    resetAllData()
+            .confirmationDialog("Reset Fae data", isPresented: $showResetConfirmation, titleVisibility: .visible) {
+                Button("Reset App Data", role: .destructive) {
+                    resetAppData()
                 }
+                Button("Erase All Fae Data Including Vault", role: .destructive) {
+                    eraseAllFaeData()
+                }
+                Button("Cancel", role: .cancel) { }
             } message: {
-                Text("This removes Fae-owned local data including conversations, memories, voice profiles, settings, forge state, and credentials. Shared model downloads are not deleted. This cannot be undone.")
+                Text("Reset App Data removes Fae-owned conversations, memories, settings, local skills, forge state, and stored credentials. The full erase option also deletes ~/.fae-vault backups. Shared model downloads are not deleted.")
             }
 
             Section("Cross-Device Handoff") {
@@ -126,10 +132,16 @@ struct SettingsAboutTab: View {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
     }
 
-    private func resetAllData() {
+    private func resetAppData() {
         isResetting = true
         resetError = nil
-        commandSender?.sendCommand(name: "data.delete_all", payload: [:])
+        commandSender?.sendCommand(name: "data.delete_all", payload: ["include_vault": false])
+    }
+
+    private func eraseAllFaeData() {
+        isResetting = true
+        resetError = nil
+        commandSender?.sendCommand(name: "data.delete_all", payload: ["include_vault": true])
     }
 
     private func resetOnboarding() {
