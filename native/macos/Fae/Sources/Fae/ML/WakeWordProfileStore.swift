@@ -1,9 +1,10 @@
 import Foundation
 
-/// Persistent store for personalized wake-name aliases (e.g. "faeye" -> Fae).
+/// Persistent store for personalized wake-name aliases (e.g. "faeye" -> Fae)
+/// and lightweight acoustic wake templates.
 ///
-/// Keeps a lightweight local profile that improves direct-address detection over time
-/// without retraining the base ASR model.
+/// Keeps a local profile that improves direct-address detection over time without
+/// changing the base ASR stack.
 actor WakeWordProfileStore {
 
     struct AliasRecord: Codable, Sendable {
@@ -15,16 +16,21 @@ actor WakeWordProfileStore {
 
     private struct Snapshot: Codable {
         var aliases: [AliasRecord]
+        var acousticTemplates: [WakeWordAcousticDetector.Template]?
     }
 
     static let baselineAliases = ["faye", "fae", "fea", "fee", "fay", "fey", "fah", "feh"]
+    private static let maxAcousticTemplates = 8
 
     private var learned: [String: AliasRecord] = [:]
+    private var learnedAcousticTemplates: [WakeWordAcousticDetector.Template] = []
     private let storePath: URL
 
     init(storePath: URL) {
         self.storePath = storePath
-        self.learned = Self.load(from: storePath)
+        let loaded = Self.load(from: storePath)
+        self.learned = loaded.aliases
+        self.learnedAcousticTemplates = loaded.acousticTemplates
     }
 
     /// Aliases available for wake matching.
@@ -71,8 +77,35 @@ actor WakeWordProfileStore {
         persist()
     }
 
+    func recordAcousticTemplate(
+        _ template: WakeWordAcousticDetector.Template,
+        phrase: String = "Hey Fae",
+        source: String
+    ) {
+        let normalized = WakeWordAcousticDetector.Template(
+            embedding: template.embedding,
+            durationSeconds: template.durationSeconds,
+            phrase: phrase,
+            source: source,
+            createdAt: template.createdAt
+        )
+        learnedAcousticTemplates.append(normalized)
+        if learnedAcousticTemplates.count > Self.maxAcousticTemplates {
+            learnedAcousticTemplates = Array(learnedAcousticTemplates.suffix(Self.maxAcousticTemplates))
+        }
+        persist()
+    }
+
     func records() -> [AliasRecord] {
         learned.values.sorted { $0.count > $1.count }
+    }
+
+    func acousticTemplates() -> [WakeWordAcousticDetector.Template] {
+        learnedAcousticTemplates.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func acousticTemplateCount() -> Int {
+        learnedAcousticTemplates.count
     }
 
     // MARK: - Persistence
@@ -82,7 +115,10 @@ actor WakeWordProfileStore {
             let dir = storePath.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-            let payload = Snapshot(aliases: learned.values.sorted { $0.alias < $1.alias })
+            let payload = Snapshot(
+                aliases: learned.values.sorted { $0.alias < $1.alias },
+                acousticTemplates: learnedAcousticTemplates.sorted { $0.createdAt < $1.createdAt }
+            )
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
@@ -93,8 +129,13 @@ actor WakeWordProfileStore {
         }
     }
 
-    private static func load(from url: URL) -> [String: AliasRecord] {
-        guard let data = try? Data(contentsOf: url) else { return [:] }
+    private static func load(from url: URL) -> (
+        aliases: [String: AliasRecord],
+        acousticTemplates: [WakeWordAcousticDetector.Template]
+    ) {
+        guard let data = try? Data(contentsOf: url) else {
+            return ([:], [])
+        }
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -103,10 +144,10 @@ actor WakeWordProfileStore {
             for record in snapshot.aliases {
                 map[record.alias] = record
             }
-            return map
+            return (map, snapshot.acousticTemplates ?? [])
         } catch {
             NSLog("WakeWordProfileStore: load failed: %@", error.localizedDescription)
-            return [:]
+            return ([:], [])
         }
     }
 

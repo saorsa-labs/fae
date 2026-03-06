@@ -570,6 +570,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         .environmentObject(onboarding)
         .environmentObject(conversation)
         .environmentObject(rescueMode)
+        .environmentObject(pipelineAux)
         .environmentObject(faeCore)
 
         let hostingController = NSHostingController(rootView: rootView)
@@ -731,6 +732,7 @@ struct FaeApp: App {
             .environmentObject(appDelegate.onboarding)
             .environmentObject(appDelegate.conversation)
             .environmentObject(appDelegate.rescueMode)
+            .environmentObject(appDelegate.pipelineAux)
             .environmentObject(appDelegate.faeCore)
         }
         .commands {

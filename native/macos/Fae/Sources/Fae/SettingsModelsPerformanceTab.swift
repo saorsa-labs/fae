@@ -49,11 +49,14 @@ struct SettingsModelsPerformanceTab: View {
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1
     @AppStorage("ttsVoiceIdentityLock") private var voiceIdentityLock: Bool = true
     @AppStorage("bargeInEnabled") private var bargeInEnabled: Bool = true
+    @AppStorage("acousticWakeEnabled") private var acousticWakeEnabled: Bool = true
+    @AppStorage("acousticWakeThreshold") private var acousticWakeThreshold: Double = 0.78
 
     // MARK: - System Info
     @State private var systemRAM: String = "—"
     @State private var loadedModel: String = "—"
     @State private var estimatedKVSavings: String = "~4x"
+    @State private var wakeTemplateCount: Int = 0
 
     private let voiceModelOptions: [(label: String, value: String, ram: String)] = [
         ("Auto (Recommended)", "auto", "Auto"),
@@ -444,6 +447,53 @@ struct SettingsModelsPerformanceTab: View {
                 }
             }
 
+            // Wake Word
+            SettingsCard(title: "Wake Word", icon: "waveform.badge.mic", color: .orange) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Enable Acoustic Wake Detection", isOn: $acousticWakeEnabled)
+                        .onChange(of: acousticWakeEnabled) {
+                            guard !hydratingFromConfig else { return }
+                            patchConfig("conversation.acoustic_wake_enabled", value: acousticWakeEnabled)
+                        }
+
+                    HStack {
+                        Text("Trained wake samples")
+                            .font(.subheadline)
+                        Spacer()
+                        Text("\(wakeTemplateCount)")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(wakeTemplateCount > 0 ? .green : .secondary)
+                    }
+
+                    if acousticWakeEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Match Threshold")
+                                    .font(.subheadline)
+                                Spacer()
+                                Text(String(format: "%.2f", acousticWakeThreshold))
+                                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Slider(value: $acousticWakeThreshold, in: 0.60...0.90, step: 0.01)
+                                .onChange(of: acousticWakeThreshold) {
+                                    guard !hydratingFromConfig else { return }
+                                    patchConfig("conversation.acoustic_wake_threshold", value: acousticWakeThreshold)
+                                }
+                        }
+                    }
+
+                    Text(
+                        wakeTemplateCount == 0
+                            ? "Acoustic wake detection uses your own 'Hey Fae' samples. Ask Fae to tune your wake phrase if you want audio-level wakeups before STT."
+                            : "Uses your enrolled wake-phrase audio as a pre-STT wake detector. Text wake matching still stays on as a fallback."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
             // Barge-In
             SettingsCard(title: "Interaction", icon: "hand.raised", color: .teal) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -586,6 +636,23 @@ struct SettingsModelsPerformanceTab: View {
                 }
                 if let lock = tts["voice_identity_lock"] as? Bool {
                     voiceIdentityLock = lock
+                }
+            }
+        }
+
+        // Fetch conversation / wake config
+        if let response = await sender.queryCommand(name: "config.get", payload: ["key": "conversation"]) {
+            if let payload = response["payload"] as? [String: Any],
+               let conversation = payload["conversation"] as? [String: Any]
+            {
+                if let enabled = conversation["acoustic_wake_enabled"] as? Bool {
+                    acousticWakeEnabled = enabled
+                }
+                if let threshold = conversation["acoustic_wake_threshold"] as? Double {
+                    acousticWakeThreshold = threshold
+                }
+                if let templateCount = conversation["wake_template_count"] as? Int {
+                    wakeTemplateCount = templateCount
                 }
             }
         }

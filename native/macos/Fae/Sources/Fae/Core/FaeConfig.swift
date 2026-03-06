@@ -139,6 +139,8 @@ struct FaeConfig: Codable {
         var idleTimeoutS: Int = 45
         var requireDirectAddress: Bool = true
         var directAddressFollowupS: Int = 30
+        var acousticWakeEnabled: Bool = true
+        var acousticWakeThreshold: Float = 0.78
         var sleepPhrases: [String] = [
             "shut up", "stop fae", "go to sleep",
             "that will do fae", "that'll do fae",
@@ -713,6 +715,12 @@ struct FaeConfig: Codable {
                 case "directAddressFollowupS":
                     guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.conversation.directAddressFollowupS = v
+                case "acousticWakeEnabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.conversation.acousticWakeEnabled = v
+                case "acousticWakeThreshold":
+                    guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.conversation.acousticWakeThreshold = v
                 case "sleepPhrases":
                     guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.conversation.sleepPhrases = v
@@ -942,6 +950,8 @@ struct FaeConfig: Codable {
         lines.append("idleTimeoutS = \(conversation.idleTimeoutS)")
         lines.append("requireDirectAddress = \(conversation.requireDirectAddress ? "true" : "false")")
         lines.append("directAddressFollowupS = \(conversation.directAddressFollowupS)")
+        lines.append("acousticWakeEnabled = \(conversation.acousticWakeEnabled ? "true" : "false")")
+        lines.append("acousticWakeThreshold = \(formatFloat(conversation.acousticWakeThreshold))")
         lines.append("sleepPhrases = \(encodeStringArray(conversation.sleepPhrases))")
         lines.append("")
 

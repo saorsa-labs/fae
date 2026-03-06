@@ -220,6 +220,7 @@ struct VoiceIdentityTool: Tool {
 
         var transcripts: [String] = []
         var learnedAliases: [String] = []
+        var learnedAcousticTemplates = 0
 
         for _ in 0..<count {
             if let playback = audioPlaybackManager {
@@ -236,6 +237,14 @@ struct VoiceIdentityTool: Tool {
 
             guard samples.count > 6_000 else {
                 continue
+            }
+
+            if let template = WakeWordAcousticDetector.makeTemplate(
+                samples: samples,
+                sampleRate: AudioCaptureManager.targetSampleRate
+            ) {
+                await wakeStore.recordAcousticTemplate(template, phrase: phrase, source: "enrollment")
+                learnedAcousticTemplates += 1
             }
 
             do {
@@ -264,9 +273,10 @@ struct VoiceIdentityTool: Tool {
             "samples_requested": count,
             "samples_transcribed": transcripts.count,
             "learned_aliases": uniqueLearned,
+            "acoustic_templates_added": learnedAcousticTemplates,
             "transcripts": transcripts,
-            "message": uniqueLearned.isEmpty
-                ? "I heard your samples, but I couldn't confidently derive a new wake-name variant yet."
+            "message": (uniqueLearned.isEmpty && learnedAcousticTemplates == 0)
+                ? "I heard your samples, but I couldn't confidently tune the wake detector yet."
                 : "Wake-name personalization updated from your voice samples."
         ]
 

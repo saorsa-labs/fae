@@ -964,6 +964,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             if key == "speaker_profiles" {
                 return await speakerProfilesResponse()
             }
+            if key == "conversation" {
+                return await conversationConfigResponse()
+            }
             return configGetResponse(key: key)
 
         default:
@@ -985,6 +988,23 @@ final class FaeCore: ObservableObject, HostCommandSender {
             ]
         }
         return ["payload": ["speaker_profiles": profiles] as [String: Any]]
+    }
+
+    private func conversationConfigResponse() async -> [String: Any] {
+        let wakeTemplateCount = await wakeWordProfileStore.acousticTemplateCount()
+        return [
+            "payload": [
+                "conversation": [
+                    "wake_word": config.conversation.wakeWord,
+                    "enabled": config.conversation.enabled,
+                    "require_direct_address": config.conversation.requireDirectAddress,
+                    "direct_address_followup_s": config.conversation.directAddressFollowupS,
+                    "acoustic_wake_enabled": config.conversation.acousticWakeEnabled,
+                    "acoustic_wake_threshold": Double(config.conversation.acousticWakeThreshold),
+                    "wake_template_count": wakeTemplateCount,
+                ] as [String: Any],
+            ] as [String: Any],
+        ]
     }
 
     func coworkWorkspaceSnapshot() async -> CoworkWorkspaceSnapshot {
@@ -1349,6 +1369,30 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let seconds = parsedS, seconds >= 5, seconds <= 60 else { return }
             config.conversation.directAddressFollowupS = seconds
             persistConfig(reason: "config.patch.conversation.direct_address_followup_s")
+
+        case "conversation.acoustic_wake_enabled":
+            guard let enabled = value as? Bool else { return }
+            config.conversation.acousticWakeEnabled = enabled
+            persistConfig(reason: "config.patch.conversation.acoustic_wake_enabled")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setAcousticWakeEnabled(enabled) }
+            }
+
+        case "conversation.acoustic_wake_threshold":
+            let parsedThreshold: Float?
+            if let v = value as? Float {
+                parsedThreshold = v
+            } else if let v = value as? Double {
+                parsedThreshold = Float(v)
+            } else {
+                parsedThreshold = nil
+            }
+            guard let threshold = parsedThreshold, threshold >= 0.50, threshold <= 0.95 else { return }
+            config.conversation.acousticWakeThreshold = threshold
+            persistConfig(reason: "config.patch.conversation.acoustic_wake_threshold")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setAcousticWakeThreshold(threshold) }
+            }
 
         case "vision.enabled":
             guard let enabled = value as? Bool else { return }
@@ -1954,6 +1998,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
             // Build speaker profiles synchronously from the actor.
             // The caller should use queryCommand for async access.
             return ["payload": ["speaker_profiles": [] as [[String: Any]]] as [String: Any]]
+        case "llm":
+            return [
+                "payload": [
+                    "llm": [
+                        "voice_model_preset": config.llm.voiceModelPreset,
+                        "thinking_enabled": config.llm.thinkingEnabled,
+                        "kv_quant_bits": config.llm.kvQuantBits as Any,
+                        "max_kv_cache_size": config.llm.maxKVCacheSize as Any,
+                        "kv_quant_start_tokens": config.llm.kvQuantStartTokens,
+                        "repetition_context_size": config.llm.repetitionContextSize,
+                        "prefill_step_size": config.llm.prefillStepSize as Any,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
         case "llm.voice_model_preset":
             return [
                 "payload": [
@@ -1974,6 +2032,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         "voice_identity_lock": config.tts.voiceIdentityLock,
                         "runtime_voice_source": runtimeSource as Any,
                         "runtime_voice_lock_applied": runtimeLockApplied as Any,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
+        case "barge_in":
+            return [
+                "payload": [
+                    "barge_in": [
+                        "enabled": config.bargeIn.enabled,
                     ] as [String: Any],
                 ] as [String: Any],
             ]

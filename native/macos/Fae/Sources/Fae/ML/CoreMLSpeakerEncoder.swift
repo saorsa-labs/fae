@@ -148,6 +148,25 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         return Self.l2Normalize(embedding)
     }
 
+    // MARK: - Shared Analysis Helpers
+
+    /// Shared sample rate for mel-spectral analysis helpers used by other audio subsystems.
+    static var analysisSampleRate: Int { modelSampleRate }
+
+    /// Shared mel bin count for mel-spectral analysis helpers used by other audio subsystems.
+    static var analysisNumMels: Int { numMels }
+
+    /// Compute the same log-mel representation used by the speaker encoder for arbitrary audio.
+    /// Returns a flat `[numMels × numFrames]` buffer in row-major order.
+    static func sharedLogMelSpectrogram(audio: [Float], sampleRate: Int) -> (mel: [Float], numFrames: Int) {
+        let audio24k = sampleRate == modelSampleRate
+            ? audio
+            : resample(audio, from: sampleRate, to: modelSampleRate)
+        let mel = computeLogMelSpectrogram(audio24k)
+        let numFrames = mel.count / numMels
+        return (mel, numFrames)
+    }
+
     // MARK: - Mel-Spectral Fallback
 
     /// Compute a speaker fingerprint from mel-spectral statistics.

@@ -134,6 +134,12 @@ actor PipelineCoordinator {
     /// Live override for direct-address policy.
     private var requireDirectAddressLive: Bool?
 
+    /// Live override for acoustic wake detector master switch.
+    private var acousticWakeEnabledLive: Bool?
+
+    /// Live override for acoustic wake detector similarity threshold.
+    private var acousticWakeThresholdLive: Float?
+
     /// Live override for vision toggle.
     private var visionEnabledLive: Bool?
 
@@ -142,6 +148,14 @@ actor PipelineCoordinator {
 
     func setRequireDirectAddress(_ enabled: Bool) {
         requireDirectAddressLive = enabled
+    }
+
+    func setAcousticWakeEnabled(_ enabled: Bool) {
+        acousticWakeEnabledLive = enabled
+    }
+
+    func setAcousticWakeThreshold(_ threshold: Float) {
+        acousticWakeThresholdLive = threshold
     }
 
     func setVisionEnabled(_ enabled: Bool) {
@@ -300,11 +314,17 @@ actor PipelineCoordinator {
         let speakerAllowsConversation: Bool
         let rms: Float
         let durationSecs: Float
+        let acousticWakeDetection: WakeWordAcousticDetector.Detection?
     }
 
     private var pendingSemanticTurn: PendingSemanticTurn?
     private var pendingSemanticTurnTask: Task<Void, Never>?
     private static let semanticTurnHoldMs: Int = 1200
+
+    private var streamingWakeSamples: [Float] = []
+    private var streamingWakeLastEvaluatedSamples: Int = 0
+    private var streamingWakeDetection: WakeWordAcousticDetector.Detection?
+    private static let acousticWakeEvalStrideSamples = 4_800
 
     // MARK: - Deferred Tool Jobs
 
@@ -670,6 +690,7 @@ actor PipelineCoordinator {
         firstOwnerEnrollmentActive = active
         vad.reset()
         resetStreamingSpeakerGate()
+        resetStreamingWakeDetector()
         clearPendingSemanticTurn()
     }
 
@@ -887,6 +908,66 @@ actor PipelineCoordinator {
         requireDirectAddressLive ?? config.conversation.requireDirectAddress
     }
 
+    private func effectiveAcousticWakeEnabled() -> Bool {
+        acousticWakeEnabledLive ?? config.conversation.acousticWakeEnabled
+    }
+
+    private func effectiveAcousticWakeThreshold() -> Float {
+        acousticWakeThresholdLive ?? config.conversation.acousticWakeThreshold
+    }
+
+    private func postVoiceAttentionEvent(_ payload: [String: Any]) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .faePipelineState,
+                object: nil,
+                userInfo: [
+                    "event": "pipeline.voice_attention",
+                    "payload": payload,
+                ]
+            )
+        }
+    }
+
+    private func publishVoiceAttention(
+        stage: String,
+        decision: String,
+        reason: String,
+        transcript: String? = nil,
+        wakeSource: String? = nil,
+        wakeScore: Float? = nil,
+        semanticState: String? = nil,
+        rms: Float? = nil
+    ) {
+        var payload: [String: Any] = [
+            "stage": stage,
+            "decision": decision,
+            "reason": reason,
+            "speaker_role": currentSpeakerRole?.rawValue ?? "unknown",
+            "gate_state": gateState == .active ? "active" : "idle",
+            "require_direct_address": effectiveRequireDirectAddress(),
+            "followup_active": engagedUntil.map { Date() < $0 } ?? false,
+            "acoustic_wake_enabled": effectiveAcousticWakeEnabled(),
+            "acoustic_wake_threshold": Double(effectiveAcousticWakeThreshold()),
+        ]
+        if let transcript, !transcript.isEmpty {
+            payload["transcript"] = transcript
+        }
+        if let wakeSource {
+            payload["wake_source"] = wakeSource
+        }
+        if let wakeScore {
+            payload["wake_score"] = Double(wakeScore)
+        }
+        if let semanticState {
+            payload["semantic_state"] = semanticState
+        }
+        if let rms {
+            payload["rms"] = Double(rms)
+        }
+        postVoiceAttentionEvent(payload)
+    }
+
     static func idleRearmSeconds(
         requireDirectAddress: Bool,
         idleTimeoutS: Int,
@@ -1100,6 +1181,111 @@ actor PipelineCoordinator {
         streamingSpeakerLastEvaluatedSamples = 0
         streamingSpeakerVerdict = nil
         streamingSpeakerVerificationAvailable = false
+    }
+
+    private func resetStreamingWakeDetector() {
+        streamingWakeSamples.removeAll(keepingCapacity: true)
+        streamingWakeLastEvaluatedSamples = 0
+        streamingWakeDetection = nil
+    }
+
+    private func acousticWakeDetectionForSegment(_ segment: SpeechSegment) async -> WakeWordAcousticDetector.Detection? {
+        if let detection = streamingWakeDetection {
+            return detection
+        }
+
+        guard effectiveAcousticWakeEnabled(),
+              !firstOwnerEnrollmentActive,
+              let wakeStore = wakeWordProfileStore
+        else {
+            return nil
+        }
+
+        let prefixMaxSamples = Int(Float(segment.sampleRate) * WakeWordAcousticDetector.maxDurationSeconds)
+        let prefix = Array(segment.samples.prefix(prefixMaxSamples))
+        let templates = await wakeStore.acousticTemplates()
+        guard let detection = WakeWordAcousticDetector.bestDetection(
+            samples: prefix,
+            sampleRate: segment.sampleRate,
+            templates: templates,
+            threshold: effectiveAcousticWakeThreshold()
+        ) else {
+            return nil
+        }
+
+        debugLog(
+            debugConsole,
+            .command,
+            "Acoustic wake detected on segment sim=\(String(format: "%.3f", detection.similarity))"
+        )
+        publishVoiceAttention(
+            stage: "wake",
+            decision: "detected",
+            reason: "acoustic_segment_match",
+            wakeSource: "acoustic",
+            wakeScore: detection.similarity,
+            rms: VoiceActivityDetector.computeRMS(prefix)
+        )
+        return detection
+    }
+
+    private func updateStreamingWakeDetector(chunk: AudioChunk, vadOutput: VoiceActivityDetector.Output) async {
+        if vadOutput.speechStarted {
+            resetStreamingWakeDetector()
+        }
+
+        if vadOutput.segment != nil || streamingWakeDetection != nil {
+            return
+        }
+
+        guard effectiveAcousticWakeEnabled(),
+              !firstOwnerEnrollmentActive,
+              vadOutput.isSpeech,
+              !assistantSpeaking,
+              !assistantGenerating,
+              let wakeStore = wakeWordProfileStore
+        else {
+            return
+        }
+
+        streamingWakeSamples.append(contentsOf: chunk.samples)
+        let maxPrefixSamples = Int(Float(AudioCaptureManager.targetSampleRate) * WakeWordAcousticDetector.maxDurationSeconds)
+        if streamingWakeSamples.count > maxPrefixSamples {
+            streamingWakeSamples = Array(streamingWakeSamples.prefix(maxPrefixSamples))
+        }
+
+        let minSamples = Int(Float(AudioCaptureManager.targetSampleRate) * WakeWordAcousticDetector.minDurationSeconds)
+        guard streamingWakeSamples.count >= minSamples else { return }
+
+        if streamingWakeSamples.count - streamingWakeLastEvaluatedSamples < Self.acousticWakeEvalStrideSamples {
+            return
+        }
+        streamingWakeLastEvaluatedSamples = streamingWakeSamples.count
+
+        let templates = await wakeStore.acousticTemplates()
+        guard let detection = WakeWordAcousticDetector.bestDetection(
+            samples: streamingWakeSamples,
+            sampleRate: AudioCaptureManager.targetSampleRate,
+            templates: templates,
+            threshold: effectiveAcousticWakeThreshold()
+        ) else {
+            return
+        }
+
+        streamingWakeDetection = detection
+        debugLog(
+            debugConsole,
+            .command,
+            "Acoustic wake detected sim=\(String(format: "%.3f", detection.similarity)) templates=\(detection.templateCount)"
+        )
+        publishVoiceAttention(
+            stage: "wake",
+            decision: "detected",
+            reason: "acoustic_prefix_match",
+            wakeSource: "acoustic",
+            wakeScore: detection.similarity,
+            rms: vadOutput.rms
+        )
     }
 
     private func updateStreamingSpeakerGate(chunk: AudioChunk, vadOutput: VoiceActivityDetector.Output) async {
@@ -1413,6 +1599,7 @@ actor PipelineCoordinator {
         pendingTTSTask = nil
         cancelDeferredToolJobs()
         resetStreamingSpeakerGate()
+        resetStreamingWakeDetector()
         clearPendingSemanticTurn()
         await conversationState.clear()
         NSLog("PipelineCoordinator: conversation reset via %@ trigger: %@", source, trigger)
@@ -1486,6 +1673,7 @@ actor PipelineCoordinator {
             eventBus.send(.audioLevel(vadOutput.rms))
 
             await updateStreamingSpeakerGate(chunk: chunk, vadOutput: vadOutput)
+            await updateStreamingWakeDetector(chunk: chunk, vadOutput: vadOutput)
 
             if !firstAudioLatencyEmitted,
                let startedAt = pipelineStartedAt,
@@ -1555,7 +1743,10 @@ actor PipelineCoordinator {
 
             // Process completed speech segment via bounded queue.
             if let segment = vadOutput.segment {
-                defer { resetStreamingSpeakerGate() }
+                defer {
+                    resetStreamingSpeakerGate()
+                    resetStreamingWakeDetector()
+                }
 
                 // Avoid stale-segment backlog during assistant generation/speech.
                 // Barge-in is already handled in-chunk before segment completion.
@@ -1568,6 +1759,12 @@ actor PipelineCoordinator {
                         debugConsole,
                         .speaker,
                         "Dropped segment from streaming speaker gate dur=\(String(format: "%.2f", segment.durationSeconds))s"
+                    )
+                    publishVoiceAttention(
+                        stage: "speaker",
+                        decision: "dropped",
+                        reason: "streaming_speaker_gate_reject",
+                        rms: VoiceActivityDetector.computeRMS(segment.samples)
                     )
                     continue
                 }
@@ -1589,6 +1786,16 @@ actor PipelineCoordinator {
         guard let pending = pendingSemanticTurn else { return }
         pendingSemanticTurn = nil
         pendingSemanticTurnTask = nil
+        publishVoiceAttention(
+            stage: "semantic",
+            decision: "flushed",
+            reason: "hold_timeout_elapsed",
+            transcript: pending.text,
+            wakeSource: pending.acousticWakeDetection != nil ? "acoustic" : nil,
+            wakeScore: pending.acousticWakeDetection?.similarity,
+            semanticState: "flushed",
+            rms: pending.rms
+        )
         await processRecognizedVoiceText(
             rawText: pending.rawText,
             text: pending.text,
@@ -1596,6 +1803,7 @@ actor PipelineCoordinator {
             speakerAllowsConversation: pending.speakerAllowsConversation,
             rms: pending.rms,
             durationSecs: pending.durationSecs,
+            acousticWakeDetection: pending.acousticWakeDetection,
             allowSemanticHold: false
         )
     }
@@ -1607,18 +1815,33 @@ actor PipelineCoordinator {
         speakerAllowsConversation: Bool,
         rms: Float,
         durationSecs: Float,
+        acousticWakeDetection: WakeWordAcousticDetector.Detection?,
         allowSemanticHold: Bool
     ) async {
         var effectiveRawText = rawText
         var effectiveText = text
+        var effectiveAcousticWakeDetection = acousticWakeDetection
 
         if let pending = pendingSemanticTurn {
             effectiveRawText = pending.rawText + " " + rawText
             effectiveText = TextProcessing.correctNameRecognition(effectiveRawText)
+            if effectiveAcousticWakeDetection == nil {
+                effectiveAcousticWakeDetection = pending.acousticWakeDetection
+            }
             pendingSemanticTurn = nil
             pendingSemanticTurnTask?.cancel()
             pendingSemanticTurnTask = nil
             debugLog(debugConsole, .stt, "Semantic turn merged: \(effectiveText)")
+            publishVoiceAttention(
+                stage: "semantic",
+                decision: "merged",
+                reason: "continued_utterance",
+                transcript: effectiveText,
+                wakeSource: effectiveAcousticWakeDetection != nil ? "acoustic" : nil,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                semanticState: "merged",
+                rms: rms
+            )
         }
 
         if (awaitingApproval || pendingGovernanceAction != nil) && !speakerAllowsConversation {
@@ -1729,16 +1952,27 @@ actor PipelineCoordinator {
             wakeAliases = await wakeStore.allAliases()
         }
         var wakeMatch = wakeAddressMatch(in: effectiveText, logDecision: true)
-        let wakeStrength = wakeMatch.map { match in
-            match.kind == .exact ? VoiceConversationWakeStrength.exact : .fuzzy
+        var wakeSource: String?
+        if wakeMatch != nil {
+            wakeSource = "text"
+        } else if effectiveAcousticWakeDetection != nil {
+            wakeSource = "acoustic"
         }
+        let wakeStrength: VoiceConversationWakeStrength? = {
+            if effectiveAcousticWakeDetection != nil {
+                return .exact
+            }
+            return wakeMatch.map { match in
+                match.kind == .exact ? VoiceConversationWakeStrength.exact : .fuzzy
+            }
+        }()
         if !VoiceConversationPolicy.shouldHonorWakeMatch(
             ownerProfileExists: ownerProfileExists,
             firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
             speakerRole: currentSpeakerRole,
             wakeStrength: wakeStrength
         ) {
-            if wakeMatch != nil, ownerProfileExists, !firstOwnerEnrollmentActive {
+            if (wakeMatch != nil || effectiveAcousticWakeDetection != nil), ownerProfileExists, !firstOwnerEnrollmentActive {
                 debugLog(
                     debugConsole,
                     .speaker,
@@ -1746,8 +1980,10 @@ actor PipelineCoordinator {
                 )
             }
             wakeMatch = nil
+            effectiveAcousticWakeDetection = nil
+            wakeSource = nil
         }
-        let addressedToFae = wakeMatch != nil
+        let addressedToFae = wakeMatch != nil || effectiveAcousticWakeDetection != nil
         if addressedToFae {
             await learnWakeAliasIfNeeded(rawText: effectiveRawText)
         }
@@ -1769,7 +2005,8 @@ actor PipelineCoordinator {
                 ownerProfileExists: ownerProfileExists,
                 speakerAllowsConversation: speakerAllowsConversation,
                 rms: rms,
-                durationSecs: durationSecs
+                durationSecs: durationSecs,
+                acousticWakeDetection: effectiveAcousticWakeDetection
             )
             pendingSemanticTurn = pending
             pendingSemanticTurnTask?.cancel()
@@ -1779,6 +2016,16 @@ actor PipelineCoordinator {
                 await self?.flushPendingSemanticTurnIfNeeded()
             }
             debugLog(debugConsole, .pipeline, "Semantic turn hold: \"\(effectiveText)\"")
+            publishVoiceAttention(
+                stage: "semantic",
+                decision: "held",
+                reason: "likely_incomplete_turn",
+                transcript: effectiveText,
+                wakeSource: wakeSource,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                semanticState: "held",
+                rms: rms
+            )
             return
         }
 
@@ -1797,6 +2044,15 @@ actor PipelineCoordinator {
         switch attentionDecision {
         case .ignoreWhileSleeping:
             debugLog(debugConsole, .command, "Ignored while sleeping (not addressed): \(effectiveText)")
+            publishVoiceAttention(
+                stage: "attention",
+                decision: "ignored_sleeping",
+                reason: "sleeping_without_address",
+                transcript: effectiveText,
+                wakeSource: wakeSource,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                rms: rms
+            )
             if wordCount >= 4,
                VoiceConversationPolicy.shouldOfferSleepHint(
                    ownerProfileExists: ownerProfileExists,
@@ -1811,14 +2067,41 @@ actor PipelineCoordinator {
             return
 
         case .wakeAndContinue:
+            publishVoiceAttention(
+                stage: "attention",
+                decision: "wake",
+                reason: wakeSource == "acoustic" ? "acoustic_wake" : "text_wake",
+                transcript: effectiveText,
+                wakeSource: wakeSource,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                rms: rms
+            )
             wake()
 
         case .dropDirectAddress:
             debugLog(debugConsole, .command, "Dropped (direct-address required): \(effectiveText)")
+            publishVoiceAttention(
+                stage: "attention",
+                decision: "dropped_direct_address",
+                reason: "direct_address_required",
+                transcript: effectiveText,
+                wakeSource: wakeSource,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                rms: rms
+            )
             return
 
         case .dropShortIdle:
             debugLog(debugConsole, .pipeline, "Dropped short idle utterance: \"\(effectiveText)\"")
+            publishVoiceAttention(
+                stage: "attention",
+                decision: "dropped_short_idle",
+                reason: "idle_fragment_filter",
+                transcript: effectiveText,
+                wakeSource: wakeSource,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                rms: rms
+            )
             return
 
         case .dropSpeaker:
@@ -1827,9 +2110,27 @@ actor PipelineCoordinator {
                 .speaker,
                 "Ignored speech from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
             )
+            publishVoiceAttention(
+                stage: "attention",
+                decision: "dropped_speaker",
+                reason: "speaker_not_allowed",
+                transcript: effectiveText,
+                wakeSource: wakeSource,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                rms: rms
+            )
             return
 
         case .allow:
+            publishVoiceAttention(
+                stage: "attention",
+                decision: "accepted",
+                reason: inFollowup ? "followup_window" : (wakeSource == nil ? "open_gate" : "addressed_to_fae"),
+                transcript: effectiveText,
+                wakeSource: wakeSource,
+                wakeScore: effectiveAcousticWakeDetection?.similarity,
+                rms: rms
+            )
             break
         }
 
@@ -2050,6 +2351,8 @@ actor PipelineCoordinator {
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
 
+            let acousticWakeDetection = await acousticWakeDetectionForSegment(segment)
+
             await processRecognizedVoiceText(
                 rawText: rawText,
                 text: text,
@@ -2057,6 +2360,7 @@ actor PipelineCoordinator {
                 speakerAllowsConversation: speakerAllowsConversation,
                 rms: rms,
                 durationSecs: durationSecs,
+                acousticWakeDetection: acousticWakeDetection,
                 allowSemanticHold: true
             )
 
@@ -3730,6 +4034,7 @@ actor PipelineCoordinator {
         if resetVAD {
             vad.reset()
             resetStreamingSpeakerGate()
+            resetStreamingWakeDetector()
             clearPendingSemanticTurn()
         }
         scheduleDeferredProactiveDrain()

@@ -22,9 +22,40 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Drives UI gating — e.g. the input bar is hidden until this becomes `true`.
     @Published var isPipelineReady: Bool = false
 
+    struct VoiceAttentionEvent: Identifiable, Sendable {
+        let id = UUID()
+        let timestamp: Date
+        let stage: String
+        let decision: String
+        let reason: String
+        let transcript: String?
+        let speakerRole: String
+        let wakeSource: String?
+        let wakeScore: Double?
+        let semanticState: String?
+        let rms: Double?
+    }
+
+    struct VoiceAttentionDiagnostics: Sendable {
+        var lastStage: String = "idle"
+        var lastDecision: String = "No recent voice decision"
+        var lastReason: String = "Waiting for voice input"
+        var lastTranscript: String = ""
+        var lastSpeakerRole: String = "unknown"
+        var lastWakeSource: String?
+        var lastWakeScore: Double?
+        var lastSemanticState: String?
+        var lastRMS: Double?
+        var lastUpdatedAt: Date?
+        var recentEvents: [VoiceAttentionEvent] = []
+    }
+
     /// Last audio RMS level received from the pipeline (0.0–1.0).
     /// Read directly by `NativeOrbView` via SwiftUI property binding.
     @Published var audioRMS: Double = 0.0
+
+    /// Latest voice attention diagnostics for the Settings > Diagnostics screen.
+    @Published var voiceAttention: VoiceAttentionDiagnostics = VoiceAttentionDiagnostics()
 
     /// Native canvas store for the SwiftUI canvas window.
     /// Set by `FaeApp` during wiring.
@@ -447,6 +478,9 @@ final class PipelineAuxBridgeController: ObservableObject {
                 status = "Mic: \(active ? "active" : "inactive")"
             }
 
+        case "pipeline.voice_attention":
+            handleVoiceAttention(payload: payload)
+
         case "pipeline.conversation_snapshot":
             // Snapshot received — don't update status string, it's a data event.
             break
@@ -473,6 +507,36 @@ final class PipelineAuxBridgeController: ObservableObject {
         default:
             break
         }
+    }
+
+    private func handleVoiceAttention(payload: [String: Any]) {
+        let event = VoiceAttentionEvent(
+            timestamp: Date(),
+            stage: payload["stage"] as? String ?? "unknown",
+            decision: payload["decision"] as? String ?? "unknown",
+            reason: payload["reason"] as? String ?? "unknown",
+            transcript: payload["transcript"] as? String,
+            speakerRole: payload["speaker_role"] as? String ?? "unknown",
+            wakeSource: payload["wake_source"] as? String,
+            wakeScore: payload["wake_score"] as? Double,
+            semanticState: payload["semantic_state"] as? String,
+            rms: payload["rms"] as? Double
+        )
+
+        var diagnostics = voiceAttention
+        diagnostics.lastStage = event.stage
+        diagnostics.lastDecision = event.decision
+        diagnostics.lastReason = event.reason
+        diagnostics.lastTranscript = event.transcript ?? ""
+        diagnostics.lastSpeakerRole = event.speakerRole
+        diagnostics.lastWakeSource = event.wakeSource
+        diagnostics.lastWakeScore = event.wakeScore
+        diagnostics.lastSemanticState = event.semanticState
+        diagnostics.lastRMS = event.rms
+        diagnostics.lastUpdatedAt = event.timestamp
+        diagnostics.recentEvents.insert(event, at: 0)
+        diagnostics.recentEvents = Array(diagnostics.recentEvents.prefix(20))
+        voiceAttention = diagnostics
     }
 
     private func handleAudioLevel(rms: Double) {
