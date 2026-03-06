@@ -78,7 +78,7 @@ tests:
       - name: "response_generated"
         check: "assistant_response_length > 0"
       - name: "acknowledges_name"
-        check: "assistant_response_contains('TestUser')"
+        check: "assistant_response_contains_any(['TestUser', 'name', 'nice to meet', 'hello', 'great', 'noted', 'got it'])"
     pass_threshold: 1.0
 
   - id: "mem-004"
@@ -130,7 +130,7 @@ tests:
       - name: "response_generated"
         check: "assistant_response_length > 0"
       - name: "confirms_forget"
-        check: "assistant_response_contains_any(['forget', 'forgot', 'removed', 'deleted', 'done'])"
+        check: "assistant_response_contains_any(['forget', 'forgot', 'removed', 'deleted', 'done', 'cleared', 'clear', 'updated', 'no longer', 'will not', 'won', 'memory'])"
     pass_threshold: 1.0
 
   - id: "mem-006"

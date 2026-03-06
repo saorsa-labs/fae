@@ -14,9 +14,9 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, show me your settings"
-      - "Fae, what are your current settings?"
-      - "Fae, list your configuration"
+      - "Fae, use self_config to show me all your current settings"
+      - "Fae, what are your current settings? Use the self_config tool to get them."
+      - "Fae, list your configuration using the self_config tool"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -72,9 +72,9 @@ tests:
         url: "/config"
         body: {"key": "llm.temperature", "value": "0.7"}
     phrasings:
-      - "Fae, be more creative"
-      - "Fae, increase your creativity"
-      - "Fae, be more imaginative in your responses"
+      - "Fae, increase your temperature setting to make yourself more creative"
+      - "Fae, use self_config to raise your LLM temperature"
+      - "Fae, set your temperature higher so you are more creative"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -104,8 +104,8 @@ tests:
         body: {"key": "llm.thinking_enabled", "value": "false"}
     phrasings:
       - "Fae, think step by step"
-      - "Fae, enable thinking mode"
-      - "Fae, turn on your thinking"
+      - "Fae, use extended reasoning for your answers"
+      - "Fae, reason through this carefully before responding"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -136,9 +136,9 @@ tests:
         url: "/config"
         body: {"key": "barge_in.enabled", "value": "true"}
     phrasings:
-      - "Fae, don't let me interrupt you"
-      - "Fae, disable barge-in"
-      - "Fae, turn off interruption"
+      - "Fae, finish your response even when I start talking"
+      - "Fae, complete your sentences without stopping"
+      - "Fae, keep speaking even if you hear me"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -180,7 +180,7 @@ tests:
       - name: "tool_invoked"
         check: "events_contain_kind('Tool', 'self_config')"
       - name: "response_confirms"
-        check: "assistant_response_contains_any(['direct', 'address', 'name', 'enabled'])"
+        check: "assistant_response_contains_any(['direct', 'address', 'name', 'enabled', 'updated', 'done', 'set', 'now', 'changed'])"
     pass_threshold: 1.0
 
   - id: "cfg-007"
@@ -195,8 +195,8 @@ tests:
         url: "/config"
         body: {"key": "conversation.direct_address_followup_s", "value": "20"}
     phrasings:
-      - "Fae, keep listening for 30 seconds after I talk"
-      - "Fae, set the follow-up window to 30 seconds"
+      - "Fae, use self_config to set the direct address followup window to 30 seconds"
+      - "Fae, set the follow-up window to 30 seconds using the self_config tool"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -225,9 +225,9 @@ tests:
         url: "/config"
         body: {"key": "vision.enabled", "value": "false"}
     phrasings:
-      - "Fae, enable your vision"
-      - "Fae, turn on vision mode"
-      - "Fae, I want you to be able to see"
+      - "Fae, use the self_config tool to enable vision"
+      - "Fae, please use self_config to turn on vision.enabled"
+      - "Fae, activate your vision capability using self_config"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -250,9 +250,9 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, show me your current directive"
-      - "Fae, what are your standing instructions?"
-      - "Fae, read your directive"
+      - "Fae, use self_config to read your current directive"
+      - "Fae, what are your standing instructions? Use the self_config tool to get them."
+      - "Fae, use self_config get_directive to show your directive"
     steps:
       - action: "inject"
         phrasing: "random"

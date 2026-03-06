@@ -24,6 +24,7 @@ FAE_URL="http://127.0.0.1:7433"
 CHATTERBOX_URL="http://127.0.0.1:8000"
 RECORDING_PID=""
 RECORDING_FILE=""
+CHATTERBOX_AVAILABLE=false
 
 # Defaults
 MODEL="claude"
@@ -835,6 +836,24 @@ execute_step() {
                 dim "    Screenshot saved: $output_path"
             fi
             ;;
+        speak)
+            # Speak text via Chatterbox TTS so Fae's mic picks it up.
+            # Requires Chatterbox at $CHATTERBOX_URL.
+            local text voice
+            text=$(echo "$step_json" | jq -r '.text // ""')
+            voice=$(echo "$step_json" | jq -r '.voice // "jarvis"')
+            if ! $CHATTERBOX_AVAILABLE; then
+                yellow "  Warning: Chatterbox not available — speak step skipped (test will fail)"
+                return
+            fi
+            local escaped_text
+            escaped_text=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
+            if $VERBOSE; then dim "  speak: '$text' via voice '$voice'"; fi
+            curl -s --max-time 30 -X POST "$CHATTERBOX_URL/speak" \
+                -H "Content-Type: application/json" \
+                -d "{\"text\": ${escaped_text}, \"voice\": \"${voice}\", \"play\": true}" > /dev/null \
+                || yellow "  Warning: Chatterbox speak request failed"
+            ;;
         wait_speech)
             # Wait for Fae to finish speaking (isSpeaking==false), separate from generation
             local max_wait
@@ -852,6 +871,36 @@ execute_step() {
             done
             if [ "$elapsed" -ge "$max_wait" ]; then
                 yellow "  Warning: speech timed out after ${max_wait}s"
+            fi
+            ;;
+        wait_approval)
+            # Poll /approvals until a pending approval appears, then optionally resolve it.
+            # Parameters:
+            #   max_wait_s  (default 120) — polling timeout in seconds
+            #   decision    (optional)    — if set, auto-resolve: "yes", "no", "always"
+            # This replaces the fragile sleep-then-approve pattern for LLM-speed-independent approval tests.
+            local max_wait decision
+            max_wait=$(echo "$step_json" | jq -r '.max_wait_s // 120')
+            decision=$(echo "$step_json" | jq -r '.decision // empty')
+            local elapsed=0
+            local found=false
+            while [ "$elapsed" -lt "$max_wait" ]; do
+                fae_get "/approvals"
+                local pending_count
+                pending_count=$(echo "$HTTP_BODY" | jq '.pending | length' 2>/dev/null || echo "0")
+                if [ "$pending_count" -gt "0" ]; then
+                    found=true
+                    break
+                fi
+                sleep 2
+                elapsed=$((elapsed + 2))
+            done
+            if ! $found; then
+                yellow "  Warning: wait_approval timed out after ${max_wait}s (no pending approval appeared)"
+            elif [ -n "$decision" ]; then
+                # Auto-resolve with the specified decision
+                fae_post "/approve" "{\"decision\":\"${decision}\"}"
+                if $VERBOSE; then dim "  wait_approval: resolved with decision=${decision}"; fi
             fi
             ;;
         *)
@@ -893,6 +942,28 @@ print(json.dumps({
     'pass': False,
     'skipped': True,
     'skip_reason': '--skip-llm flag set',
+    'notes': ''
+}))
+")"
+        return
+    fi
+
+    # Skip live_audio if Chatterbox not available
+    if [ "$test_class" = "live_audio" ] && ! $CHATTERBOX_AVAILABLE; then
+        SKIPPED=$((SKIPPED + 1))
+        yellow "  SKIP $test_id ($test_name) — live_audio, Chatterbox not available"
+        record_result "$(python3 -c "
+import json
+print(json.dumps({
+    'test_id': '$test_id',
+    'phase': '$phase_name',
+    'class': '$test_class',
+    'phrasing_used': None,
+    'scores': [],
+    'overall_score': 0.0,
+    'pass': False,
+    'skipped': True,
+    'skip_reason': 'live_audio: Chatterbox TTS not available',
     'notes': ''
 }))
 ")"
@@ -1343,6 +1414,16 @@ main() {
     check_prereqs
     wait_for_fae || exit 1
 
+    # Check Chatterbox TTS availability (required for live_audio tests)
+    dim "  Checking Chatterbox TTS availability..."
+    if curl -s --max-time 2 "$CHATTERBOX_URL/health" > /dev/null 2>&1; then
+        CHATTERBOX_AVAILABLE=true
+        dim "  Chatterbox: available at $CHATTERBOX_URL"
+    else
+        CHATTERBOX_AVAILABLE=false
+        dim "  Chatterbox: not available — live_audio tests will be skipped"
+    fi
+
     # Disable thinking mode for consistent, faster test execution.
     # The 35B model with thinking adds 30-60s overhead per query.
     # Phase 01 base-008 explicitly tests thinking toggle.
@@ -1350,12 +1431,14 @@ main() {
     fae_set_config "llm.thinking_enabled" "false"
 
     # Warm-up: first LLM generation in a fresh session may produce EOS immediately
-    # (35B model prefill cache not yet populated). Run one throwaway generation.
+    # (35B model prefill cache not yet populated). Run one throwaway generation
+    # with tools enabled so the full system prompt is primed.
     dim "  Warming up LLM (first generation)..."
-    fae_set_config "tool_mode" "off"
+    fae_set_config "tool_mode" "full_no_approval"
     fae_inject "Fae, say hello"
     fae_wait_generation 120
     fae_post "/reset" "{}"
+    fae_set_config "tool_mode" "off"
     sleep 2
     dim "  Warm-up complete."
 

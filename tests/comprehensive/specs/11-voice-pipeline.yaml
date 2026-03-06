@@ -4,7 +4,7 @@ description: "End-to-end voice tests via Chatterbox TTS — audio plays through 
 tests:
   - id: "voice-001"
     name: "Voice greeting reaches pipeline"
-    class: deterministic
+    class: live_audio
     timeout_s: 120
     setup:
       - action: "http_post"
@@ -39,7 +39,7 @@ tests:
 
   - id: "voice-002"
     name: "Voice math accuracy"
-    class: deterministic
+    class: live_audio
     timeout_s: 150
     setup:
       - action: "http_post"
@@ -70,7 +70,7 @@ tests:
 
   - id: "voice-003"
     name: "Voice multi-turn memory"
-    class: deterministic
+    class: live_audio
     timeout_s: 320
     setup:
       - action: "http_post"

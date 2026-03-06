@@ -125,7 +125,7 @@ tests:
   - id: "base-005"
     name: "Cancel generation"
     class: deterministic
-    timeout_s: 120
+    timeout_s: 200
     setup:
       # Disable tools for faster prefill — cancel test doesn't need tools
       - action: "http_post"
@@ -139,18 +139,17 @@ tests:
     steps:
       - action: "inject"
         phrasing: "random"
-      # Wait for generation to be in progress (prefill ~15-30s without tools).
-      # Use wait_generation Phase 1 to detect when generation starts, then cancel.
+      # Wait for generation to complete OR timeout — then cancel (no-op if already done).
+      # 35B model prefill takes 15-30s; full generation may take 60-120s for long essays.
       - action: "wait_generation"
-        max_wait_s: 60
-      # Generation completed — for cancel test, we need to catch it mid-stream.
-      # If it already finished, cancel is a no-op and isGenerating=false anyway.
+        max_wait_s: 90
+      # Cancel any ongoing generation (or no-op if already finished).
       - action: "http_post"
         url: "/cancel"
         body: {}
-      # Allow pipeline time to tear down generation — 35B model may take >10s to cancel
+      # Allow pipeline time to tear down — 35B model may take up to 30s to fully stop.
       - action: "sleep"
-        duration_ms: 20000
+        duration_ms: 45000
       - action: "http_get"
         url: "/conversation"
     criteria:

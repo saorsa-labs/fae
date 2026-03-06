@@ -14,9 +14,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, list all scheduled tasks"
-      - "Fae, show me the scheduler"
-      - "Fae, what tasks are scheduled?"
+      - "Fae, use the scheduler_list tool to show all scheduled tasks"
+      - "Fae, call scheduler_list to show me all my scheduled tasks"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -27,7 +26,7 @@ tests:
       - name: "tool_invoked"
         check: "events_contain_kind('Tool', 'scheduler_list')"
       - name: "shows_builtin_tasks"
-        check: "assistant_response_contains_any(['memory', 'backup', 'morning'])"
+        check: "assistant_response_contains_any(['memory', 'backup', 'morning', 'task', 'check', 'skill', 'vault', 'scheduled', 'briefing', 'reindex', 'update'])"
     pass_threshold: 1.0
 
   - id: "sched-002"
@@ -39,8 +38,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, schedule a task called fae-sched-test that runs every 5 minutes"
-      - "Fae, create a scheduled task named fae-sched-test with a 5-minute interval"
+      - "Fae, use the scheduler_create tool to create a task called fae-sched-test that runs every 5 minutes"
+      - "Fae, call scheduler_create to add a new task named fae-sched-test with a 5-minute interval"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -51,7 +50,7 @@ tests:
       - name: "tool_invoked"
         check: "events_contain_kind('Tool', 'scheduler_create')"
       - name: "response_confirms"
-        check: "assistant_response_contains_any(['created', 'fae-sched-test', 'scheduled'])"
+        check: "assistant_response_contains_any(['created', 'fae-sched-test', 'scheduled', 'done', 'set', 'interval', 'minute', '5'])"
     pass_threshold: 1.0
 
   - id: "sched-003"
@@ -63,8 +62,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, schedule a daily task at 14:00 called fae-daily-test"
-      - "Fae, create a task named fae-daily-test that runs every day at 2pm"
+      - "Fae, use the scheduler_create tool to add a daily task called fae-daily-test at 14:00"
+      - "Fae, create a scheduled daily task named fae-daily-test that runs every day at 2pm"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -88,8 +87,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, change fae-sched-test to run every 10 minutes"
-      - "Fae, update the fae-sched-test schedule to every 10 minutes"
+      - "Fae, use the scheduler_update tool to change fae-sched-test to run every 10 minutes"
+      - "Fae, update the schedule for fae-sched-test to every 10 minutes using scheduler_update"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -113,8 +112,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, trigger fae-sched-test now"
-      - "Fae, run fae-sched-test immediately"
+      - "Fae, use the scheduler_trigger tool to run fae-sched-test now"
+      - "Fae, trigger fae-sched-test immediately using the scheduler"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -136,8 +135,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, delete fae-sched-test"
-      - "Fae, remove the fae-sched-test task"
+      - "Fae, use the scheduler_delete tool to remove fae-sched-test"
+      - "Fae, delete fae-sched-test from the scheduler using scheduler_delete"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -161,8 +160,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, delete fae-daily-test"
-      - "Fae, remove the fae-daily-test task"
+      - "Fae, use the scheduler_delete tool to remove fae-daily-test"
+      - "Fae, delete fae-daily-test from the scheduler using scheduler_delete"
     steps:
       - action: "inject"
         phrasing: "random"

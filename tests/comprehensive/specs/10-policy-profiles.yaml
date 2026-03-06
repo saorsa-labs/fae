@@ -28,7 +28,7 @@ tests:
   - id: "prof-002"
     name: "moreCautious confirms medium-risk actions"
     class: deterministic
-    timeout_s: 90
+    timeout_s: 300
     depends_on: ["prof-001"]
     setup:
       - action: "http_post"
@@ -40,13 +40,16 @@ tests:
       - action: "http_post"
         url: "/config"
         body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "bash"
+        command: "rm -f /tmp/cautious-test.txt"
     phrasings:
       - "Fae, write 'cautious test' to /tmp/cautious-test.txt"
     steps:
       - action: "inject"
         phrasing: "random"
-      - action: "sleep"
-        duration_ms: 5000
+      # wait_approval polls until a pending approval appears (no decision = just verify it's pending)
+      - action: "wait_approval"
+        max_wait_s: 180
       - action: "http_get"
         url: "/approvals"
     criteria:
@@ -87,8 +90,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, read /etc/hosts"
-      - "Fae, show me /etc/hosts"
+      - "Fae, use the read tool to get /etc/hosts"
+      - "Fae, read the file /etc/hosts using your read tool"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -135,8 +138,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, read /etc/hosts"
-      - "Fae, show me /etc/hosts"
+      - "Fae, use the read tool to get /etc/hosts"
+      - "Fae, read the file /etc/hosts using your read tool"
     steps:
       - action: "inject"
         phrasing: "random"
