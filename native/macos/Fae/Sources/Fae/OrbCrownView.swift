@@ -109,7 +109,7 @@ struct OrbCrownView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .help("Open Cowork Desktop")
+                    .help("Open Work with Fae")
                     .padding(.trailing, 12)
                     .padding(.top, 10)
                 }
@@ -165,7 +165,7 @@ struct OrbCrownView: View {
             NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
         }
         let coworkItem = NSMenuItem(
-            title: "Open Cowork Desktop",
+            title: "Open Work with Fae",
             action: #selector(MenuActionHandler.invoke),
             keyEquivalent: ""
         )

@@ -585,6 +585,34 @@ enum TextProcessing {
         ("fey.", "Fae."),
     ]
 
+    /// Returns true when a transcript strongly suggests the user has not finished
+    /// their turn yet and the pipeline should briefly wait for continuation.
+    ///
+    /// This is intentionally conservative: it only fires for clearly unfinished
+    /// phrasing such as trailing conjunctions / prepositions.
+    static func isLikelyIncompleteTurn(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        if let last = trimmed.last, [".", "!", "?"].contains(last) {
+            return false
+        }
+
+        let normalized = normalizeWakeAlias(trimmed)
+        let tokens = normalized.split(separator: " ").map(String.init)
+        guard let lastToken = tokens.last else { return false }
+
+        let trailingFunctionWords: Set<String> = [
+            "and", "or", "but", "so", "because", "if", "when", "while", "then",
+            "that", "which", "who", "where", "with", "without", "for", "from",
+            "to", "into", "onto", "at", "in", "on", "of", "about", "like",
+            "as", "after", "before", "until", "unless", "since", "than", "by",
+            "around", "through", "over", "under", "between", "during", "per",
+            "plus", "minus", "versus", "vs", "uh", "um"
+        ]
+        return trailingFunctionWords.contains(lastToken)
+    }
+
     /// Correct common ASR misrecognitions of "Fae" in transcribed text.
     static func correctNameRecognition(_ text: String) -> String {
         var result = text

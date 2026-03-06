@@ -3,6 +3,9 @@ import XCTest
 @testable import Fae
 
 final class EndToEndAllowWithTransformTests: XCTestCase {
+    override func setUp() async throws {
+        await ApprovedToolsStore.shared.revokeAll()
+    }
 
     func testAutonomousWriteUsesAllowWithTransform() async {
         let broker = DefaultTrustedActionBroker(

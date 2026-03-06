@@ -1,19 +1,20 @@
 import Foundation
 
-/// Energy-based voice activity detector with hysteresis.
+/// Neural voice activity detector backed by Silero VAD, with legacy energy
+/// fallback if the model cannot be loaded.
 ///
-/// Accumulates audio samples into speech segments, using RMS energy
-/// thresholds with configurable silence gap and pre-roll buffer.
-///
-/// Replaces: `src/vad/mod.rs` (SileroVad)
+/// Fae keeps utterance segmentation, pre-roll, silence handling, and force-flush
+/// logic here. Silero supplies the per-frame speech probability used to drive the
+/// segmentation state machine.
 struct VoiceActivityDetector {
 
     // MARK: - Configuration
 
-    /// RMS threshold to enter speech state.
-    var threshold: Float = 0.008
-    /// Ratio applied to threshold for sustain (hysteresis).
-    var hysteresisRatio: Float = 0.6
+    /// Speech probability threshold to enter speech state.
+    var threshold: Float = 0.30
+    /// Ratio applied to `threshold` while already in speech.
+    /// Default 0.8333 ~= 0.25 / 0.30, matching common Silero settings.
+    var hysteresisRatio: Float = 0.8333333
     /// Silence duration (ms) to end speech segment.
     var minSilenceDurationMs: Int = 1000
     /// Pre-roll buffer duration (ms) prepended to speech start.
@@ -33,24 +34,54 @@ struct VoiceActivityDetector {
     private var silenceSamplesThreshold: Int = 0
     private var minSpeechSamples: Int = 0
     private var maxSpeechSamples: Int = 0
-    private var sampleRate: Int = 16_000
+    private var sampleRate: Int = SileroVADEngine.sampleRate
     /// Wall-clock time when current speech began (set on speech onset).
     private var currentOnsetAt: Date?
+    /// Most recent Silero speech probability.
+    private var lastSpeechProbability: Float = 0
+    /// Neural VAD backend when available. If loading fails, we transparently fall
+    /// back to the old RMS detector so Fae still works.
+    private var silero: SileroVADEngine?
+
+    private static let legacyEnergyThresholdUpperBound: Float = 0.05
+    private static let fallbackEnergyThreshold: Float = 0.008
+    private static let fallbackEnergyHysteresisRatio: Float = 0.6
+    private static let defaultSileroThreshold: Float = 0.30
+    private static let defaultSileroHysteresisRatio: Float = 0.8333333
 
     /// Sustained threshold = threshold * hysteresisRatio.
     private var sustainThreshold: Float { threshold * hysteresisRatio }
+    private var energySustainThreshold: Float {
+        Self.fallbackEnergyThreshold * Self.fallbackEnergyHysteresisRatio
+    }
+    private var isUsingSilero: Bool { silero != nil }
 
     // MARK: - Init
 
-    init(sampleRate: Int = 16_000) {
+    init(sampleRate: Int = SileroVADEngine.sampleRate) {
         self.sampleRate = sampleRate
+        self.silero = try? SileroVADEngine()
+        if silero == nil {
+            NSLog("VoiceActivityDetector: Silero model unavailable — falling back to legacy RMS VAD")
+        }
         recalculateThresholds()
     }
 
     /// Apply the persisted VAD configuration and refresh derived sample thresholds.
     mutating func applyConfiguration(_ config: FaeConfig.VadConfig) {
-        threshold = config.threshold
-        hysteresisRatio = config.hysteresisRatio
+        if config.threshold < Self.legacyEnergyThresholdUpperBound {
+            threshold = Self.defaultSileroThreshold
+            hysteresisRatio = Self.defaultSileroHysteresisRatio
+            NSLog(
+                "VoiceActivityDetector: migrating legacy VAD threshold %.4f to Silero defaults %.2f / %.2f",
+                config.threshold,
+                Self.defaultSileroThreshold,
+                Self.defaultSileroHysteresisRatio
+            )
+        } else {
+            threshold = config.threshold
+            hysteresisRatio = max(0.1, config.hysteresisRatio)
+        }
         minSilenceDurationMs = config.minSilenceDurationMs
         speechPadMs = config.speechPadMs
         minSpeechDurationMs = config.minSpeechDurationMs
@@ -65,21 +96,37 @@ struct VoiceActivityDetector {
         var isSpeech: Bool = false
         var segment: SpeechSegment?
         var rms: Float = 0
+        var speechProbability: Float?
     }
 
     /// Process an audio chunk and return VAD output.
     mutating func processChunk(_ chunk: AudioChunk) -> Output {
         var output = Output()
 
-        // Compute RMS energy.
         let rms = Self.computeRMS(chunk.samples)
         output.rms = rms
 
-        let effectiveThreshold = inSpeech ? sustainThreshold : threshold
-        let isSpeech = rms > effectiveThreshold
+        let speechScore: Float
+        if let silero {
+            if let probability = try? silero.process(samples: chunk.samples) {
+                lastSpeechProbability = probability
+            }
+            speechScore = lastSpeechProbability
+            output.speechProbability = speechScore
+        } else {
+            speechScore = rms
+        }
+
+        let effectiveThreshold: Float
+        if isUsingSilero {
+            effectiveThreshold = inSpeech ? sustainThreshold : threshold
+        } else {
+            effectiveThreshold = inSpeech ? energySustainThreshold : Self.fallbackEnergyThreshold
+        }
+
+        let isSpeech = speechScore > effectiveThreshold
         output.isSpeech = isSpeech
 
-        // Update pre-roll ring buffer.
         preRoll.append(contentsOf: chunk.samples)
         if preRoll.count > preRollMax {
             preRoll.removeFirst(preRoll.count - preRollMax)
@@ -87,7 +134,6 @@ struct VoiceActivityDetector {
 
         if isSpeech {
             if !inSpeech {
-                // Speech onset — prepend pre-roll.
                 inSpeech = true
                 output.speechStarted = true
                 currentOnsetAt = Date()
@@ -96,12 +142,10 @@ struct VoiceActivityDetector {
             silenceSamples = 0
             speechBuffer.append(contentsOf: chunk.samples)
         } else if inSpeech {
-            // In speech but current chunk is silence — accumulate.
             silenceSamples += chunk.samples.count
             speechBuffer.append(contentsOf: chunk.samples)
 
             if silenceSamples >= silenceSamplesThreshold {
-                // Silence gap exceeded — end segment.
                 inSpeech = false
                 silenceSamples = 0
                 if speechBuffer.count >= minSpeechSamples {
@@ -117,7 +161,6 @@ struct VoiceActivityDetector {
             }
         }
 
-        // Safety cap — force-emit if speech exceeds max duration.
         if inSpeech && speechBuffer.count >= maxSpeechSamples {
             inSpeech = false
             silenceSamples = 0
@@ -143,6 +186,8 @@ struct VoiceActivityDetector {
         inSpeech = false
         silenceSamples = 0
         currentOnsetAt = nil
+        lastSpeechProbability = 0
+        silero?.reset()
     }
 
     /// Dynamically adjust silence threshold for barge-in responsiveness.
@@ -174,7 +219,9 @@ struct VoiceActivityDetector {
     static func computeRMS(_ samples: [Float]) -> Float {
         guard !samples.isEmpty else { return 0 }
         var sumSquares: Float = 0
-        for s in samples { sumSquares += s * s }
+        for sample in samples {
+            sumSquares += sample * sample
+        }
         return (sumSquares / Float(samples.count)).squareRoot()
     }
 }

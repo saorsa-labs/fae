@@ -26,6 +26,8 @@ let package = Package(
         // with SQLITE_CORE defined to avoid the conflict.
         // TOML config file parsing.
         .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
+        // Neural Voice Activity Detection (Silero VAD v6 via CoreML).
+        .package(url: "https://github.com/paean-ai/silero-vad-swift.git", from: "1.0.0"),
     ],
     targets: [
         .executableTarget(
@@ -45,6 +47,7 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
                 "CSQLiteVecCore",
                 .product(name: "TOMLKit", package: "TOMLKit"),
+                .product(name: "SileroVAD", package: "silero-vad-swift"),
             ],
             path: "Sources/Fae",
             exclude: [

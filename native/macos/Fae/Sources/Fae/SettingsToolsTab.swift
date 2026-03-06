@@ -14,6 +14,7 @@ struct SettingsToolsTab: View {
     @State private var approvedTools: [String] = []
     @State private var approveAllReadonly: Bool = false
     @State private var approveAllEnabled: Bool = false
+    @State private var disabledTools: Set<String> = []
 
     private let toolModes: [(label: String, value: String, description: String)] = [
         ("Off", "off", "Tools disabled. LLM-only conversational mode."),
@@ -108,6 +109,20 @@ struct SettingsToolsTab: View {
                 Text("Say “show tools and permissions” any time to open this snapshot in the canvas with quick mode actions.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Per-Tool Availability") {
+                Text("Use these toggles to hide or hard-disable individual tools. Tool mode and privacy mode still apply on top.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                ForEach(groupedTools.keys.sorted(), id: \.self) { category in
+                    DisclosureGroup(category) {
+                        ForEach(groupedTools[category] ?? [], id: \.name) { tool in
+                            toolToggleRow(tool)
+                        }
+                    }
+                }
             }
 
             Section("Apple Tool Permissions") {
@@ -222,6 +237,7 @@ struct SettingsToolsTab: View {
         .onAppear {
             permissionSnapshot = PermissionStatusProvider.current()
             autonomyProfile = autonomyProfile(forToolMode: toolMode)
+            disabledTools = ToolToggleStore.disabledToolNames()
             refreshToolSnapshot()
             Task { await refreshApprovalState() }
         }
@@ -258,6 +274,77 @@ struct SettingsToolsTab: View {
                 .controlSize(.small)
             }
         }
+    }
+
+    private var groupedTools: [String: [any Tool]] {
+        Dictionary(grouping: ToolRegistry.buildDefault().allTools) {
+            CoworkToolSummary.category(for: $0.name)
+        }
+        .mapValues { group in
+            group.sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func toolToggleRow(_ tool: any Tool) -> some View {
+        let config = FaeConfig.load()
+        let registry = ToolRegistry.buildDefault()
+        let disabledByUser = disabledTools.contains(tool.name)
+        let allowedByMode = registry.isToolAllowed(tool.name, mode: toolMode, privacyMode: config.privacy.mode)
+            || (!ToolToggleStore.isToolEnabled(tool.name) && !disabledByUser)
+        let effectiveEnabled = !disabledByUser && allowedByMode
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(CoworkToolSummary.displayName(for: tool.name))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Text(tool.description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { !disabledByUser },
+                        set: { newValue in
+                            ToolToggleStore.setToolEnabled(newValue, for: tool.name)
+                            disabledTools = ToolToggleStore.disabledToolNames()
+                            refreshToolSnapshot()
+                        }
+                    )
+                )
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+
+            HStack(spacing: 8) {
+                Text(tool.name)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                Text(tool.riskLevel.rawValue.capitalized)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if disabledByUser {
+                    Text("Disabled here")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                } else if !effectiveEnabled {
+                    Text("Blocked by mode/privacy")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Available")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     private func autonomyProfile(forToolMode mode: String) -> String {

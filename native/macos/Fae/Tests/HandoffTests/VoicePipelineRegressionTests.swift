@@ -20,6 +20,252 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(derived.maxSpeechSamples, 38_400)
     }
 
+    func testSileroEngineLoadsAndReturnsProbabilityForSingleFrame() throws {
+        let engine = try SileroVADEngine()
+        let silence = [Float](repeating: 0, count: SileroVADEngine.chunkSize)
+
+        let probability = try XCTUnwrap(engine.process(samples: silence))
+
+        XCTAssertGreaterThanOrEqual(probability, 0)
+        XCTAssertLessThanOrEqual(probability, 1)
+    }
+
+    func testShouldSkipSTTAfterSpeakerVerificationForUnknownSpeakerWhenOwnerExists() {
+        XCTAssertTrue(
+            PipelineCoordinator.shouldSkipSTTAfterSpeakerVerification(
+                ownerProfileExists: true,
+                speakerVerificationCompleted: true,
+                firstOwnerEnrollmentActive: false,
+                speakerRole: nil
+            )
+        )
+    }
+
+    func testStreamingSpeakerSimilarityDecisionAllowsStrongMatch() {
+        XCTAssertEqual(
+            PipelineCoordinator.streamingSpeakerSimilarityDecision(
+                bestHumanSimilarity: 0.78,
+                acceptThreshold: 0.70,
+                rejectThreshold: 0.50
+            ),
+            .allow
+        )
+    }
+
+    func testStreamingSpeakerSimilarityDecisionRejectsLowSimilarity() {
+        XCTAssertEqual(
+            PipelineCoordinator.streamingSpeakerSimilarityDecision(
+                bestHumanSimilarity: 0.42,
+                acceptThreshold: 0.70,
+                rejectThreshold: 0.50
+            ),
+            .reject
+        )
+    }
+
+    func testStreamingSpeakerSimilarityDecisionStaysUndecidedInMiddleBand() {
+        XCTAssertEqual(
+            PipelineCoordinator.streamingSpeakerSimilarityDecision(
+                bestHumanSimilarity: 0.61,
+                acceptThreshold: 0.70,
+                rejectThreshold: 0.50
+            ),
+            .undecided
+        )
+    }
+
+    func testStreamingSpeakerSimilarityDecisionRejectsMissingProfiles() {
+        XCTAssertEqual(
+            PipelineCoordinator.streamingSpeakerSimilarityDecision(
+                bestHumanSimilarity: nil,
+                acceptThreshold: 0.70,
+                rejectThreshold: 0.50
+            ),
+            .reject
+        )
+    }
+
+    func testFusedVoiceAttentionWakesWhenAddressedFromIdle() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .idle,
+                requireDirectAddress: true,
+                addressedToFae: true,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 4
+            ),
+            .wakeAndContinue
+        )
+    }
+
+    func testFusedVoiceAttentionIgnoresSleepingBackgroundSpeech() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .idle,
+                requireDirectAddress: true,
+                addressedToFae: false,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 6
+            ),
+            .ignoreWhileSleeping
+        )
+    }
+
+    func testFusedVoiceAttentionAllowsFollowupWithoutAddress() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .active,
+                requireDirectAddress: true,
+                addressedToFae: false,
+                inFollowup: true,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 5
+            ),
+            .allow
+        )
+    }
+
+    func testFusedVoiceAttentionDropsWhenDirectAddressRequired() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .active,
+                requireDirectAddress: true,
+                addressedToFae: false,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 5
+            ),
+            .dropDirectAddress
+        )
+    }
+
+    func testFusedVoiceAttentionDropsShortIdleFragments() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .active,
+                requireDirectAddress: false,
+                addressedToFae: false,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 2
+            ),
+            .dropShortIdle
+        )
+    }
+
+    func testFusedVoiceAttentionDropsDisallowedSpeaker() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .active,
+                requireDirectAddress: false,
+                addressedToFae: true,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: false,
+                wordCount: 4
+            ),
+            .dropSpeaker
+        )
+    }
+
+    func testSemanticTurnDefersClearlyIncompletePhrase() {
+        XCTAssertTrue(
+            PipelineCoordinator.shouldDeferSemanticTurn(
+                text: "set a timer for",
+                addressedToFae: false,
+                inFollowup: true,
+                awaitingApproval: false,
+                hasPendingGovernanceAction: false,
+                firstOwnerEnrollmentActive: false
+            )
+        )
+    }
+
+    func testSemanticTurnDoesNotDeferBareWakePhrase() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldDeferSemanticTurn(
+                text: "hey fae",
+                addressedToFae: true,
+                inFollowup: false,
+                awaitingApproval: false,
+                hasPendingGovernanceAction: false,
+                firstOwnerEnrollmentActive: false
+            )
+        )
+    }
+
+    func testSemanticTurnDoesNotDeferCompleteSentence() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldDeferSemanticTurn(
+                text: "set a timer for ten minutes.",
+                addressedToFae: false,
+                inFollowup: true,
+                awaitingApproval: false,
+                hasPendingGovernanceAction: false,
+                firstOwnerEnrollmentActive: false
+            )
+        )
+    }
+
+    func testSemanticTurnDoesNotDeferDuringOnboarding() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldDeferSemanticTurn(
+                text: "my name is david and",
+                addressedToFae: false,
+                inFollowup: true,
+                awaitingApproval: false,
+                hasPendingGovernanceAction: false,
+                firstOwnerEnrollmentActive: true
+            )
+        )
+    }
+
+    func testShouldNotSkipSTTWhenVerificationUnavailable() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldSkipSTTAfterSpeakerVerification(
+                ownerProfileExists: true,
+                speakerVerificationCompleted: false,
+                firstOwnerEnrollmentActive: false,
+                speakerRole: nil
+            )
+        )
+    }
+
+    func testShouldNotSkipSTTDuringFirstOwnerEnrollment() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldSkipSTTAfterSpeakerVerification(
+                ownerProfileExists: true,
+                speakerVerificationCompleted: true,
+                firstOwnerEnrollmentActive: true,
+                speakerRole: nil
+            )
+        )
+    }
+
+    func testShouldNotSkipSTTForTrustedSpeaker() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldSkipSTTAfterSpeakerVerification(
+                ownerProfileExists: true,
+                speakerVerificationCompleted: true,
+                firstOwnerEnrollmentActive: false,
+                speakerRole: .trusted
+            )
+        )
+    }
+
     func testBargeInCandidateAccumulatesAcrossSpeechChunks() {
         let chunk = [Float](repeating: 0.12, count: 512)
 

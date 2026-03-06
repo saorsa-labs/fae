@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 /// Captures microphone audio via AVAudioEngine input tap, converting to
-/// mono 16kHz Float32 in 512-sample chunks for the VAD/STT pipeline.
+/// mono 16kHz Float32 in 576-sample chunks for the VAD/STT pipeline.
 ///
 /// Replaces: `src/audio/capture.rs` (CpalCapture)
 actor AudioCaptureManager {
@@ -12,21 +12,31 @@ actor AudioCaptureManager {
 
     /// Target sample rate for pipeline processing.
     static let targetSampleRate: Int = 16_000
-    /// Chunk size in samples at target rate (32ms per chunk).
-    static let chunkSize: Int = 512
+    /// Chunk size in samples at target rate (36ms per chunk) to match Silero VAD.
+    static let chunkSize: Int = 576
 
     // MARK: - Software Noise Gate
 
     /// RMS threshold below which audio chunks are zeroed out before reaching VAD.
     /// This acts as a software substitute for macOS Voice Isolation when the system
     /// keeps reverting to "standard" mic mode. Chunks quieter than this floor are
-    /// treated as silence, preventing ambient noise from triggering false speech
-    /// detections. Default 0.005 is just below the VAD threshold (0.008).
-    var noiseGateThreshold: Float = 0.005
+    /// treated as silence, preventing ambient noise from reaching the neural VAD.
+    /// This remains an RMS floor, not the Silero speech-probability threshold.
+    var noiseGateThreshold: Float = 0.008
+
+    /// When true, all incoming audio chunks are silenced before reaching the pipeline.
+    /// Set by PipelineCoordinator when the user toggles the mic button off.
+    var isMuted: Bool = false
 
     // MARK: - Public API
 
-    /// Returns an AsyncStream of 512-sample mono Float32 chunks at 16kHz.
+    /// Mute or unmute the microphone. When muted, incoming audio chunks are
+    /// silently dropped before reaching the VAD/STT pipeline.
+    func setMuted(_ muted: Bool) {
+        isMuted = muted
+    }
+
+    /// Returns an AsyncStream of 576-sample mono Float32 chunks at 16kHz.
     func startCapture() throws -> AsyncStream<AudioChunk> {
         guard !isCapturing else {
             return AsyncStream { $0.finish() }
@@ -260,6 +270,11 @@ actor AudioCaptureManager {
     }
 
     private func emitChunk(_ chunk: AudioChunk) {
+        // Hard mute: mic button toggled off — drop chunk entirely (don't even
+        // send silence, so the VAD/STT pipeline stays completely idle).
+        if isMuted {
+            return
+        }
         // Software noise gate: zero out chunks below the noise floor.
         // This prevents low-level ambient noise from reaching VAD when macOS
         // Voice Isolation is not active (system keeps reverting to "standard").

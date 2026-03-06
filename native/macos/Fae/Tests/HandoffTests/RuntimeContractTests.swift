@@ -195,6 +195,46 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
+    func testFaeCorePersistsRemoteProviderDefaults() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "llm.remote_provider_preset", "value": "openrouter"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "llm.remote_base_url", "value": "https://openrouter.ai/api"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "llm.remote_model", "value": "anthropic/claude-sonnet-4"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertEqual(reloaded.llm.remoteProviderPreset, "openrouter")
+        XCTAssertEqual(reloaded.llm.remoteBaseURL, "https://openrouter.ai/api")
+        XCTAssertEqual(reloaded.llm.remoteModel, "anthropic/claude-sonnet-4")
+    }
+
+    @MainActor
     func testFaeCorePersistsPrivacyModePatch() async throws {
         let url = FaeConfig.configFileURL
         let fm = FileManager.default

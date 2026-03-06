@@ -2,6 +2,9 @@ import XCTest
 @testable import Fae
 
 final class TrustedActionBrokerTests: XCTestCase {
+    override func setUp() async throws {
+        await ApprovedToolsStore.shared.revokeAll()
+    }
 
     private func makeIntent(
         toolName: String,

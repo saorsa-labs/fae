@@ -70,4 +70,30 @@ struct GenerationOptions: Sendable {
     /// Native tool specs for MLX tool calling (ToolSpec = `[String: any Sendable]`).
     /// When set, passed to `UserInput.tools` so the chat template enables tool calling mode.
     var tools: [[String: any Sendable]]?
+
+    // MARK: - KV Cache Optimization (Phase 1)
+
+    /// Maximum KV cache size in tokens. When set, uses RotatingKVCache for
+    /// bounded memory usage regardless of conversation length. nil = unlimited.
+    var maxKVSize: Int?
+
+    /// Quantization bits for KV cache (4 or 8). Reduces KV memory by 4x or 2x respectively.
+    /// Requires Flash Attention (available on Apple Silicon). nil = no quantization (f16).
+    var kvBits: Int? = 4
+
+    /// Group size for KV cache quantization. Default 64 matches Ollama/mistral.rs.
+    var kvGroupSize: Int = 64
+
+    /// Token count after which to begin quantizing the KV cache. Keeps initial
+    /// context at full precision for better quality. Default 512.
+    var quantizedKVStart: Int = 512
+
+    /// Number of tokens to consider for repetition penalty. Larger windows
+    /// catch more repetition patterns. Default 64 (up from MLX default of 20).
+    var repetitionContextSize: Int = 64
+
+    /// Prefill step size for chunked prompt processing. Smaller values reduce
+    /// memory spikes for large prompts; larger values speed up prefill.
+    /// Auto-tuned based on model size if nil.
+    var prefillStepSize: Int? = nil
 }

@@ -214,6 +214,16 @@ actor PipelineCoordinator {
     /// Wall-clock time when the current utterance was captured by the VAD.
     private var currentUtteranceTimestamp: Date?
 
+    private enum StreamingSpeakerGateVerdict: Equatable {
+        case allow
+        case rejectUnknown
+    }
+
+    private var streamingSpeakerSamples: [Float] = []
+    private var streamingSpeakerLastEvaluatedSamples: Int = 0
+    private var streamingSpeakerVerdict: StreamingSpeakerGateVerdict?
+    private var streamingSpeakerVerificationAvailable: Bool = false
+
     // MARK: - Enrollment State
 
     /// True while first-owner enrollment is actively running.
@@ -282,6 +292,19 @@ actor PipelineCoordinator {
     private var lastUserTurnEndedAt: Date?
     private var ttfaEmittedForCurrentTurn: Bool = false
     private var currentTurnID: String?
+
+    private struct PendingSemanticTurn: Sendable {
+        let rawText: String
+        let text: String
+        let ownerProfileExists: Bool
+        let speakerAllowsConversation: Bool
+        let rms: Float
+        let durationSecs: Float
+    }
+
+    private var pendingSemanticTurn: PendingSemanticTurn?
+    private var pendingSemanticTurnTask: Task<Void, Never>?
+    private static let semanticTurnHoldMs: Int = 1200
 
     // MARK: - Deferred Tool Jobs
 
@@ -493,6 +516,9 @@ actor PipelineCoordinator {
         cancelDeferredToolJobs()
         await playback.stop()
         assistantSpeaking = false
+        // Ensure generation flag is cleared so the pipeline accepts new injections after reset.
+        assistantGenerating = false
+        awaitingApproval = false
         NSLog("PipelineCoordinator: cancelAndWait complete")
     }
 
@@ -548,7 +574,9 @@ actor PipelineCoordinator {
         currentSpeakerIsKnownNonOwner = false
 
         if gateState == .idle {
-            guard isAddressedToFae(trimmed) else {
+            // When direct-address gating is off, any text wakes Fae (she should always respond).
+            // When gating is on, require the name to avoid responding to ambient conversation.
+            guard isAddressedToFae(trimmed) || !effectiveRequireDirectAddress() else {
                 debugLog(debugConsole, .pipeline, "Text ignored while sleeping (not addressed)")
                 return
             }
@@ -567,6 +595,15 @@ actor PipelineCoordinator {
         if assistantSpeaking || assistantGenerating {
             interrupted = true
             await playback.stop()
+        }
+
+        // Handle governance voice commands from injected text (mirrors voice segment processing).
+        // This allows test injection and typed input to trigger governance shortcuts (tool mode,
+        // thinking toggle, barge-in toggle) without routing through the LLM, which would require
+        // approval for self_config even in full_no_approval mode.
+        let voiceCmd = VoiceCommandParser.parse(trimmed)
+        if voiceCmd != .none {
+            if await handleVoiceCommandIfNeeded(voiceCmd, originalText: trimmed) { return }
         }
 
         await processTranscription(
@@ -631,6 +668,9 @@ actor PipelineCoordinator {
     /// Set/clear the first-owner enrollment active flag.
     func setFirstOwnerEnrollmentActive(_ active: Bool) {
         firstOwnerEnrollmentActive = active
+        vad.reset()
+        resetStreamingSpeakerGate()
+        clearPendingSemanticTurn()
     }
 
     /// Register a callback fired on each user-initiated turn.
@@ -858,6 +898,394 @@ actor PipelineCoordinator {
         return max(idleTimeoutS, 0)
     }
 
+    static func shouldSkipSTTAfterSpeakerVerification(
+        ownerProfileExists: Bool,
+        speakerVerificationCompleted: Bool,
+        firstOwnerEnrollmentActive: Bool,
+        speakerRole: SpeakerRole?
+    ) -> Bool {
+        guard ownerProfileExists, speakerVerificationCompleted else {
+            return false
+        }
+        return !VoiceConversationPolicy.allowsConversation(
+            ownerProfileExists: ownerProfileExists,
+            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            speakerRole: speakerRole
+        )
+    }
+
+    static func streamingSpeakerSimilarityDecision(
+        bestHumanSimilarity: Float?,
+        acceptThreshold: Float,
+        rejectThreshold: Float
+    ) -> StreamingSpeakerSimilarityDecision {
+        guard let bestHumanSimilarity else {
+            return .reject
+        }
+        if bestHumanSimilarity >= acceptThreshold {
+            return .allow
+        }
+        if bestHumanSimilarity <= rejectThreshold {
+            return .reject
+        }
+        return .undecided
+    }
+
+    static func fusedVoiceAttentionDecision(
+        gateState: GateState,
+        requireDirectAddress: Bool,
+        addressedToFae: Bool,
+        inFollowup: Bool,
+        awaitingApproval: Bool,
+        firstOwnerEnrollmentActive: Bool,
+        speakerAllowsConversation: Bool,
+        wordCount: Int
+    ) -> VoiceAttentionDecision {
+        if gateState != .active {
+            return addressedToFae ? .wakeAndContinue : .ignoreWhileSleeping
+        }
+
+        if requireDirectAddress,
+           !addressedToFae,
+           !inFollowup,
+           !awaitingApproval,
+           !firstOwnerEnrollmentActive
+        {
+            return .dropDirectAddress
+        }
+
+        if !awaitingApproval,
+           !inFollowup,
+           !addressedToFae,
+           wordCount <= 2
+        {
+            return .dropShortIdle
+        }
+
+        if !speakerAllowsConversation {
+            return .dropSpeaker
+        }
+
+        return .allow
+    }
+
+    static func shouldDeferSemanticTurn(
+        text: String,
+        addressedToFae: Bool,
+        inFollowup: Bool,
+        awaitingApproval: Bool,
+        hasPendingGovernanceAction: Bool,
+        firstOwnerEnrollmentActive: Bool
+    ) -> Bool {
+        guard !awaitingApproval,
+              !hasPendingGovernanceAction,
+              !firstOwnerEnrollmentActive
+        else {
+            return false
+        }
+
+        // Do not hold a bare wake phrase — wake promptly.
+        let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
+        if addressedToFae && wordCount <= 2 {
+            return false
+        }
+
+        // Strongest value is in active/follow-up conversational turns.
+        guard inFollowup || addressedToFae || wordCount >= 3 else {
+            return false
+        }
+
+        return TextProcessing.isLikelyIncompleteTurn(text)
+    }
+
+    private enum PreviewSpeakerVerificationDecision {
+        case useEmbedding([Float])
+        case rejectUnknown
+        case echoRejected(Float)
+        case fallBackToFullSegment
+    }
+
+    enum StreamingSpeakerSimilarityDecision: Equatable {
+        case allow
+        case reject
+        case undecided
+    }
+
+    enum VoiceAttentionDecision: Equatable {
+        case ignoreWhileSleeping
+        case wakeAndContinue
+        case dropDirectAddress
+        case dropShortIdle
+        case dropSpeaker
+        case allow
+    }
+
+    private static let previewSpeakerWindowMs: Int = 1200
+    private static let previewSpeakerMinWindowMs: Int = 700
+    private static let previewSpeakerThresholdRelaxation: Float = 0.08
+    private static let previewSpeakerRejectMargin: Float = 0.14
+    private static let streamingSpeakerWindowMs: Int = 1400
+    private static let streamingSpeakerStepMs: Int = 240
+
+    private func previewSpeakerVerification(
+        segment: SpeechSegment,
+        encoder: CoreMLSpeakerEncoder,
+        store: SpeakerProfileStore,
+        hasOwner: Bool
+    ) async -> PreviewSpeakerVerificationDecision {
+        guard hasOwner, !firstOwnerEnrollmentActive else {
+            return .fallBackToFullSegment
+        }
+
+        let minSamples = (Self.previewSpeakerMinWindowMs * segment.sampleRate) / 1000
+        guard segment.samples.count >= minSamples else {
+            return .fallBackToFullSegment
+        }
+
+        let previewSamples = min(
+            segment.samples.count,
+            (Self.previewSpeakerWindowMs * segment.sampleRate) / 1000
+        )
+
+        do {
+            let previewEmbedding = try await encoder.embed(
+                audio: Array(segment.samples.prefix(previewSamples)),
+                sampleRate: segment.sampleRate
+            )
+            let previewThreshold = max(
+                config.speaker.threshold - Self.previewSpeakerThresholdRelaxation,
+                0.55
+            )
+            let rejectThreshold = max(
+                previewThreshold - Self.previewSpeakerRejectMargin,
+                0.35
+            )
+
+            let bestHumanSimilarity = await store.bestMatch(
+                embedding: previewEmbedding,
+                excludingRoles: [.faeSelf]
+            )?.similarity
+            switch Self.streamingSpeakerSimilarityDecision(
+                bestHumanSimilarity: bestHumanSimilarity,
+                acceptThreshold: previewThreshold,
+                rejectThreshold: rejectThreshold
+            ) {
+            case .allow:
+                return .useEmbedding(previewEmbedding)
+            case .reject:
+                return .rejectUnknown
+            case .undecided:
+                break
+            }
+
+            if let faeSelfSim = await store.matchesFaeSelf(
+                embedding: previewEmbedding,
+                threshold: previewThreshold
+            ) {
+                if echoSuppressor.isInSuppression {
+                    return .echoRejected(faeSelfSim)
+                }
+                return .fallBackToFullSegment
+            }
+        } catch {
+            debugLog(debugConsole, .speaker, "Preview embed failed: \(error.localizedDescription)")
+            return .fallBackToFullSegment
+        }
+
+        return .fallBackToFullSegment
+    }
+
+    private func resetStreamingSpeakerGate() {
+        streamingSpeakerSamples.removeAll(keepingCapacity: true)
+        streamingSpeakerLastEvaluatedSamples = 0
+        streamingSpeakerVerdict = nil
+        streamingSpeakerVerificationAvailable = false
+    }
+
+    private func updateStreamingSpeakerGate(chunk: AudioChunk, vadOutput: VoiceActivityDetector.Output) async {
+        if vadOutput.speechStarted {
+            resetStreamingSpeakerGate()
+        }
+
+        if vadOutput.segment != nil {
+            return
+        }
+
+        guard vadOutput.isSpeech,
+              !assistantSpeaking,
+              !assistantGenerating,
+              streamingSpeakerVerdict != .rejectUnknown,
+              let encoder = speakerEncoder,
+              await encoder.isLoaded,
+              let store = speakerProfileStore
+        else {
+            return
+        }
+
+        let hasOwner = await store.hasOwnerProfile()
+        guard hasOwner, !firstOwnerEnrollmentActive else { return }
+
+        streamingSpeakerVerificationAvailable = true
+        if streamingSpeakerVerdict == .allow {
+            return
+        }
+
+        let maxSamples = (Self.streamingSpeakerWindowMs * chunk.sampleRate) / 1000
+        let stepSamples = max((Self.streamingSpeakerStepMs * chunk.sampleRate) / 1000, chunk.samples.count)
+        let minSamples = (Self.previewSpeakerMinWindowMs * chunk.sampleRate) / 1000
+
+        if streamingSpeakerSamples.count < maxSamples {
+            let remaining = maxSamples - streamingSpeakerSamples.count
+            streamingSpeakerSamples.append(contentsOf: chunk.samples.prefix(remaining))
+        }
+
+        guard streamingSpeakerSamples.count >= minSamples else { return }
+        guard streamingSpeakerSamples.count - streamingSpeakerLastEvaluatedSamples >= stepSamples
+                || streamingSpeakerSamples.count == maxSamples
+        else {
+            return
+        }
+
+        streamingSpeakerLastEvaluatedSamples = streamingSpeakerSamples.count
+
+        do {
+            let embedding = try await encoder.embed(
+                audio: streamingSpeakerSamples,
+                sampleRate: chunk.sampleRate
+            )
+            let previewThreshold = max(
+                config.speaker.threshold - Self.previewSpeakerThresholdRelaxation,
+                0.55
+            )
+            let rejectThreshold = max(
+                previewThreshold - Self.previewSpeakerRejectMargin,
+                0.35
+            )
+            let bestHumanSimilarity = await store.bestMatch(
+                embedding: embedding,
+                excludingRoles: [.faeSelf]
+            )?.similarity
+
+            switch Self.streamingSpeakerSimilarityDecision(
+                bestHumanSimilarity: bestHumanSimilarity,
+                acceptThreshold: previewThreshold,
+                rejectThreshold: rejectThreshold
+            ) {
+            case .allow:
+                streamingSpeakerVerdict = .allow
+                debugLog(debugConsole, .speaker, "Streaming gate allowed speaker before segment close")
+            case .reject:
+                if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: previewThreshold),
+                   echoSuppressor.isInSuppression {
+                    currentSpeakerRole = .faeSelf
+                    debugLog(
+                        debugConsole,
+                        .pipeline,
+                        "Streaming gate echo-rejected sim=\(String(format: "%.3f", faeSelfSim)) before segment close"
+                    )
+                } else {
+                    currentSpeakerRole = nil
+                    debugLog(debugConsole, .speaker, "Streaming gate rejected unknown speaker before segment close")
+                }
+                currentSpeakerLabel = nil
+                currentSpeakerDisplayName = nil
+                currentSpeakerIsOwner = false
+                currentSpeakerIsKnownNonOwner = false
+                streamingSpeakerVerdict = .rejectUnknown
+            case .undecided:
+                break
+            }
+        } catch {
+            debugLog(debugConsole, .speaker, "Streaming gate embed failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func shouldDropSegmentFromStreamingSpeakerGate() -> Bool {
+        streamingSpeakerVerificationAvailable && streamingSpeakerVerdict == .rejectUnknown
+    }
+
+    private func evaluateSpeakerEmbedding(
+        _ embedding: [Float],
+        hasOwner: Bool,
+        store: SpeakerProfileStore,
+        durationSecs: Float,
+        threshold: Float,
+        progressiveEnrollment: Bool,
+        source: String
+    ) async -> Bool {
+        if hasOwner, let match = await store.match(
+            embedding: embedding,
+            threshold: threshold,
+            excludingRoles: [.faeSelf]
+        ) {
+            currentSpeakerLabel = match.label
+            currentSpeakerDisplayName = match.displayName
+            currentSpeakerRole = match.role
+            currentSpeakerIsOwner = match.role == .owner
+            currentSpeakerIsKnownNonOwner = match.role != .owner
+
+            if progressiveEnrollment && config.speaker.progressiveEnrollment {
+                await store.enrollIfBelowMax(
+                    label: match.label,
+                    embedding: embedding,
+                    max: config.speaker.maxEnrollments
+                )
+            }
+
+            NSLog(
+                "PipelineCoordinator: speaker matched (%@): %@ (%@), similarity: %.3f",
+                source,
+                match.displayName,
+                match.label,
+                match.similarity
+            )
+            debugLog(
+                debugConsole,
+                .speaker,
+                "Matched [\(source)]: \(match.displayName) (\(match.label)) sim=\(String(format: "%.3f", match.similarity)) owner=\(currentSpeakerIsOwner)"
+            )
+            return true
+        }
+
+        if !hasOwner {
+            NSLog("PipelineCoordinator: no owner voice enrolled yet — awaiting voice_identity enrollment")
+            debugLog(debugConsole, .speaker, "Owner not enrolled yet; speaker left as unknown")
+            return true
+        }
+
+        if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: threshold) {
+            if echoSuppressor.isInSuppression {
+                NSLog(
+                    "PipelineCoordinator: dropping %.1fs segment (%@ fae_self sim=%.3f, echo suppressor active)",
+                    durationSecs,
+                    source,
+                    faeSelfSim
+                )
+                debugLog(
+                    debugConsole,
+                    .pipeline,
+                    "Echo rejected [\(source)] (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)), suppressor active)"
+                )
+                return false
+            }
+            NSLog("PipelineCoordinator: fae_self match sim=%.3f ignored (%@, echo suppressor expired)", faeSelfSim, source)
+            debugLog(
+                debugConsole,
+                .speaker,
+                "fae_self sim=\(String(format: "%.3f", faeSelfSim)) [\(source)] outside echo window — passing as unknown"
+            )
+        } else {
+            NSLog("PipelineCoordinator: speaker not recognized (%@)", source)
+            debugLog(
+                debugConsole,
+                .speaker,
+                "Not recognized [\(source)] (no match above threshold \(String(format: "%.2f", threshold)))"
+            )
+        }
+
+        return true
+    }
+
     private func effectiveIdleRearmSeconds() -> Int {
         Self.idleRearmSeconds(
             requireDirectAddress: effectiveRequireDirectAddress(),
@@ -984,6 +1412,8 @@ actor PipelineCoordinator {
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
         cancelDeferredToolJobs()
+        resetStreamingSpeakerGate()
+        clearPendingSemanticTurn()
         await conversationState.clear()
         NSLog("PipelineCoordinator: conversation reset via %@ trigger: %@", source, trigger)
         debugLog(debugConsole, .pipeline, "Conversation reset (\(source)): \(trigger)")
@@ -1055,6 +1485,8 @@ actor PipelineCoordinator {
             // Emit audio level for orb animation.
             eventBus.send(.audioLevel(vadOutput.rms))
 
+            await updateStreamingSpeakerGate(chunk: chunk, vadOutput: vadOutput)
+
             if !firstAudioLatencyEmitted,
                let startedAt = pipelineStartedAt,
                (vadOutput.isSpeech || vadOutput.speechStarted || vadOutput.segment != nil)
@@ -1123,10 +1555,20 @@ actor PipelineCoordinator {
 
             // Process completed speech segment via bounded queue.
             if let segment = vadOutput.segment {
+                defer { resetStreamingSpeakerGate() }
+
                 // Avoid stale-segment backlog during assistant generation/speech.
                 // Barge-in is already handled in-chunk before segment completion.
                 if assistantGenerating || assistantSpeaking {
                     debugLog(debugConsole, .pipeline, "Discarded segment while assistant busy dur=\(String(format: "%.2f", segment.durationSeconds))s")
+                    continue
+                }
+                if shouldDropSegmentFromStreamingSpeakerGate() {
+                    debugLog(
+                        debugConsole,
+                        .speaker,
+                        "Dropped segment from streaming speaker gate dur=\(String(format: "%.2f", segment.durationSeconds))s"
+                    )
                     continue
                 }
                 lastUserTurnEndedAt = Date()
@@ -1136,6 +1578,290 @@ actor PipelineCoordinator {
     }
 
     // MARK: - Speech Segment Processing
+
+    private func clearPendingSemanticTurn() {
+        pendingSemanticTurnTask?.cancel()
+        pendingSemanticTurnTask = nil
+        pendingSemanticTurn = nil
+    }
+
+    private func flushPendingSemanticTurnIfNeeded() async {
+        guard let pending = pendingSemanticTurn else { return }
+        pendingSemanticTurn = nil
+        pendingSemanticTurnTask = nil
+        await processRecognizedVoiceText(
+            rawText: pending.rawText,
+            text: pending.text,
+            ownerProfileExists: pending.ownerProfileExists,
+            speakerAllowsConversation: pending.speakerAllowsConversation,
+            rms: pending.rms,
+            durationSecs: pending.durationSecs,
+            allowSemanticHold: false
+        )
+    }
+
+    private func processRecognizedVoiceText(
+        rawText: String,
+        text: String,
+        ownerProfileExists: Bool,
+        speakerAllowsConversation: Bool,
+        rms: Float,
+        durationSecs: Float,
+        allowSemanticHold: Bool
+    ) async {
+        var effectiveRawText = rawText
+        var effectiveText = text
+
+        if let pending = pendingSemanticTurn {
+            effectiveRawText = pending.rawText + " " + rawText
+            effectiveText = TextProcessing.correctNameRecognition(effectiveRawText)
+            pendingSemanticTurn = nil
+            pendingSemanticTurnTask?.cancel()
+            pendingSemanticTurnTask = nil
+            debugLog(debugConsole, .stt, "Semantic turn merged: \(effectiveText)")
+        }
+
+        if (awaitingApproval || pendingGovernanceAction != nil) && !speakerAllowsConversation {
+            debugLog(
+                debugConsole,
+                .speaker,
+                "Ignoring approval/governance reply from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+            )
+            return
+        }
+
+        // Approval gate — while a tool approval is pending, only approval responses
+        // are accepted. This prevents unrelated chatter/noise from being routed to the LLM.
+        if awaitingApproval {
+            if let decision = VoiceCommandParser.parseApprovalResponse(effectiveText),
+               let manager = approvalManager,
+               await manager.resolveMostRecent(decision: decision, source: "voice")
+            {
+                debugLog(debugConsole, .approval, "Tool approval decision via voice: \(decision.rawValue)")
+                awaitingApproval = false
+                let ack: String
+                switch decision {
+                case .yes:
+                    ack = PersonalityManager.nextApprovalGranted()
+                case .no:
+                    ack = PersonalityManager.nextApprovalDenied()
+                case .always:
+                    ack = "Got it, I'll always allow that tool."
+                case .approveAllReadOnly:
+                    ack = "Okay, all read-only tools are now approved."
+                case .approveAll:
+                    ack = "Understood, all tools are now approved."
+                }
+                await speakDirect(ack)
+            } else {
+                let words = effectiveText.split(whereSeparator: { $0.isWhitespace }).count
+                if words > 2 {
+                    debugLog(debugConsole, .approval, "Ambiguous tool approval response: \(effectiveText)")
+                    await speakDirect(PersonalityManager.nextApprovalAmbiguous())
+                }
+            }
+            return
+        }
+
+        if let pendingAction = pendingGovernanceAction {
+            if let decision = VoiceCommandParser.parseApprovalResponse(effectiveText) {
+                pendingGovernanceAction = nil
+                debugLog(debugConsole, .approval, "Governance confirmation decision=\(decision.rawValue) action=\(pendingAction.action)")
+                if decision != .no {
+                    applyGovernanceAction(
+                        action: pendingAction.action,
+                        value: pendingAction.value,
+                        source: "\(pendingAction.source)_confirm",
+                        metadata: pendingAction.metadata
+                    )
+                    await speakDirect(pendingAction.successSpeech)
+                } else {
+                    await speakDirect(pendingAction.cancelledSpeech)
+                }
+            } else {
+                let words = effectiveText.split(whereSeparator: { $0.isWhitespace }).count
+                if words > 2 {
+                    debugLog(debugConsole, .approval, "Ambiguous governance confirmation response: \(effectiveText)")
+                    await speakDirect(pendingAction.confirmationPrompt)
+                }
+            }
+            return
+        }
+
+        // Echo detection — if the transcribed text is a fragment of the last
+        // assistant response, the mic picked up speaker output. Drop it.
+        if !lastAssistantResponseText.isEmpty {
+            let sttLower = effectiveText.lowercased()
+            let assistLower = lastAssistantResponseText.lowercased()
+            if assistLower.contains(sttLower) || sttLower.contains(assistLower) {
+                NSLog("PipelineCoordinator: dropping echo (STT matched last assistant response)")
+                debugLog(debugConsole, .pipeline, "Echo dropped (text match): \"\(effectiveText.prefix(60))\"")
+                return
+            }
+            let sttWords = Set(sttLower.split(separator: " ").filter { $0.count > 2 })
+            let assistWords = Set(assistLower.split(separator: " ").filter { $0.count > 2 })
+            if sttWords.count >= 3, !assistWords.isEmpty {
+                let overlap = sttWords.intersection(assistWords)
+                if Double(overlap.count) / Double(sttWords.count) >= 0.6 {
+                    NSLog("PipelineCoordinator: dropping echo (%.0f%% word overlap with last response)",
+                          Double(overlap.count) / Double(sttWords.count) * 100)
+                    debugLog(debugConsole, .pipeline, "Echo dropped (\(Int(Double(overlap.count) / Double(sttWords.count) * 100))%% overlap): \"\(effectiveText.prefix(60))\"")
+                    return
+                }
+            }
+        }
+
+        let ghostWords = effectiveText.split(whereSeparator: { $0.isWhitespace }).count
+        let ghostInFollowup = engagedUntil.map { Date() < $0 } ?? false
+        if ghostWords <= 2,
+           let lastStart = lastAssistantStart,
+           Date().timeIntervalSince(lastStart) < 8.0,
+           !effectiveText.lowercased().contains("fae"),
+           !ghostInFollowup
+        {
+            NSLog("PipelineCoordinator: dropping post-speech ghost \"%@\" (%d words, %.1fs after speech start)",
+                  effectiveText, ghostWords, Date().timeIntervalSince(lastStart))
+            debugLog(debugConsole, .pipeline, "Ghost filtered: \"\(effectiveText)\" (\(ghostWords) words, recent speech)")
+            return
+        }
+
+        if let wakeStore = wakeWordProfileStore {
+            wakeAliases = await wakeStore.allAliases()
+        }
+        var wakeMatch = wakeAddressMatch(in: effectiveText, logDecision: true)
+        let wakeStrength = wakeMatch.map { match in
+            match.kind == .exact ? VoiceConversationWakeStrength.exact : .fuzzy
+        }
+        if !VoiceConversationPolicy.shouldHonorWakeMatch(
+            ownerProfileExists: ownerProfileExists,
+            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            speakerRole: currentSpeakerRole,
+            wakeStrength: wakeStrength
+        ) {
+            if wakeMatch != nil, ownerProfileExists, !firstOwnerEnrollmentActive {
+                debugLog(
+                    debugConsole,
+                    .speaker,
+                    "Ignoring wake match from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                )
+            }
+            wakeMatch = nil
+        }
+        let addressedToFae = wakeMatch != nil
+        if addressedToFae {
+            await learnWakeAliasIfNeeded(rawText: effectiveRawText)
+        }
+
+        let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+        if allowSemanticHold,
+           Self.shouldDeferSemanticTurn(
+                text: effectiveText,
+                addressedToFae: addressedToFae,
+                inFollowup: inFollowup,
+                awaitingApproval: awaitingApproval,
+                hasPendingGovernanceAction: pendingGovernanceAction != nil,
+                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive
+           )
+        {
+            let pending = PendingSemanticTurn(
+                rawText: effectiveRawText,
+                text: effectiveText,
+                ownerProfileExists: ownerProfileExists,
+                speakerAllowsConversation: speakerAllowsConversation,
+                rms: rms,
+                durationSecs: durationSecs
+            )
+            pendingSemanticTurn = pending
+            pendingSemanticTurnTask?.cancel()
+            pendingSemanticTurnTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(Self.semanticTurnHoldMs) * 1_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.flushPendingSemanticTurnIfNeeded()
+            }
+            debugLog(debugConsole, .pipeline, "Semantic turn hold: \"\(effectiveText)\"")
+            return
+        }
+
+        let wordCount = effectiveText.split(whereSeparator: { $0.isWhitespace }).count
+        let attentionDecision = Self.fusedVoiceAttentionDecision(
+            gateState: gateState,
+            requireDirectAddress: effectiveRequireDirectAddress(),
+            addressedToFae: addressedToFae,
+            inFollowup: inFollowup,
+            awaitingApproval: awaitingApproval,
+            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            speakerAllowsConversation: speakerAllowsConversation,
+            wordCount: wordCount
+        )
+
+        switch attentionDecision {
+        case .ignoreWhileSleeping:
+            debugLog(debugConsole, .command, "Ignored while sleeping (not addressed): \(effectiveText)")
+            if wordCount >= 4,
+               VoiceConversationPolicy.shouldOfferSleepHint(
+                   ownerProfileExists: ownerProfileExists,
+                   firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                   speakerRole: currentSpeakerRole
+               ),
+               (lastSleepHintAt == nil || Date().timeIntervalSince(lastSleepHintAt!) > 20)
+            {
+                lastSleepHintAt = Date()
+                await speakDirect("I’m resting right now—say hey Fae to wake me.")
+            }
+            return
+
+        case .wakeAndContinue:
+            wake()
+
+        case .dropDirectAddress:
+            debugLog(debugConsole, .command, "Dropped (direct-address required): \(effectiveText)")
+            return
+
+        case .dropShortIdle:
+            debugLog(debugConsole, .pipeline, "Dropped short idle utterance: \"\(effectiveText)\"")
+            return
+
+        case .dropSpeaker:
+            debugLog(
+                debugConsole,
+                .speaker,
+                "Ignored speech from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+            )
+            return
+
+        case .allow:
+            break
+        }
+
+        eventBus.send(.transcription(text: effectiveText, isFinal: true))
+
+        if isConversationStopTrigger(effectiveText) {
+            await resetConversationSession(trigger: effectiveText, source: "voice")
+            return
+        }
+
+        let voiceCommand = VoiceCommandParser.parse(effectiveText)
+        debugLog(debugConsole, .command, "Parsed voice command: \(String(describing: voiceCommand))")
+        let voiceCommandStarted = Date()
+        let handledVoiceCommand = await handleVoiceCommandIfNeeded(voiceCommand, originalText: effectiveText)
+        let voiceCommandLatencyMs = Int(Date().timeIntervalSince(voiceCommandStarted) * 1000)
+        recordVoiceCommandMetrics(
+            command: String(describing: voiceCommand),
+            handled: handledVoiceCommand,
+            latencyMs: voiceCommandLatencyMs
+        )
+        if handledVoiceCommand {
+            debugLog(debugConsole, .command, "Handled voice command in \(voiceCommandLatencyMs)ms")
+            return
+        }
+
+        await processTranscription(
+            text: effectiveText,
+            wakeMatch: wakeMatch,
+            rms: rms,
+            durationSecs: durationSecs
+        )
+    }
 
     private func handleSpeechSegment(_ segment: SpeechSegment) async {
         let rms = VoiceActivityDetector.computeRMS(segment.samples)
@@ -1170,65 +1896,70 @@ actor PipelineCoordinator {
         currentSpeakerRole = nil
         currentSpeakerIsOwner = false
         currentSpeakerIsKnownNonOwner = false
+        var speakerVerificationCompleted = false
         // Speaker recognition is always on — no config gate.
         if let encoder = speakerEncoder, await encoder.isLoaded,
            let store = speakerProfileStore
         {
             do {
-                let embedding = try await encoder.embed(
-                    audio: segment.samples,
-                    sampleRate: segment.sampleRate
+                let hasOwner = await store.hasOwnerProfile()
+                let previewDecision = await previewSpeakerVerification(
+                    segment: segment,
+                    encoder: encoder,
+                    store: store,
+                    hasOwner: hasOwner
                 )
 
-                let hasOwner = await store.hasOwnerProfile()
+                switch previewDecision {
+                case .echoRejected(let faeSelfSim):
+                    NSLog(
+                        "PipelineCoordinator: dropping %.1fs segment (preview fae_self sim=%.3f, echo suppressor active)",
+                        durationSecs,
+                        faeSelfSim
+                    )
+                    debugLog(
+                        debugConsole,
+                        .pipeline,
+                        "Echo rejected [preview] (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)), suppressor active)"
+                    )
+                    return
 
-                // Two-pass matching: human profiles first, then fae_self echo check.
-                // fae_self is excluded from general matching because voice cloning
-                // makes its embeddings nearly identical to the owner's voice — it
-                // would always win the match and prevent the owner from being recognized.
+                case .rejectUnknown:
+                    speakerVerificationCompleted = true
+                    NSLog("PipelineCoordinator: preview speaker verification rejected unknown speaker")
+                    debugLog(debugConsole, .speaker, "Preview rejected unknown speaker before full embed/STT")
 
-                // Pass 1: match against human profiles (exclude fae_self).
-                if hasOwner, let match = await store.match(
-                    embedding: embedding,
-                    threshold: config.speaker.threshold,
-                    excludingRoles: [.faeSelf]
-                ) {
-                    currentSpeakerLabel = match.label
-                    currentSpeakerDisplayName = match.displayName
-                    currentSpeakerRole = match.role
-                    currentSpeakerIsOwner = match.role == .owner
-                    currentSpeakerIsKnownNonOwner = match.role != .owner
-
-                    // Progressive enrollment: strengthen known profiles.
-                    if config.speaker.progressiveEnrollment {
-                        await store.enrollIfBelowMax(
-                            label: match.label,
-                            embedding: embedding,
-                            max: config.speaker.maxEnrollments
-                        )
+                case .useEmbedding(let embedding):
+                    speakerVerificationCompleted = true
+                    guard await evaluateSpeakerEmbedding(
+                        embedding,
+                        hasOwner: hasOwner,
+                        store: store,
+                        durationSecs: durationSecs,
+                        threshold: max(config.speaker.threshold - Self.previewSpeakerThresholdRelaxation, 0.55),
+                        progressiveEnrollment: true,
+                        source: "preview"
+                    ) else {
+                        return
                     }
 
-                    NSLog("PipelineCoordinator: speaker matched: %@ (%@), similarity: %.3f",
-                          match.displayName, match.label, match.similarity)
-                    debugLog(debugConsole, .speaker, "Matched: \(match.displayName) (\(match.label)) sim=\(String(format: "%.3f", match.similarity)) owner=\(currentSpeakerIsOwner)")
-                } else if !hasOwner {
-                    NSLog("PipelineCoordinator: no owner voice enrolled yet — awaiting voice_identity enrollment")
-                    debugLog(debugConsole, .speaker, "Owner not enrolled yet; speaker left as unknown")
-                } else {
-                    // Pass 2: no human match — check fae_self for echo detection.
-                    // Only reject if echo suppressor is still active (duration-proportional).
-                    if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: config.speaker.threshold) {
-                        if echoSuppressor.isInSuppression {
-                            NSLog("PipelineCoordinator: dropping %.1fs segment (fae_self sim=%.3f, echo suppressor active)", durationSecs, faeSelfSim)
-                            debugLog(debugConsole, .pipeline, "Echo rejected (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)), suppressor active)")
-                            return
-                        }
-                        // Echo suppressor expired — real person with voice similar to TTS.
-                        NSLog("PipelineCoordinator: fae_self match sim=%.3f ignored (echo suppressor expired)", faeSelfSim)
-                        debugLog(debugConsole, .speaker, "fae_self sim=\(String(format: "%.3f", faeSelfSim)) outside echo window — passing as unknown")
-                    } else {
-                        NSLog("PipelineCoordinator: speaker not recognized")
-                        debugLog(debugConsole, .speaker, "Not recognized (no match above threshold \(String(format: "%.2f", config.speaker.threshold)))")
+                case .fallBackToFullSegment:
+                    let embedding = try await encoder.embed(
+                        audio: segment.samples,
+                        sampleRate: segment.sampleRate
+                    )
+                    speakerVerificationCompleted = true
+
+                    guard await evaluateSpeakerEmbedding(
+                        embedding,
+                        hasOwner: hasOwner,
+                        store: store,
+                        durationSecs: durationSecs,
+                        threshold: config.speaker.threshold,
+                        progressiveEnrollment: true,
+                        source: "full"
+                    ) else {
+                        return
                     }
                 }
             } catch {
@@ -1259,6 +1990,27 @@ actor PipelineCoordinator {
             } else {
                 debugLog(debugConsole, .speaker, "Dropping low-liveness speech from non-conversational speaker")
             }
+            return
+        }
+
+        let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+        let speakerAllowsConversation = VoiceConversationPolicy.allowsConversation(
+            ownerProfileExists: ownerProfileExists,
+            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            speakerRole: currentSpeakerRole
+        )
+
+        if Self.shouldSkipSTTAfterSpeakerVerification(
+            ownerProfileExists: ownerProfileExists,
+            speakerVerificationCompleted: speakerVerificationCompleted,
+            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            speakerRole: currentSpeakerRole
+        ) {
+            debugLog(
+                debugConsole,
+                .speaker,
+                "Skipped STT for non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+            )
             return
         }
 
@@ -1297,224 +2049,15 @@ actor PipelineCoordinator {
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
-            let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
-            let speakerAllowsConversation = VoiceConversationPolicy.allowsConversation(
-                ownerProfileExists: ownerProfileExists,
-                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-                speakerRole: currentSpeakerRole
-            )
 
-            if (awaitingApproval || pendingGovernanceAction != nil) && !speakerAllowsConversation {
-                debugLog(
-                    debugConsole,
-                    .speaker,
-                    "Ignoring approval/governance reply from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
-                )
-                return
-            }
-
-            // Approval gate — while a tool approval is pending, only approval responses
-            // are accepted. This prevents unrelated chatter/noise from being routed to the LLM.
-            if awaitingApproval {
-                if let decision = VoiceCommandParser.parseApprovalResponse(text),
-                   let manager = approvalManager,
-                   await manager.resolveMostRecent(decision: decision, source: "voice")
-                {
-                    debugLog(debugConsole, .approval, "Tool approval decision via voice: \(decision.rawValue)")
-                    awaitingApproval = false
-                    let ack: String
-                    switch decision {
-                    case .yes:
-                        ack = PersonalityManager.nextApprovalGranted()
-                    case .no:
-                        ack = PersonalityManager.nextApprovalDenied()
-                    case .always:
-                        ack = "Got it, I'll always allow that tool."
-                    case .approveAllReadOnly:
-                        ack = "Okay, all read-only tools are now approved."
-                    case .approveAll:
-                        ack = "Understood, all tools are now approved."
-                    }
-                    await speakDirect(ack)
-                } else {
-                    let words = text.split(whereSeparator: { $0.isWhitespace }).count
-                    if words > 2 {
-                        debugLog(debugConsole, .approval, "Ambiguous tool approval response: \(text)")
-                        await speakDirect(PersonalityManager.nextApprovalAmbiguous())
-                    }
-                }
-                return
-            }
-
-            if let pendingAction = pendingGovernanceAction {
-                if let decision = VoiceCommandParser.parseApprovalResponse(text) {
-                    pendingGovernanceAction = nil
-                    debugLog(debugConsole, .approval, "Governance confirmation decision=\(decision.rawValue) action=\(pendingAction.action)")
-                    if decision != .no {
-                        applyGovernanceAction(
-                            action: pendingAction.action,
-                            value: pendingAction.value,
-                            source: "\(pendingAction.source)_confirm",
-                            metadata: pendingAction.metadata
-                        )
-                        await speakDirect(pendingAction.successSpeech)
-                    } else {
-                        await speakDirect(pendingAction.cancelledSpeech)
-                    }
-                } else {
-                    let words = text.split(whereSeparator: { $0.isWhitespace }).count
-                    if words > 2 {
-                        debugLog(debugConsole, .approval, "Ambiguous governance confirmation response: \(text)")
-                        await speakDirect(pendingAction.confirmationPrompt)
-                    }
-                }
-                return
-            }
-
-            // Echo detection — if the transcribed text is a fragment of the last
-            // assistant response, the mic picked up speaker output. Drop it.
-            if !lastAssistantResponseText.isEmpty {
-                let sttLower = text.lowercased()
-                let assistLower = lastAssistantResponseText.lowercased()
-                if assistLower.contains(sttLower) || sttLower.contains(assistLower) {
-                    NSLog("PipelineCoordinator: dropping echo (STT matched last assistant response)")
-                    debugLog(debugConsole, .pipeline, "Echo dropped (text match): \"\(text.prefix(60))\"")
-                    return
-                }
-                // Check for significant overlap via shared words.
-                let sttWords = Set(sttLower.split(separator: " ").filter { $0.count > 2 })
-                let assistWords = Set(assistLower.split(separator: " ").filter { $0.count > 2 })
-                if sttWords.count >= 3, !assistWords.isEmpty {
-                    let overlap = sttWords.intersection(assistWords)
-                    if Double(overlap.count) / Double(sttWords.count) >= 0.6 {
-                        NSLog("PipelineCoordinator: dropping echo (%.0f%% word overlap with last response)",
-                              Double(overlap.count) / Double(sttWords.count) * 100)
-                        debugLog(debugConsole, .pipeline, "Echo dropped (\(Int(Double(overlap.count) / Double(sttWords.count) * 100))%% overlap): \"\(text.prefix(60))\"")
-                        return
-                    }
-                }
-            }
-
-            // Post-speech ghost filter — short single-word transcriptions within
-            // 8 seconds of assistant speech are almost always mic bleed or ambient noise
-            // ("Oh.", "Come.", "Okay.") that shouldn't trigger a new LLM turn.
-            // Exception: during the follow-up window (Fae just asked a question), accept
-            // short responses like "David", "yes", "no" — these are conversational answers.
-            let ghostWords = text.split(whereSeparator: { $0.isWhitespace }).count
-            let ghostInFollowup = engagedUntil.map { Date() < $0 } ?? false
-            if ghostWords <= 2,
-               let lastStart = lastAssistantStart,
-               Date().timeIntervalSince(lastStart) < 8.0,
-               !text.lowercased().contains("fae"),
-               !ghostInFollowup
-            {
-                NSLog("PipelineCoordinator: dropping post-speech ghost \"%@\" (%d words, %.1fs after speech start)",
-                      text, ghostWords, Date().timeIntervalSince(lastStart))
-                debugLog(debugConsole, .pipeline, "Ghost filtered: \"\(text)\" (\(ghostWords) words, recent speech)")
-                return
-            }
-
-            if let wakeStore = wakeWordProfileStore {
-                wakeAliases = await wakeStore.allAliases()
-            }
-            var wakeMatch = wakeAddressMatch(in: text, logDecision: true)
-            let wakeStrength = wakeMatch.map { match in
-                match.kind == .exact ? VoiceConversationWakeStrength.exact : .fuzzy
-            }
-            if !VoiceConversationPolicy.shouldHonorWakeMatch(
-                ownerProfileExists: ownerProfileExists,
-                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-                speakerRole: currentSpeakerRole,
-                wakeStrength: wakeStrength
-            ) {
-                if wakeMatch != nil, ownerProfileExists, !firstOwnerEnrollmentActive {
-                    debugLog(
-                        debugConsole,
-                        .speaker,
-                        "Ignoring wake match from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
-                    )
-                }
-                wakeMatch = nil
-            }
-            let addressedToFae = wakeMatch != nil
-            if addressedToFae {
-                await learnWakeAliasIfNeeded(rawText: rawText)
-            }
-
-            if gateState != .active {
-                guard addressedToFae else {
-                    debugLog(debugConsole, .command, "Ignored while sleeping (not addressed): \(text)")
-                    let words = text.split(whereSeparator: { $0.isWhitespace }).count
-                    if words >= 4,
-                       VoiceConversationPolicy.shouldOfferSleepHint(
-                           ownerProfileExists: ownerProfileExists,
-                           firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-                           speakerRole: currentSpeakerRole
-                       ),
-                       (lastSleepHintAt == nil || Date().timeIntervalSince(lastSleepHintAt!) > 20)
-                    {
-                        lastSleepHintAt = Date()
-                        await speakDirect("I’m resting right now—say hey Fae to wake me.")
-                    }
-                    return
-                }
-                wake()
-            }
-
-            // Conversation gate — direct address check.
-            let inFollowup = engagedUntil.map { Date() < $0 } ?? false
-            if effectiveRequireDirectAddress() {
-                if !addressedToFae && !inFollowup && !awaitingApproval && !firstOwnerEnrollmentActive {
-                    debugLog(debugConsole, .command, "Dropped (direct-address required): \(text)")
-                    return // Drop — not addressed to Fae.
-                }
-            }
-
-            // Noise gate for idle periods: ignore very short, out-of-context utterances
-            // after silence (clicks, accidental mic hits, tiny fragments).
-            let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
-            if !awaitingApproval && !inFollowup && !addressedToFae && wordCount <= 2 {
-                debugLog(debugConsole, .pipeline, "Dropped short idle utterance: \"\(text)\"")
-                return
-            }
-
-            guard speakerAllowsConversation else {
-                debugLog(
-                    debugConsole,
-                    .speaker,
-                    "Ignored speech from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
-                )
-                return
-            }
-
-            eventBus.send(.transcription(text: text, isFinal: true))
-
-            if isConversationStopTrigger(text) {
-                await resetConversationSession(trigger: text, source: "voice")
-                return
-            }
-
-            let voiceCommand = VoiceCommandParser.parse(text)
-            debugLog(debugConsole, .command, "Parsed voice command: \(String(describing: voiceCommand))")
-            let voiceCommandStarted = Date()
-            let handledVoiceCommand = await handleVoiceCommandIfNeeded(voiceCommand, originalText: text)
-            let voiceCommandLatencyMs = Int(Date().timeIntervalSince(voiceCommandStarted) * 1000)
-            recordVoiceCommandMetrics(
-                command: String(describing: voiceCommand),
-                handled: handledVoiceCommand,
-                latencyMs: voiceCommandLatencyMs
-            )
-            if handledVoiceCommand {
-                debugLog(debugConsole, .command, "Handled voice command in \(voiceCommandLatencyMs)ms")
-                return
-            }
-
-            // Process through LLM.
-            await processTranscription(
+            await processRecognizedVoiceText(
+                rawText: rawText,
                 text: text,
-                wakeMatch: wakeMatch,
+                ownerProfileExists: ownerProfileExists,
+                speakerAllowsConversation: speakerAllowsConversation,
                 rms: rms,
-                durationSecs: durationSecs
+                durationSecs: durationSecs,
+                allowSemanticHold: true
             )
 
         } catch {
@@ -1670,6 +2213,18 @@ actor PipelineCoordinator {
             eventBus.send(.voiceCommandRecognized("hide_canvas"))
             eventBus.send(.canvasVisibility(false))
             await speakDirect("Hiding the canvas.")
+            return true
+
+        case .showConversation:
+            eventBus.send(.voiceCommandRecognized("show_conversation"))
+            eventBus.send(.conversationVisibility(true))
+            await speakDirect("Opening the conversation.")
+            return true
+
+        case .hideConversation:
+            eventBus.send(.voiceCommandRecognized("hide_conversation"))
+            eventBus.send(.conversationVisibility(false))
+            await speakDirect("Hiding the conversation.")
             return true
 
         case .showSettings:
@@ -2314,13 +2869,26 @@ actor PipelineCoordinator {
 
         let suppressThinking = forceSuppressThinking || !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
 
+        // Auto-tune prefill step size based on loaded model if not explicitly configured.
+        var prefillStep = config.llm.prefillStepSize ?? 512
+        if prefillStep == 512, let mm = modelManager, let modelId = await mm.loadedModelId {
+            prefillStep = FaeConfig.recommendedPrefillStepSize(modelId: modelId)
+        }
+
         let options = GenerationOptions(
             temperature: config.llm.temperature,
             topP: config.llm.topP,
             maxTokens: config.llm.maxTokens,
             repetitionPenalty: config.llm.repeatPenalty,
             suppressThinking: suppressThinking,
-            tools: generationContext.nativeTools
+            tools: generationContext.nativeTools,
+            // KV Cache Optimization (Phase 1) - based on Ollama/mistral.rs/LM Studio research
+            maxKVSize: config.llm.maxKVCacheSize,
+            kvBits: config.llm.kvQuantBits,
+            kvGroupSize: config.llm.kvGroupSize,
+            quantizedKVStart: config.llm.kvQuantStartTokens,
+            repetitionContextSize: config.llm.repetitionContextSize,
+            prefillStepSize: prefillStep
         )
 
         // Stream tokens.
@@ -2498,7 +3066,14 @@ actor PipelineCoordinator {
                     thinkEndSeen = true
                     eventBus.send(.thinkingText(text: "", isActive: false))
                 }
-                guard !visible.isEmpty else { continue }
+                guard !visible.isEmpty else {
+                    // Qwen3.5: think-block content is consumed by ThinkTagStripper (visible="").
+                    // Still emit Think debug events so test tooling can detect thinking is active.
+                    if !thinkEndSeen && !token.isEmpty {
+                        debugLog(debugConsole, .llmThink, token)
+                    }
+                    continue
+                }
 
                 fullResponse += visible
 
@@ -3154,6 +3729,8 @@ actor PipelineCoordinator {
         }
         if resetVAD {
             vad.reset()
+            resetStreamingSpeakerGate()
+            clearPendingSemanticTurn()
         }
         scheduleDeferredProactiveDrain()
     }

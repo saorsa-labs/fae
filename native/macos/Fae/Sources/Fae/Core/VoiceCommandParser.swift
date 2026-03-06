@@ -18,6 +18,8 @@ enum VoiceCommandParser {
     enum VoiceCommand: Sendable, Equatable {
         case showCanvas
         case hideCanvas
+        case showConversation
+        case hideConversation
         case showSettings
         case hideSettings
         case showPermissionsCanvas
@@ -37,16 +39,28 @@ enum VoiceCommandParser {
     static func parse(_ text: String) -> VoiceCommand {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Canvas commands.
-        if lower.contains("show canvas") || lower.contains("open canvas") {
+        // Canvas commands — word-level matching handles "the" variants.
+        if (lower.contains("show") || lower.contains("open")) && lower.contains("canvas") {
             return .showCanvas
         }
-        if lower.contains("hide canvas") || lower.contains("close canvas") {
+        if (lower.contains("hide") || lower.contains("close")) && lower.contains("canvas") {
             return .hideCanvas
         }
 
-        // Settings/window control is skill-driven via the window-control skill/tool.
-        // Keep parser deterministic routing focused on governance and safety-critical toggles.
+        // Conversation panel commands.
+        if (lower.contains("show") || lower.contains("open")) && lower.contains("conversation") {
+            return .showConversation
+        }
+        if (lower.contains("hide") || lower.contains("close")) && lower.contains("conversation") {
+            return .hideConversation
+        }
+
+        // Settings window commands.
+        if lower.contains("show settings") || lower.contains("open settings")
+            || lower.contains("go to settings") || lower.contains("settings window")
+        {
+            return .showSettings
+        }
 
         // Tool + permission snapshot canvas commands.
         if lower.contains("show permissions") || lower.contains("show tool permissions")
@@ -112,11 +126,12 @@ enum VoiceCommandParser {
         }
 
         if lower.contains("barge") || lower.contains("interrupt") {
+            // Check disable phrases first — "don't let me" must win over the "let me" substring.
+            if lower.contains("disable") || lower.contains("turn off") || lower.contains("don't let me") || lower.contains("stop letting") {
+                return .setBargeIn(false)
+            }
             if lower.contains("enable") || lower.contains("turn on") || lower.contains("let me") {
                 return .setBargeIn(true)
-            }
-            if lower.contains("disable") || lower.contains("turn off") || lower.contains("don't let me") {
-                return .setBargeIn(false)
             }
         }
 

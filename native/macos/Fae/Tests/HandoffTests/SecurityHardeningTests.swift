@@ -288,7 +288,13 @@ final class ToolModeFilteringTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        ToolToggleStore.reset()
         registry = ToolRegistry.buildDefault()
+    }
+
+    override func tearDown() {
+        ToolToggleStore.reset()
+        super.tearDown()
     }
 
     // MARK: - Off Mode
@@ -357,6 +363,14 @@ final class ToolModeFilteringTests: XCTestCase {
         XCTAssertFalse(registry.isToolAllowed("fetch_url", mode: "full", privacyMode: "strict_local"))
         XCTAssertTrue(registry.isToolAllowed("read", mode: "full", privacyMode: "strict_local"))
         XCTAssertTrue(registry.isToolAllowed("write", mode: "full", privacyMode: "strict_local"))
+    }
+
+    func testUserToolToggleCanDisableSpecificTool() {
+        XCTAssertTrue(registry.isToolAllowed("calendar", mode: "full"))
+        ToolToggleStore.setToolEnabled(false, for: "calendar")
+        XCTAssertFalse(registry.isToolAllowed("calendar", mode: "full"))
+        ToolToggleStore.setToolEnabled(true, for: "calendar")
+        XCTAssertTrue(registry.isToolAllowed("calendar", mode: "full"))
     }
 
     // MARK: - Schema Filtering

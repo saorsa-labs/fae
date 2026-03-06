@@ -23,6 +23,29 @@ struct CoworkWorkspaceView: View {
     @ObservedObject var conversation: ConversationController
 
     @State private var isDropTargeted = false
+    @State private var showingAddWorkspaceSheet = false
+    @State private var showingRenameWorkspaceSheet = false
+    @State private var showingAddAgentSheet = false
+    @State private var showingDeleteAgentAlert = false
+    @State private var showingDeleteWorkspaceAlert = false
+    @State private var newWorkspaceName = ""
+    @State private var renameWorkspaceName = ""
+    @State private var editingAgentID: String?
+    @State private var newAgentName = ""
+    @State private var newAgentBackendPresetID = "openai"
+    @State private var newAgentProvider: CoworkLLMProviderKind = .openAICompatibleExternal
+    @State private var newAgentModel = ""
+    @State private var newAgentBaseURL = ""
+    @State private var newAgentAPIKey = ""
+    @State private var clearStoredAPIKey = false
+    @State private var assignNewAgentToWorkspace = true
+    @State private var isTestingAgentConnection = false
+    @State private var agentTestStatus: String?
+    @State private var discoveredModels: [String] = []
+    @State private var showConsensusDetails = false
+    @State private var showWorkspacePolicies = false
+    @State private var showAgentControls = false
+    @Namespace private var workspaceSelectionAnimation
 
     var body: some View {
         ZStack {
@@ -30,16 +53,13 @@ struct CoworkWorkspaceView: View {
 
             HStack(spacing: 18) {
                 sidebar
-                    .frame(width: 236)
+                    .frame(width: 340)
 
                 VStack(spacing: 18) {
                     header
                     content
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                inspector
-                    .frame(width: 320)
             }
             .padding(22)
         }
@@ -47,6 +67,12 @@ struct CoworkWorkspaceView: View {
             VisualEffectBlur(material: .underWindowBackground, blendingMode: .behindWindow)
                 .ignoresSafeArea()
         )
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                .ignoresSafeArea()
+        }
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -71,6 +97,39 @@ struct CoworkWorkspaceView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             controller.scheduleRefresh(after: 0.05)
+        }
+        .onChange(of: controller.latestConsensusResults.count) {
+            showConsensusDetails = false
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: controller.selectedWorkspace?.id)
+        .animation(.easeInOut(duration: 0.24), value: controller.selectedSection)
+        .animation(.easeInOut(duration: 0.22), value: showWorkspacePolicies)
+        .animation(.easeInOut(duration: 0.22), value: showAgentControls)
+        .animation(.easeInOut(duration: 0.22), value: showConsensusDetails)
+        .sheet(isPresented: $showingAddWorkspaceSheet) {
+            workspaceCreationSheet
+        }
+        .sheet(isPresented: $showingRenameWorkspaceSheet) {
+            workspaceRenameSheet
+        }
+        .sheet(isPresented: $showingAddAgentSheet) {
+            agentCreationSheet
+        }
+        .alert("Remove agent?", isPresented: $showingDeleteAgentAlert, presenting: controller.selectedAgent) { agent in
+            Button("Remove", role: .destructive) {
+                controller.deleteAgent(agent)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { agent in
+            Text("Remove \(agent.name)? Any workspaces using it will fall back to Fae Local.")
+        }
+        .alert("Delete workspace?", isPresented: $showingDeleteWorkspaceAlert, presenting: controller.selectedWorkspace) { workspace in
+            Button("Delete", role: .destructive) {
+                controller.deleteSelectedWorkspace()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { workspace in
+            Text("Delete \(workspace.name)? Its folder, attachments, and compare settings will be removed from Work with Fae.")
         }
     }
 
@@ -110,7 +169,7 @@ struct CoworkWorkspaceView: View {
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.white.opacity(0.70))
 
-                HStack(spacing: 10) {
+                FlowLayout(spacing: 10) {
                     statusChip(
                         icon: faeCore.pipelineState == .running ? "waveform.badge.mic" : "bolt.horizontal.circle",
                         title: snapshot.pipelineStateLabel,
@@ -136,9 +195,15 @@ struct CoworkWorkspaceView: View {
                     )
 
                     statusChip(
-                        icon: "network",
-                        title: controller.providerKind == .faeLocalhost ? "Fae localhost" : "External provider",
-                        accent: controller.providerStatus.contains("fallback") ? CoworkPalette.rose : CoworkPalette.heather
+                        icon: controller.remoteAgentBlockedByPolicy || controller.selectedAgent?.isTrustedLocal == true ? "lock.shield" : "network",
+                        title: controller.remoteAgentBlockedByPolicy ? "Fae Local enforced" : (controller.selectedAgent?.name ?? (controller.providerKind == .faeLocalhost ? "Fae localhost" : "External provider")),
+                        accent: controller.remoteAgentBlockedByPolicy || controller.selectedAgent?.isTrustedLocal == true ? CoworkPalette.mint : (controller.providerStatus.contains("fallback") ? CoworkPalette.rose : CoworkPalette.heather)
+                    )
+
+                    statusChip(
+                        icon: controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "square.stack.3d.up.fill" : "paperplane",
+                        title: controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "Auto compare" : "Compare on demand",
+                        accent: controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? CoworkPalette.amber : CoworkPalette.heather
                     )
                 }
             }
@@ -187,51 +252,7 @@ struct CoworkWorkspaceView: View {
     private var workspaceSection: some View {
         VStack(spacing: 18) {
             HStack(spacing: 18) {
-                glassCard {
-                    VStack(alignment: .leading, spacing: 18) {
-                        HStack(spacing: 14) {
-                            Image(nsImage: CoworkArtwork.orb)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 56, height: 56)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Workspace context")
-                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white)
-                                Text(currentWorkspaceSubtitle)
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.62))
-                                    .lineLimit(2)
-                            }
-                        }
-
-                        HStack(spacing: 14) {
-                            metricTile(title: "Files", value: "\(controller.workspaceState.indexedFiles.count)", accent: CoworkPalette.amber)
-                            metricTile(title: "Attached", value: "\(controller.workspaceState.attachments.count)", accent: CoworkPalette.cyan)
-                            metricTile(title: "Tasks", value: "\(controller.schedulerTasks.filter(\.enabled).count)", accent: CoworkPalette.mint)
-                        }
-
-                        HStack(spacing: 10) {
-                            workspaceActionButton(
-                                title: controller.workspaceState.selectedDirectoryPath == nil ? "Choose folder" : "Change folder",
-                                systemImage: "folder",
-                                accent: CoworkPalette.heather,
-                                action: controller.chooseWorkspaceDirectory
-                            )
-
-                            if controller.workspaceState.selectedDirectoryPath != nil {
-                                workspaceActionButton(
-                                    title: "Clear",
-                                    systemImage: "xmark.circle",
-                                    accent: CoworkPalette.rose,
-                                    action: controller.clearWorkspaceDirectory
-                                )
-                            }
-                        }
-                    }
-                }
+                workspaceHeroCard
 
                 glassCard {
                     VStack(alignment: .leading, spacing: 14) {
@@ -270,6 +291,73 @@ struct CoworkWorkspaceView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var workspaceHeroCard: some View {
+        glassCard {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [CoworkPalette.heather.opacity(0.16), CoworkPalette.amber.opacity(0.08), .clear],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top, spacing: 14) {
+                        Image(nsImage: CoworkArtwork.orb)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 60, height: 60)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .shadow(color: CoworkPalette.heather.opacity(0.25), radius: 12, y: 6)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(controller.selectedWorkspace?.name ?? "Workspace")
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .contentTransition(.interpolate)
+                            Text(currentWorkspaceSubtitle)
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.68))
+                                .lineLimit(3)
+                            FlowLayout(spacing: 8) {
+                                miniInfoBadge(icon: "sparkles", text: controller.selectedAgent?.backendDisplayName ?? "Fae Local")
+                                miniInfoBadge(icon: controller.isStrictLocalWorkspace ? "lock.shield" : "network", text: controller.selectedWorkspacePolicy.remoteExecution.displayName)
+                                miniInfoBadge(icon: "paperplane", text: controller.selectedWorkspacePolicy.compareBehavior.displayName)
+                            }
+                        }
+                    }
+
+                    HStack(spacing: 14) {
+                        metricTile(title: "Files", value: "\(controller.workspaceState.indexedFiles.count)", accent: CoworkPalette.amber)
+                        metricTile(title: "Attached", value: "\(controller.workspaceState.attachments.count)", accent: CoworkPalette.cyan)
+                        metricTile(title: "Tasks", value: "\(controller.schedulerTasks.filter(\.enabled).count)", accent: CoworkPalette.mint)
+                    }
+
+                    HStack(spacing: 10) {
+                        workspaceActionButton(
+                            title: controller.workspaceState.selectedDirectoryPath == nil ? "Choose folder" : "Change folder",
+                            systemImage: "folder",
+                            accent: CoworkPalette.heather,
+                            action: controller.chooseWorkspaceDirectory
+                        )
+
+                        if controller.workspaceState.selectedDirectoryPath != nil {
+                            workspaceActionButton(
+                                title: "Clear",
+                                systemImage: "xmark.circle",
+                                accent: CoworkPalette.rose,
+                                action: controller.clearWorkspaceDirectory
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .matchedGeometryEffect(id: "workspace-hero", in: workspaceSelectionAnimation)
     }
 
     private var workspaceContextPanel: some View {
@@ -522,29 +610,37 @@ struct CoworkWorkspaceView: View {
                     }
                     Spacer()
                     if conversation.isGenerating {
-                        Label("Generating", systemImage: "ellipsis.message.fill")
+                        Label(conversation.isStreaming ? "Replying live" : "Thinking", systemImage: conversation.isStreaming ? "waveform.badge.mic" : "ellipsis.message.fill")
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background(Capsule().fill(CoworkPalette.cyan.opacity(0.18)))
                             .overlay(Capsule().stroke(CoworkPalette.cyan.opacity(0.40), lineWidth: 1))
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
                 }
 
                 Divider().overlay(Color.white.opacity(0.08))
 
+                if !controller.latestConsensusResults.isEmpty {
+                    consensusSummaryStrip
+                    Divider().overlay(Color.white.opacity(0.08))
+                }
+
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
+                        LazyVStack(alignment: .leading, spacing: 18) {
                             if conversation.messages.isEmpty && conversation.streamingText.isEmpty {
                                 emptyConversationState
                             } else {
                                 ForEach(Array(conversation.messages.suffix(40))) { message in
                                     conversationBubble(message)
+                                        .transition(.move(edge: message.role == .assistant ? .leading : .trailing).combined(with: .opacity))
                                 }
 
                                 if conversation.isStreaming, !conversation.streamingText.isEmpty {
                                     streamingBubble(conversation.streamingText)
+                                        .transition(.move(edge: .leading).combined(with: .opacity))
                                 }
 
                                 Color.clear
@@ -553,6 +649,7 @@ struct CoworkWorkspaceView: View {
                             }
                         }
                         .padding(.trailing, 4)
+                        .padding(.vertical, 10)
                     }
                     .onAppear {
                         proxy.scrollTo("cowork-bottom", anchor: .bottom)
@@ -602,58 +699,88 @@ struct CoworkWorkspaceView: View {
                         .help(faeCore.thinkingEnabled ? "Turn thinking off for faster replies." : "Turn thinking on for deeper reasoning.")
                     }
 
-                    HStack(alignment: .bottom, spacing: 12) {
-                        HStack(spacing: 8) {
-                            iconActionButton(symbol: "plus") {
-                                controller.addAttachmentsViaPicker()
-                            }
-                            iconActionButton(symbol: "doc.on.clipboard") {
-                                controller.addPastedContent()
-                            }
-                            iconActionButton(symbol: "camera") {
-                                controller.inspectCamera()
-                            }
-                            iconActionButton(symbol: "rectangle.on.rectangle") {
-                                controller.inspectScreen()
+                    VStack(alignment: .leading, spacing: 10) {
+                        FlowLayout(spacing: 8) {
+                            miniInfoBadge(icon: "sparkles", text: controller.selectedWorkspace?.name ?? "Workspace")
+                            miniInfoBadge(icon: controller.remoteAgentBlockedByPolicy ? "lock.shield" : "cpu", text: controller.remoteAgentBlockedByPolicy ? "Fae Local only" : (controller.selectedAgent?.name ?? "Fae Local"))
+                            if let focusedTitle = controller.focusedPreview?.title {
+                                miniInfoBadge(icon: "scope", text: focusedTitle)
                             }
                         }
 
-                        TextField(
-                            "Ask Fae to work with this folder, these files, or what you want her to inspect…",
-                            text: $controller.draft,
-                            axis: .vertical
-                        )
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                        .textFieldStyle(.plain)
-                        .lineLimit(1 ... 5)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color.white.opacity(0.05))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                                )
-                        )
+                        HStack(alignment: .bottom, spacing: 12) {
+                            contextActionMenu
 
-                        Button(action: controller.submitDraft) {
-                            Label("Send", systemImage: "paperplane.fill")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 12)
-                                .background(
-                                    Capsule()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [CoworkPalette.amber, CoworkPalette.rose],
-                                                startPoint: .leading,
-                                                endPoint: .trailing
+                            VStack(alignment: .leading, spacing: 8) {
+                                TextField(
+                                    "Ask Fae to work with this folder, these files, or what you want her to inspect…",
+                                    text: $controller.draft,
+                                    axis: .vertical
+                                )
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .textFieldStyle(.plain)
+                                .lineLimit(1 ... 5)
+
+                                HStack(spacing: 8) {
+                                    Text(conversation.isGenerating ? (conversation.isStreaming ? "Fae is replying live…" : "Fae is thinking…") : "Grounded in your workspace and ready.")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.white.opacity(0.48))
+                                        .contentTransition(.interpolate)
+
+                                    Spacer()
+
+                                    if !controller.latestConsensusResults.isEmpty {
+                                        Text("Last compare: \(controller.latestConsensusResults.count) agents")
+                                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.42))
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(Color.white.opacity(0.05))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                    )
+                            )
+
+                            Button(action: controller.compareDraftAcrossAgents) {
+                                Label(controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "Auto compare" : "Compare", systemImage: "square.stack.3d.up.fill")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color.white.opacity(0.08))
+                                            .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1))
+                                    )
+                                    .opacity(controller.canCompareAcrossAgents && controller.selectedWorkspacePolicy.compareBehavior != .alwaysCompare ? 1 : 0.55)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!controller.canCompareAcrossAgents || controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare)
+                            .help(controller.isStrictLocalWorkspace ? "This workspace is strict local only, so comparison stays disabled." : (controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "This workspace already compares automatically when you send." : "Compare across the selected workspace agents now."))
+
+                            Button(action: controller.submitDraft) {
+                                Label(controller.shouldCompareOnSubmit ? "Compare & Send" : "Send", systemImage: "paperplane.fill")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(
+                                        Capsule()
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [CoworkPalette.amber, CoworkPalette.rose],
+                                                    startPoint: .leading,
+                                                    endPoint: .trailing
+                                                )
                                             )
-                                        )
-                                )
+                                    )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -661,28 +788,53 @@ struct CoworkWorkspaceView: View {
     }
 
     private var emptyConversationState: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Start by choosing a folder or adding a few files.")
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(nsImage: CoworkArtwork.orb)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .shadow(color: CoworkPalette.heather.opacity(0.22), radius: 10, y: 5)
 
-            Text("Work with Fae is designed to keep local project context close at hand. Select a workspace, drop files or images, paste something in, or ask Fae to look at your screen.")
-                .font(.system(size: 14, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.68))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Start by choosing a folder or adding a few files.")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
 
-            HStack(spacing: 10) {
-                quickSuggestionChip("Summarize this workspace") {
+                    Text("Work with Fae keeps local project context close at hand. Select a workspace, drop files or images, paste something in, or ask Fae to look at your screen.")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.68))
+                }
+            }
+
+            HStack(spacing: 12) {
+                luxuryPromptCard(
+                    title: "Summarize this workspace",
+                    subtitle: "Get oriented quickly with a grounded overview.",
+                    icon: "sparkles.rectangle.stack"
+                ) {
                     controller.useQuickPrompt("Summarize this workspace and tell me where I should start.")
                 }
-                quickSuggestionChip("Find key files") {
+
+                luxuryPromptCard(
+                    title: "Find key files",
+                    subtitle: "Ask Fae which files matter most right now.",
+                    icon: "doc.text.magnifyingglass"
+                ) {
                     controller.useQuickPrompt("Given this workspace context, identify the most important files for the task at hand.")
                 }
-                quickSuggestionChip("Look at my screen") {
+
+                luxuryPromptCard(
+                    title: "Look at my screen",
+                    subtitle: "Use vision to understand what is in front of me.",
+                    icon: "rectangle.on.rectangle"
+                ) {
                     controller.inspectScreen()
                 }
             }
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, 18)
     }
 
     private var schedulerSection: some View {
@@ -919,47 +1071,368 @@ struct CoworkWorkspaceView: View {
     }
 
     private var sidebar: some View {
-        glassCard(padding: 18) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 14) {
-                    Image(nsImage: CoworkArtwork.orb)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 48, height: 48)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        glassCard(padding: 0) {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 14) {
+                        Image(nsImage: CoworkArtwork.orb)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 48, height: 48)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Work with Fae")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                        Text("Local workspace")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.62))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Work with Fae")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text(controller.selectedAgent?.isTrustedLocal == true ? "Trusted local relationship layer" : "Multi-workspace orchestration")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.62))
+                        }
                     }
-                }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 18)
 
-                VStack(spacing: 10) {
-                    ForEach(CoworkWorkspaceSection.allCases) { section in
-                        sidebarButton(for: section)
+                    sidebarSectionHeader(title: "Workspaces", subtitle: "Switch focus without losing context") {
+                        newWorkspaceName = ""
+                        showingAddWorkspaceSheet = true
                     }
+                    .padding(.horizontal, 18)
+
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(controller.workspaces) { workspace in
+                                workspaceButton(for: workspace)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 246)
+                    .padding(.horizontal, 18)
+
+                    if let selectedWorkspace = controller.selectedWorkspace {
+                        glassCard(padding: 14) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(selectedWorkspace.name)
+                                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                                            .foregroundStyle(.white)
+                                            .contentTransition(.interpolate)
+                                        Text(controller.selectedAgent?.backendDisplayName ?? "Fae Local")
+                                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(controller.selectedAgent?.isTrustedLocal == true ? CoworkPalette.mint : CoworkPalette.cyan)
+                                    }
+                                    Spacer()
+                                    if controller.selectedAgent?.isTrustedLocal == true || controller.remoteAgentBlockedByPolicy {
+                                        capsule(text: controller.remoteAgentBlockedByPolicy ? "Local enforced" : "Local", accent: CoworkPalette.mint)
+                                    }
+                                    Menu {
+                                        Button("Rename workspace") {
+                                            renameWorkspaceName = selectedWorkspace.name
+                                            showingRenameWorkspaceSheet = true
+                                        }
+                                        Button("Duplicate workspace") {
+                                            controller.duplicateSelectedWorkspace()
+                                        }
+                                        Divider()
+                                        Button("Delete workspace", role: .destructive) {
+                                            showingDeleteWorkspaceAlert = true
+                                        }
+                                        .disabled(controller.workspaces.count <= 1)
+                                    } label: {
+                                        Image(systemName: "ellipsis.circle")
+                                            .font(.system(size: 16, weight: .semibold))
+                                            .foregroundStyle(Color.white.opacity(0.76))
+                                            .frame(width: 28, height: 28)
+                                    }
+                                    .menuStyle(.borderlessButton)
+                                }
+
+                                FlowLayout(spacing: 8) {
+                                    miniInfoBadge(icon: "folder", text: selectedWorkspace.state.selectedDirectoryPath == nil ? "No folder" : "Folder attached")
+                                    miniInfoBadge(icon: "doc.text", text: "\(selectedWorkspace.state.indexedFiles.count) files")
+                                    miniInfoBadge(icon: "paperclip", text: "\(selectedWorkspace.state.attachments.count) items")
+                                    miniInfoBadge(icon: "cpu", text: controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "Auto compare" : "On demand")
+                                }
+
+                                HStack(spacing: 12) {
+                                    heroDetailColumn(title: "Model", value: controller.selectedAgent?.modelIdentifier ?? "fae-agent-local")
+                                    heroDetailColumn(title: "Execution", value: controller.selectedWorkspacePolicy.remoteExecution.displayName)
+                                    heroDetailColumn(title: "Consensus", value: controller.usesAutomaticConsensusSelection ? "Automatic" : "Custom roster")
+                                }
+
+                                DisclosureGroup(isExpanded: $showWorkspacePolicies) {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        policyMenuRow(
+                                            title: "Remote execution",
+                                            value: controller.selectedWorkspacePolicy.remoteExecution.displayName,
+                                            icon: controller.selectedWorkspacePolicy.remoteExecution == .strictLocalOnly ? "lock.shield.fill" : "network"
+                                        ) {
+                                            ForEach(WorkWithFaeRemoteExecutionPolicy.allCases) { policy in
+                                                Button(policy.displayName) {
+                                                    controller.updateWorkspaceRemoteExecution(policy)
+                                                }
+                                            }
+                                        }
+
+                                        policyMenuRow(
+                                            title: "Compare behavior",
+                                            value: controller.selectedWorkspacePolicy.compareBehavior.displayName,
+                                            icon: controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "square.stack.3d.up.fill" : "paperplane"
+                                        ) {
+                                            ForEach(WorkWithFaeCompareBehavior.allCases) { policy in
+                                                Button(policy.displayName) {
+                                                    controller.updateWorkspaceCompareBehavior(policy)
+                                                }
+                                            }
+                                        }
+
+                                        policyMenuRow(
+                                            title: "Consensus participants",
+                                            value: controller.usesAutomaticConsensusSelection ? "Automatic" : "Custom selection",
+                                            icon: controller.usesAutomaticConsensusSelection ? "wand.and.stars" : "person.3.fill"
+                                        ) {
+                                            Button {
+                                                controller.resetConsensusParticipantsToAutomatic()
+                                            } label: {
+                                                Label("Automatic selection", systemImage: controller.usesAutomaticConsensusSelection ? "checkmark" : "wand.and.stars")
+                                            }
+
+                                            Divider()
+
+                                            ForEach(controller.agents) { agent in
+                                                Button {
+                                                    controller.toggleConsensusParticipant(agent)
+                                                } label: {
+                                                    Label(
+                                                        agent.name,
+                                                        systemImage: controller.isConsensusParticipantSelected(agent) ? "checkmark.circle.fill" : "circle"
+                                                    )
+                                                }
+                                                .disabled(controller.isStrictLocalWorkspace && !agent.isTrustedLocal)
+                                            }
+                                        }
+
+                                        Text(controller.selectedWorkspacePolicy.remoteExecution.shortDescription)
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.56))
+                                            .lineLimit(3)
+
+                                        Text(controller.selectedWorkspacePolicy.compareBehavior.shortDescription)
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.50))
+                                            .lineLimit(3)
+
+                                        Text(controller.selectedConsensusParticipantsSummary)
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.46))
+                                            .lineLimit(3)
+                                    }
+                                    .padding(.top, 8)
+                                } label: {
+                                    Text("Workspace policies")
+                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                }
+                                .tint(.white)
+                            }
+                        }
+                        .padding(.horizontal, 18)
+                    }
+
+                    VStack(spacing: 10) {
+                        ForEach(CoworkWorkspaceSection.allCases) { section in
+                            sidebarButton(for: section)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+
+                    sidebarSectionHeader(title: "Agent", subtitle: "Keep setup nearby, not noisy") {
+                        prepareNewAgentForm()
+                        showingAddAgentSheet = true
+                    }
+                    .padding(.horizontal, 18)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let selectedWorkspace = controller.selectedWorkspace {
+                            Menu {
+                                ForEach(controller.agents) { agent in
+                                    Button(agent.name) {
+                                        controller.assignAgent(agent, to: selectedWorkspace)
+                                    }
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(controller.selectedAgent?.name ?? "Attach agent")
+                                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        Text(controller.selectedAgent?.backendDisplayName ?? "No backend selected")
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.54))
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.up.chevron.down")
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.04))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                        )
+                                )
+                            }
+                            .menuStyle(.borderlessButton)
+                        }
+
+                        if let selectedAgent = controller.selectedAgent {
+                            DisclosureGroup(isExpanded: $showAgentControls) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(selectedAgent.providerKind == .openAICompatibleExternal ? "OpenAI-compatible runtime" : selectedAgent.providerKind.shortDescription)
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.58))
+                                            .lineLimit(2)
+                                        Text(controller.credentialSummary(for: selectedAgent))
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.52))
+                                            .lineLimit(2)
+                                    }
+
+                                    FlowLayout(spacing: 8) {
+                                        quickActionPill(title: "Edit") {
+                                            prepareAgentFormForEditing(selectedAgent)
+                                            showingAddAgentSheet = true
+                                        }
+                                        quickActionPill(title: "Retest") {
+                                            Task {
+                                                do {
+                                                    let report = try await controller.testConnection(for: selectedAgent)
+                                                    await MainActor.run {
+                                                        agentTestStatus = report.statusText
+                                                        controller.refreshNow()
+                                                    }
+                                                } catch {
+                                                    await MainActor.run {
+                                                        agentTestStatus = error.localizedDescription
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if selectedAgent.id != WorkWithFaeAgentProfile.faeLocal.id {
+                                            quickActionPill(title: "Delete", accent: CoworkPalette.rose) {
+                                                showingDeleteAgentAlert = true
+                                            }
+                                        }
+                                    }
+
+                                    if let agentTestStatus {
+                                        Text(agentTestStatus)
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.white.opacity(0.56))
+                                            .lineLimit(3)
+                                    }
+                                }
+                                .padding(.top, 8)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(selectedAgent.backendDisplayName)
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(selectedAgent.isTrustedLocal ? CoworkPalette.mint : CoworkPalette.cyan)
+                                    Text("Manage this agent")
+                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.white.opacity(0.54))
+                                }
+                            }
+                            .tint(.white)
+                        }
+                    }
+                    .padding(.horizontal, 18)
+
+                    sidebarSectionHeader(title: "Quick actions", subtitle: "Useful, tucked away")
+                        .padding(.horizontal, 18)
+
+                    FlowLayout(spacing: 8) {
+                        quickActionPill(title: "Choose folder", accent: CoworkPalette.heather, action: controller.chooseWorkspaceDirectory)
+                        quickActionPill(title: "Add files", accent: CoworkPalette.cyan, action: controller.addAttachmentsViaPicker)
+                        quickActionPill(title: "Look at screen", accent: CoworkPalette.amber, action: controller.inspectScreen)
+                        quickActionPill(title: "Open settings", accent: CoworkPalette.heather, action: controller.openSettings)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 18)
                 }
-
-                Divider().overlay(Color.white.opacity(0.08))
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Quick controls")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.86))
-
-                    quickActionPill(title: "Choose folder", action: controller.chooseWorkspaceDirectory)
-                    quickActionPill(title: "Add files", action: controller.addAttachmentsViaPicker)
-                    quickActionPill(title: "Look at screen", action: controller.inspectScreen)
-                    quickActionPill(title: "Open settings", action: controller.openSettings)
-                }
-
-                Spacer()
             }
         }
+    }
+
+    private func workspaceButton(for workspace: WorkWithFaeWorkspaceRecord) -> some View {
+        let isSelected = controller.selectedWorkspace?.id == workspace.id
+        let agent = controller.agents.first(where: { $0.id == workspace.agentID })
+
+        return Button {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                controller.selectWorkspace(workspace)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: isSelected ? 8 : 4) {
+                HStack(spacing: 8) {
+                    Text(workspace.name)
+                        .font(.system(size: isSelected ? 14 : 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Spacer()
+                    if agent?.isTrustedLocal == true {
+                        capsule(text: "Local", accent: CoworkPalette.mint)
+                    }
+                }
+
+                if isSelected {
+                    Text(agent?.backendDisplayName ?? agent?.name ?? "No agent attached")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle((agent?.isTrustedLocal == true ? CoworkPalette.mint : CoworkPalette.cyan).opacity(0.95))
+                        .lineLimit(1)
+
+                    FlowLayout(spacing: 6) {
+                        capsule(
+                            text: workspace.policy.remoteExecution == .strictLocalOnly ? "Strict local" : "Remote okay",
+                            accent: workspace.policy.remoteExecution == .strictLocalOnly ? CoworkPalette.mint : CoworkPalette.cyan
+                        )
+                        if workspace.policy.compareBehavior == .alwaysCompare {
+                            capsule(text: "Auto compare", accent: CoworkPalette.amber)
+                        }
+                        if !workspace.policy.usesAutomaticConsensusSelection {
+                            capsule(text: "Custom roster", accent: CoworkPalette.heather)
+                        }
+                    }
+
+                    Text(workspace.state.selectedDirectoryPath ?? "No folder selected")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.48))
+                        .lineLimit(2)
+
+                    HStack(spacing: 10) {
+                        miniWorkspaceStat(label: "files", value: workspace.state.indexedFiles.count)
+                        miniWorkspaceStat(label: "items", value: workspace.state.attachments.count)
+                        miniWorkspaceStat(label: "model", value: agent?.modelIdentifier ?? "local")
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.12) : Color.white.opacity(0.03))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(isSelected ? Color.white.opacity(0.16) : Color.white.opacity(0.06), lineWidth: 1)
+                    )
+                    .matchedGeometryEffect(id: "workspace-row-\(workspace.id.uuidString)", in: workspaceSelectionAnimation)
+            )
+            .scaleEffect(isSelected ? 1.0 : 0.985)
+        }
+        .buttonStyle(.plain)
     }
 
     private func sidebarButton(for section: CoworkWorkspaceSection) -> some View {
@@ -967,7 +1440,9 @@ struct CoworkWorkspaceView: View {
         let count = sidebarCount(for: section)
 
         return Button {
-            controller.selectedSection = section
+            withAnimation(.easeInOut(duration: 0.2)) {
+                controller.selectedSection = section
+            }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: section.systemImage)
@@ -994,8 +1469,206 @@ struct CoworkWorkspaceView: View {
                             .stroke(isSelected ? Color.white.opacity(0.16) : Color.white.opacity(0.06), lineWidth: 1)
                     )
             )
+            .scaleEffect(isSelected ? 1.0 : 0.985)
         }
         .buttonStyle(.plain)
+    }
+
+    private var workspaceCreationSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New workspace")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+            TextField("Workspace name", text: $newWorkspaceName)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showingAddWorkspaceSheet = false
+                }
+                Button("Create") {
+                    controller.createWorkspace(named: newWorkspaceName)
+                    showingAddWorkspaceSheet = false
+                }
+                .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+    }
+
+    private var workspaceRenameSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rename workspace")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+            TextField("Workspace name", text: $renameWorkspaceName)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showingRenameWorkspaceSheet = false
+                }
+                Button("Save") {
+                    controller.renameSelectedWorkspace(to: renameWorkspaceName)
+                    showingRenameWorkspaceSheet = false
+                }
+                .disabled(renameWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+    }
+
+    private var agentCreationSheet: some View {
+        let preset = selectedBackendPreset
+        let editingAgent = editingAgent
+        return VStack(alignment: .leading, spacing: 16) {
+            Text(editingAgent == nil ? "Add agent" : "Edit agent")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+            Text(preset.setupHint)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+            TextField("Agent name", text: $newAgentName)
+                .textFieldStyle(.roundedBorder)
+
+            Picker("Backend", selection: $newAgentBackendPresetID) {
+                ForEach(controller.backendPresets, id: \.id) { backend in
+                    Text(backend.displayName).tag(backend.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: newAgentBackendPresetID) {
+                let updatedPreset = selectedBackendPreset
+                newAgentProvider = updatedPreset.providerKind
+                newAgentBaseURL = updatedPreset.defaultBaseURL
+                if newAgentModel.isEmpty || presetSuggestedModels.contains(newAgentModel) {
+                    newAgentModel = updatedPreset.suggestedModels.first ?? (updatedPreset.providerKind == .faeLocalhost ? "fae-agent-local" : "")
+                }
+                if !updatedPreset.requiresAPIKey {
+                    newAgentAPIKey = ""
+                    clearStoredAPIKey = false
+                }
+                discoveredModels = []
+                agentTestStatus = nil
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Provider")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(preset.providerKind == .openAICompatibleExternal ? "OpenAI-compatible" : preset.providerKind.displayName)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.72))
+            }
+
+            TextField("Model", text: $newAgentModel)
+                .textFieldStyle(.roundedBorder)
+            TextField(preset.allowsCustomBaseURL ? "Base URL" : "Base URL (fixed)", text: $newAgentBaseURL)
+                .textFieldStyle(.roundedBorder)
+                .disabled(!preset.allowsCustomBaseURL)
+
+            if preset.requiresAPIKey {
+                SecureField(editingAgent == nil ? preset.apiKeyPlaceholder : "New API key (leave blank to keep current)", text: $newAgentAPIKey)
+                    .textFieldStyle(.roundedBorder)
+                if let editingAgent, controller.hasStoredCredential(for: editingAgent) {
+                    Toggle("Clear stored API key", isOn: $clearStoredAPIKey)
+                }
+            }
+
+            if !suggestedModels.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(discoveredModels.isEmpty ? "Suggested models" : "Suggested + discovered models")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(suggestedModels, id: \.self) { model in
+                                Button(model) {
+                                    newAgentModel = model
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule()
+                                        .fill(Color.white.opacity(0.06))
+                                        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let agentTestStatus {
+                Text(agentTestStatus)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.72))
+            }
+
+            Toggle(editingAgent == nil ? "Attach to current workspace" : "Attach updated agent to current workspace", isOn: $assignNewAgentToWorkspace)
+            HStack {
+                Button(isTestingAgentConnection ? "Testing…" : "Test connection") {
+                    isTestingAgentConnection = true
+                    agentTestStatus = nil
+                    discoveredModels = []
+                    Task {
+                        do {
+                            let report = try await controller.testConnection(
+                                providerKind: preset.providerKind,
+                                baseURL: newAgentBaseURL,
+                                apiKey: effectiveAPIKeyForTesting
+                            )
+                            await MainActor.run {
+                                isTestingAgentConnection = false
+                                agentTestStatus = report.statusText
+                                discoveredModels = report.discoveredModels
+                                if newAgentModel.isEmpty, let first = report.discoveredModels.first {
+                                    newAgentModel = first
+                                }
+                            }
+                        } catch {
+                            await MainActor.run {
+                                isTestingAgentConnection = false
+                                agentTestStatus = error.localizedDescription
+                            }
+                        }
+                    }
+                }
+                .disabled(isTestingAgentConnection)
+
+                Spacer()
+                Button("Cancel") {
+                    showingAddAgentSheet = false
+                }
+                Button(editingAgent == nil ? "Save" : "Update") {
+                    if let editingAgent {
+                        controller.updateAgent(
+                            id: editingAgent.id,
+                            name: newAgentName,
+                            backendPresetID: preset.id,
+                            providerKind: preset.providerKind,
+                            modelIdentifier: newAgentModel,
+                            baseURL: newAgentBaseURL,
+                            apiKey: newAgentAPIKey,
+                            clearStoredAPIKey: clearStoredAPIKey,
+                            assignToSelectedWorkspace: assignNewAgentToWorkspace
+                        )
+                    } else {
+                        controller.createAgent(
+                            name: newAgentName,
+                            backendPresetID: preset.id,
+                            providerKind: preset.providerKind,
+                            modelIdentifier: newAgentModel,
+                            baseURL: newAgentBaseURL,
+                            apiKey: newAgentAPIKey,
+                            assignToSelectedWorkspace: assignNewAgentToWorkspace
+                        )
+                    }
+                    showingAddAgentSheet = false
+                }
+                .disabled(newAgentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
     }
 
     private func glassCard<Content: View>(
@@ -1017,6 +1690,7 @@ struct CoworkWorkspaceView: View {
                 .padding(padding)
         }
         .shadow(color: .black.opacity(0.22), radius: 26, y: 16)
+        .contentTransition(.interpolate)
     }
 
     private func statusChip(icon: String, title: String, accent: Color) -> some View {
@@ -1097,22 +1771,84 @@ struct CoworkWorkspaceView: View {
         .buttonStyle(.plain)
     }
 
-    private func iconActionButton(symbol: String, action: @escaping () -> Void) -> some View {
+    private func luxuryPromptCard(title: String, subtitle: String, icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 38, height: 38)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.06))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(Color.white.opacity(0.09), lineWidth: 1)
-                        )
-                )
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(CoworkPalette.heather)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(0.05))
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(subtitle)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.58))
+                        .lineLimit(3)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                    )
+            )
         }
         .buttonStyle(.plain)
+    }
+
+    private var contextActionMenu: some View {
+        Menu {
+            Button {
+                controller.addAttachmentsViaPicker()
+            } label: {
+                Label("Add files", systemImage: "plus.square.on.square")
+            }
+
+            Button {
+                controller.addPastedContent()
+            } label: {
+                Label("Paste from clipboard", systemImage: "doc.on.clipboard")
+            }
+
+            Button {
+                controller.inspectCamera()
+            } label: {
+                Label("Use camera", systemImage: "camera")
+            }
+
+            Button {
+                controller.inspectScreen()
+            } label: {
+                Label("Look at screen", systemImage: "rectangle.on.rectangle")
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Context")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(Capsule().stroke(Color.white.opacity(0.09), lineWidth: 1))
+            )
+        }
+        .menuStyle(.borderlessButton)
     }
 
     private func workspaceActionButton(
@@ -1136,41 +1872,196 @@ struct CoworkWorkspaceView: View {
         .buttonStyle(.plain)
     }
 
+    private var consensusSummaryStrip: some View {
+        let successCount = controller.latestConsensusResults.filter { $0.errorText == nil }.count
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Fae consensus")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(controller.selectedConsensusParticipantsSummary)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.58))
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                HStack(spacing: 8) {
+                    capsule(text: "\(successCount)/\(controller.latestConsensusResults.count) replied", accent: successCount == controller.latestConsensusResults.count ? CoworkPalette.mint : CoworkPalette.amber)
+
+                    Button(showConsensusDetails ? "Hide answers" : "Show answers") {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                            showConsensusDetails.toggle()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.06))
+                            .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    )
+                }
+            }
+
+            FlowLayout(spacing: 8) {
+                ForEach(controller.latestConsensusResults) { result in
+                    capsule(
+                        text: result.errorText == nil ? result.agentName : "\(result.agentName) failed",
+                        accent: result.errorText == nil ? (result.isTrustedLocal ? CoworkPalette.mint : CoworkPalette.cyan) : CoworkPalette.rose
+                    )
+                }
+            }
+
+            if showConsensusDetails {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 12) {
+                        ForEach(controller.latestConsensusResults) { result in
+                            consensusResultCard(result)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                )
+        )
+        .shadow(color: showConsensusDetails ? CoworkPalette.heather.opacity(0.12) : .clear, radius: 16, y: 10)
+    }
+
+    private func consensusResultCard(_ result: WorkWithFaeConsensusResult) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(result.agentName)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(result.providerLabel)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.56))
+                        .lineLimit(2)
+                }
+                Spacer()
+                capsule(
+                    text: result.errorText == nil ? (result.isTrustedLocal ? "Local" : "Remote") : "Issue",
+                    accent: result.errorText == nil ? (result.isTrustedLocal ? CoworkPalette.mint : CoworkPalette.cyan) : CoworkPalette.rose
+                )
+            }
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            ScrollView(.vertical, showsIndicators: true) {
+                if let responseText = result.responseText {
+                    Text(responseText)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.90))
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Label(result.errorText ?? "Unknown error", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(CoworkPalette.rose)
+                        .lineSpacing(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(maxHeight: 220)
+        }
+        .padding(14)
+        .frame(width: 280, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
     private func conversationBubble(_ message: ChatMessage) -> some View {
-        HStack {
+        HStack(alignment: .bottom, spacing: 10) {
             if message.role == .assistant {
+                messageAccessory(role: .assistant, timestamp: message.timestamp)
                 bubble(message.content, accent: CoworkPalette.amber, isTrailing: false)
-                Spacer(minLength: 50)
+                Spacer(minLength: 60)
             } else {
-                Spacer(minLength: 50)
+                Spacer(minLength: 60)
                 bubble(message.content, accent: CoworkPalette.cyan, isTrailing: true)
+                messageAccessory(role: .user, timestamp: message.timestamp)
             }
         }
     }
 
     private func streamingBubble(_ text: String) -> some View {
-        HStack {
-            bubble(text, accent: CoworkPalette.mint, isTrailing: false)
-            Spacer(minLength: 50)
+        HStack(alignment: .bottom, spacing: 10) {
+            messageAccessory(role: .assistant, timestamp: Date(), showPulse: true)
+            bubble(text, accent: CoworkPalette.mint, isTrailing: false, isStreaming: true)
+            Spacer(minLength: 60)
         }
     }
 
-    private func bubble(_ text: String, accent: Color, isTrailing: Bool) -> some View {
-        Text(text)
-            .font(.system(size: 14, weight: .medium, design: .rounded))
-            .foregroundStyle(.white)
-            .multilineTextAlignment(isTrailing ? .trailing : .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(accent.opacity(0.14))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(accent.opacity(0.25), lineWidth: 1)
-                    )
-            )
-            .frame(maxWidth: 620, alignment: isTrailing ? .trailing : .leading)
+    private func messageAccessory(role: ChatRole, timestamp: Date, showPulse: Bool = false) -> some View {
+        VStack(alignment: .center, spacing: 6) {
+            Circle()
+                .fill(role == .assistant ? CoworkPalette.amber.opacity(0.9) : CoworkPalette.cyan.opacity(0.9))
+                .frame(width: 8, height: 8)
+                .overlay {
+                    if showPulse {
+                        Circle()
+                            .stroke((role == .assistant ? CoworkPalette.mint : CoworkPalette.cyan).opacity(0.5), lineWidth: 1)
+                            .scaleEffect(1.8)
+                            .opacity(0.6)
+                    }
+                }
+            Text(timestamp.formatted(date: .omitted, time: .shortened))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.38))
+        }
+        .frame(width: 42)
+    }
+
+    private func bubble(_ text: String, accent: Color, isTrailing: Bool, isStreaming: Bool = false) -> some View {
+        VStack(alignment: isTrailing ? .trailing : .leading, spacing: 8) {
+            Text(isTrailing ? "You" : (isStreaming ? "Fae · live" : "Fae"))
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(accent.opacity(0.9))
+                .textCase(.uppercase)
+
+            Text(text)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(isTrailing ? .trailing : .leading)
+                .lineSpacing(3)
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 13)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(accent.opacity(isStreaming ? 0.17 : 0.14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(accent.opacity(isStreaming ? 0.32 : 0.25), lineWidth: 1)
+                )
+        )
+        .shadow(color: accent.opacity(isStreaming ? 0.16 : 0.08), radius: 12, y: 6)
+        .frame(maxWidth: 620, alignment: isTrailing ? .trailing : .leading)
     }
 
     private func schedulerTaskCard(_ task: CoworkSchedulerTask) -> some View {
@@ -1261,7 +2152,124 @@ struct CoworkWorkspaceView: View {
         }
     }
 
-    private func quickActionPill(title: String, action: @escaping () -> Void) -> some View {
+    private func policyMenuRow<Content: View>(
+        title: String,
+        value: String,
+        icon: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        Menu {
+            content()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CoworkPalette.heather)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.52))
+                    Text(value)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.46))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            )
+        }
+        .menuStyle(.borderlessButton)
+    }
+
+    private func miniWorkspaceStat(label: String, value: some CustomStringConvertible) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.40))
+            Text(value.description)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.82))
+                .lineLimit(1)
+        }
+    }
+
+    private func sidebarSectionHeader(
+        title: String,
+        subtitle: String,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.86))
+                Text(subtitle)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.48))
+            }
+            Spacer()
+            if let action {
+                Button(action: action) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 24, height: 24)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.05))
+                                .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func miniInfoBadge(icon: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(CoworkPalette.heather)
+            Text(text)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.76))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.05))
+                .overlay(Capsule().stroke(Color.white.opacity(0.07), lineWidth: 1))
+        )
+    }
+
+    private func heroDetailColumn(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.38))
+            Text(value)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.84))
+                .lineLimit(2)
+                .contentTransition(.interpolate)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+    }
+
+    private func quickActionPill(title: String, accent: Color = CoworkPalette.heather, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -1270,8 +2278,8 @@ struct CoworkWorkspaceView: View {
                 .padding(.vertical, 8)
                 .background(
                     Capsule()
-                        .fill(Color.white.opacity(0.05))
-                        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        .fill(accent.opacity(0.14))
+                        .overlay(Capsule().stroke(accent.opacity(0.22), lineWidth: 1))
                 )
         }
         .buttonStyle(.plain)
@@ -1324,21 +2332,97 @@ struct CoworkWorkspaceView: View {
         }
     }
 
+    private var selectedBackendPreset: CoworkBackendPreset {
+        CoworkBackendPresetCatalog.preset(id: newAgentBackendPresetID) ?? CoworkLLMProviderKind.openAICompatibleExternal.defaultPreset
+    }
+
+    private var editingAgent: WorkWithFaeAgentProfile? {
+        guard let editingAgentID else { return nil }
+        return controller.agents.first(where: { $0.id == editingAgentID })
+    }
+
+    private var effectiveAPIKeyForTesting: String? {
+        let trimmed = newAgentAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        if selectedBackendPreset.id == "openrouter" {
+            return CredentialManager.retrieve(key: "llm.openrouter.api_key")
+        }
+        guard !clearStoredAPIKey, let editingAgent, let credentialKey = editingAgent.credentialKey else {
+            return nil
+        }
+        return CredentialManager.retrieve(key: credentialKey)
+    }
+
+    private var presetSuggestedModels: [String] {
+        selectedBackendPreset.suggestedModels
+    }
+
+    private var suggestedModels: [String] {
+        var seen = Set<String>()
+        return (presetSuggestedModels + discoveredModels).filter { seen.insert($0).inserted }
+    }
+
+    private func prepareNewAgentForm() {
+        let config = FaeConfig.load()
+        let preset = CoworkBackendPresetCatalog.preset(id: config.llm.remoteProviderPreset)
+            ?? CoworkBackendPresetCatalog.preset(id: "openrouter")
+            ?? CoworkLLMProviderKind.openAICompatibleExternal.defaultPreset
+        editingAgentID = nil
+        newAgentName = ""
+        newAgentBackendPresetID = preset.id
+        newAgentProvider = preset.providerKind
+        newAgentModel = config.llm.remoteModel.isEmpty ? (preset.suggestedModels.first ?? "") : config.llm.remoteModel
+        newAgentBaseURL = config.llm.remoteBaseURL.isEmpty ? preset.defaultBaseURL : config.llm.remoteBaseURL
+        newAgentAPIKey = ""
+        clearStoredAPIKey = false
+        discoveredModels = []
+        agentTestStatus = nil
+        assignNewAgentToWorkspace = true
+    }
+
+    private func prepareAgentFormForEditing(_ agent: WorkWithFaeAgentProfile) {
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+        editingAgentID = agent.id
+        newAgentName = agent.name
+        newAgentBackendPresetID = preset.id
+        newAgentProvider = agent.providerKind
+        newAgentModel = agent.modelIdentifier
+        newAgentBaseURL = agent.baseURL ?? preset.defaultBaseURL
+        newAgentAPIKey = ""
+        clearStoredAPIKey = false
+        discoveredModels = []
+        agentTestStatus = nil
+        assignNewAgentToWorkspace = controller.selectedWorkspace?.agentID == agent.id
+    }
+
     private var snapshot: CoworkWorkspaceSnapshot { controller.snapshot }
 
     private var headerSubtitle: String {
         let user = snapshot.userName ?? "you"
+        let workspaceName = controller.selectedWorkspace?.name ?? "this workspace"
+        let agentName = controller.remoteAgentBlockedByPolicy ? "Fae Local" : (controller.selectedAgent?.name ?? "Fae Local")
         if faeCore.pipelineState == .running {
-            return "Fae is ready to work with \(user), grounded in your folder, files, pasted context, and live tools."
+            if controller.isStrictLocalWorkspace {
+                return "\(workspaceName) is in strict local mode for \(user). Fae keeps this workspace on-device, even if a remote agent is attached for later use."
+            }
+            return "\(workspaceName) is attached to \(agentName). Fae keeps watching over \(user)'s work locally, while workspace context, skills, and agent setup stay close at hand."
         }
-        return "Fae is still starting. Your workspace can stay mounted so context is ready when she is."
+        return "Fae is still starting. \(workspaceName) stays mounted so context and agent setup are ready when she is."
     }
 
     private var currentWorkspaceSubtitle: String {
         if let path = controller.workspaceState.selectedDirectoryPath {
             return path
         }
-        return conversation.loadedModelLabel.isEmpty ? "Choose a folder or add files to ground Fae in what you are working on." : conversation.loadedModelLabel
+        if controller.remoteAgentBlockedByPolicy {
+            return "Strict local only is active here. Remote agents stay attached but idle until you re-enable remote execution."
+        }
+        if let agent = controller.selectedAgent {
+            return agent.isTrustedLocal ? "Trusted local agent with memory, tools, scheduler, and approvals." : "\(agent.backendDisplayName) · \(agent.notes ?? "Remote agent profile")"
+        }
+        return conversation.loadedModelLabel.isEmpty ? "Choose a folder or attach an agent to ground the workspace." : conversation.loadedModelLabel
     }
 
     private var latestAssistantExcerpt: String {

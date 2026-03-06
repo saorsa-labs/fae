@@ -792,6 +792,107 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
             NSLog("FaeCore: skills reloaded")
 
+        case "scheduler.create":
+            guard let taskName = payload["name"] as? String,
+                  !taskName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let scheduleType = payload["scheduleType"] as? String ?? payload["schedule_type"] as? String,
+                  let action = payload["action"] as? String,
+                  !action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                NSLog("FaeCore: scheduler.create missing required fields")
+                break
+            }
+
+            let rawParams = (payload["scheduleParams"] as? [String: Any])
+                ?? (payload["schedule_params"] as? [String: Any])
+                ?? [:]
+            let params = rawParams.compactMapValues { "\($0)" }
+            let requestedTools = (payload["allowedTools"] as? [String])
+                ?? (payload["allowed_tools"] as? [String])
+            let allowedTools = normalizedAutonomousSchedulerTools(from: requestedTools)
+            let id = "user_\(UUID().uuidString.prefix(8).lowercased())"
+            var task = SchedulerTask(
+                id: id,
+                name: taskName.trimmingCharacters(in: .whitespacesAndNewlines),
+                kind: "user",
+                enabled: true,
+                scheduleType: scheduleType,
+                scheduleParams: params,
+                action: action.trimmingCharacters(in: .whitespacesAndNewlines),
+                nextRun: nil,
+                allowedTools: allowedTools
+            )
+            task.nextRun = schedulerNextRunString(for: task, after: Date())
+            var tasks = readSchedulerTasks()
+            tasks.append(task)
+            do {
+                try writeSchedulerTasks(tasks)
+                NotificationCenter.default.post(
+                    name: .faePipelineState,
+                    object: nil,
+                    userInfo: ["event": "scheduler.created", "id": id]
+                )
+            } catch {
+                NSLog("FaeCore: scheduler.create failed %@", error.localizedDescription)
+            }
+
+        case "scheduler.update":
+            guard let taskId = payload["id"] as? String else {
+                NSLog("FaeCore: scheduler.update missing id")
+                break
+            }
+
+            var tasks = readSchedulerTasks()
+            guard let index = tasks.firstIndex(where: { $0.id == taskId }) else {
+                NSLog("FaeCore: scheduler.update unknown task %@", taskId)
+                break
+            }
+
+            if let name = payload["name"] as? String,
+               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                tasks[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let enabled = payload["enabled"] as? Bool {
+                tasks[index].enabled = enabled
+                Task { await scheduler?.setTaskEnabled(id: taskId, enabled: enabled) }
+            }
+            if let scheduleType = payload["scheduleType"] as? String ?? payload["schedule_type"] as? String {
+                tasks[index].scheduleType = scheduleType
+            }
+            let rawParams = (payload["scheduleParams"] as? [String: Any])
+                ?? (payload["schedule_params"] as? [String: Any])
+            if let rawParams {
+                tasks[index].scheduleParams = rawParams.compactMapValues { "\($0)" }
+            }
+            if let action = payload["action"] as? String,
+               !action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                tasks[index].action = action.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if payload.keys.contains("allowedTools") || payload.keys.contains("allowed_tools") {
+                let requestedTools = (payload["allowedTools"] as? [String])
+                    ?? (payload["allowed_tools"] as? [String])
+                tasks[index].allowedTools = normalizedAutonomousSchedulerTools(from: requestedTools)
+            }
+            if payload.keys.contains("scheduleType") || payload.keys.contains("schedule_type")
+                || payload.keys.contains("scheduleParams") || payload.keys.contains("schedule_params")
+                || (payload["enabled"] as? Bool == true)
+            {
+                tasks[index].nextRun = schedulerNextRunString(for: tasks[index], after: Date())
+            }
+
+            do {
+                try writeSchedulerTasks(tasks)
+                NotificationCenter.default.post(
+                    name: .faePipelineState,
+                    object: nil,
+                    userInfo: ["event": "scheduler.updated", "id": taskId]
+                )
+            } catch {
+                NSLog("FaeCore: scheduler.update failed %@", error.localizedDescription)
+            }
+
         case "scheduler.delete":
             if let taskId = payload["id"] as? String {
                 Task { await scheduler?.deleteUserTask(id: taskId) }
@@ -1032,6 +1133,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     await coordinator.setToolMode(value)
                 }
             }
+            // full_no_approval means all tools execute without approval popups.
+            // Sync the ApprovedToolsStore so the broker's shouldAutoApprove path
+            // short-circuits and bypasses confirmation for every tool in this mode.
+            Task {
+                await ApprovedToolsStore.shared.setApproveAll(value == "full_no_approval")
+            }
 
         case "privacy.mode":
             guard let value = value as? String,
@@ -1051,6 +1158,21 @@ final class FaeCore: ObservableObject, HostCommandSender {
             else { return }
             config.llm.voiceModelPreset = value
             persistConfig(reason: "config.patch.llm.voice_model_preset")
+
+        case "llm.remote_provider_preset":
+            guard let value = sanitizedString(value), !value.isEmpty else { return }
+            config.llm.remoteProviderPreset = value
+            persistConfig(reason: "config.patch.llm.remote_provider_preset")
+
+        case "llm.remote_base_url":
+            guard let value = sanitizedString(value), !value.isEmpty else { return }
+            config.llm.remoteBaseURL = value
+            persistConfig(reason: "config.patch.llm.remote_base_url")
+
+        case "llm.remote_model":
+            guard let value = sanitizedString(value), !value.isEmpty else { return }
+            config.llm.remoteModel = value
+            persistConfig(reason: "config.patch.llm.remote_model")
 
         case "llm.thinking_enabled":
             guard let value = value as? Bool else { return }

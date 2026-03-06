@@ -32,10 +32,20 @@ struct SettingsView: View {
                         Label("Overview", systemImage: "rectangle.grid.2x2")
                     }
 
+                SettingsModelsPerformanceTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Models & Performance", systemImage: "cpu")
+                    }
+
                 SettingsSkillsChannelsWorkspace(commandSender: commandSender)
                     .environmentObject(auxiliaryWindows)
                     .tabItem {
                         Label("Skills & Channels", systemImage: "bubble.left.and.bubble.right")
+                    }
+
+                SettingsOtherLLMsTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Other LLMs", systemImage: "network.badge.shield.half.filled")
                     }
 
                 SettingsPrivacySecurityTab(
@@ -135,7 +145,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(minWidth: 500, minHeight: 420)
+        .frame(minWidth: 920, minHeight: 680)
         .onAppear {
             showDeveloper = NSEvent.modifierFlags.contains(.option)
         }

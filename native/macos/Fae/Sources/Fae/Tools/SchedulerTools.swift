@@ -220,7 +220,7 @@ struct SchedulerListTool: Tool {
             default:
                 schedule = task.scheduleType
             }
-            return "- \(task.name) [\(task.kind)] — \(schedule) (\(status))"
+            return "- \(task.name) (id: \(task.id)) [\(task.kind)] — \(schedule) (\(status))"
         }
 
         return .success("\(tasks.count) scheduled tasks:\n" + lines.joined(separator: "\n"))

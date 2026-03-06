@@ -11,9 +11,11 @@ struct ReadTool: Tool {
     let example = #"<tool_call>{"name":"read","arguments":{"path":"~/Documents/notes.txt"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
-        guard let path = input["path"] as? String else {
+        guard let rawPath = input["path"] as? String else {
             return .error("Missing required parameter: path")
         }
+        // Trim whitespace/newlines that may arise from XML parameter formatting.
+        let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let expanded = NSString(string: path).expandingTildeInPath
         guard FileManager.default.fileExists(atPath: expanded) else {
             return .error("File not found: \(path)")
@@ -78,12 +80,14 @@ struct EditTool: Tool {
     let example = #"<tool_call>{"name":"edit","arguments":{"path":"~/config.toml","old_string":"timeout = 30","new_string":"timeout = 60"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
-        guard let path = input["path"] as? String,
+        guard let rawPath = input["path"] as? String,
               let oldString = input["old_string"] as? String,
               let newString = input["new_string"] as? String
         else {
             return .error("Missing required parameters: path, old_string, new_string")
         }
+        // Trim whitespace/newlines that may arise from XML parameter formatting.
+        let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Validate write path against blocklist.
         switch PathPolicy.validateWritePath(path) {

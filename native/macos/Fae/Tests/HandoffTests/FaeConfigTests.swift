@@ -14,6 +14,9 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertNil(config.userName)
         XCTAssertEqual(config.audio.inputSampleRate, 16_000)
         XCTAssertEqual(config.llm.voiceModelPreset, "auto")
+        XCTAssertEqual(config.llm.remoteProviderPreset, "openrouter")
+        XCTAssertEqual(config.llm.remoteBaseURL, "https://openrouter.ai/api")
+        XCTAssertEqual(config.llm.remoteModel, "openai/gpt-4.1-mini")
         XCTAssertTrue(config.memory.enabled)
         XCTAssertTrue(config.vision.enabled)
         XCTAssertTrue(config.awareness.enabled)
@@ -70,6 +73,9 @@ final class FaeConfigTests: XCTestCase {
         original.llm.maxTokens = 1024
         original.llm.enableVision = true
         original.llm.voiceModelPreset = "qwen3_4b"
+        original.llm.remoteProviderPreset = "openrouter"
+        original.llm.remoteBaseURL = "https://openrouter.ai/api"
+        original.llm.remoteModel = "anthropic/claude-sonnet-4"
 
         original.tts.voice = "custom"
         original.tts.speed = 0.95
@@ -102,6 +108,9 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(loaded.llm.maxTokens, 1024)
         XCTAssertTrue(loaded.llm.enableVision)
         XCTAssertEqual(loaded.llm.voiceModelPreset, "qwen3_4b")
+        XCTAssertEqual(loaded.llm.remoteProviderPreset, "openrouter")
+        XCTAssertEqual(loaded.llm.remoteBaseURL, "https://openrouter.ai/api")
+        XCTAssertEqual(loaded.llm.remoteModel, "anthropic/claude-sonnet-4")
 
         XCTAssertEqual(loaded.tts.voice, "custom")
         XCTAssertEqual(loaded.tts.speed, 0.95, accuracy: 0.0001)

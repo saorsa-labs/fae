@@ -135,6 +135,10 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
     let isBuiltin: Bool
     let failureStreak: Int
     let lastError: String?
+    let scheduleType: String
+    let scheduleParams: [String: String]
+    let action: String
+    let allowedTools: [String]
 
     static func load(
         from url: URL = resolvedSchedulerFileURL(),
@@ -172,16 +176,20 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
                 enabled: status.enabled,
                 isBuiltin: true,
                 failureStreak: 0,
-                lastError: nil
+                lastError: nil,
+                scheduleType: "builtin",
+                scheduleParams: [:],
+                action: id,
+                allowedTools: []
             )
         }
 
         return tasksByID.values.sorted { lhs, rhs in
+            if lhs.isBuiltin != rhs.isBuiltin {
+                return !lhs.isBuiltin && rhs.isBuiltin
+            }
             if lhs.enabled != rhs.enabled {
                 return lhs.enabled && !rhs.enabled
-            }
-            if lhs.isBuiltin != rhs.isBuiltin {
-                return lhs.isBuiltin && !rhs.isBuiltin
             }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
@@ -205,6 +213,12 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
             ?? (dict["lastRun"] as? String).flatMap(iso8601Date(from:))
 
         let name = (dict["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? title(from: id)
+        let scheduleType = dict["scheduleType"] as? String ?? "interval"
+        let scheduleParams = (dict["scheduleParams"] as? [String: Any])?.compactMapValues { "\($0)" } ?? [:]
+        let action = dict["action"] as? String ?? id
+        let allowedTools = (dict["allowedTools"] as? [String])
+            ?? (dict["allowed_tools"] as? [String])
+            ?? []
         let scheduleDescription = scheduleDescription(
             for: id,
             legacySchedule: dict["schedule"],
@@ -221,7 +235,11 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
             enabled: enabled,
             isBuiltin: kind == "builtin",
             failureStreak: failureStreak,
-            lastError: lastError
+            lastError: lastError,
+            scheduleType: scheduleType,
+            scheduleParams: scheduleParams,
+            action: action,
+            allowedTools: allowedTools
         )
     }
 

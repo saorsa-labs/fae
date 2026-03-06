@@ -131,11 +131,24 @@ actor SpeakerProfileStore {
     /// Use `excludingRoles` to skip certain profiles (e.g. `.faeSelf` for echo
     /// detection, which should be checked separately).
     func match(embedding: [Float], threshold: Float, excludingRoles: Set<SpeakerRole> = []) -> MatchResult? {
+        guard let best = bestMatch(embedding: embedding, excludingRoles: excludingRoles),
+              best.similarity >= threshold
+        else {
+            return nil
+        }
+        return best
+    }
+
+    /// Return the closest enrolled profile regardless of threshold.
+    ///
+    /// Useful for preview / short-window verification where callers want to apply
+    /// custom accept/reject bands around the similarity score.
+    func bestMatch(embedding: [Float], excludingRoles: Set<SpeakerRole> = []) -> MatchResult? {
         var best: MatchResult?
 
         for profile in profiles where !excludingRoles.contains(profile.role) {
             let sim = Self.cosineSimilarity(embedding, profile.centroid)
-            if sim >= threshold, sim > (best?.similarity ?? 0) {
+            if sim > (best?.similarity ?? -.greatestFiniteMagnitude) {
                 best = MatchResult(
                     profileId: profile.id,
                     label: profile.label,

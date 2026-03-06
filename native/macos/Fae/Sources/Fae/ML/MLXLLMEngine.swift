@@ -17,13 +17,16 @@ actor MLXLLMEngine: LLMEngine {
         do {
             var config = ModelConfiguration(id: modelID)
             // Qwen3.5 models use XML parameter format for tool calls:
-            //   <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
-            // The default .json ToolCallProcessor can't parse XML content and silently
-            // discards tool calls. Setting .xmlFunction activates XMLFunctionParser which
-            // correctly handles this format.
-            if modelID.lowercased().contains("qwen3.5") {
+            //   <tool_call>{"name":"...","arguments":{...}}</tool_call>
+            // The default ToolCallProcessor can't parse XML content and silently
+            // discards tool calls. Setting .xmlFunction activates XMLFunctionParser
+            // which correctly handles this format.
+            // NOTE: With .xmlFunction set, passing tools=nil causes 0-token generation.
+            // This is handled by always passing an empty array when tool_mode=off —
+            // see MLXLLMEngine.generate() where options.tools drives userInput.tools.
+            if modelID.lowercased().contains("qwen") {
                 config.toolCallFormat = .xmlFunction
-                NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen3.5")
+                NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen model")
             }
             container = try await LLMModelFactory.shared.loadContainer(configuration: config)
             isLoaded = true
@@ -117,17 +120,32 @@ actor MLXLLMEngine: LLMEngine {
                     // Pass native tool specs so the chat template enables tool calling mode.
                     // Without this, Qwen3.5 thinks about tools in <think> but never emits
                     // actual tool calls — the template needs `tools` to activate that behavior.
-                    if let toolSpecs = options.tools {
-                        userInput.tools = toolSpecs
-                    }
+                    // IMPORTANT: With toolCallFormat=.xmlFunction, passing tools=nil causes
+                    // 0-token generation (the xmlFunction ToolCallProcessor interferes when
+                    // no tools context is present). Always pass an array — either the real
+                    // specs or an empty array to signal "no tools available" safely.
+                    userInput.tools = options.tools ?? []
 
                     let lmInput = try await container.prepare(input: userInput)
 
+                    // Build GenerateParameters with KV cache optimization (Phase 1).
+                    // Based on research into Ollama, mistral.rs, and LM Studio pipelines:
+                    // - kvBits: 4-bit KV quantization → 4x memory savings
+                    // - maxKVSize: Enables RotatingKVCache for bounded memory
+                    // - quantizedKVStart: Progressive quantization for quality
+                    // - repetitionContextSize: Larger window for better rep handling
+                    // - prefillStepSize: Tuned per model size
                     let params = GenerateParameters(
                         maxTokens: options.maxTokens,
+                        maxKVSize: options.maxKVSize,
+                        kvBits: options.kvBits,
+                        kvGroupSize: options.kvGroupSize,
+                        quantizedKVStart: options.quantizedKVStart,
                         temperature: options.temperature,
                         topP: options.topP,
-                        repetitionPenalty: options.repetitionPenalty
+                        repetitionPenalty: options.repetitionPenalty,
+                        repetitionContextSize: options.repetitionContextSize,
+                        prefillStepSize: options.prefillStepSize ?? 512
                     )
 
                     let stream = try await container.generate(
@@ -135,7 +153,7 @@ actor MLXLLMEngine: LLMEngine {
                         parameters: params
                     )
 
-                    // With .xmlFunction format (inline), the ToolCallProcessor passes
+                    // With .xmlFunction format, the ToolCallProcessor passes
                     // raw XML text through as .chunk events AND emits .toolCall events
                     // when parsing succeeds. We suppress the raw XML text between
                     // <tool_call>...</tool_call> tags so PipelineCoordinator only sees

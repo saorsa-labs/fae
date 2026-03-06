@@ -80,7 +80,7 @@ struct WorkWithFaeAttachment: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-struct WorkWithFaeWorkspaceState: Codable, Sendable {
+struct WorkWithFaeWorkspaceState: Codable, Hashable, Sendable {
     var selectedDirectoryPath: String?
     var indexedFiles: [WorkWithFaeFileEntry]
     var attachments: [WorkWithFaeAttachment]
@@ -114,6 +114,225 @@ struct WorkWithFaePreparedPrompt: Sendable, Equatable {
     let containsLocalOnlyContext: Bool
 }
 
+enum WorkWithFaeRemoteExecutionPolicy: String, Codable, CaseIterable, Hashable, Identifiable, Sendable {
+    case allowRemote
+    case strictLocalOnly
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .allowRemote:
+            return "Remote allowed"
+        case .strictLocalOnly:
+            return "Strict local only"
+        }
+    }
+
+    var shortDescription: String {
+        switch self {
+        case .allowRemote:
+            return "Fae may use attached remote agents for this workspace."
+        case .strictLocalOnly:
+            return "Fae keeps this workspace on-device and blocks remote agent execution."
+        }
+    }
+}
+
+enum WorkWithFaeCompareBehavior: String, Codable, CaseIterable, Hashable, Identifiable, Sendable {
+    case onDemand
+    case alwaysCompare
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .onDemand:
+            return "Compare on demand"
+        case .alwaysCompare:
+            return "Always compare on send"
+        }
+    }
+
+    var shortDescription: String {
+        switch self {
+        case .onDemand:
+            return "Use the Compare button only when you want multi-agent fanout."
+        case .alwaysCompare:
+            return "Send runs a comparison first when more than one agent is available."
+        }
+    }
+}
+
+struct WorkWithFaeWorkspacePolicy: Codable, Hashable, Sendable {
+    var remoteExecution: WorkWithFaeRemoteExecutionPolicy
+    var compareBehavior: WorkWithFaeCompareBehavior
+    var consensusAgentIDs: [String]
+
+    static let `default` = WorkWithFaeWorkspacePolicy(
+        remoteExecution: .allowRemote,
+        compareBehavior: .onDemand,
+        consensusAgentIDs: []
+    )
+
+    var usesAutomaticConsensusSelection: Bool {
+        consensusAgentIDs.isEmpty
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case remoteExecution
+        case compareBehavior
+        case consensusAgentIDs
+    }
+
+    init(
+        remoteExecution: WorkWithFaeRemoteExecutionPolicy,
+        compareBehavior: WorkWithFaeCompareBehavior,
+        consensusAgentIDs: [String] = []
+    ) {
+        self.remoteExecution = remoteExecution
+        self.compareBehavior = compareBehavior
+        self.consensusAgentIDs = consensusAgentIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        remoteExecution = try container.decodeIfPresent(WorkWithFaeRemoteExecutionPolicy.self, forKey: .remoteExecution) ?? .allowRemote
+        compareBehavior = try container.decodeIfPresent(WorkWithFaeCompareBehavior.self, forKey: .compareBehavior) ?? .onDemand
+        consensusAgentIDs = try container.decodeIfPresent([String].self, forKey: .consensusAgentIDs) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(remoteExecution, forKey: .remoteExecution)
+        try container.encode(compareBehavior, forKey: .compareBehavior)
+        try container.encode(consensusAgentIDs, forKey: .consensusAgentIDs)
+    }
+}
+
+struct WorkWithFaeAgentProfile: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    var name: String
+    var providerKind: CoworkLLMProviderKind
+    var backendPresetID: String?
+    var modelIdentifier: String
+    var baseURL: String?
+    var credentialKey: String?
+    var notes: String?
+    var createdAt: Date
+
+    var isTrustedLocal: Bool { providerKind == .faeLocalhost }
+
+    var backendPreset: CoworkBackendPreset? {
+        CoworkBackendPresetCatalog.preset(id: backendPresetID)
+    }
+
+    var backendDisplayName: String {
+        backendPreset?.displayName ?? providerKind.displayName
+    }
+
+    static var faeLocal: WorkWithFaeAgentProfile {
+        WorkWithFaeAgentProfile(
+            id: "fae-local",
+            name: "Fae Local",
+            providerKind: .faeLocalhost,
+            backendPresetID: "fae-local",
+            modelIdentifier: "fae-agent-local",
+            baseURL: "http://127.0.0.1:7434",
+            credentialKey: nil,
+            notes: "Trusted local runtime with memory, tools, scheduler, and approvals.",
+            createdAt: Date()
+        )
+    }
+}
+
+struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
+    let id: UUID
+    var name: String
+    var agentID: String
+    var policy: WorkWithFaeWorkspacePolicy
+    var state: WorkWithFaeWorkspaceState
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        agentID: String,
+        policy: WorkWithFaeWorkspacePolicy = .default,
+        state: WorkWithFaeWorkspaceState = .empty,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.agentID = agentID
+        self.policy = policy
+        self.state = state
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case agentID
+        case policy
+        case state
+        case createdAt
+        case updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        agentID = try container.decode(String.self, forKey: .agentID)
+        policy = try container.decodeIfPresent(WorkWithFaeWorkspacePolicy.self, forKey: .policy) ?? .default
+        state = try container.decode(WorkWithFaeWorkspaceState.self, forKey: .state)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(agentID, forKey: .agentID)
+        try container.encode(policy, forKey: .policy)
+        try container.encode(state, forKey: .state)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+    }
+}
+
+struct WorkWithFaeWorkspaceRegistry: Codable, Sendable {
+    var selectedWorkspaceID: UUID?
+    var workspaces: [WorkWithFaeWorkspaceRecord]
+    var agents: [WorkWithFaeAgentProfile]
+
+    static var `default`: WorkWithFaeWorkspaceRegistry {
+        let localAgent = WorkWithFaeAgentProfile.faeLocal
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: localAgent.id)
+        return WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: [localAgent]
+        )
+    }
+}
+
+struct WorkWithFaeConsensusResult: Identifiable, Equatable, Sendable {
+    let agentID: String
+    let agentName: String
+    let providerLabel: String
+    let isTrustedLocal: Bool
+    let responseText: String?
+    let errorText: String?
+
+    var id: String { agentID }
+}
+
 enum WorkWithFaeWorkspaceStore {
     private static let maxIndexedFiles = 800
     private static let ignoredDirectoryNames: Set<String> = [
@@ -130,24 +349,343 @@ enum WorkWithFaeWorkspaceStore {
         storageURL.deletingLastPathComponent().appendingPathComponent("workspace-attachments", isDirectory: true)
     }
 
-    static func load() -> WorkWithFaeWorkspaceState {
+    static func loadRegistry() -> WorkWithFaeWorkspaceRegistry {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let data = try? Data(contentsOf: storageURL),
-              let decoded = try? decoder.decode(WorkWithFaeWorkspaceState.self, from: data)
-        else {
-            return .empty
+        guard let data = try? Data(contentsOf: storageURL) else {
+            return .default
         }
-        return decoded
+        if let decoded = try? decoder.decode(WorkWithFaeWorkspaceRegistry.self, from: data) {
+            return normalized(decoded)
+        }
+        if let legacyState = try? decoder.decode(WorkWithFaeWorkspaceState.self, from: data) {
+            let localAgent = WorkWithFaeAgentProfile.faeLocal
+            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: localAgent.id, state: legacyState)
+            return WorkWithFaeWorkspaceRegistry(
+                selectedWorkspaceID: workspace.id,
+                workspaces: [workspace],
+                agents: [localAgent]
+            )
+        }
+        return .default
     }
 
-    static func save(_ state: WorkWithFaeWorkspaceState) {
+    static func saveRegistry(_ registry: WorkWithFaeWorkspaceRegistry) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(state) else { return }
+        guard let data = try? encoder.encode(normalized(registry)) else { return }
         try? FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: storageURL, options: .atomic)
+    }
+
+    static func load() -> WorkWithFaeWorkspaceState {
+        let registry = loadRegistry()
+        return selectedWorkspace(in: registry)?.state ?? .empty
+    }
+
+    static func save(_ state: WorkWithFaeWorkspaceState) {
+        var registry = loadRegistry()
+        if let selectedID = registry.selectedWorkspaceID,
+           let index = registry.workspaces.firstIndex(where: { $0.id == selectedID })
+        {
+            registry.workspaces[index].state = state
+            registry.workspaces[index].updatedAt = Date()
+            saveRegistry(registry)
+            return
+        }
+
+        if registry.workspaces.isEmpty {
+            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: normalized(registry).agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id, state: state)
+            registry.workspaces = [workspace]
+            registry.selectedWorkspaceID = workspace.id
+        }
+        saveRegistry(registry)
+    }
+
+    static func selectedWorkspace(in registry: WorkWithFaeWorkspaceRegistry) -> WorkWithFaeWorkspaceRecord? {
+        if let selectedWorkspaceID = registry.selectedWorkspaceID,
+           let selected = registry.workspaces.first(where: { $0.id == selectedWorkspaceID })
+        {
+            return selected
+        }
+        return registry.workspaces.first
+    }
+
+    static func selectedAgent(in registry: WorkWithFaeWorkspaceRegistry) -> WorkWithFaeAgentProfile? {
+        guard let workspace = selectedWorkspace(in: registry) else { return registry.agents.first }
+        return registry.agents.first(where: { $0.id == workspace.agentID }) ?? registry.agents.first
+    }
+
+    static func executionAgent(in registry: WorkWithFaeWorkspaceRegistry) -> WorkWithFaeAgentProfile? {
+        guard let workspace = selectedWorkspace(in: normalized(registry)) else {
+            return normalized(registry).agents.first
+        }
+        return executionAgent(for: workspace, agents: normalized(registry).agents)
+    }
+
+    static func executionAgent(
+        for workspace: WorkWithFaeWorkspaceRecord,
+        agents: [WorkWithFaeAgentProfile]
+    ) -> WorkWithFaeAgentProfile? {
+        if workspace.policy.remoteExecution == .strictLocalOnly {
+            return agents.first(where: { $0.id == WorkWithFaeAgentProfile.faeLocal.id }) ?? agents.first
+        }
+        return agents.first(where: { $0.id == workspace.agentID }) ?? agents.first
+    }
+
+    static func registryByUpsertingAgent(
+        _ agent: WorkWithFaeAgentProfile,
+        assignToSelectedWorkspace: Bool,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        if let index = copy.agents.firstIndex(where: { $0.id == agent.id }) {
+            copy.agents[index] = agent
+        } else {
+            copy.agents.append(agent)
+        }
+
+        if assignToSelectedWorkspace,
+           let selectedID = copy.selectedWorkspaceID,
+           let workspaceIndex = copy.workspaces.firstIndex(where: { $0.id == selectedID })
+        {
+            copy.workspaces[workspaceIndex].agentID = agent.id
+            copy.workspaces[workspaceIndex].updatedAt = Date()
+        }
+
+        return normalized(copy)
+    }
+
+    static func registryByRemovingAgent(
+        id agentID: String,
+        from registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        guard agentID != WorkWithFaeAgentProfile.faeLocal.id else {
+            return normalized(registry)
+        }
+
+        var copy = normalized(registry)
+        copy.agents.removeAll { $0.id == agentID }
+        for index in copy.workspaces.indices where copy.workspaces[index].agentID == agentID {
+            copy.workspaces[index].agentID = WorkWithFaeAgentProfile.faeLocal.id
+            copy.workspaces[index].updatedAt = Date()
+        }
+        return normalized(copy)
+    }
+
+    static func registryByUpdatingWorkspaceName(
+        workspaceID: UUID?,
+        name: String,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
+        guard !trimmed.isEmpty,
+              let targetWorkspaceID,
+              let index = copy.workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            return copy
+        }
+        copy.workspaces[index].name = trimmed
+        copy.workspaces[index].updatedAt = Date()
+        return normalized(copy)
+    }
+
+    static func registryByDuplicatingWorkspace(
+        workspaceID: UUID?,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
+        guard let targetWorkspaceID,
+              let workspace = copy.workspaces.first(where: { $0.id == targetWorkspaceID })
+        else {
+            return copy
+        }
+
+        let duplicate = WorkWithFaeWorkspaceRecord(
+            name: duplicatedWorkspaceName(from: workspace.name, existingNames: copy.workspaces.map(\.name)),
+            agentID: workspace.agentID,
+            policy: workspace.policy,
+            state: workspace.state
+        )
+        copy.workspaces.append(duplicate)
+        copy.selectedWorkspaceID = duplicate.id
+        return normalized(copy)
+    }
+
+    static func registryByRemovingWorkspace(
+        workspaceID: UUID?,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        guard copy.workspaces.count > 1 else {
+            return copy
+        }
+        let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
+        guard let targetWorkspaceID,
+              let index = copy.workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            return copy
+        }
+
+        copy.workspaces.remove(at: index)
+        if copy.selectedWorkspaceID == targetWorkspaceID {
+            copy.selectedWorkspaceID = copy.workspaces.indices.contains(index)
+                ? copy.workspaces[index].id
+                : copy.workspaces.last?.id
+        }
+        return normalized(copy)
+    }
+
+    static func registryByUpdatingWorkspacePolicy(
+        workspaceID: UUID?,
+        policy: WorkWithFaeWorkspacePolicy,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
+        guard let targetWorkspaceID,
+              let index = copy.workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            return copy
+        }
+        copy.workspaces[index].policy = policy
+        copy.workspaces[index].updatedAt = Date()
+        return normalized(copy)
+    }
+
+    static func registryByTogglingConsensusAgent(
+        workspaceID: UUID?,
+        agentID: String,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
+        guard let targetWorkspaceID,
+              let index = copy.workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            return copy
+        }
+
+        var policy = copy.workspaces[index].policy
+        if let existingIndex = policy.consensusAgentIDs.firstIndex(of: agentID) {
+            policy.consensusAgentIDs.remove(at: existingIndex)
+        } else {
+            policy.consensusAgentIDs.append(agentID)
+        }
+        copy.workspaces[index].policy = policy
+        copy.workspaces[index].updatedAt = Date()
+        return normalized(copy)
+    }
+
+    static func registryByResettingConsensusAgents(
+        workspaceID: UUID?,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
+        guard let targetWorkspaceID,
+              let index = copy.workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            return copy
+        }
+        copy.workspaces[index].policy.consensusAgentIDs = []
+        copy.workspaces[index].updatedAt = Date()
+        return normalized(copy)
+    }
+
+    static func consensusAgents(
+        selectedAgentID: String?,
+        agents: [WorkWithFaeAgentProfile],
+        policy: WorkWithFaeWorkspacePolicy = .default,
+        limit: Int = 4
+    ) -> [WorkWithFaeAgentProfile] {
+        let normalizedAgents = agents.sorted { lhs, rhs in
+            if lhs.isTrustedLocal != rhs.isTrustedLocal {
+                return lhs.isTrustedLocal && !rhs.isTrustedLocal
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+
+        let local = normalizedAgents.first(where: { $0.id == WorkWithFaeAgentProfile.faeLocal.id })
+
+        if policy.remoteExecution == .strictLocalOnly {
+            return local.map { [$0] } ?? Array(normalizedAgents.prefix(1))
+        }
+
+        if !policy.consensusAgentIDs.isEmpty {
+            var seen = Set<String>()
+            return policy.consensusAgentIDs
+                .compactMap { agentID in normalizedAgents.first(where: { $0.id == agentID }) }
+                .filter { seen.insert($0.id).inserted }
+                .prefix(limit)
+                .map { $0 }
+        }
+
+        var seen = Set<String>()
+        let selected = normalizedAgents.first(where: { $0.id == selectedAgentID })
+        return ([selected, local].compactMap { $0 } + normalizedAgents)
+            .filter { seen.insert($0.id).inserted }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    static func normalized(_ registry: WorkWithFaeWorkspaceRegistry) -> WorkWithFaeWorkspaceRegistry {
+        var copy = registry
+        copy.agents = copy.agents.map { agent in
+            var mutable = agent
+            if mutable.backendPresetID == nil {
+                mutable.backendPresetID = CoworkBackendPresetCatalog.defaultPreset(for: mutable.providerKind).id
+            }
+            if mutable.baseURL == nil {
+                mutable.baseURL = mutable.providerKind.defaultBaseURL
+            }
+            return mutable
+        }
+        if !copy.agents.contains(where: { $0.id == WorkWithFaeAgentProfile.faeLocal.id }) {
+            copy.agents.insert(WorkWithFaeAgentProfile.faeLocal, at: 0)
+        }
+        if copy.workspaces.isEmpty {
+            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: copy.agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id)
+            copy.workspaces = [workspace]
+            copy.selectedWorkspaceID = workspace.id
+        }
+        if copy.selectedWorkspaceID == nil || !copy.workspaces.contains(where: { $0.id == copy.selectedWorkspaceID }) {
+            copy.selectedWorkspaceID = copy.workspaces.first?.id
+        }
+        copy.workspaces = copy.workspaces.map { workspace in
+            var mutable = workspace
+            if !copy.agents.contains(where: { $0.id == workspace.agentID }) {
+                mutable.agentID = WorkWithFaeAgentProfile.faeLocal.id
+            }
+            let validAgentIDs = Set(copy.agents.map(\.id))
+            mutable.policy.consensusAgentIDs = mutable.policy.consensusAgentIDs.filter { validAgentIDs.contains($0) }
+            if mutable.policy.remoteExecution == .strictLocalOnly {
+                mutable.policy.consensusAgentIDs = mutable.policy.consensusAgentIDs.filter { $0 == WorkWithFaeAgentProfile.faeLocal.id }
+            }
+            return mutable
+        }
+        return copy
+    }
+
+    private static func duplicatedWorkspaceName(from baseName: String, existingNames: [String]) -> String {
+        let normalizedExisting = Set(existingNames.map { $0.lowercased() })
+        let firstCandidate = "\(baseName) Copy"
+        if !normalizedExisting.contains(firstCandidate.lowercased()) {
+            return firstCandidate
+        }
+
+        var index = 2
+        while true {
+            let candidate = "\(baseName) Copy \(index)"
+            if !normalizedExisting.contains(candidate.lowercased()) {
+                return candidate
+            }
+            index += 1
+        }
     }
 
     static func scanDirectory(_ root: URL) -> [WorkWithFaeFileEntry] {

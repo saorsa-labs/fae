@@ -1,220 +1,135 @@
 import AppKit
 import SwiftUI
 
-/// Skills management tab: directory-based skills with type/tier badges,
-/// Apple app integrations, and system capabilities.
-///
-/// Apple apps are split into two tiers:
-/// - **Core Apps** (5): have dedicated LLM tools with structured data access
-/// - **Extended Apps** (13): accessible via AppleScript through Desktop Automation
-///
-/// System capabilities (Microphone, Files, Notifications, Location, Desktop Automation)
-/// are shown in a separate section. Each row links to the relevant macOS Privacy pane.
+/// Skills management tab focused on personal skill CRUD while keeping built-in
+/// Apple/system integrations available but visually de-emphasized.
 struct SettingsSkillsTab: View {
     let commandSender: HostCommandSender?
 
     @State private var showingImport: Bool = false
     @State private var discoveredSkills: [SkillMetadata] = []
+    @State private var editorDraft: EditableSkillDraft?
+    @State private var deletingSkillName: String?
+    @State private var showSharedSkills: Bool = true
+    @State private var showAppleApps: Bool = false
+    @State private var showSystemCapabilities: Bool = false
+
+    private let coreAppleApps: [PermissionLink] = [
+        .init(name: "Calendar", description: "View, create, and modify events", icon: "calendar", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"),
+        .init(name: "Contacts", description: "Search and manage your address book", icon: "person.crop.circle", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts"),
+        .init(name: "Mail", description: "Read, search, and compose emails", icon: "envelope", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Notes", description: "Read, create, and append to notes", icon: "note.text", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Reminders", description: "Create and manage tasks and reminders", icon: "checklist", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"),
+    ]
+
+    private let extendedAppleApps: [PermissionLink] = [
+        .init(name: "Messages", description: "Send and read iMessages and SMS", icon: "message", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Music", description: "Playback control and library search", icon: "music.note", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Safari", description: "Open URLs and manage bookmarks", icon: "safari", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Finder", description: "File management and folder navigation", icon: "folder.badge.gearshape", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Shortcuts", description: "Run and manage Shortcuts automations", icon: "square.on.square.badge.person.crop", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Photos", description: "Browse and search your photo library", icon: "photo.on.rectangle", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"),
+        .init(name: "Maps", description: "Directions, local search, and places", icon: "map", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "FaceTime", description: "Initiate audio and video calls", icon: "video", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Pages", description: "Create and edit documents", icon: "doc.richtext", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Numbers", description: "Create and edit spreadsheets", icon: "tablecells", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Keynote", description: "Create and edit presentations", icon: "play.rectangle", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Books", description: "Browse and manage your book library", icon: "books.vertical", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+        .init(name: "Podcasts", description: "Browse and control podcast playback", icon: "antenna.radiowaves.left.and.right", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+    ]
+
+    private let systemCapabilities: [PermissionLink] = [
+        .init(name: "Microphone", description: "Voice input for conversations", icon: "mic.fill", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"),
+        .init(name: "Files", description: "Read and write documents on disk", icon: "folder", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+        .init(name: "Notifications", description: "Send proactive alerts and reminders", icon: "bell", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Notifications"),
+        .init(name: "Location", description: "Weather, local search, and directions", icon: "location", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"),
+        .init(name: "Desktop Automation", description: "AppleScript, screenshots, and window management", icon: "gearshape.2", settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"),
+    ]
+
+    private var personalSkills: [SkillMetadata] {
+        discoveredSkills.filter { $0.tier == .personal }
+    }
+
+    private var sharedSkills: [SkillMetadata] {
+        discoveredSkills.filter { $0.tier != .personal }
+    }
 
     var body: some View {
         Form {
-            // MARK: - Header
-
             Section {
-                Text("Fae can work with 18 Apple apps and 5 system capabilities. Core apps have dedicated tools; extended apps work through Desktop Automation. Grant access in System Settings when prompted, or open the relevant pane below.")
+                Text("Personal skills are first-class here: create, edit, import, and remove them directly. Built-in and Apple integrations are still available, but tucked away so the screen stays focused.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            // MARK: - Installed Skills
+            Section("Personal Skills") {
+                HStack {
+                    Button {
+                        editorDraft = .new()
+                    } label: {
+                        Label("Create Skill", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
 
-            Section("Skills") {
-                Text("Directory-based skills following the Agent Skills standard. Each skill has a SKILL.md with instructions and optional Python scripts.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-
-                Button {
-                    showingImport = true
-                } label: {
-                    Label("Import Skill from URL", systemImage: "arrow.down.doc")
+                    Button {
+                        showingImport = true
+                    } label: {
+                        Label("Import Skill", systemImage: "arrow.down.doc")
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
 
-                if discoveredSkills.isEmpty {
-                    Text("No skills installed")
+                if personalSkills.isEmpty {
+                    Text("No personal skills yet. Create one here or import an Agent Skill.")
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                         .padding(.vertical, 4)
                 } else {
-                    ForEach(discoveredSkills, id: \.name) { skill in
-                        skillMetadataRow(skill)
+                    ForEach(personalSkills, id: \.name) { skill in
+                        skillMetadataRow(skill, allowEditing: true)
                     }
                 }
             }
 
-            // MARK: - Core Apple Apps (dedicated tools)
-
-            Section("Core Apple Apps") {
-                Text("These apps have dedicated tools with structured data access.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-
-                skillRow(
-                    name: "Calendar",
-                    description: "View, create, and modify events",
-                    icon: "calendar",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"
-                )
-                skillRow(
-                    name: "Contacts",
-                    description: "Search and manage your address book",
-                    icon: "person.crop.circle",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts"
-                )
-                skillRow(
-                    name: "Mail",
-                    description: "Read, search, and compose emails",
-                    icon: "envelope",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Notes",
-                    description: "Read, create, and append to notes",
-                    icon: "note.text",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Reminders",
-                    description: "Create and manage tasks and reminders",
-                    icon: "checklist",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"
-                )
+            Section("Built-in & Shared Skills") {
+                DisclosureGroup(isExpanded: $showSharedSkills) {
+                    if sharedSkills.isEmpty {
+                        Text("No shared or bundled skills discovered.")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(sharedSkills, id: \.name) { skill in
+                            skillMetadataRow(skill, allowEditing: false)
+                        }
+                    }
+                } label: {
+                    Text("\(sharedSkills.count) available")
+                }
             }
 
-            // MARK: - Extended Apple Apps (via AppleScript)
+            Section("Apple & System Access") {
+                DisclosureGroup(isExpanded: $showAppleApps) {
+                    Text("Core Apple apps use dedicated tools. Extended apps use Desktop Automation.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    ForEach(coreAppleApps + extendedAppleApps) { item in
+                        permissionRow(item)
+                    }
+                } label: {
+                    Text("Apple integrations")
+                }
 
-            Section("Extended Apple Apps") {
-                Text("These apps work via AppleScript and require Desktop Automation permission.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-
-                skillRow(
-                    name: "Messages",
-                    description: "Send and read iMessages and SMS",
-                    icon: "message",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Music",
-                    description: "Playback control and library search",
-                    icon: "music.note",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Safari",
-                    description: "Open URLs and manage bookmarks",
-                    icon: "safari",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Finder",
-                    description: "File management and folder navigation",
-                    icon: "folder.badge.gearshape",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Shortcuts",
-                    description: "Run and manage Shortcuts automations",
-                    icon: "square.on.square.badge.person.crop",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Photos",
-                    description: "Browse and search your photo library",
-                    icon: "photo.on.rectangle",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
-                )
-                skillRow(
-                    name: "Maps",
-                    description: "Directions, local search, and places",
-                    icon: "map",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "FaceTime",
-                    description: "Initiate audio and video calls",
-                    icon: "video",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Pages",
-                    description: "Create and edit documents",
-                    icon: "doc.richtext",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Numbers",
-                    description: "Create and edit spreadsheets",
-                    icon: "tablecells",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Keynote",
-                    description: "Create and edit presentations",
-                    icon: "play.rectangle",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Books",
-                    description: "Browse and manage your book library",
-                    icon: "books.vertical",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-                skillRow(
-                    name: "Podcasts",
-                    description: "Browse and control podcast playback",
-                    icon: "antenna.radiowaves.left.and.right",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
-            }
-
-            // MARK: - System Capabilities
-
-            Section("System Capabilities") {
-                Text("System-level permissions for voice input, file access, and automation.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-
-                skillRow(
-                    name: "Microphone",
-                    description: "Voice input for conversations",
-                    icon: "mic.fill",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-                )
-                skillRow(
-                    name: "Files",
-                    description: "Read and write documents on disk",
-                    icon: "folder",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
-                )
-                skillRow(
-                    name: "Notifications",
-                    description: "Send proactive alerts and reminders",
-                    icon: "bell",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Notifications"
-                )
-                skillRow(
-                    name: "Location",
-                    description: "Weather, local search, and directions",
-                    icon: "location",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices"
-                )
-                skillRow(
-                    name: "Desktop Automation",
-                    description: "AppleScript, screenshots, window management",
-                    icon: "gearshape.2",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
-                )
+                DisclosureGroup(isExpanded: $showSystemCapabilities) {
+                    Text("Open the relevant privacy panes only when you need them.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    ForEach(systemCapabilities) { item in
+                        permissionRow(item)
+                    }
+                } label: {
+                    Text("System capabilities")
+                }
             }
         }
         .formStyle(.grouped)
@@ -222,18 +137,39 @@ struct SettingsSkillsTab: View {
             SkillImportView(commandSender: commandSender)
                 .onDisappear { refreshSkills() }
         }
+        .sheet(item: $editorDraft) { draft in
+            SkillEditorSheet(draft: draft) { savedDraft in
+                saveSkill(savedDraft)
+            }
+        }
+        .confirmationDialog(
+            "Remove skill?",
+            isPresented: Binding(
+                get: { deletingSkillName != nil },
+                set: { if !$0 { deletingSkillName = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Skill", role: .destructive) {
+                if let deletingSkillName {
+                    removeSkill(named: deletingSkillName)
+                }
+                deletingSkillName = nil
+            }
+            Button("Cancel", role: .cancel) {
+                deletingSkillName = nil
+            }
+        } message: {
+            Text("This removes the personal skill from your local Fae skills directory.")
+        }
         .onAppear {
             refreshSkills()
         }
     }
 
-    // MARK: - Skill Metadata Row (v2 directory-based)
-
-    private func skillMetadataRow(_ skill: SkillMetadata) -> some View {
+    private func skillMetadataRow(_ skill: SkillMetadata, allowEditing: Bool) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: skill.type == .executable
-                  ? "chevron.left.forwardslash.chevron.right"
-                  : "doc.text")
+            Image(systemName: skill.type == .executable ? "chevron.left.forwardslash.chevron.right" : "doc.text")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 20, alignment: .center)
@@ -252,11 +188,27 @@ struct SettingsSkillsTab: View {
             HStack(spacing: 4) {
                 tierBadge(skill.tier)
                 typeBadge(skill.type)
+                if !skill.isEnabled {
+                    Text("Disabled")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                }
             }
 
-            if skill.tier == .personal {
+            if allowEditing {
+                Button {
+                    editorDraft = EditableSkillDraft.loadPersonalSkill(named: skill.name)
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
                 Button(role: .destructive) {
-                    removeSkill(named: skill.name)
+                    deletingSkillName = skill.name
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -267,24 +219,17 @@ struct SettingsSkillsTab: View {
         .padding(.vertical, 2)
     }
 
-    // MARK: - Apple App Row
-
-    private func skillRow(
-        name: String,
-        description: String,
-        icon: String,
-        settingsURL: String
-    ) -> some View {
+    private func permissionRow(_ item: PermissionLink) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: icon)
+            Image(systemName: item.icon)
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 20, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(name)
+                Text(item.name)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Text(description)
+                Text(item.description)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -292,7 +237,7 @@ struct SettingsSkillsTab: View {
             Spacer()
 
             Button("Open Settings") {
-                openPrivacySettings(settingsURL)
+                openPrivacySettings(item.settingsURL)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -304,8 +249,6 @@ struct SettingsSkillsTab: View {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)
     }
-
-    // MARK: - Badges
 
     @ViewBuilder
     private func tierBadge(_ tier: SkillTier) -> some View {
@@ -336,8 +279,6 @@ struct SettingsSkillsTab: View {
             .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
     }
 
-    // MARK: - Skills Management
-
     private func refreshSkills() {
         Task {
             let manager = SkillManager()
@@ -348,10 +289,53 @@ struct SettingsSkillsTab: View {
         }
     }
 
-    private func removeSkill(named name: String) {
-        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: skillDir)
-        refreshSkills()
-        commandSender?.sendCommand(name: "skills.reload", payload: [:])
+    private func saveSkill(_ draft: EditableSkillDraft) {
+        Task {
+            let manager = SkillManager()
+            do {
+                switch draft.mode {
+                case .create:
+                    _ = try await manager.createSkill(
+                        name: draft.trimmedName,
+                        description: draft.trimmedDescription,
+                        body: draft.trimmedBody
+                    )
+                case .edit(let existingName):
+                    _ = try await manager.updateSkill(
+                        name: existingName,
+                        description: draft.trimmedDescription,
+                        body: draft.trimmedBody
+                    )
+                }
+                await MainActor.run {
+                    refreshSkills()
+                    commandSender?.sendCommand(name: "skills.reload", payload: [:])
+                }
+            } catch {
+                NSLog("SettingsSkillsTab: failed to save skill %@", error.localizedDescription)
+            }
+        }
     }
+
+    private func removeSkill(named name: String) {
+        Task {
+            do {
+                try await SkillManager().deleteSkill(name: name)
+                await MainActor.run {
+                    refreshSkills()
+                    commandSender?.sendCommand(name: "skills.reload", payload: [:])
+                }
+            } catch {
+                NSLog("SettingsSkillsTab: failed to remove skill %@", error.localizedDescription)
+            }
+        }
+    }
+}
+
+private struct PermissionLink: Identifiable {
+    let id = UUID()
+    let name: String
+    let description: String
+    let icon: String
+    let settingsURL: String
 }

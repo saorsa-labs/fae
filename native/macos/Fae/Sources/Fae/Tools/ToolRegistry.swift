@@ -166,6 +166,10 @@ final class ToolRegistry: Sendable {
 
     /// Check whether a tool is allowed in the given mode.
     func isToolAllowed(_ name: String, mode: String, privacyMode: String = "local_preferred") -> Bool {
+        if !ToolToggleStore.isToolEnabled(name) {
+            return false
+        }
+
         if privacyMode == "strict_local", Self.strictLocalDeniedTools.contains(name) {
             return false
         }

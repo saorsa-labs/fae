@@ -125,4 +125,344 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertTrue(prepared.shareablePrompt.contains("Important pasted note"))
         XCTAssertTrue(prepared.shareablePrompt.contains("Summarize this project"))
     }
+
+    func testDefaultRegistryIncludesTrustedLocalFaeAgent() {
+        let registry = WorkWithFaeWorkspaceRegistry.default
+        XCTAssertEqual(registry.workspaces.count, 1)
+        XCTAssertTrue(registry.agents.contains(where: { $0.id == "fae-local" && $0.isTrustedLocal }))
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: registry)?.agentID, "fae-local")
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: registry)?.policy, .default)
+        XCTAssertTrue(WorkWithFaeWorkspaceStore.selectedWorkspace(in: registry)?.policy.usesAutomaticConsensusSelection == true)
+    }
+
+    func testNormalizedRegistryRestoresMissingAgentBindingToLocalFae() {
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Client", agentID: "missing-agent")
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: []
+        )
+
+        let normalized = WorkWithFaeWorkspaceStore.normalized(registry)
+        XCTAssertEqual(normalized.agents.first?.id, "fae-local")
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: normalized)?.agentID, "fae-local")
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedAgent(in: normalized)?.id, "fae-local")
+    }
+
+    func testNormalizedRegistryBackfillsBackendPresetMetadata() {
+        let remoteAgent = WorkWithFaeAgentProfile(
+            id: "agent-openai",
+            name: "Remote OpenAI",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: nil,
+            modelIdentifier: "gpt-4.1",
+            baseURL: nil,
+            credentialKey: "agents.openai.test.api_key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Client", agentID: remoteAgent.id)
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: [remoteAgent]
+        )
+
+        let normalized = WorkWithFaeWorkspaceStore.normalized(registry)
+        let agent = normalized.agents.first(where: { $0.id == remoteAgent.id })
+        XCTAssertEqual(agent?.backendPresetID, "openai")
+        XCTAssertEqual(agent?.baseURL, "https://api.openai.com")
+        XCTAssertEqual(agent?.backendDisplayName, "OpenAI")
+    }
+
+    func testRegistryByUpsertingAgentUpdatesSelectedWorkspaceBinding() {
+        var registry = WorkWithFaeWorkspaceRegistry.default
+        let updatedAgent = WorkWithFaeAgentProfile(
+            id: "agent-openrouter",
+            name: "Research Router",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openrouter",
+            modelIdentifier: "anthropic/claude-sonnet-4",
+            baseURL: "https://openrouter.ai/api",
+            credentialKey: "agents.openrouter.api_key",
+            notes: "OpenRouter agent",
+            createdAt: Date()
+        )
+
+        registry = WorkWithFaeWorkspaceStore.registryByUpsertingAgent(
+            updatedAgent,
+            assignToSelectedWorkspace: true,
+            in: registry
+        )
+
+        XCTAssertTrue(registry.agents.contains(where: { $0.id == updatedAgent.id && $0.backendPresetID == "openrouter" }))
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: registry)?.agentID, updatedAgent.id)
+    }
+
+    func testRegistryByRemovingAgentFallsBackToLocalFae() {
+        let remoteAgent = WorkWithFaeAgentProfile(
+            id: "agent-remote",
+            name: "Remote",
+            providerKind: .anthropic,
+            backendPresetID: "anthropic",
+            modelIdentifier: "claude-sonnet-4-5",
+            baseURL: "https://api.anthropic.com",
+            credentialKey: "agents.anthropic.api_key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Client", agentID: remoteAgent.id)
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: [WorkWithFaeAgentProfile.faeLocal, remoteAgent]
+        )
+
+        let updated = WorkWithFaeWorkspaceStore.registryByRemovingAgent(id: remoteAgent.id, from: registry)
+        XCTAssertFalse(updated.agents.contains(where: { $0.id == remoteAgent.id }))
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.agentID, WorkWithFaeAgentProfile.faeLocal.id)
+    }
+
+    func testRegistryByUpdatingWorkspaceNameRenamesSelectedWorkspace() {
+        let registry = WorkWithFaeWorkspaceRegistry.default
+        let updated = WorkWithFaeWorkspaceStore.registryByUpdatingWorkspaceName(
+            workspaceID: registry.selectedWorkspaceID,
+            name: "Client work",
+            in: registry
+        )
+
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.name, "Client work")
+    }
+
+    func testRegistryByDuplicatingWorkspaceSelectsCopy() {
+        let registry = WorkWithFaeWorkspaceRegistry.default
+        let updated = WorkWithFaeWorkspaceStore.registryByDuplicatingWorkspace(
+            workspaceID: registry.selectedWorkspaceID,
+            in: registry
+        )
+
+        XCTAssertEqual(updated.workspaces.count, 2)
+        XCTAssertTrue(updated.workspaces.contains(where: { $0.name == "Main workspace Copy" }))
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.name, "Main workspace Copy")
+    }
+
+    func testRegistryByRemovingWorkspaceFallsBackToRemainingWorkspace() {
+        let first = WorkWithFaeWorkspaceRecord(name: "One", agentID: WorkWithFaeAgentProfile.faeLocal.id)
+        let second = WorkWithFaeWorkspaceRecord(name: "Two", agentID: WorkWithFaeAgentProfile.faeLocal.id)
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: second.id,
+            workspaces: [first, second],
+            agents: [.faeLocal]
+        )
+
+        let updated = WorkWithFaeWorkspaceStore.registryByRemovingWorkspace(
+            workspaceID: second.id,
+            in: registry
+        )
+
+        XCTAssertEqual(updated.workspaces.count, 1)
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.name, "One")
+    }
+
+    func testConsensusAgentsPrefersSelectedThenLocalThenOthers() {
+        let local = WorkWithFaeAgentProfile.faeLocal
+        let selected = WorkWithFaeAgentProfile(
+            id: "agent-openai",
+            name: "OpenAI",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openai",
+            modelIdentifier: "gpt-4.1",
+            baseURL: "https://api.openai.com",
+            credentialKey: "agents.openai.key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let other = WorkWithFaeAgentProfile(
+            id: "agent-anthropic",
+            name: "Anthropic",
+            providerKind: .anthropic,
+            backendPresetID: "anthropic",
+            modelIdentifier: "claude-sonnet-4-5",
+            baseURL: "https://api.anthropic.com",
+            credentialKey: "agents.anthropic.key",
+            notes: nil,
+            createdAt: Date()
+        )
+
+        let ordered = WorkWithFaeWorkspaceStore.consensusAgents(
+            selectedAgentID: selected.id,
+            agents: [other, local, selected],
+            limit: 4
+        )
+
+        XCTAssertEqual(ordered.map(\.id), [selected.id, local.id, other.id])
+    }
+
+    func testConsensusAgentsRespectStrictLocalPolicy() {
+        let local = WorkWithFaeAgentProfile.faeLocal
+        let selected = WorkWithFaeAgentProfile(
+            id: "agent-openrouter",
+            name: "OpenRouter",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openrouter",
+            modelIdentifier: "openai/gpt-4.1-mini",
+            baseURL: "https://openrouter.ai/api",
+            credentialKey: "agents.openrouter.key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let ordered = WorkWithFaeWorkspaceStore.consensusAgents(
+            selectedAgentID: selected.id,
+            agents: [selected, local],
+            policy: WorkWithFaeWorkspacePolicy(remoteExecution: .strictLocalOnly, compareBehavior: .alwaysCompare),
+            limit: 4
+        )
+
+        XCTAssertEqual(ordered.map(\.id), [local.id])
+    }
+
+    func testConsensusAgentsRespectExplicitWorkspaceSelection() {
+        let local = WorkWithFaeAgentProfile.faeLocal
+        let openRouter = WorkWithFaeAgentProfile(
+            id: "agent-openrouter",
+            name: "OpenRouter",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openrouter",
+            modelIdentifier: "openai/gpt-4.1-mini",
+            baseURL: "https://openrouter.ai/api",
+            credentialKey: "agents.openrouter.key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let anthropic = WorkWithFaeAgentProfile(
+            id: "agent-anthropic",
+            name: "Anthropic",
+            providerKind: .anthropic,
+            backendPresetID: "anthropic",
+            modelIdentifier: "claude-sonnet-4-5",
+            baseURL: "https://api.anthropic.com",
+            credentialKey: "agents.anthropic.key",
+            notes: nil,
+            createdAt: Date()
+        )
+
+        let ordered = WorkWithFaeWorkspaceStore.consensusAgents(
+            selectedAgentID: openRouter.id,
+            agents: [local, openRouter, anthropic],
+            policy: WorkWithFaeWorkspacePolicy(
+                remoteExecution: .allowRemote,
+                compareBehavior: .onDemand,
+                consensusAgentIDs: [anthropic.id, local.id]
+            ),
+            limit: 4
+        )
+
+        XCTAssertEqual(ordered.map(\.id), [anthropic.id, local.id])
+    }
+
+    func testExecutionAgentUsesLocalWhenWorkspaceIsStrictLocalOnly() {
+        let remoteAgent = WorkWithFaeAgentProfile(
+            id: "agent-openrouter",
+            name: "OpenRouter",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openrouter",
+            modelIdentifier: "openai/gpt-4.1-mini",
+            baseURL: "https://openrouter.ai/api",
+            credentialKey: "agents.openrouter.key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let workspace = WorkWithFaeWorkspaceRecord(
+            name: "Private client",
+            agentID: remoteAgent.id,
+            policy: WorkWithFaeWorkspacePolicy(remoteExecution: .strictLocalOnly, compareBehavior: .onDemand)
+        )
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: [remoteAgent, .faeLocal]
+        )
+
+        let executionAgent = WorkWithFaeWorkspaceStore.executionAgent(in: registry)
+        XCTAssertEqual(executionAgent?.id, WorkWithFaeAgentProfile.faeLocal.id)
+    }
+
+    func testRegistryByUpdatingWorkspacePolicyPersistsPolicyChange() {
+        let registry = WorkWithFaeWorkspaceRegistry.default
+        let updated = WorkWithFaeWorkspaceStore.registryByUpdatingWorkspacePolicy(
+            workspaceID: registry.selectedWorkspaceID,
+            policy: WorkWithFaeWorkspacePolicy(remoteExecution: .strictLocalOnly, compareBehavior: .alwaysCompare),
+            in: registry
+        )
+
+        XCTAssertEqual(
+            WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.policy,
+            WorkWithFaeWorkspacePolicy(remoteExecution: .strictLocalOnly, compareBehavior: .alwaysCompare)
+        )
+    }
+
+    func testRegistryByTogglingConsensusAgentTracksCustomSelection() {
+        let remoteAgent = WorkWithFaeAgentProfile(
+            id: "agent-openrouter",
+            name: "OpenRouter",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openrouter",
+            modelIdentifier: "openai/gpt-4.1-mini",
+            baseURL: "https://openrouter.ai/api",
+            credentialKey: "agents.openrouter.key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Client", agentID: remoteAgent.id)
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: [WorkWithFaeAgentProfile.faeLocal, remoteAgent]
+        )
+
+        let updated = WorkWithFaeWorkspaceStore.registryByTogglingConsensusAgent(
+            workspaceID: workspace.id,
+            agentID: remoteAgent.id,
+            in: registry
+        )
+
+        XCTAssertEqual(
+            WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.policy.consensusAgentIDs,
+            [remoteAgent.id]
+        )
+    }
+
+    func testNormalizedRegistryFiltersConsensusSelectionToAllowedAgents() {
+        let remoteAgent = WorkWithFaeAgentProfile(
+            id: "agent-openrouter",
+            name: "OpenRouter",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openrouter",
+            modelIdentifier: "openai/gpt-4.1-mini",
+            baseURL: "https://openrouter.ai/api",
+            credentialKey: "agents.openrouter.key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let workspace = WorkWithFaeWorkspaceRecord(
+            name: "Private client",
+            agentID: remoteAgent.id,
+            policy: WorkWithFaeWorkspacePolicy(
+                remoteExecution: .strictLocalOnly,
+                compareBehavior: .alwaysCompare,
+                consensusAgentIDs: [remoteAgent.id, WorkWithFaeAgentProfile.faeLocal.id]
+            )
+        )
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: [remoteAgent, .faeLocal]
+        )
+
+        let normalized = WorkWithFaeWorkspaceStore.normalized(registry)
+        XCTAssertEqual(
+            WorkWithFaeWorkspaceStore.selectedWorkspace(in: normalized)?.policy.consensusAgentIDs,
+            [WorkWithFaeAgentProfile.faeLocal.id]
+        )
+    }
 }

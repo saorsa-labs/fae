@@ -11,7 +11,7 @@ struct SettingsSkillsChannelsWorkspace: View {
     var commandSender: HostCommandSender?
 
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
-    @State private var section: Section = .channels
+    @State private var section: Section = .skills
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

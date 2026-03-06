@@ -31,14 +31,21 @@ struct FaeConfig: Codable {
         var inputSampleRate: Int = 16_000
         var outputSampleRate: Int = 24_000
         var inputChannels: Int = 1
-        var bufferSize: Int = 512
+        /// Capture buffer size at the pipeline sample rate.
+        /// 576 matches Silero VAD's native 36 ms frame size.
+        var bufferSize: Int = 576
     }
 
     // MARK: - VAD
 
     struct VadConfig: Codable {
-        var threshold: Float = 0.008
-        var hysteresisRatio: Float = 0.6
+        /// Speech probability threshold for Silero VAD.
+        /// Legacy RMS configs used very small values like 0.008; those are migrated
+        /// at runtime to the Silero defaults for backward compatibility.
+        var threshold: Float = 0.30
+        /// Sustain ratio applied while already in speech.
+        /// 0.8333 ~= 0.25 / 0.30, a common Silero start/stop pairing.
+        var hysteresisRatio: Float = 0.8333333
         var minSilenceDurationMs: Int = 1000
         var speechPadMs: Int = 30
         var minSpeechDurationMs: Int = 250
@@ -57,11 +64,41 @@ struct FaeConfig: Codable {
         var repeatPenalty: Float = 1.1
         var maxHistoryMessages: Int = 10
         var voiceModelPreset: String = "auto"
+        /// Preferred remote provider preset for user-managed external sessions.
+        var remoteProviderPreset: String = "openrouter"
+        /// Preferred remote base URL for user-managed external sessions.
+        var remoteBaseURL: String = "https://openrouter.ai/api"
+        /// Preferred remote model for user-managed external sessions.
+        var remoteModel: String = "openai/gpt-4.1-mini"
         var enableVision: Bool = false
         /// When true, model thinking mode is enabled (extended reasoning).
         /// When false (default), Fae suppresses reasoning via
         /// `enable_thinking: false` in the chat template context.
         var thinkingEnabled: Bool = false
+
+        // MARK: KV Cache Optimization (Phase 1)
+
+        /// Enable 4-bit KV cache quantization for 4x memory savings.
+        /// Set to nil to disable quantization (uses f16). Default: 4.
+        var kvQuantBits: Int? = 4
+
+        /// Maximum KV cache size in tokens. When set, uses sliding window
+        /// (RotatingKVCache) for bounded memory. nil = unlimited.
+        var maxKVCacheSize: Int? = nil
+
+        /// Token count after which to begin quantizing KV cache.
+        /// Keeps initial context at full precision. Default: 512.
+        var kvQuantStartTokens: Int = 512
+
+        /// Quantization group size. Default 64 matches Ollama/mistral.rs.
+        var kvGroupSize: Int = 64
+
+        /// Number of tokens for repetition penalty window.
+        /// Larger catches more patterns. Default: 64 (up from 20).
+        var repetitionContextSize: Int = 64
+
+        /// Prefill chunk size. nil = auto-tune based on model size.
+        var prefillStepSize: Int? = nil
     }
 
     // MARK: - TTS
@@ -329,6 +366,25 @@ struct FaeConfig: Codable {
         return min(max(computed, 6), 100)
     }
 
+    /// Auto-tune prefill step size based on model size.
+    ///
+    /// Larger models benefit from smaller prefill chunks to reduce memory spikes.
+    /// Smaller models can handle larger chunks for faster prefill.
+    ///
+    /// Based on research into Ollama, mistral.rs, and LM Studio optimizations.
+    static func recommendedPrefillStepSize(modelId: String) -> Int {
+        let modelLower = modelId.lowercased()
+        if modelLower.contains("35b") || modelLower.contains("32b") || modelLower.contains("27b") {
+            return 256  // Large MoE/dense models: smaller chunks
+        } else if modelLower.contains("14b") || modelLower.contains("9b") || modelLower.contains("8b") {
+            return 512  // Medium models: standard
+        } else if modelLower.contains("4b") || modelLower.contains("3b") {
+            return 768  // Small-medium models: larger chunks
+        } else {
+            return 1024 // Small models (2B, 1B, 0.8B): maximize chunk size
+        }
+    }
+
     // MARK: - STT Model Selection
 
     /// Select the appropriate STT model based on system RAM.
@@ -585,6 +641,15 @@ struct FaeConfig: Codable {
                 case "voiceModelPreset":
                     guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.voiceModelPreset = v
+                case "remoteProviderPreset":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.remoteProviderPreset = v
+                case "remoteBaseURL":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.remoteBaseURL = v
+                case "remoteModel":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.remoteModel = v
                 case "enableVision":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.enableVision = v
@@ -849,6 +914,9 @@ struct FaeConfig: Codable {
         lines.append("repeatPenalty = \(formatFloat(llm.repeatPenalty))")
         lines.append("maxHistoryMessages = \(llm.maxHistoryMessages)")
         lines.append("voiceModelPreset = \(encodeString(llm.voiceModelPreset))")
+        lines.append("remoteProviderPreset = \(encodeString(llm.remoteProviderPreset))")
+        lines.append("remoteBaseURL = \(encodeString(llm.remoteBaseURL))")
+        lines.append("remoteModel = \(encodeString(llm.remoteModel))")
         lines.append("enableVision = \(llm.enableVision ? "true" : "false")")
         lines.append("thinkingEnabled = \(llm.thinkingEnabled ? "true" : "false")")
         lines.append("")
