@@ -186,7 +186,7 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
 
         return tasksByID.values.sorted { lhs, rhs in
             if lhs.isBuiltin != rhs.isBuiltin {
-                return !lhs.isBuiltin && rhs.isBuiltin
+                return lhs.isBuiltin && !rhs.isBuiltin
             }
             if lhs.enabled != rhs.enabled {
                 return lhs.enabled && !rhs.enabled

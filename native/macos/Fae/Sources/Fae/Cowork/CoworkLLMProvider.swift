@@ -118,7 +118,7 @@ enum CoworkBackendPresetCatalog {
             setupHint: "Use OpenRouter when you want broad model choice through one OpenAI-compatible endpoint.",
             defaultBaseURL: "https://openrouter.ai/api",
             apiKeyPlaceholder: "sk-or-v1-...",
-            suggestedModels: ["openai/gpt-4.1", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro"],
+            suggestedModels: ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-4.1", "google/gemini-2.5-pro"],
             requiresAPIKey: true,
             allowsCustomBaseURL: true
         ),
@@ -142,7 +142,7 @@ enum CoworkBackendPresetCatalog {
             setupHint: "Use your Anthropic API key. Fae can test the connection and list available Claude models.",
             defaultBaseURL: "https://api.anthropic.com",
             apiKeyPlaceholder: "sk-ant-...",
-            suggestedModels: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
+            suggestedModels: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
             requiresAPIKey: true,
             allowsCustomBaseURL: true
         ),
@@ -556,7 +556,7 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
     let apiKey: String
     let maxTokens: Int
 
-    init(baseURL: String, apiKey: String, maxTokens: Int = 2048) {
+    init(baseURL: String, apiKey: String, maxTokens: Int = 8192) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.maxTokens = maxTokens
@@ -622,10 +622,6 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
                     "role": "user",
                     "content": CoworkPromptEgressPolicy.prompt(for: .anthropic, request: request),
                 ],
-            ],
-            "metadata": [
-                "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
-                "context_scope": request.preparedPrompt.containsLocalOnlyContext ? "shareable_only" : "shareable",
             ],
         ]
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
