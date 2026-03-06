@@ -116,6 +116,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let relayServer = FaeRelayServer()
     let aboutWindow = AboutWindowController()
     let memoryImport = MemoryImportWindowController()
+    let coworkWindow = CoworkWindowController()
     let hotkeyManager = GlobalHotkeyManager()
     let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
@@ -127,6 +128,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     var deviceTransferObserver: NSObjectProtocol?
     var openSettingsObserver: NSObjectProtocol?
     var closeSettingsObserver: NSObjectProtocol?
+    var openCoworkObserver: NSObjectProtocol?
     var settingsWindow: NSWindow?
     private var terminationInFlight: Bool = false
     private var cancellables: Set<AnyCancellable> = []
@@ -255,6 +257,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         aboutWindow.faeCore = faeCore
         memoryImport.conversation = conversation
         memoryImport.auxiliaryWindows = auxiliaryWindows
+        coworkWindow.faeCore = faeCore
+        coworkWindow.conversation = conversation
         relayServer.bindOrbState(orbState)
         relayServer.commandSender = faeCore
         relayServer.audioSender = faeCore
@@ -383,6 +387,18 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 debugLog(self?.debugConsole, .command, "Received faeCloseSettingsRequested notification")
                 Task { @MainActor [weak self] in
                     self?.closeSettingsWindows(reason: "notification")
+                }
+            }
+        }
+
+        if openCoworkObserver == nil {
+            openCoworkObserver = NotificationCenter.default.addObserver(
+                forName: .faeOpenCoworkRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.coworkWindow.show()
                 }
             }
         }
@@ -762,6 +778,11 @@ struct FaeApp: App {
             }
             CommandGroup(after: .sidebar) {
                 Divider()
+                Button("Cowork Desktop") {
+                    NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+
                 Button("Toggle Canvas") {
                     appDelegate.auxiliaryWindows.toggleCanvas()
                 }

@@ -30,6 +30,7 @@ struct ActionIntent: Sendable {
     let policyProfile: PolicyProfile
     let argumentSummary: String
     let schedulerTaskId: String?  // nil for non-scheduler actions
+    let schedulerAllowedTools: Set<String>
     let schedulerConsentGranted: Bool
 
     init(
@@ -44,6 +45,7 @@ struct ActionIntent: Sendable {
         policyProfile: PolicyProfile,
         argumentSummary: String,
         schedulerTaskId: String? = nil,
+        schedulerAllowedTools: Set<String> = [],
         schedulerConsentGranted: Bool = false
     ) {
         self.source = source
@@ -57,6 +59,7 @@ struct ActionIntent: Sendable {
         self.policyProfile = policyProfile
         self.argumentSummary = argumentSummary
         self.schedulerTaskId = schedulerTaskId
+        self.schedulerAllowedTools = schedulerAllowedTools
         self.schedulerConsentGranted = schedulerConsentGranted
     }
 }
@@ -182,9 +185,19 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
                 ))
             }
 
-            guard let taskId = intent.schedulerTaskId,
-                  let allowed = Self.schedulerTaskAllowlists[taskId]
-            else {
+            guard let taskId = intent.schedulerTaskId else {
+                return .deny(reason: DecisionReason(
+                    code: .noExplicitRule,
+                    message: "Unknown scheduler task policy"
+                ))
+            }
+
+            let allowed: Set<String>
+            if !intent.schedulerAllowedTools.isEmpty {
+                allowed = intent.schedulerAllowedTools
+            } else if let knownAllowed = Self.schedulerTaskAllowlists[taskId] {
+                allowed = knownAllowed
+            } else {
                 return .deny(reason: DecisionReason(
                     code: .noExplicitRule,
                     message: "Unknown scheduler task policy"

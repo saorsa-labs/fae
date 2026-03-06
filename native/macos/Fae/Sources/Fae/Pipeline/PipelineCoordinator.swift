@@ -284,6 +284,9 @@ actor PipelineCoordinator {
     private struct GenerationContext: Sendable {
         let systemPrompt: String
         let nativeTools: [[String: any Sendable]]?
+        let actionSource: ActionSource
+        let playsThinkingTone: Bool
+        let allowsAudibleOutput: Bool
     }
 
     /// In-flight deferred tool tasks keyed by job ID.
@@ -554,7 +557,37 @@ actor PipelineCoordinator {
             text: trimmed,
             wakeMatch: wakeAddressMatch(in: trimmed),
             rms: nil,
-            durationSecs: nil
+            durationSecs: nil,
+            turnSource: .text
+        )
+    }
+
+    /// Inject text from the desktop cowork surface.
+    ///
+    /// This path is intentionally silent: it bypasses wake/direct-address gating,
+    /// keeps the turn in text mode, and suppresses thinking tones and audio playback.
+    func injectDesktopText(_ text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if isConversationStopTrigger(trimmed) {
+            await resetConversationSession(trigger: trimmed, source: "desktop_text")
+            return
+        }
+
+        currentSpeakerLabel = "owner"
+        currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
+        currentSpeakerRole = .owner
+        currentSpeakerIsOwner = true
+        currentSpeakerIsKnownNonOwner = false
+
+        await processTranscription(
+            text: trimmed,
+            rms: nil,
+            durationSecs: nil,
+            turnSource: .text,
+            playsThinkingTone: false,
+            allowsAudibleOutput: false
         )
     }
 
@@ -1463,7 +1496,10 @@ actor PipelineCoordinator {
         wakeMatch: TextProcessing.WakeAddressMatch? = nil,
         rms: Float?,
         durationSecs: Float?,
-        proactiveContext: ProactiveRequestContext? = nil
+        proactiveContext: ProactiveRequestContext? = nil,
+        turnSource: ActionSource = .voice,
+        playsThinkingTone: Bool = true,
+        allowsAudibleOutput: Bool = true
     ) async {
         currentTurnID = UUID().uuidString
         ttfaEmittedForCurrentTurn = false
@@ -1524,7 +1560,10 @@ actor PipelineCoordinator {
             isToolFollowUp: false,
             turnCount: 0,
             forceSuppressThinking: forceFastCommandPath,
-            proactiveContext: proactiveContext
+            proactiveContext: proactiveContext,
+            turnSource: turnSource,
+            playsThinkingTone: playsThinkingTone,
+            allowsAudibleOutput: allowsAudibleOutput
         )
     }
 
@@ -2011,7 +2050,10 @@ actor PipelineCoordinator {
         forceSuppressThinking: Bool = false,
         generationContext providedGenerationContext: GenerationContext? = nil,
         generationID providedGenerationID: UUID? = nil,
-        proactiveContext: ProactiveRequestContext? = nil
+        proactiveContext: ProactiveRequestContext? = nil,
+        turnSource: ActionSource = .voice,
+        playsThinkingTone: Bool = true,
+        allowsAudibleOutput: Bool = true
     ) async {
         let maxToolTurns = 5
 
@@ -2054,7 +2096,9 @@ actor PipelineCoordinator {
             eventBus.send(.assistantGenerating(true))
 
             // Play thinking tone.
-            await playback.playThinkingTone()
+            if playsThinkingTone {
+                await playback.playThinkingTone()
+            }
 
             // Add user message to history.
             await conversationState.addUserMessage(
@@ -2086,6 +2130,7 @@ actor PipelineCoordinator {
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                 && !ownerProfileExists
             let includeTools = toolMode != "off" && !ownerEnrollmentRequired
+            let visibleToolNames = proactiveContext?.allowedTools
 
             let hiddenToolsReason: String? = {
                 guard !includeTools else { return nil }
@@ -2142,16 +2187,16 @@ actor PipelineCoordinator {
             }
             // Build native tool specs for MLX tool calling.
             let nativeTools = includeTools
-                ? registry.nativeToolSpecs(for: toolMode)
+                ? registry.nativeToolSpecs(for: toolMode, limitedTo: visibleToolNames)
                 : nil
 
             let toolSchemas: String? = {
                 guard includeTools else { return nil }
                 if nativeTools != nil {
-                    let compact = registry.compactToolSummary(for: toolMode)
+                    let compact = registry.compactToolSummary(for: toolMode, limitedTo: visibleToolNames)
                     return compact.isEmpty ? nil : compact
                 }
-                let full = registry.toolSchemas(for: toolMode)
+                let full = registry.toolSchemas(for: toolMode, limitedTo: visibleToolNames)
                 return full.isEmpty ? nil : full
             }()
 
@@ -2197,7 +2242,10 @@ actor PipelineCoordinator {
             }
             generationContext = GenerationContext(
                 systemPrompt: systemPrompt,
-                nativeTools: nativeTools
+                nativeTools: nativeTools,
+                actionSource: proactiveContext?.source ?? turnSource,
+                playsThinkingTone: playsThinkingTone,
+                allowsAudibleOutput: allowsAudibleOutput
             )
             currentTurnGenerationContext = generationContext
         } else if let providedGenerationContext {
@@ -2251,6 +2299,7 @@ actor PipelineCoordinator {
         var llmTokenCount = 0
         var firstTokenAt: Date?
         var spokenTextThisTurn = ""
+        var visibleTextThisTurn = ""
         // Stability-first speech mode: keep live text streaming, but defer TTS
         // until the turn completes so Qwen3-TTS sees larger coherent text spans.
         // This avoids audible interleaving/hallucinated fragments from tiny chunks.
@@ -2277,6 +2326,16 @@ actor PipelineCoordinator {
             }
         }
 
+        func recordVisibleText(_ text: String) {
+            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return }
+            if visibleTextThisTurn.isEmpty {
+                visibleTextThisTurn = cleaned
+            } else {
+                visibleTextThisTurn += " " + cleaned
+            }
+        }
+
         // Streaming chunk smoothing: prioritize sentence-sized chunks, and only use
         // clause fallback when enough text has accumulated and cadence allows it.
         let minSentenceChunkChars = 28
@@ -2295,12 +2354,14 @@ actor PipelineCoordinator {
             if TextProcessing.looksLikeNonProse(cleaned) {
                 debugLog(debugConsole, .pipeline, "[suppressed non-prose TTS] \(String(cleaned.prefix(80)))")
                 // Still show in conversation UI, just don't speak it.
+                recordVisibleText(cleaned)
                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                 return
             }
             // Suppress UI self-narration at any position (model describing its own interface).
             if TextProcessing.isUISelfNarration(cleaned) {
                 debugLog(debugConsole, .pipeline, "[suppressed UI self-narration] \(String(cleaned.prefix(80)))")
+                recordVisibleText(cleaned)
                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                 return
             }
@@ -2309,6 +2370,7 @@ actor PipelineCoordinator {
             // Keep UI text live, but avoid speaking provisional chunks to prevent
             // rambling/contradictory audio while tools are still pending.
             if suppressProvisionalSpeechForLikelyToolTurn {
+                recordVisibleText(cleaned)
                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                 return
             }
@@ -2316,6 +2378,7 @@ actor PipelineCoordinator {
             // Conservative mode: keep text streaming to UI, but defer audio until
             // turn completion so TTS receives larger coherent text context.
             if preferFinalOnlySpeech {
+                recordVisibleText(cleaned)
                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
                 if deferredStreamingSpeech.isEmpty {
                     deferredStreamingSpeech = cleaned
@@ -2336,9 +2399,12 @@ actor PipelineCoordinator {
             }
             debugLog(debugConsole, .pipeline, "Stream chunk #\(streamingChunkCount) chars=\(cleaned.count) interval_ms=\(intervalMs)")
             NSLog("PipelineCoordinator: TTS chunk → \"%@\"", String(cleaned.prefix(120)))
-            recordSpokenText(cleaned)
+            recordVisibleText(cleaned)
             eventBus.send(.assistantText(text: cleaned, isFinal: false))
-            enqueueTTS(cleaned, isFinal: false)
+            if generationContext.allowsAudibleOutput {
+                recordSpokenText(cleaned)
+                enqueueTTS(cleaned, isFinal: false)
+            }
         }
 
         let systemPromptTokens = Self.estimateTokenCount(for: systemPrompt)
@@ -2465,9 +2531,12 @@ actor PipelineCoordinator {
                         }
                         let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                         if !cleaned.isEmpty {
-                            recordSpokenText(cleaned)
+                            recordVisibleText(cleaned)
                             eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                            enqueueTTS(cleaned, isFinal: false, voiceInstruct: voice)
+                            if generationContext.allowsAudibleOutput {
+                                recordSpokenText(cleaned)
+                                enqueueTTS(cleaned, isFinal: false, voiceInstruct: voice)
+                            }
                         }
                     }
                 } else {
@@ -2606,10 +2675,13 @@ actor PipelineCoordinator {
                     }
                     let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
                     if !cleaned.isEmpty {
-                        recordSpokenText(cleaned)
+                        recordVisibleText(cleaned)
                         eventBus.send(.assistantText(text: cleaned, isFinal: true))
-                        enqueueTTS(cleaned, isFinal: true, voiceInstruct: voice)
-                        spokeSomething = true
+                        if generationContext.allowsAudibleOutput {
+                            recordSpokenText(cleaned)
+                            enqueueTTS(cleaned, isFinal: true, voiceInstruct: voice)
+                            spokeSomething = true
+                        }
                     }
                 }
                 // Wait for all TTS (streaming + final) to complete.
@@ -2630,8 +2702,11 @@ actor PipelineCoordinator {
                     if finalText.isEmpty { return deferredStreamingSpeech }
                     return deferredStreamingSpeech + " " + finalText
                 }()
-                let shouldSpeak = !spokenTextCandidate.isEmpty && !TextProcessing.looksLikeNonProse(spokenTextCandidate)
+                let shouldSpeak = generationContext.allowsAudibleOutput
+                    && !spokenTextCandidate.isEmpty
+                    && !TextProcessing.looksLikeNonProse(spokenTextCandidate)
                 if !finalText.isEmpty {
+                    recordVisibleText(finalText)
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
                 }
                 if shouldSpeak {
@@ -2656,9 +2731,11 @@ actor PipelineCoordinator {
             }
 
             let spokenText = spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines)
+            let visibleText = visibleTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines)
+            let assistantTextForStorage = generationContext.allowsAudibleOutput ? spokenText : visibleText
             let visibleResponse = Self.stripThinkContent(fullResponse)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if spokenText.isEmpty && visibleResponse.isEmpty && !options.suppressThinking && !forceSuppressThinking {
+            if assistantTextForStorage.isEmpty && visibleResponse.isEmpty && !options.suppressThinking && !forceSuppressThinking {
                 debugLog(debugConsole, .pipeline, "No visible response after thinking block — retrying with thinking disabled")
                 await generateWithTools(
                     userText: userText,
@@ -2686,7 +2763,11 @@ actor PipelineCoordinator {
                     let inputJSON = Self.serializeArguments(repairCall.arguments)
                     eventBus.send(.toolCall(id: repairCallID, name: repairCall.name, inputJSON: inputJSON))
 
-                    let repairResult = await executeTool(repairCall, proactiveContext: proactiveContext)
+                    let repairResult = await executeTool(
+                        repairCall,
+                        proactiveContext: proactiveContext,
+                        generationContextOverride: generationContext
+                    )
 
                     eventBus.send(.toolResult(
                         id: repairCallID,
@@ -2754,7 +2835,9 @@ actor PipelineCoordinator {
                 }
 
                 eventBus.send(.assistantText(text: fallback, isFinal: true))
-                enqueueTTS(fallback, isFinal: true)
+                if generationContext.allowsAudibleOutput {
+                    enqueueTTS(fallback, isFinal: true)
+                }
                 await awaitPendingTTS()
                 endAssistantGeneration()
                 engage()
@@ -2763,8 +2846,8 @@ actor PipelineCoordinator {
                 return
             }
 
-            if !spokenText.isEmpty {
-                await conversationState.addAssistantMessage(spokenText, tag: proactiveContext?.conversationTag)
+            if !assistantTextForStorage.isEmpty {
+                await conversationState.addAssistantMessage(assistantTextForStorage, tag: proactiveContext?.conversationTag)
 
                 let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
                 if VoiceConversationPolicy.shouldPersistSpeechMemory(
@@ -2776,7 +2859,7 @@ actor PipelineCoordinator {
                     _ = await memoryOrchestrator?.capture(
                         turnId: turnId,
                         userText: userText,
-                        assistantText: spokenText,
+                        assistantText: assistantTextForStorage,
                         speakerId: currentSpeakerLabel,
                         utteranceTimestamp: currentUtteranceTimestamp
                     )
@@ -2789,7 +2872,7 @@ actor PipelineCoordinator {
                 }
 
                 // Sentiment → orb feeling.
-                if let feeling = SentimentClassifier.classify(spokenText) {
+                if let feeling = SentimentClassifier.classify(assistantTextForStorage) {
                     eventBus.send(.orbStateChanged(mode: "idle", feeling: feeling.rawValue, palette: nil))
                 }
             } else if let proactiveContext,
@@ -2815,7 +2898,7 @@ actor PipelineCoordinator {
             // Refresh follow-up window.
             engage()
             activeCapabilityTicket = nil
-            debugLog(debugConsole, .qa, "=== TURN END spoken_chars=\(spokenText.count) tool_calls=0 ===")
+            debugLog(debugConsole, .qa, "=== TURN END spoken_chars=\(assistantTextForStorage.count) tool_calls=0 ===")
             return
         }
 
@@ -2829,12 +2912,16 @@ actor PipelineCoordinator {
 
             let ack = "I’ll check that in the background and report back as soon as it’s ready."
             eventBus.send(.assistantText(text: ack, isFinal: true))
-            enqueueTTS(ack, isFinal: true)
+            if generationContext.allowsAudibleOutput {
+                enqueueTTS(ack, isFinal: true)
+            }
 
             // Prevent audio stutter: do not launch background tool execution while
             // the acknowledgement is still being spoken.
             await awaitPendingTTS()
-            await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_deferred_tools")
+            if generationContext.allowsAudibleOutput {
+                await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_deferred_tools")
+            }
 
             await startDeferredToolJob(
                 userText: userText,
@@ -2858,7 +2945,9 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .qa, "Exceeded max tool turns (\(maxToolTurns))")
             let msg = "I've used several tools but couldn't complete that. Could you try rephrasing?"
             eventBus.send(.assistantText(text: msg, isFinal: true))
-            await speakText(msg, isFinal: true)
+            if generationContext.allowsAudibleOutput {
+                await speakText(msg, isFinal: true)
+            }
             endAssistantGeneration()
             activeCapabilityTicket = nil
             return
@@ -2874,10 +2963,12 @@ actor PipelineCoordinator {
         {
             let filler = Self.toolCallAcknowledgement(for: toolCalls)
             if !filler.isEmpty {
-                recordSpokenText(filler)
                 eventBus.send(.assistantText(text: filler, isFinal: false))
-                enqueueTTS(filler, isFinal: false)
-                didEnqueueToolFiller = true
+                if generationContext.allowsAudibleOutput {
+                    recordSpokenText(filler)
+                    enqueueTTS(filler, isFinal: false)
+                    didEnqueueToolFiller = true
+                }
             }
         }
 
@@ -2908,7 +2999,11 @@ actor PipelineCoordinator {
             let inputPreview = String(inputJSON.prefix(220))
             debugLog(debugConsole, .toolCall, "id=\(callId.prefix(8)) name=\(call.name) args=\(inputPreview)")
 
-            var result = await executeTool(call, proactiveContext: proactiveContext)
+            var result = await executeTool(
+                call,
+                proactiveContext: proactiveContext,
+                generationContextOverride: generationContext
+            )
             if call.name == "camera", proactiveContext?.taskId == "camera_presence_check", !result.isError {
                 let userPresent = Self.inferUserPresentFromCameraOutput(result.output)
                 await proactivePresenceHandler?(userPresent)
@@ -2942,7 +3037,9 @@ actor PipelineCoordinator {
                let audioPath = Self.extractAudioFilePath(from: result.output)
             {
                 let audioURL = URL(fileURLWithPath: audioPath)
-                if FileManager.default.fileExists(atPath: audioPath) {
+                if generationContext.allowsAudibleOutput,
+                   FileManager.default.fileExists(atPath: audioPath)
+                {
                     NSLog("PipelineCoordinator: playing skill audio output: %@", audioURL.lastPathComponent)
                     await playback.playFile(url: audioURL)
                 }
@@ -2962,7 +3059,9 @@ actor PipelineCoordinator {
             let reason = firstToolError ?? "the tool call was denied or failed"
             let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
             eventBus.send(.assistantText(text: msg, isFinal: true))
-            await speakText(msg, isFinal: true)
+            if generationContext.allowsAudibleOutput {
+                await speakText(msg, isFinal: true)
+            }
             endAssistantGeneration()
             activeCapabilityTicket = nil
             return
@@ -3686,7 +3785,8 @@ actor PipelineCoordinator {
             let result = await executeTool(
                 call,
                 capabilityTicketOverride: job.capabilityTicket,
-                explicitUserAuthorizationOverride: job.explicitUserAuthorization
+                explicitUserAuthorizationOverride: job.explicitUserAuthorization,
+                generationContextOverride: job.generationContext
             )
             if result.isError {
                 toolFailureCount += 1
@@ -3721,7 +3821,9 @@ actor PipelineCoordinator {
             let reason = firstToolError ?? "the tool call was denied or failed"
             let msg = "I couldn't complete that background check because the required tool didn't run: \(reason)"
             eventBus.send(.assistantText(text: msg, isFinal: true))
-            await speakText(msg, isFinal: true)
+            if job.generationContext.allowsAudibleOutput {
+                await speakText(msg, isFinal: true)
+            }
             return
         }
 
@@ -3747,7 +3849,9 @@ actor PipelineCoordinator {
         explicitUserAuthorizationForTurn = job.explicitUserAuthorization
         assistantGenerating = true
         eventBus.send(.assistantGenerating(true))
-        await playback.playThinkingTone()
+        if job.generationContext.playsThinkingTone {
+            await playback.playThinkingTone()
+        }
 
         // Re-issue a capability ticket for the follow-up turn so the LLM
         // can make additional tool calls (e.g. a second web_search).
@@ -3771,7 +3875,8 @@ actor PipelineCoordinator {
         _ call: ToolCall,
         capabilityTicketOverride: CapabilityTicket? = nil,
         explicitUserAuthorizationOverride: Bool? = nil,
-        proactiveContext: ProactiveRequestContext? = nil
+        proactiveContext: ProactiveRequestContext? = nil,
+        generationContextOverride: GenerationContext? = nil
     ) async -> ToolResult {
         // Tool mode enforcement — reject tools not allowed in current mode.
         let toolMode = effectiveToolMode()
@@ -3847,8 +3952,9 @@ actor PipelineCoordinator {
         let effectiveTicket = capabilityTicketOverride ?? activeCapabilityTicket
         let hasCapabilityTicket = effectiveTicket?.allows(toolName: call.name) ?? false
         let explicitAuthorization = explicitUserAuthorizationOverride ?? explicitUserAuthorizationForTurn
+        let effectiveGenerationContext = generationContextOverride ?? currentTurnGenerationContext
         let intent = ActionIntent(
-            source: proactiveContext?.source ?? .voice,
+            source: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             toolName: call.name,
             riskLevel: effectiveRiskLevel,
             requiresApproval: effectiveRequiresApproval,
@@ -3863,6 +3969,7 @@ actor PipelineCoordinator {
                 arguments: call.arguments
             ),
             schedulerTaskId: proactiveContext?.taskId,
+            schedulerAllowedTools: proactiveContext?.allowedTools ?? [],
             schedulerConsentGranted: proactiveContext?.consentGranted ?? false
         )
 

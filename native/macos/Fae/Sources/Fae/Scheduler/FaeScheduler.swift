@@ -1,21 +1,6 @@
 import AppKit
 import Foundation
 
-private struct SchedulerPersistedTask: Codable {
-    var id: String
-    var name: String
-    var kind: String
-    var enabled: Bool
-    var scheduleType: String
-    var scheduleParams: [String: String]
-    var action: String
-    var nextRun: String?
-}
-
-private struct SchedulerPersistedEnvelope: Codable {
-    var tasks: [SchedulerPersistedTask]
-}
-
 /// Background task scheduler with 11 built-in tasks.
 ///
 /// Uses `DispatchSourceTimer` for periodic tasks and `Calendar`-based
@@ -899,6 +884,8 @@ actor FaeScheduler {
                 await runDailyIfNeeded("enhanced_morning_briefing") { await runEnhancedMorningBriefing() }
             }
         }
+
+        await runDueUserTasksIfNeeded(now: now)
     }
 
     private func runDailyIfNeeded(_ name: String, _ action: () async -> Void) async {
@@ -910,6 +897,134 @@ actor FaeScheduler {
         await action()
     }
 
+    private func schedulerPrompt(for task: SchedulerTask) -> String {
+        """
+        [USER SCHEDULED TASK]
+        Task name: \(task.name)
+        Task instructions: \(task.action)
+
+        Run this scheduled task on the user's behalf. Prefer relevant skills when they help, and stay within the scheduled-task tool allowlist for this run.
+        """
+    }
+
+    private func persistSchedulerTasks(_ tasks: [SchedulerTask]) {
+        do {
+            try writeSchedulerTasks(tasks)
+        } catch {
+            NSLog("FaeScheduler: failed to persist scheduler tasks: %@", error.localizedDescription)
+        }
+    }
+
+    private func normalizedNextRun(for task: SchedulerTask, after reference: Date) -> String? {
+        schedulerNextRunString(for: task, after: reference)
+    }
+
+    private func ensureNextRun(for task: inout SchedulerTask, after reference: Date) -> Bool {
+        if let nextRun = task.nextRun,
+           schedulerISO8601Formatter.date(from: nextRun) != nil
+        {
+            return false
+        }
+
+        let updated = normalizedNextRun(for: task, after: reference)
+        guard task.nextRun != updated else { return false }
+        task.nextRun = updated
+        return true
+    }
+
+    private func recordSuccessfulRun(taskID: String, at runAt: Date, reason: String) async {
+        runHistory[taskID, default: []].append(runAt)
+
+        guard let store = persistenceStore else { return }
+
+        let record = TaskRunRecord(
+            taskID: taskID,
+            idempotencyKey: "\(reason):\(taskID):\(Int(runAt.timeIntervalSince1970))",
+            state: .success,
+            attempt: 0,
+            updatedAt: runAt,
+            lastError: nil
+        )
+
+        do {
+            try await store.insertRun(record)
+        } catch {
+            NSLog("FaeScheduler: failed to persist run for '%@': %@", taskID, error.localizedDescription)
+        }
+    }
+
+    private func dispatchUserTask(_ task: SchedulerTask, silent: Bool) async -> Bool {
+        guard let handler = proactiveQueryHandler else {
+            NSLog("FaeScheduler: no proactive query handler for user task '%@'", task.id)
+            return false
+        }
+
+        let allowedTools = Set(normalizedAutonomousSchedulerTools(from: task.allowedTools))
+        await handler(
+            schedulerPrompt(for: task),
+            silent,
+            task.id,
+            allowedTools,
+            true
+        )
+        return true
+    }
+
+    @discardableResult
+    private func runUserTaskIfExists(id: String, at reference: Date, silent: Bool, reason: String) async -> Bool {
+        var tasks = readSchedulerTasks()
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.kind == "user" }) else {
+            return false
+        }
+
+        let task = tasks[index]
+        guard task.enabled, !disabledTaskIDs.contains(task.id) else {
+            NSLog("FaeScheduler: user task '%@' is disabled", task.id)
+            return true
+        }
+
+        guard await dispatchUserTask(task, silent: silent) else {
+            return true
+        }
+
+        tasks[index].nextRun = normalizedNextRun(for: task, after: reference)
+        persistSchedulerTasks(tasks)
+        await recordSuccessfulRun(taskID: task.id, at: reference, reason: reason)
+        return true
+    }
+
+    private func runDueUserTasksIfNeeded(now: Date) async {
+        var tasks = readSchedulerTasks()
+        var didChangeTasks = false
+
+        for index in tasks.indices {
+            guard tasks[index].kind == "user" else { continue }
+
+            if ensureNextRun(for: &tasks[index], after: now) {
+                didChangeTasks = true
+            }
+
+            guard tasks[index].enabled, !disabledTaskIDs.contains(tasks[index].id) else { continue }
+            guard let nextRunString = tasks[index].nextRun,
+                  let nextRunDate = schedulerISO8601Formatter.date(from: nextRunString),
+                  nextRunDate <= now
+            else {
+                continue
+            }
+
+            let task = tasks[index]
+            guard await dispatchUserTask(task, silent: true) else { continue }
+
+            tasks[index].nextRun = normalizedNextRun(for: task, after: now)
+            didChangeTasks = true
+            await recordSuccessfulRun(taskID: task.id, at: now, reason: "scheduled")
+        }
+
+        if didChangeTasks {
+            persistSchedulerTasks(tasks)
+        }
+    }
+
     // MARK: - External Task Control
 
     /// Trigger a named task to run immediately (from FaeCore command or SchedulerTriggerTool).
@@ -919,6 +1034,7 @@ actor FaeScheduler {
             NSLog("FaeScheduler: task '%@' is disabled", id)
             return
         }
+        let runAt = Date()
         switch id {
         case "memory_reflect":    await runMemoryReflect()
         case "memory_reindex":    await runMemoryReindex()
@@ -938,41 +1054,28 @@ actor FaeScheduler {
         case "overnight_work":         await runOvernightWork()
         case "enhanced_morning_briefing": await runEnhancedMorningBriefing()
         default:
-            NSLog("FaeScheduler: unknown task id '%@'", id)
-        }
-        runHistory[id, default: []].append(Date())
-
-        // Persist the run to the store
-        if let store = persistenceStore {
-            let record = TaskRunRecord(
-                taskID: id, idempotencyKey: "trigger:\(id):\(Int(Date().timeIntervalSince1970))",
-                state: .success, attempt: 0,
-                updatedAt: Date(), lastError: nil
-            )
-            do {
-                try await store.insertRun(record)
-            } catch {
-                NSLog("FaeScheduler: failed to persist trigger run: %@", error.localizedDescription)
+            if await runUserTaskIfExists(id: id, at: runAt, silent: true, reason: "trigger") {
+                return
             }
+            NSLog("FaeScheduler: unknown task id '%@'", id)
+            return
         }
+        await recordSuccessfulRun(taskID: id, at: runAt, reason: "trigger")
     }
 
     /// Delete a user-created scheduled task (builtin tasks cannot be deleted).
     func deleteUserTask(id: String) async {
-        guard let schedulerURL = Self.schedulerFileURL() else {
-            NSLog("FaeScheduler: scheduler file path unavailable")
+        var tasks = readSchedulerTasks()
+        guard let index = tasks.firstIndex(where: { $0.id == id && $0.kind == "user" }) else {
+            NSLog("FaeScheduler: task '%@' not found or not deletable", id)
             return
         }
-        do {
-            let didDelete = try Self.deleteUserTaskFromFile(id: id, fileURL: schedulerURL)
-            if didDelete {
-                NSLog("FaeScheduler: deleted user task '%@'", id)
-            } else {
-                NSLog("FaeScheduler: task '%@' not found or not deletable", id)
-            }
-        } catch {
-            NSLog("FaeScheduler: failed to delete task '%@': %@", id, error.localizedDescription)
-        }
+
+        tasks.remove(at: index)
+        persistSchedulerTasks(tasks)
+        disabledTaskIDs.remove(id)
+        runHistory[id] = nil
+        NSLog("FaeScheduler: deleted user task '%@'", id)
     }
 
     func setTaskEnabled(id: String, enabled: Bool) async {
@@ -980,6 +1083,15 @@ actor FaeScheduler {
             disabledTaskIDs.remove(id)
         } else {
             disabledTaskIDs.insert(id)
+        }
+
+        var tasks = readSchedulerTasks()
+        if let index = tasks.firstIndex(where: { $0.id == id }) {
+            tasks[index].enabled = enabled
+            if enabled {
+                _ = ensureNextRun(for: &tasks[index], after: Date())
+            }
+            persistSchedulerTasks(tasks)
         }
 
         // Persist to store
@@ -1032,6 +1144,7 @@ actor FaeScheduler {
 
     func statusAll() async -> [[String: Any]] {
         var ids = Set(runHistory.keys).union(disabledTaskIDs)
+        ids.formUnion(readSchedulerTasks().map(\.id))
 
         // Include all known task IDs from the builtin list
         let builtinIDs = [
@@ -1051,57 +1164,6 @@ actor FaeScheduler {
                 "last_run_at": runHistory[id]?.last?.timeIntervalSince1970 as Any,
             ]
         }
-    }
-
-    // MARK: - Scheduler File Helpers
-
-    private static func schedulerFileURL() -> URL? {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-
-        return appSupport.appendingPathComponent("fae/scheduler.json")
-    }
-
-    private static func deleteUserTaskFromFile(id: String, fileURL: URL) throws -> Bool {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: fileURL.path) else { return false }
-
-        let data = try Data(contentsOf: fileURL)
-        let decoder = JSONDecoder()
-
-        var tasks: [SchedulerPersistedTask]
-        var wrapped = false
-
-        if let envelope = try? decoder.decode(SchedulerPersistedEnvelope.self, from: data) {
-            tasks = envelope.tasks
-            wrapped = true
-        } else if let array = try? decoder.decode([SchedulerPersistedTask].self, from: data) {
-            tasks = array
-        } else {
-            return false
-        }
-
-        guard let index = tasks.firstIndex(where: { $0.id == id && $0.kind == "user" }) else {
-            return false
-        }
-
-        tasks.remove(at: index)
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let output: Data
-        if wrapped {
-            output = try encoder.encode(SchedulerPersistedEnvelope(tasks: tasks))
-        } else {
-            output = try encoder.encode(tasks)
-        }
-
-        try fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try output.write(to: fileURL, options: .atomic)
-        return true
     }
 
     // MARK: - Timer Helpers

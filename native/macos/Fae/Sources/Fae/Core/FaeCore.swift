@@ -10,6 +10,16 @@ import Foundation
 /// to the appropriate subsystem.
 @MainActor
 final class FaeCore: ObservableObject, HostCommandSender {
+    private struct PendingTextInjection {
+        enum Mode {
+            case standard
+            case desktop
+        }
+
+        let text: String
+        let mode: Mode
+    }
+
     let eventBus = FaeEventBus()
 
     @Published var pipelineState: FaePipelineState = .stopped
@@ -100,7 +110,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     /// Text queued for injection while the pipeline is still loading.
     /// Drained once `pipelineCoordinator` becomes non-nil and pipeline reaches `.running`.
-    private var pendingTextInjections: [String] = []
+    private var pendingTextInjections: [PendingTextInjection] = []
 
     // MARK: - Lifecycle
 
@@ -355,8 +365,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 // Drain any text that was queued while models were loading.
                 if !pendingTextInjections.isEmpty {
                     NSLog("FaeCore: draining %d queued text injections", pendingTextInjections.count)
-                    for text in pendingTextInjections {
-                        await coordinator.injectText(text)
+                    for injection in pendingTextInjections {
+                        switch injection.mode {
+                        case .standard:
+                            await coordinator.injectText(injection.text)
+                        case .desktop:
+                            await coordinator.injectDesktopText(injection.text)
+                        }
                     }
                     pendingTextInjections.removeAll()
                 }
@@ -867,6 +882,59 @@ final class FaeCore: ObservableObject, HostCommandSender {
         return ["payload": ["speaker_profiles": profiles] as [String: Any]]
     }
 
+    func coworkWorkspaceSnapshot() async -> CoworkWorkspaceSnapshot {
+        let skillManager = skillManagerRef ?? SkillManager()
+        let activeSkillNames = Set(await skillManager.activatedSkillNames())
+        let discoveredSkills = await skillManager.discoverSkills()
+            .map { metadata in
+                CoworkSkillSummary(
+                    id: metadata.name,
+                    description: metadata.description,
+                    type: metadata.type.rawValue,
+                    tier: metadata.tier.rawValue,
+                    isEnabled: metadata.isEnabled,
+                    isActive: activeSkillNames.contains(metadata.name)
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.isActive != rhs.isActive {
+                    return lhs.isActive && !rhs.isActive
+                }
+                return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
+            }
+
+        let registry = ToolRegistry.buildDefault()
+        let tools = registry.allTools
+            .filter { registry.isToolAllowed($0.name, mode: toolMode) }
+            .sorted { $0.name < $1.name }
+            .map {
+                CoworkToolSummary(
+                    name: $0.name,
+                    description: $0.description,
+                    riskLevel: $0.riskLevel.rawValue
+                )
+            }
+
+        let schedulerStatuses = await scheduler?.statusAll() ?? []
+        let schedulerStatusMap = schedulerStatuses.reduce(into: [String: CoworkSchedulerStatus]()) { result, entry in
+            guard let id = entry["id"] as? String else { return }
+            let enabled = entry["enabled"] as? Bool ?? true
+            let lastRunAt = (entry["last_run_at"] as? TimeInterval).map(Date.init(timeIntervalSince1970:))
+            result[id] = CoworkSchedulerStatus(enabled: enabled, lastRunAt: lastRunAt)
+        }
+
+        return CoworkWorkspaceSnapshot(
+            pipelineStateLabel: pipelineState.label,
+            toolMode: toolMode,
+            thinkingEnabled: thinkingEnabled,
+            hasOwnerSetUp: hasOwnerSetUp,
+            userName: userName,
+            tools: tools,
+            skills: discoveredSkills,
+            schedulerStatusesByID: schedulerStatusMap
+        )
+    }
+
     // MARK: - Commands
 
     func injectText(_ text: String) {
@@ -874,8 +942,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
             Task { await coordinator.injectText(text) }
         } else {
             // Pipeline still loading — queue for delivery when ready.
-            pendingTextInjections.append(text)
+            pendingTextInjections.append(PendingTextInjection(text: text, mode: .standard))
             NSLog("FaeCore: queued text injection (%d queued) — pipeline not ready", pendingTextInjections.count)
+        }
+    }
+
+    func injectDesktopText(_ text: String) {
+        if let coordinator = pipelineCoordinator {
+            Task { await coordinator.injectDesktopText(text) }
+        } else {
+            pendingTextInjections.append(PendingTextInjection(text: text, mode: .desktop))
+            NSLog("FaeCore: queued desktop text injection (%d queued) — pipeline not ready", pendingTextInjections.count)
         }
     }
 

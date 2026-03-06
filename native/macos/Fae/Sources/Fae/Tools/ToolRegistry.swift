@@ -137,18 +137,16 @@ final class ToolRegistry: Sendable {
     /// - `read_write`: read tools + write/edit/self_config + scheduler mutation
     /// - `full`: all tools (with approval for writes)
     /// - `full_no_approval`: all tools
-    func toolSchemas(for mode: String) -> String {
-        let allowed = tools.values.filter { isToolAllowed($0.name, mode: mode) }
+    func toolSchemas(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> String {
+        let allowed = filteredTools(for: mode, limitedTo: allowedNames)
         return schemaString(for: allowed)
     }
 
     /// Compact tool summary for prompt context when native tool specs are also supplied.
     ///
     /// Keeps prompt tokens low while still exposing high-level capability surface.
-    func compactToolSummary(for mode: String) -> String {
-        let allowed = tools.values
-            .filter { isToolAllowed($0.name, mode: mode) }
-            .sorted { $0.name < $1.name }
+    func compactToolSummary(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> String {
+        let allowed = filteredTools(for: mode, limitedTo: allowedNames)
 
         guard !allowed.isEmpty else { return "" }
 
@@ -203,14 +201,24 @@ final class ToolRegistry: Sendable {
     ///
     /// Returns `nil` when tools are disabled (`off` mode) so the caller
     /// can distinguish "no tools" from "empty tool list".
-    func nativeToolSpecs(for mode: String) -> [ToolSpec]? {
+    func nativeToolSpecs(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> [ToolSpec]? {
         guard mode != "off" else { return nil }
-        let allowed = tools.values.filter { isToolAllowed($0.name, mode: mode) }
+        let allowed = filteredTools(for: mode, limitedTo: allowedNames)
         guard !allowed.isEmpty else { return nil }
         return allowed.sorted { $0.name < $1.name }.map { $0.toolSpec }
     }
 
     // MARK: - Private
+
+    private func filteredTools(for mode: String, limitedTo allowedNames: Set<String>? = nil) -> [any Tool] {
+        tools.values
+            .filter { tool in
+                guard isToolAllowed(tool.name, mode: mode) else { return false }
+                guard let allowedNames else { return true }
+                return allowedNames.contains(tool.name)
+            }
+            .sorted { $0.name < $1.name }
+    }
 
     private func schemaString(for toolList: [any Tool]) -> String {
         toolList

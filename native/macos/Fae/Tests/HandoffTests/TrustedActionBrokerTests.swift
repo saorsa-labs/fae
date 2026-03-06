@@ -13,6 +13,7 @@ final class TrustedActionBrokerTests: XCTestCase {
         profile: PolicyProfile = .balanced,
         source: ActionSource = .voice,
         schedulerTaskId: String? = nil,
+        schedulerAllowedTools: Set<String> = [],
         schedulerConsentGranted: Bool = false
     ) -> ActionIntent {
         ActionIntent(
@@ -27,6 +28,7 @@ final class TrustedActionBrokerTests: XCTestCase {
             policyProfile: profile,
             argumentSummary: "test",
             schedulerTaskId: schedulerTaskId,
+            schedulerAllowedTools: schedulerAllowedTools,
             schedulerConsentGranted: schedulerConsentGranted
         )
     }
@@ -286,6 +288,29 @@ final class TrustedActionBrokerTests: XCTestCase {
             XCTAssertEqual(reason.code, .schedulerAutoAllowed)
         } else {
             XCTFail("Expected allow for scheduler allowlisted tool")
+        }
+    }
+
+    func testSchedulerUserTaskUsesExplicitAllowedTools() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["run_skill"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(
+                toolName: "run_skill",
+                source: .scheduler,
+                schedulerTaskId: "user_daily_brief",
+                schedulerAllowedTools: ["activate_skill", "run_skill"],
+                schedulerConsentGranted: true
+            )
+        )
+
+        if case .allow(let reason) = decision {
+            XCTAssertEqual(reason.code, .schedulerAutoAllowed)
+        } else {
+            XCTFail("Expected allow for user scheduler task with explicit allowlist")
         }
     }
 }

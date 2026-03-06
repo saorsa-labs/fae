@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Scheduler Task JSON Model
 
 /// JSON-serializable scheduler task for persistence.
-private struct SchedulerTask: Codable {
+struct SchedulerTask: Codable {
     var id: String
     var name: String
     var kind: String // "builtin" or "user"
@@ -12,26 +12,116 @@ private struct SchedulerTask: Codable {
     var scheduleParams: [String: String]
     var action: String
     var nextRun: String?
+    var allowedTools: [String]?
 }
 
-private struct SchedulerFileEnvelope: Codable {
+struct SchedulerFileEnvelope: Codable {
     var tasks: [SchedulerTask]
 }
 
+/// Shared scheduler file override used by tests to avoid touching the real app state.
+var schedulerFileURLOverride: URL?
+
 /// Shared path for the scheduler task file.
-private let schedulerFilePath: String = {
+func resolvedSchedulerFileURL() -> URL {
+    if let schedulerFileURLOverride {
+        return schedulerFileURLOverride
+    }
     let appSupport = FileManager.default.urls(
         for: .applicationSupportDirectory,
         in: .userDomainMask
     ).first ?? FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support")
-    return appSupport.appendingPathComponent("fae/scheduler.json").path
+    return appSupport.appendingPathComponent("fae/scheduler.json")
+}
+
+let schedulerISO8601Formatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
 }()
 
+let defaultAutonomousSchedulerTools: Set<String> = [
+    "activate_skill", "run_skill",
+    "web_search", "fetch_url",
+    "calendar", "reminders", "contacts", "mail", "notes",
+    "scheduler_list",
+]
+
+func normalizedAutonomousSchedulerTools(from raw: [String]?) -> [String] {
+    let requested = raw ?? []
+    let cleaned = requested
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        .filter { !$0.isEmpty }
+    let allowed = Set(cleaned).intersection(defaultAutonomousSchedulerTools)
+    let final = allowed.isEmpty ? defaultAutonomousSchedulerTools : allowed
+    return final.sorted()
+}
+
+func schedulerNextRunDate(for task: SchedulerTask, after reference: Date = Date()) -> Date? {
+    let calendar = Calendar.current
+    let anchor = reference.addingTimeInterval(1)
+
+    switch task.scheduleType.lowercased() {
+    case "interval":
+        if let minutes = task.scheduleParams["minutes"].flatMap(Int.init), minutes > 0 {
+            return reference.addingTimeInterval(TimeInterval(minutes * 60))
+        }
+        if let hours = task.scheduleParams["hours"].flatMap(Int.init), hours > 0 {
+            return reference.addingTimeInterval(TimeInterval(hours * 3600))
+        }
+        return nil
+
+    case "daily":
+        guard let hour = task.scheduleParams["hour"].flatMap(Int.init),
+              let minute = task.scheduleParams["minute"].flatMap(Int.init)
+        else { return nil }
+        var components = calendar.dateComponents([.year, .month, .day], from: reference)
+        components.hour = hour
+        components.minute = minute
+        components.second = 0
+        if let sameDay = calendar.date(from: components), sameDay > reference {
+            return sameDay
+        }
+        return calendar.date(byAdding: .day, value: 1, to: calendar.date(from: components) ?? reference)
+
+    case "weekly":
+        guard let day = task.scheduleParams["day"],
+              let weekday = schedulerWeekday(for: day),
+              let hour = task.scheduleParams["hour"].flatMap(Int.init),
+              let minute = task.scheduleParams["minute"].flatMap(Int.init)
+        else { return nil }
+        let components = DateComponents(hour: hour, minute: minute, second: 0, weekday: weekday)
+        return calendar.nextDate(after: anchor, matching: components, matchingPolicy: .nextTime)
+
+    default:
+        return nil
+    }
+}
+
+func schedulerNextRunString(for task: SchedulerTask, after reference: Date = Date()) -> String? {
+    guard let nextRun = schedulerNextRunDate(for: task, after: reference) else { return nil }
+    return schedulerISO8601Formatter.string(from: nextRun)
+}
+
+private func schedulerWeekday(for value: String) -> Int? {
+    switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "sunday": return 1
+    case "monday": return 2
+    case "tuesday": return 3
+    case "wednesday": return 4
+    case "thursday": return 5
+    case "friday": return 6
+    case "saturday": return 7
+    default: return nil
+    }
+}
+
 /// Read scheduler tasks from disk.
-private func readSchedulerTasks() -> [SchedulerTask] {
-    guard FileManager.default.fileExists(atPath: schedulerFilePath),
-          let data = FileManager.default.contents(atPath: schedulerFilePath)
+func readSchedulerTasks() -> [SchedulerTask] {
+    let fileURL = resolvedSchedulerFileURL()
+    guard FileManager.default.fileExists(atPath: fileURL.path),
+          let data = FileManager.default.contents(atPath: fileURL.path)
     else {
         return defaultBuiltinTasks()
     }
@@ -48,40 +138,44 @@ private func readSchedulerTasks() -> [SchedulerTask] {
 }
 
 /// Write scheduler tasks to disk.
-private func writeSchedulerTasks(_ tasks: [SchedulerTask]) throws {
+func writeSchedulerTasks(_ tasks: [SchedulerTask]) throws {
+    let fileURL = resolvedSchedulerFileURL()
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(SchedulerFileEnvelope(tasks: tasks))
-    let dir = (schedulerFilePath as NSString).deletingLastPathComponent
-    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    try data.write(to: URL(fileURLWithPath: schedulerFilePath))
+    try FileManager.default.createDirectory(
+        at: fileURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true,
+        attributes: nil
+    )
+    try data.write(to: fileURL, options: .atomic)
 }
 
 /// Default builtin tasks (read-only, used when no file exists yet).
 private func defaultBuiltinTasks() -> [SchedulerTask] {
     [
         SchedulerTask(id: "memory_reflect", name: "Memory Reflect", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "memory_reflect"),
+                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "memory_reflect", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_reindex", name: "Memory Reindex", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "3"], action: "memory_reindex"),
+                       scheduleType: "interval", scheduleParams: ["hours": "3"], action: "memory_reindex", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_migrate", name: "Memory Migrate", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "1"], action: "memory_migrate"),
+                       scheduleType: "interval", scheduleParams: ["hours": "1"], action: "memory_migrate", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_gc", name: "Memory GC", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "3", "minute": "30"], action: "memory_gc"),
+                       scheduleType: "daily", scheduleParams: ["hour": "3", "minute": "30"], action: "memory_gc", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_backup", name: "Memory Backup", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "2", "minute": "0"], action: "memory_backup"),
+                       scheduleType: "daily", scheduleParams: ["hour": "2", "minute": "0"], action: "memory_backup", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "check_fae_update", name: "Check for Updates", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "check_fae_update"),
+                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "check_fae_update", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "noise_budget_reset", name: "Noise Budget Reset", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "0", "minute": "0"], action: "noise_budget_reset"),
+                       scheduleType: "daily", scheduleParams: ["hour": "0", "minute": "0"], action: "noise_budget_reset", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "morning_briefing", name: "Morning Briefing", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "8", "minute": "0"], action: "morning_briefing"),
+                       scheduleType: "daily", scheduleParams: ["hour": "8", "minute": "0"], action: "morning_briefing", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "skill_proposals", name: "Skill Proposals", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "11", "minute": "0"], action: "skill_proposals"),
+                       scheduleType: "daily", scheduleParams: ["hour": "11", "minute": "0"], action: "skill_proposals", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "stale_relationships", name: "Stale Relationships", kind: "builtin", enabled: true,
-                       scheduleType: "weekly", scheduleParams: ["day": "sunday", "hour": "10", "minute": "0"], action: "stale_relationships"),
+                       scheduleType: "weekly", scheduleParams: ["day": "sunday", "hour": "10", "minute": "0"], action: "stale_relationships", nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "skill_health_check", name: "Skill Health Check", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["minutes": "5"], action: "skill_health_check"),
+                       scheduleType: "interval", scheduleParams: ["minutes": "5"], action: "skill_health_check", nextRun: nil, allowedTools: nil),
     ]
 }
 
@@ -146,7 +240,8 @@ struct SchedulerCreateTool: Tool {
         {"name": "string (required)", \
         "schedule_type": "string (required: interval|daily|weekly)", \
         "schedule_params": "object (e.g. {hours: '6'} or {hour: '8', minute: '0'} or {day: 'monday'})", \
-        "action": "string (required: description of what to do)"}
+        "action": "string (required: description of what to do)", \
+        "allowed_tools": "array<string> (optional: subset of autonomous scheduler tools such as activate_skill, run_skill, web_search, fetch_url, calendar, reminders, contacts, mail, notes, scheduler_list)"}
         """
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
@@ -164,17 +259,22 @@ struct SchedulerCreateTool: Tool {
         }
 
         let params = (input["schedule_params"] as? [String: Any])?.compactMapValues { "\($0)" } ?? [:]
+        let requestedTools = input["allowed_tools"] as? [String]
+        let allowedTools = normalizedAutonomousSchedulerTools(from: requestedTools)
 
         let id = "user_\(UUID().uuidString.prefix(8).lowercased())"
-        let task = SchedulerTask(
+        var task = SchedulerTask(
             id: id,
             name: taskName,
             kind: "user",
             enabled: true,
             scheduleType: scheduleType,
             scheduleParams: params,
-            action: action
+            action: action,
+            nextRun: nil,
+            allowedTools: allowedTools
         )
+        task.nextRun = schedulerNextRunString(for: task, after: Date())
 
         var tasks = readSchedulerTasks()
         tasks.append(task)
@@ -201,7 +301,8 @@ struct SchedulerUpdateTool: Tool {
         {"id": "string (required)", \
         "enabled": "bool (optional)", \
         "schedule_type": "string (optional)", \
-        "schedule_params": "object (optional)"}
+        "schedule_params": "object (optional)", \
+        "allowed_tools": "array<string> (optional)"}
         """
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
@@ -234,6 +335,14 @@ struct SchedulerUpdateTool: Tool {
         }
         if let params = input["schedule_params"] as? [String: Any] {
             tasks[index].scheduleParams = params.compactMapValues { "\($0)" }
+        }
+        if input.keys.contains("allowed_tools") {
+            tasks[index].allowedTools = normalizedAutonomousSchedulerTools(from: input["allowed_tools"] as? [String])
+        }
+        if input["schedule_type"] != nil || input["schedule_params"] != nil {
+            tasks[index].nextRun = schedulerNextRunString(for: tasks[index], after: Date())
+        } else if let enabled = input["enabled"] as? Bool, enabled, tasks[index].nextRun == nil {
+            tasks[index].nextRun = schedulerNextRunString(for: tasks[index], after: Date())
         }
 
         do {

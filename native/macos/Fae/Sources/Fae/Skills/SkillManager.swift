@@ -329,6 +329,23 @@ actor SkillManager {
             .joined(separator: "\n\n")
     }
 
+    /// Names of skills that are currently active in the prompt/runtime context.
+    func activatedSkillNames() -> [String] {
+        guard !activatedBodies.isEmpty else { return [] }
+
+        var activeNames: [String] = []
+        for skillName in activatedBodies.keys.sorted() {
+            guard let metadata = resolvedSkillMetadata(named: skillName),
+                  metadata.isEnabled
+            else {
+                activatedBodies.removeValue(forKey: skillName)
+                continue
+            }
+            activeNames.append(skillName)
+        }
+        return activeNames
+    }
+
     // MARK: - Execution
 
     /// Execute a skill's Python script by name with the given input.

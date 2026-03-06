@@ -200,6 +200,8 @@ extension Notification.Name {
     static let faeOpenSettingsRequested = Notification.Name("faeOpenSettingsRequested")
     /// Posted when voice-command routing asks the app to close the Settings window.
     static let faeCloseSettingsRequested = Notification.Name("faeCloseSettingsRequested")
+    /// Posted when the user opens the cowork workspace from the orb UI or menus.
+    static let faeOpenCoworkRequested = Notification.Name("faeOpenCoworkRequested")
     /// Posted by canvas interactions or voice authority flow to request a governed settings mutation.
     /// userInfo: ["action": String, "value": String, "source": String]
     static let faeGovernanceActionRequested = Notification.Name("faeGovernanceActionRequested")
