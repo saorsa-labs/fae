@@ -66,6 +66,7 @@ let package = Package(
                 .copy("Resources/default.metallib"),
                 .copy("Resources/SOUL.md"),
                 .copy("Resources/HEARTBEAT.md"),
+                .copy("Resources/damage-control-default.yaml"),
                 .copy("Resources/Voices/fae.wav"),
                 .copy("Resources/App/AppIconFace.jpg"),
             ],

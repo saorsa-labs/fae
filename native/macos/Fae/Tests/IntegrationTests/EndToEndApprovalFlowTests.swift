@@ -114,7 +114,7 @@ final class EndToEndApprovalFlowTests: XCTestCase {
         let events = await collector.allEvents()
 
         let requested = events.compactMap { event -> String? in
-            if case .approvalRequested(_, let name, _) = event { return name }
+            if case .approvalRequested(_, let name, _, _, _) = event { return name }
             return nil
         }
         let resolved = events.compactMap { event -> Bool? in

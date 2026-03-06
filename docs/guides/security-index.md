@@ -14,7 +14,10 @@ This index is the entry point for Fae's security architecture, policy, rollout, 
 
 ## Runtime policy and contributor guardrails
 
-- [Security Contributor Guidelines](security-contributor-guidelines.md)  
+- [**Damage Control Policy**](damage-control.md)
+  Layer-zero pre-broker safety net: three-tier block/disaster/confirm-manual model, dual trust model for local vs. non-local co-work, physical-click-only approval for catastrophic operations.
+
+- [Security Contributor Guidelines](security-contributor-guidelines.md)
   Non-bypassable invariants and engineering guardrails.
 
 - [Security PR Review Checklist](../checklists/security-pr-review-checklist.md)  
@@ -61,6 +64,7 @@ This index is the entry point for Fae's security architecture, policy, rollout, 
 
 ## Related implementation files (code anchors)
 
+- `native/macos/Fae/Sources/Fae/Tools/DamageControlPolicy.swift`
 - `native/macos/Fae/Sources/Fae/Pipeline/PipelineCoordinator.swift`
 - `native/macos/Fae/Sources/Fae/Tools/TrustedActionBroker.swift`
 - `native/macos/Fae/Sources/Fae/Tools/CapabilityTicket.swift`

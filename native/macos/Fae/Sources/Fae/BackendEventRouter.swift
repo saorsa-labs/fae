@@ -241,6 +241,8 @@ final class BackendEventRouter: Sendable {
             if let requestId = payload["request_id"] { userInfo["request_id"] = requestId }
             if let toolName = payload["tool_name"] as? String { userInfo["tool_name"] = toolName }
             if let inputJson = payload["input_json"] as? String { userInfo["input_json"] = inputJson }
+            if let manualOnly = payload["manual_only"] as? Bool { userInfo["manual_only"] = manualOnly }
+            if let disasterLevel = payload["disaster_level"] as? Bool { userInfo["disaster_level"] = disasterLevel }
             NotificationCenter.default.post(
                 name: .faeApprovalRequested, object: nil, userInfo: userInfo
             )

@@ -304,6 +304,28 @@ Fae now uses a **core-enforced security spine** (not prompt-only safety):
 
 See: [Security Index](docs/guides/security-index.md), [Security Autonomy Boundary + Execution Plan](docs/guides/security-autonomy-boundary-and-execution-plan.md), [Security Launch SLOs](docs/guides/security-autonomy-launch-slos.md), and [Security PR Review Checklist](docs/checklists/security-pr-review-checklist.md).
 
+### Safety & Autonomy Boundaries
+
+Fae is designed to be highly autonomous — that is the point. But some operations are destructive enough that no amount of autonomy justifies executing them silently.
+
+**Layer-zero Damage Control** runs before every tool call, before the broker, before any progressive approval logic. It enforces a three-tier response model:
+
+| Tier | UI | Examples |
+|---|---|---|
+| **Block** | Hard deny, no dialog, no override | `rm -rf /`, disk format (`mkfs`, `diskutil erase`), raw disk write (`dd of=/dev/*`), `chmod -R 000 /` |
+| **Disaster Warning** | Red-border overlay, physical click required, voice not accepted | `rm -rf ~/`, `rm -rf ~/Documents`, `rm -rf ~/Library` |
+| **Confirm Manual** | Orange-border overlay, physical click required, voice not accepted | `sudo rm -rf`, `curl \| bash`, `wget \| bash`, `launchctl disable system/`, `osascript System Events` |
+
+**Dual trust model for credential access:**
+
+When a non-local (API/cloud co-work) model is active, the following paths are zero-access — reads and writes are hard-blocked, no dialog:
+
+`~/.ssh` · `~/.gnupg` · `~/.aws` · `~/.azure` · `~/.kube` · `~/.docker/config.json` · `~/.netrc` · `~/.npmrc`
+
+These credential blocks are inactive when the local MLX model is running. Fae's own data vault (`~/.fae-vault`) and data directory are always protected from deletion without manual confirmation.
+
+See: [Damage Control Policy](docs/guides/damage-control.md) for the full three-tier model, default rules, dual trust model, rollback story, and YAML schema reference.
+
 ## Configuration
 
 **Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
@@ -355,6 +377,7 @@ modelPreset = "auto"
 ### Guides
 
 - [Security Index](docs/guides/security-index.md)
+- [Damage Control Policy](docs/guides/damage-control.md)
 - [Memory Guide](docs/guides/Memory.md)
 - [Voice Identity Guide](docs/guides/voice-identity.md)
 - [Self-Modification Guide](docs/guides/self-modification.md)

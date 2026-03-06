@@ -31,11 +31,19 @@ struct ApprovalOverlayView: View {
                         removal: .opacity
                     ))
             } else if let request = controller.activeApproval {
-                ApprovalCard(request: request, controller: controller)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                        removal: .opacity
-                    ))
+                Group {
+                    if request.isDisasterLevel {
+                        DisasterWarningCard(request: request, controller: controller)
+                    } else if request.manualOnly {
+                        ManualApprovalCard(request: request, controller: controller)
+                    } else {
+                        ApprovalCard(request: request, controller: controller)
+                    }
+                }
+                .transition(.asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .opacity
+                ))
             }
         }
         .animation(.spring(duration: 0.3), value: controller.activeApproval?.id)
@@ -335,6 +343,137 @@ private struct ToolModeCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+    }
+}
+
+// MARK: - Manual Approval Card (damage-control confirm_manual tier)
+
+/// Standard manual-only confirmation. No voice hint, no "Always" / "Allow All".
+/// Used when the operation is dangerous but has legitimate uses (sudo delete, pipe-shell, etc.).
+private struct ManualApprovalCard: View {
+    let request: ApprovalOverlayController.ApprovalRequest
+    let controller: ApprovalOverlayController
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Manual Approval Required")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.orange)
+
+            Text(request.description)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.primary)
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            Text("This operation requires a deliberate button press. Voice approval is not accepted.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            HStack(spacing: 8) {
+                Button(action: { controller.deny() }) {
+                    Text("No")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .keyboardShortcut(.escape, modifiers: [])
+
+                Button(action: { controller.approve() }) {
+                    Text("Proceed")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .keyboardShortcut(.return, modifiers: [])
+            }
+        }
+        .padding(14)
+        .frame(width: 320)
+        .background(.ultraThinMaterial)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.orange.opacity(0.6), lineWidth: 1.5)
+        )
+        .overlay(alignment: .topTrailing) {
+            DismissOverlayButton(action: controller.deny)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .orange.opacity(0.15), radius: 8, y: 4)
+    }
+}
+
+// MARK: - Disaster Warning Card (damage-control disaster tier)
+
+/// Extreme manual-only overlay for catastrophic, irreversible operations.
+/// Red border, bold DISASTER WARNING header. No voice, no "Always", no timeout.
+/// Only a deliberate physical click on "Proceed Anyway" can approve.
+private struct DisasterWarningCard: View {
+    let request: ApprovalOverlayController.ApprovalRequest
+    let controller: ApprovalOverlayController
+
+    var body: some View {
+        VStack(spacing: 12) {
+            VStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(.red)
+
+                Text("DISASTER WARNING")
+                    .font(.system(size: 13, weight: .heavy))
+                    .foregroundColor(.red)
+            }
+
+            Text(request.description)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.primary)
+                .lineLimit(4)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            Text("This operation is IRREVERSIBLE. Voice approval is not accepted.\nOnly click \"Proceed Anyway\" if you are absolutely certain.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.red.opacity(0.85))
+                .multilineTextAlignment(.center)
+
+            HStack(spacing: 8) {
+                Button(action: { controller.deny() }) {
+                    Text("Cancel")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .keyboardShortcut(.escape, modifiers: [])
+
+                Button(action: { controller.approve() }) {
+                    Text("Proceed Anyway")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+        .background(.ultraThinMaterial)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.red.opacity(0.8), lineWidth: 2)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .red.opacity(0.2), radius: 12, y: 6)
     }
 }
 

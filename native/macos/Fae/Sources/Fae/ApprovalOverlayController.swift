@@ -39,6 +39,11 @@ final class ApprovalOverlayController: ObservableObject {
         let toolName: String
         /// Human-readable description of the tool action.
         let description: String
+        /// When true, voice "yes/no" is blocked and "Always"/"Allow All" are hidden.
+        /// Set by `DamageControlPolicy` for `disaster` and `confirmManual` verdicts.
+        let manualOnly: Bool
+        /// When true, the overlay shows the DISASTER WARNING variant with a red border.
+        let isDisasterLevel: Bool
     }
 
     struct InputField: Identifiable {
@@ -456,11 +461,15 @@ final class ApprovalOverlayController: ObservableObject {
 
         let toolName = info["tool_name"] as? String ?? "tool"
         let description = Self.formatDescription(toolName: toolName, inputJson: info["input_json"] as? String)
+        let manualOnly = info["manual_only"] as? Bool ?? false
+        let isDisasterLevel = info["disaster_level"] as? Bool ?? false
 
         activeApproval = ApprovalRequest(
             id: requestId,
             toolName: toolName,
-            description: description
+            description: description,
+            manualOnly: manualOnly,
+            isDisasterLevel: isDisasterLevel
         )
     }
 

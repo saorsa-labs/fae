@@ -1,0 +1,106 @@
+# Fae Damage Control Policy — Default Rules
+#
+# This file documents the default rule schema used by DamageControlPolicy.swift.
+# Rules are hardcoded in Swift for reliability. This file serves as the canonical
+# reference for what is enforced and why.
+#
+# Future: user overrides via damage-control-override.json in the Fae support directory.
+#
+# Actions:
+#   block         — hard deny, no dialog, no override (disk format, root wipeout)
+#   disaster      — DISASTER WARNING overlay, manual physical click required
+#   confirm_manual — standard manual-only overlay, no voice approval
+#
+# nonLocalOnly: true — rule only fires when a non-local (API/cloud) model is active
+
+# -------------------------------------------------------------------
+# Bash command pattern rules
+# -------------------------------------------------------------------
+bashToolPatterns:
+
+  # BLOCK — no recovery possible
+
+  - pattern: 'rm\s+-[^\s]*r[^\s]*\s+/\s*$'
+    reason: "Recursive deletion from filesystem root would destroy the entire system."
+    action: block
+
+  - pattern: 'mkfs\b|diskutil\s+erase\b|diskutil\s+zeroDisk\b'
+    reason: "Disk format or erase operation — data cannot be recovered."
+    action: block
+
+  - pattern: 'dd\s+.*\bof=/dev/(?!null\b)'
+    reason: "Raw disk write via dd — can corrupt the entire drive."
+    action: block
+
+  - pattern: 'chmod\s+-[^\s]*R[^\s]*\s+[0-]*\s+/\s*$'
+    reason: "Strip all permissions from filesystem root — system becomes unbootable."
+    action: block
+
+  # DISASTER — catastrophic but user may have a reason
+
+  - pattern: 'rm\s+-[^\s]*r[^\s]*\s+~/?\s*$'
+    reason: "Entire home directory deletion — all your files, configs, and data permanently lost."
+    action: disaster
+
+  - pattern: 'rm\s+-[^\s]*r[^\s]*\s+~/Documents\s*$|rm\s+-[^\s]*r[^\s]*\s+~/Desktop\s*$'
+    reason: "Deletion of a major user folder (Documents or Desktop) — irreversible data loss."
+    action: disaster
+
+  - pattern: 'rm\s+-[^\s]*r[^\s]*\s+~/Library\s*$'
+    reason: "Deletion of ~/Library — all app data, preferences, and keychains lost."
+    action: disaster
+
+  # CONFIRM MANUAL — dangerous but legitimate uses exist
+
+  - pattern: 'sudo\s+rm\s+-[^\s]*r'
+    reason: "Privileged recursive delete — requires deliberate confirmation."
+    action: confirm_manual
+
+  - pattern: 'curl\s+.*\|\s*(bash|sh|zsh|fish|python[0-9.]*)\b'
+    reason: "Curl-pipe-shell: downloading and immediately executing remote code."
+    action: confirm_manual
+
+  - pattern: 'wget\s+.*\|\s*(bash|sh|zsh|fish|python[0-9.]*)\b'
+    reason: "Wget-pipe-shell: downloading and immediately executing remote code."
+    action: confirm_manual
+
+  - pattern: 'launchctl\s+(bootout|disable)\s+system/'
+    reason: "Disabling a system-level launchd daemon — may break core macOS services."
+    action: confirm_manual
+
+  - pattern: 'osascript\s+-e\s+.*System\s+Events'
+    reason: "AppleScript system automation via osascript requires manual confirmation."
+    action: confirm_manual
+
+# -------------------------------------------------------------------
+# Zero-access paths — hard block reads AND writes (non-local model only)
+# -------------------------------------------------------------------
+zeroAccessPaths:
+  - path: "~/.ssh"
+    nonLocalOnly: true
+  - path: "~/.gnupg"
+    nonLocalOnly: true
+  - path: "~/.aws"
+    nonLocalOnly: true
+  - path: "~/.azure"
+    nonLocalOnly: true
+  - path: "~/.kube"
+    nonLocalOnly: true
+  - path: "~/.docker/config.json"
+    nonLocalOnly: true
+  - path: "~/.netrc"
+    nonLocalOnly: true
+  - path: "~/.npmrc"
+    nonLocalOnly: true
+
+# -------------------------------------------------------------------
+# No-delete paths — bash rm/mv on these paths → confirm_manual (always active)
+# -------------------------------------------------------------------
+noDeletePaths:
+  - path: "~/Library/Application Support/fae/"
+  - path: "~/.fae-vault"
+
+# -------------------------------------------------------------------
+# Read-only paths — deny writes/edits (empty by default; user-configurable)
+# -------------------------------------------------------------------
+readOnlyPaths: []

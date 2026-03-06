@@ -80,6 +80,9 @@ enum DecisionReasonCode: String, Sendable {
     case outboundPayloadRisk
     case approvedByUserGrant
     case schedulerAutoAllowed
+    case damageControlBlock
+    case damageControlDisaster
+    case damageControlConfirmManual
 }
 
 struct DecisionReason: Sendable {
@@ -99,7 +102,12 @@ enum SafetyTransform: String, Sendable {
 enum BrokerDecision: Sendable {
     case allow(reason: DecisionReason)
     case allowWithTransform(transform: SafetyTransform, reason: DecisionReason)
-    case confirm(prompt: ConfirmationPrompt, reason: DecisionReason)
+    /// Standard or damage-control confirmation.
+    ///
+    /// - `manualOnly`: When true, voice "yes/no" is rejected — only a physical button press proceeds.
+    ///   Set by `DamageControlPolicy` for `disaster` and `confirmManual` verdicts.
+    /// - `isDisasterLevel`: When true, the overlay shows the DISASTER WARNING variant with a red border.
+    case confirm(prompt: ConfirmationPrompt, reason: DecisionReason, manualOnly: Bool = false, isDisasterLevel: Bool = false)
     case deny(reason: DecisionReason)
 }
 

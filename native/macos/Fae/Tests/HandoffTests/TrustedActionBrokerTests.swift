@@ -156,7 +156,7 @@ final class TrustedActionBrokerTests: XCTestCase {
             )
         )
 
-        if case .confirm(let prompt, let reason) = decision {
+        if case .confirm(let prompt, let reason, _, _) = decision {
             XCTAssertEqual(reason.code, .explicitApprovalRequired)
             XCTAssertTrue(prompt.message.contains("test"))
         } else {

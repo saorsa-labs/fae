@@ -256,18 +256,26 @@ only detectable from AppleScript error responses, not via a pre-flight API.
 Settings > Tools shows an **"Apple Tool Permissions"** section with per-tool Granted/Not Granted
 status badges and Grant buttons. See `docs/guides/scheduler-tooling-and-permissions.md`.
 
-### Tool security (v0.8.1 + v0.8.63 TrustedActionBroker)
+### Tool security (v0.8.1 + v0.8.63 TrustedActionBroker + damage control)
 
-**6-layer safety model** for the tool system (v0.8.63 adds layers 5-6):
+**7-layer safety model** for the tool system (damage control adds layer 0):
 
 | Layer | Implementation | Purpose |
 |-------|---------------|---------|
+| **Damage control** | `DamageControlPolicy.evaluate()` | Pre-broker layer-zero: block/disaster/confirm_manual for catastrophic ops; credential zero-access for non-local models |
 | **Tool mode filtering** | `ToolRegistry.toolSchemas(for:)` | LLM never sees tools outside current mode |
 | **Execution guard** | `PipelineCoordinator.executeTool()` | Rejects tool calls even if LLM hallucinates them |
 | **Path validation** | `PathPolicy.validateWritePath()` | Blocks writes to dotfiles, system paths, Fae config |
 | **Rate limiting** | `ToolRateLimiter` | Per-tool sliding-window limits with risk-aware adjustments |
 | **TrustedActionBroker** | `TrustedActionBroker.evaluate()` | Default-deny policy chokepoint; all tool calls route through |
 | **Outbound guard** | `OutboundExfiltrationGuard` | Novel recipient confirmation + sensitive payload detection |
+
+**DamageControlPolicy** (layer 0, pre-broker): Intercepts every tool call before `TrustedActionBroker`. Three-tier verdict:
+- `block` — hard deny, no dialog (disk format, raw disk write, root permission wipeout, `rm -rf /`)
+- `disaster` — DISASTER WARNING overlay, physical click only, no voice (`rm -rf ~/`, `rm -rf ~/Documents`, `rm -rf ~/Library`)
+- `confirmManual` — Manual Approval overlay, physical click only, no voice (`sudo rm -rf`, `curl|bash`, `wget|bash`, `launchctl disable system/`, `osascript System Events`)
+
+Non-local (co-work API) model: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.npmrc` are zero-access (reads + writes hard-blocked). See `docs/guides/damage-control.md`.
 
 **TrustedActionBroker** (v0.8.63, extended v0.8.82): Central policy chokepoint implementing default-deny. Every tool call is modeled as an `ActionIntent` and evaluated to a `BrokerDecision`:
 - `allow` — proceed immediately

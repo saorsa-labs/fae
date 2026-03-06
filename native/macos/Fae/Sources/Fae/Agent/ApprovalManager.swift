@@ -26,14 +26,25 @@ actor ApprovalManager {
     ///
     /// Shows the approval overlay and waits for a response.
     /// Returns `true` if approved, `false` if denied or timed out.
-    func requestApproval(toolName: String, description: String) async -> Bool {
+    ///
+    /// - `manualOnly`: When true, the overlay suppresses voice-approval and "Always"/"Allow All" options.
+    ///   Only a deliberate physical button press can approve. Set by `DamageControlPolicy`.
+    /// - `isDisasterLevel`: When true, the overlay shows the red DISASTER WARNING variant.
+    func requestApproval(
+        toolName: String,
+        description: String,
+        manualOnly: Bool = false,
+        isDisasterLevel: Bool = false
+    ) async -> Bool {
         let requestId = nextRequestId
         nextRequestId += 1
 
         eventBus.send(.approvalRequested(
             id: requestId,
             toolName: toolName,
-            input: description
+            input: description,
+            manualOnly: manualOnly,
+            isDisasterLevel: isDisasterLevel
         ))
 
         // Wait for response with timeout.

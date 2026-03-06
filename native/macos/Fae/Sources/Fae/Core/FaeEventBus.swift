@@ -78,11 +78,13 @@ final class FaeEventBus: @unchecked Sendable {
             payload["feeling"] = feeling
             if let palette { payload["palette"] = palette }
 
-        case .approvalRequested(let id, let toolName, let input):
+        case .approvalRequested(let id, let toolName, let input, let manualOnly, let isDisasterLevel):
             eventName = "approval.requested"
             payload["request_id"] = id
             payload["tool_name"] = toolName
             payload["input_json"] = input
+            payload["manual_only"] = manualOnly
+            payload["disaster_level"] = isDisasterLevel
 
         case .approvalResolved(let id, let approved, let source):
             eventName = "approval.resolved"

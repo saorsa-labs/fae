@@ -51,6 +51,8 @@ actor PipelineCoordinator {
     private let approvalManager: ApprovalManager?
     private let registry: ToolRegistry
     private let actionBroker: any TrustedActionBroker
+    private let damageControlPolicy = DamageControlPolicy()
+    private var modelLocality: ModelLocality = .local
     private let rateLimiter = ToolRateLimiter()
     private let securityLogger = SecurityEventLogger.shared
     private let outboundGuard = OutboundExfiltrationGuard.shared
@@ -129,6 +131,11 @@ actor PipelineCoordinator {
 
     func setPrivacyMode(_ mode: String) {
         privacyModeLive = mode
+    }
+
+    /// Update the model locality (local vs. non-local co-work) for damage-control policy.
+    func setModelLocality(_ locality: ModelLocality) {
+        modelLocality = locality
     }
 
     /// Live override for direct-address policy.
@@ -210,6 +217,10 @@ actor PipelineCoordinator {
     private var activeGenerationID: UUID?
     private var interrupted: Bool = false
     private var awaitingApproval: Bool = false
+    /// When true, the current pending approval requires a physical button press.
+    /// Voice "yes/no" is rejected and Fae speaks an explanation instead.
+    /// Set alongside `awaitingApproval` for damage-control disaster/confirmManual verdicts.
+    private var manualOnlyApprovalPending: Bool = false
     private var pendingGovernanceAction: PendingGovernanceAction?
 
     // MARK: - Speaker Identity State
@@ -484,6 +495,7 @@ actor PipelineCoordinator {
         interrupted = true
         pendingGovernanceAction = nil
         awaitingApproval = false
+        manualOnlyApprovalPending = false
         computerUseStepCount = 0
 
         // Ensure any in-flight TTS synthesis task fully exits before teardown.
@@ -526,6 +538,8 @@ actor PipelineCoordinator {
     func cancelAndWait() async {
         interrupted = true
         pendingGovernanceAction = nil
+        awaitingApproval = false
+        manualOnlyApprovalPending = false
         computerUseStepCount = 0
 
         let activeTTSTask = pendingTTSTask
@@ -539,6 +553,7 @@ actor PipelineCoordinator {
         // Ensure generation flag is cleared so the pipeline accepts new injections after reset.
         assistantGenerating = false
         awaitingApproval = false
+        manualOnlyApprovalPending = false
         NSLog("PipelineCoordinator: cancelAndWait complete")
     }
 
@@ -1593,6 +1608,7 @@ actor PipelineCoordinator {
         lastAssistantResponseText = ""
         activeCapabilityTicket = nil
         awaitingApproval = false
+        manualOnlyApprovalPending = false
         pendingGovernanceAction = nil
         computerUseStepCount = 0
         pendingTTSTask?.cancel()
@@ -1856,12 +1872,18 @@ actor PipelineCoordinator {
         // Approval gate — while a tool approval is pending, only approval responses
         // are accepted. This prevents unrelated chatter/noise from being routed to the LLM.
         if awaitingApproval {
-            if let decision = VoiceCommandParser.parseApprovalResponse(effectiveText),
+            if manualOnlyApprovalPending {
+                // Damage-control manual-only approval: voice is never accepted.
+                // Only a physical button press on the overlay can proceed.
+                debugLog(debugConsole, .approval, "Voice rejected for manual-only approval: \(effectiveText)")
+                await speakDirect("This operation requires a deliberate button press to confirm. Voice approval is not accepted — please use the overlay.")
+            } else if let decision = VoiceCommandParser.parseApprovalResponse(effectiveText),
                let manager = approvalManager,
                await manager.resolveMostRecent(decision: decision, source: "voice")
             {
                 debugLog(debugConsole, .approval, "Tool approval decision via voice: \(decision.rawValue)")
                 awaitingApproval = false
+                manualOnlyApprovalPending = false
                 let ack: String
                 switch decision {
                 case .yes:
@@ -4906,8 +4928,69 @@ actor PipelineCoordinator {
         )
 
         let brokerDecisionStartedAt = Date()
+
+        // MARK: Damage Control — Layer 0 (pre-broker)
+        // Evaluates before the outbound guard and TrustedActionBroker.
+        // Catastrophic operations are blocked or require manual-only UI confirmation.
+        let dcVerdict = await damageControlPolicy.evaluate(
+            toolName: call.name,
+            arguments: call.arguments,
+            locality: modelLocality
+        )
+        var dcManualDecision: BrokerDecision? = nil
+        switch dcVerdict {
+        case .allow:
+            break
+
+        case .block(let reason):
+            await securityLogger.log(
+                event: "dc_block",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: "damageControlBlock",
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC block: \(call.name) — \(reason)")
+            return .error("Blocked by damage-control policy: \(reason)")
+
+        case .disaster(let reason):
+            await securityLogger.log(
+                event: "dc_disaster",
+                toolName: call.name,
+                decision: "confirm",
+                reasonCode: "damageControlDisaster",
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC disaster: \(call.name) — \(reason)")
+            dcManualDecision = .confirm(
+                prompt: ConfirmationPrompt(message: reason),
+                reason: DecisionReason(code: .damageControlDisaster, message: reason),
+                manualOnly: true,
+                isDisasterLevel: true
+            )
+
+        case .confirmManual(let reason):
+            await securityLogger.log(
+                event: "dc_confirm_manual",
+                toolName: call.name,
+                decision: "confirm",
+                reasonCode: "damageControlConfirmManual",
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC confirm manual: \(call.name) — \(reason)")
+            dcManualDecision = .confirm(
+                prompt: ConfirmationPrompt(message: reason),
+                reason: DecisionReason(code: .damageControlConfirmManual, message: reason),
+                manualOnly: true,
+                isDisasterLevel: false
+            )
+        }
+
         let brokerDecision: BrokerDecision
-        if let outboundDecision = await outboundGuard.evaluate(
+        if let dcVerdict = dcManualDecision {
+            // DC mandated a manual confirmation — skip outbound guard and broker.
+            brokerDecision = dcVerdict
+        } else if let outboundDecision = await outboundGuard.evaluate(
             toolName: call.name,
             arguments: call.arguments
         ) {
@@ -4940,7 +5023,7 @@ actor PipelineCoordinator {
         case .allowWithTransform(_, let reason):
             brokerDecisionString = "allow_with_transform"
             brokerReasonCode = reason.code.rawValue
-        case .confirm(_, let reason):
+        case .confirm(_, let reason, _, _):
             brokerDecisionString = "confirm"
             brokerReasonCode = reason.code.rawValue
         case .deny(let reason):
@@ -4961,7 +5044,7 @@ actor PipelineCoordinator {
         var effectiveDecision = brokerDecision
         if UserDefaults.standard.bool(forKey: "fae.security.shadowMode") {
             switch brokerDecision {
-            case .confirm(_, let reason), .deny(let reason):
+            case .confirm(_, let reason, _, _), .deny(let reason):
                 await securityLogger.log(
                     event: "shadow_decision",
                     toolName: call.name,
@@ -4992,17 +5075,25 @@ actor PipelineCoordinator {
                 return .error(transformError)
             }
 
-        case .confirm(let prompt, _):
+        case .confirm(let prompt, _, let manualOnly, let isDisasterLevel):
             if let manager = approvalManager {
-                debugLog(debugConsole, .approval, "Requesting approval for \(call.name): \(prompt.message)")
+                debugLog(debugConsole, .approval, "Requesting approval for \(call.name): \(prompt.message) manualOnly=\(manualOnly)")
                 awaitingApproval = true
+                manualOnlyApprovalPending = manualOnly
                 async let approvalDecision = manager.requestApproval(
                     toolName: call.name,
-                    description: prompt.message
+                    description: prompt.message,
+                    manualOnly: manualOnly,
+                    isDisasterLevel: isDisasterLevel
                 )
-                await speakDirect(prompt.message)
+                // For manual-only approvals, don't speak the description aloud — the overlay
+                // is the primary communication channel. For normal approvals, speak the prompt.
+                if !manualOnly {
+                    await speakDirect(prompt.message)
+                }
                 let approved = await approvalDecision
                 awaitingApproval = false
+                manualOnlyApprovalPending = false
                 approvedByUser = approved
                 debugLog(debugConsole, .approval, "Approval result for \(call.name): \(approved)")
                 if !approved {
