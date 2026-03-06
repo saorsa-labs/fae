@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import CryptoKit
 import Foundation
+import MLXLMCommon
 
 /// Central voice pipeline: AudioCapture → VAD → STT → LLM → TTS → Playback.
 ///
@@ -353,6 +354,7 @@ actor PipelineCoordinator {
 
     private struct GenerationContext: Sendable {
         let systemPrompt: String
+        let turnContextPrefix: String?
         let nativeTools: [[String: any Sendable]]?
         let actionSource: ActionSource
         let playsThinkingTone: Bool
@@ -874,8 +876,14 @@ actor PipelineCoordinator {
     /// Reset conversation history (for test harness use).
     func resetConversation() async {
         await conversationState.clear()
+        await llmEngine.resetSession()
         currentTurnGenerationContext = nil
         NSLog("PipelineCoordinator: conversation history cleared (test reset)")
+    }
+
+    private func synchronizeLLMSession() async {
+        let history = await conversationState.history
+        await llmEngine.synchronizeSession(history: history)
     }
 
     // MARK: - Gate Control
@@ -1618,6 +1626,7 @@ actor PipelineCoordinator {
         resetStreamingWakeDetector()
         clearPendingSemanticTurn()
         await conversationState.clear()
+        await llmEngine.resetSession()
         NSLog("PipelineCoordinator: conversation reset via %@ trigger: %@", source, trigger)
         debugLog(debugConsole, .pipeline, "Conversation reset (\(source)): \(trigger)")
     }
@@ -3155,22 +3164,29 @@ actor PipelineCoordinator {
                 nativeToolsAvailable: nativeToolsAvailable,
                 toolSchemas: toolSchemas,
                 installedSkills: legacySkills,
-                skillDescriptions: skillDescs
+                skillDescriptions: skillDescs,
+                includeEphemeralContext: false
             )
-            // Inject activated skill instructions into context.
+            // Inject activated skill instructions into the stable prompt.
             if let activatedCtx = await skillManager?.activatedContext() {
                 systemPrompt += "\n\n" + activatedCtx
             }
-            if let context = memoryContext {
-                systemPrompt += "\n\n" + context
-            }
-            // First-owner enrollment: one-shot context prime — cleared after first use.
+
+            var turnContextExtras: [String] = []
             if let enrollCtx = firstOwnerEnrollmentContext {
-                systemPrompt += "\n\n" + enrollCtx
+                turnContextExtras.append(enrollCtx)
                 firstOwnerEnrollmentContext = nil
             }
+            let turnContextPrefix = PersonalityManager.assembleEphemeralTurnContext(
+                speakerDisplayName: currentSpeakerDisplayName,
+                speakerRole: currentSpeakerRole,
+                memoryContext: memoryContext,
+                extraSections: turnContextExtras
+            )
+
             generationContext = GenerationContext(
                 systemPrompt: systemPrompt,
+                turnContextPrefix: turnContextPrefix,
                 nativeTools: nativeTools,
                 actionSource: proactiveContext?.source ?? turnSource,
                 playsThinkingTone: playsThinkingTone,
@@ -3186,9 +3202,12 @@ actor PipelineCoordinator {
         }
 
         let systemPrompt = generationContext.systemPrompt
+        let turnContextPrefix = generationContext.turnContextPrefix ?? ""
         let dynamicReservedTokens = max(
             1024,
-            Self.estimateTokenCount(for: systemPrompt) + config.llm.maxTokens
+            Self.estimateTokenCount(for: systemPrompt)
+                + Self.estimateTokenCount(for: turnContextPrefix)
+                + config.llm.maxTokens
         )
         await conversationState.setReservedTokens(dynamicReservedTokens)
         let history = await conversationState.history
@@ -3201,6 +3220,7 @@ actor PipelineCoordinator {
             prefillStep = FaeConfig.recommendedPrefillStepSize(modelId: modelId)
         }
 
+        let contextLimitTokens = await conversationState.currentContextBudget()
         let options = GenerationOptions(
             temperature: config.llm.temperature,
             topP: config.llm.topP,
@@ -3208,6 +3228,8 @@ actor PipelineCoordinator {
             repetitionPenalty: config.llm.repeatPenalty,
             suppressThinking: suppressThinking,
             tools: generationContext.nativeTools,
+            turnContextPrefix: generationContext.turnContextPrefix,
+            contextLimitTokens: contextLimitTokens,
             // KV Cache Optimization (Phase 1) - based on Ollama/mistral.rs/LM Studio research
             maxKVSize: config.llm.maxKVCacheSize,
             kvBits: config.llm.kvQuantBits,
@@ -3247,6 +3269,8 @@ actor PipelineCoordinator {
         // This avoids audible interleaving/hallucinated fragments from tiny chunks.
         let preferFinalOnlySpeech = true
         var deferredStreamingSpeech = ""
+        var streamedToolCalls: [ToolCall] = []
+        var completionInfo: GenerateCompletionInfo?
 
         if turnCount == 0 {
             // Keep echo matching aligned with what we actually speak this turn.
@@ -3365,102 +3389,103 @@ actor PipelineCoordinator {
         )
 
         var staleGenerationDetected = false
+        await instrumentation.markLLMStart()
 
         do {
-            for try await token in tokenStream {
+            for try await event in tokenStream {
                 if activeGenerationID != generationID {
                     staleGenerationDetected = true
                     debugLog(debugConsole, .pipeline, "Drop stale token stream id=\(generationID.uuidString.prefix(8))")
                     break
                 }
 
-                llmTokenCount += 1
-                if firstTokenAt == nil {
-                    firstTokenAt = Date()
-                }
                 guard !interrupted else {
                     NSLog("PipelineCoordinator: generation interrupted")
                     break
                 }
 
-                let visible = thinkTagStripper.process(token)
-                // For Qwen3.5-35B-A3B: <think> is literal text, so ThinkTagStripper
-                // consumes it natively. When it exits the think block, signal thinkEndSeen
-                // so the pipeline doesn't wait for </think> in thinkAccum (which never arrives
-                // because ThinkTagStripper already consumed it).
-                if thinkTagStripper.hasExitedThinkBlock && !thinkEndSeen {
-                    thinkEndSeen = true
-                    eventBus.send(.thinkingText(text: "", isActive: false))
-                }
-                guard !visible.isEmpty else {
-                    // Qwen3.5: think-block content is consumed by ThinkTagStripper (visible="").
-                    // Still emit Think debug events so test tooling can detect thinking is active.
-                    if !thinkEndSeen && !token.isEmpty {
-                        debugLog(debugConsole, .llmThink, token)
-                    }
+                switch event {
+                case .info(let info):
+                    completionInfo = info
                     continue
-                }
 
-                fullResponse += visible
-
-                // Once we detect a tool call, stop streaming to TTS.
-                if !detectedToolCall && fullResponse.contains("<tool_call>") {
+                case .toolCall(let nativeCall):
                     detectedToolCall = true
-                    // Flush text before the tool call tag to TTS.
-                    if let tagRange = sentenceBuffer.range(of: "<tool_call>") {
-                        let beforeTag = String(sentenceBuffer[..<tagRange.lowerBound])
-                        let cleaned = TextProcessing.stripNonSpeechChars(beforeTag)
-                        emitStreamingChunk(cleaned)
-                    }
+                    streamedToolCalls.append(
+                        ToolCall(
+                            name: nativeCall.function.name,
+                            arguments: nativeCall.function.arguments.mapValues { $0.anyValue }
+                        )
+                    )
                     if preferFinalOnlySpeech {
-                        // Drop any deferred provisional speech once a tool call appears.
                         deferredStreamingSpeech = ""
                     }
                     sentenceBuffer = ""
                     continue
-                }
 
-                if detectedToolCall {
-                    // Accumulate tool call content without speaking.
-                    continue
-                }
+                case .text(let token):
+                    llmTokenCount += 1
+                    if firstTokenAt == nil {
+                        firstTokenAt = Date()
+                        await instrumentation.markLLMFirstToken(
+                            latencyMs: Date().timeIntervalSince(llmStartedAt) * 1000
+                        )
+                    }
 
-                // Think block suppression: Qwen3's <think> is a special token decoded to ""
-                // so ThinkTagStripper never sees it. </think> IS emitted as literal text.
-                // Buffer everything until </think>, then discard the think block.
-                if !thinkEndSeen {
-                    debugLog(debugConsole, .llmThink, visible)
-                    thinkAccum += visible
-                    // Stream thinking text to the thought bubble UI.
-                    eventBus.send(.thinkingText(text: visible, isActive: true))
-                    if let endRange = thinkAccum.range(of: "</think>") {
-                        let afterThink = String(thinkAccum[endRange.upperBound...])
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        thinkAccum = ""
+                    let visible = thinkTagStripper.process(token)
+                    // For Qwen3.5-35B-A3B: <think> is literal text, so ThinkTagStripper
+                    // consumes it natively. When it exits the think block, signal thinkEndSeen
+                    // so the pipeline doesn't wait for </think> in thinkAccum (which never arrives
+                    // because ThinkTagStripper already consumed it).
+                    if thinkTagStripper.hasExitedThinkBlock && !thinkEndSeen {
                         thinkEndSeen = true
-                        // Signal thinking complete — bubble will fade out.
                         eventBus.send(.thinkingText(text: "", isActive: false))
-                        // Seed sentenceBuffer with any content following </think>.
-                        if !afterThink.isEmpty && !roleplayActive {
-                            sentenceBuffer = afterThink
+                    }
+                    guard !visible.isEmpty else {
+                        // Qwen3.5: think-block content is consumed by ThinkTagStripper (visible="").
+                        // Still emit Think debug events so test tooling can detect thinking is active.
+                        if !thinkEndSeen && !token.isEmpty {
+                            debugLog(debugConsole, .llmThink, token)
                         }
                         continue
                     }
-                    // Safety timeout: if the think block is very long and </think> never
-                    // arrives, the model likely went off-rails — flush and start speaking.
-                    if thinkAccum.count > 80_000 {
-                        thinkAccum = ""
-                        thinkEndSeen = true
-                        eventBus.send(.thinkingText(text: "", isActive: false))
-                        // Fall through to normal routing.
-                    } else {
+
+                    fullResponse += visible
+
+                    if detectedToolCall {
                         continue
                     }
-                }
-                debugLog(debugConsole, .llmToken, visible)
 
-                // Roleplay mode: route through voice tag parser for per-character TTS.
-                if roleplayActive {
+                    // Think block suppression: Qwen3's <think> is a special token decoded to ""
+                    // so ThinkTagStripper never sees it. </think> IS emitted as literal text.
+                    // Buffer everything until </think>, then discard the think block.
+                    if !thinkEndSeen {
+                        debugLog(debugConsole, .llmThink, visible)
+                        thinkAccum += visible
+                        eventBus.send(.thinkingText(text: visible, isActive: true))
+                        if let endRange = thinkAccum.range(of: "</think>") {
+                            let afterThink = String(thinkAccum[endRange.upperBound...])
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            thinkAccum = ""
+                            thinkEndSeen = true
+                            eventBus.send(.thinkingText(text: "", isActive: false))
+                            if !afterThink.isEmpty && !roleplayActive {
+                                sentenceBuffer = afterThink
+                            }
+                            continue
+                        }
+                        if thinkAccum.count > 80_000 {
+                            thinkAccum = ""
+                            thinkEndSeen = true
+                            eventBus.send(.thinkingText(text: "", isActive: false))
+                        } else {
+                            continue
+                        }
+                    }
+                    debugLog(debugConsole, .llmToken, visible)
+
+                    // Roleplay mode: route through voice tag parser for per-character TTS.
+                    if roleplayActive {
                     let segments = voiceTagStripper.process(visible)
                     for segment in segments {
                         let voice: String?
@@ -3535,6 +3560,7 @@ actor PipelineCoordinator {
                     }
                 }
             }
+        }
         } catch {
             NSLog("PipelineCoordinator: LLM error: %@", error.localizedDescription)
             debugLog(debugConsole, .pipeline, "⚠️ LLM error: \(error.localizedDescription)")
@@ -3546,6 +3572,19 @@ actor PipelineCoordinator {
 
         let llmEndedAt = Date()
         let llmElapsed = llmEndedAt.timeIntervalSince(llmStartedAt)
+        if let completionInfo {
+            debugLog(
+                debugConsole,
+                .pipeline,
+                "LLM metrics prompt=\(completionInfo.promptTokenCount)tok prompt_tps=\(String(format: "%.1f", completionInfo.promptTokensPerSecond)) decode_tps=\(String(format: "%.1f", completionInfo.tokensPerSecond)) stop=\(completionInfo.stopReason)"
+            )
+            await instrumentation.markLLMEnd(
+                durationMs: (completionInfo.promptTime + completionInfo.generateTime) * 1000,
+                tokenCount: completionInfo.generationTokenCount
+            )
+        } else {
+            await instrumentation.markLLMEnd(durationMs: llmElapsed * 1000, tokenCount: llmTokenCount)
+        }
         if llmElapsed > 0 {
             let throughput = Double(llmTokenCount) / llmElapsed
             NSLog("phase1.llm_token_throughput_tps=%.2f", throughput)
@@ -3593,8 +3632,10 @@ actor PipelineCoordinator {
             .prefix(180)
         debugLog(debugConsole, .qa, "Model raw response preview: \(responsePreview)")
 
-        // Parse tool calls from the full response.
-        let toolCalls = Self.parseToolCalls(from: fullResponse)
+        // Prefer structured MLX tool calls; fall back to legacy text parsing.
+        let toolCalls = streamedToolCalls.isEmpty
+            ? Self.parseToolCalls(from: fullResponse)
+            : streamedToolCalls
         if !toolCalls.isEmpty {
             debugLog(debugConsole, .pipeline, "Found \(toolCalls.count) tool call(s): \(toolCalls.map(\.name).joined(separator: ", "))")
         } else if fullResponse.contains("<tool_call>") {
@@ -3797,6 +3838,7 @@ actor PipelineCoordinator {
 
             if !assistantTextForStorage.isEmpty {
                 await conversationState.addAssistantMessage(assistantTextForStorage, tag: proactiveContext?.conversationTag)
+                await synchronizeLLMSession()
 
                 let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
                 if VoiceConversationPolicy.shouldPersistSpeechMemory(
@@ -3923,6 +3965,7 @@ actor PipelineCoordinator {
 
         // Add the assistant's tool-calling message to history (strip think content).
         await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse), tag: proactiveContext?.conversationTag)
+        await synchronizeLLMSession()
 
         // Prevent synthesis/playback jitter: avoid starting tool execution while
         // filler/pre-tool speech is still active.
@@ -4003,6 +4046,7 @@ actor PipelineCoordinator {
         }
 
         debugLog(debugConsole, .qa, "Tool execution summary: success=\(toolSuccessCount) failure=\(toolFailureCount)")
+        await synchronizeLLMSession()
 
         if toolFailureCount > 0 && toolSuccessCount == 0 {
             let reason = firstToolError ?? "the tool call was denied or failed"

@@ -34,8 +34,10 @@ final class EndToEndTextToolFlowTests: XCTestCase {
         )
 
         var collected = ""
-        for try await token in stream {
-            collected += token
+        for try await event in stream {
+            if case .text(let token) = event {
+                collected += token
+            }
         }
         XCTAssertEqual(collected, "Hello world!")
         let count = await llm.generateCallCount

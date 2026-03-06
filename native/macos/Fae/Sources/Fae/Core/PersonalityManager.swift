@@ -327,7 +327,8 @@ enum PersonalityManager {
         nativeToolsAvailable: Bool = false,
         toolSchemas: String? = nil,
         installedSkills: [String] = [],
-        skillDescriptions: [(name: String, description: String, type: SkillType)] = []
+        skillDescriptions: [(name: String, description: String, type: SkillType)] = [],
+        includeEphemeralContext: Bool = true
     ) -> String {
         var parts: [String] = []
         let toolsActive = nativeToolsAvailable || (toolSchemas != nil && !toolSchemas!.isEmpty)
@@ -359,40 +360,15 @@ enum PersonalityManager {
                 """)
         }
 
-        // 5. Memory context.
-        if let memory = memoryContext, !memory.isEmpty {
-            parts.append("""
-                Recalled memories (use to personalize your response):
-                \(memory)
-                """)
-        }
-
-        // 6. Speaker identity context.
-        if let name = speakerDisplayName {
-            let roleDesc: String
-            switch speakerRole {
-            case .owner:
-                roleDesc = "your owner"
-            case .trusted:
-                roleDesc = "a trusted speaker"
-            case .guest:
-                roleDesc = "an unregistered speaker"
-            case .faeSelf, .none:
-                roleDesc = "unknown"
+        if includeEphemeralContext {
+            if let ephemeral = assembleEphemeralTurnContext(
+                speakerDisplayName: speakerDisplayName,
+                speakerRole: speakerRole,
+                memoryContext: memoryContext
+            ) {
+                parts.append(ephemeral)
             }
-            parts.append("The current speaker is \(name) (\(roleDesc)).")
-        } else {
-            parts.append("The speaker has not been identified.")
         }
-
-        // 7. Current date/time.
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
-        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-        parts.append("Current date and time: \(dateFormatter.string(from: Date()))")
-
-        // 8. Permission context.
-        parts.append(PermissionStatusProvider.promptFragment())
 
         // 9. Directive (critical overriding instructions, usually empty).
         let directive = directiveOverride ?? loadDirective()
@@ -466,6 +442,54 @@ enum PersonalityManager {
         }
 
         return parts.joined(separator: "\n\n")
+    }
+
+    static func assembleEphemeralTurnContext(
+        speakerDisplayName: String?,
+        speakerRole: SpeakerRole?,
+        memoryContext: String? = nil,
+        extraSections: [String] = []
+    ) -> String? {
+        var parts: [String] = []
+
+        if let memory = memoryContext, !memory.isEmpty {
+            parts.append("""
+                Recalled memories (use to personalize your response):
+                \(memory)
+                """)
+        }
+
+        if let name = speakerDisplayName {
+            let roleDesc: String
+            switch speakerRole {
+            case .owner:
+                roleDesc = "your owner"
+            case .trusted:
+                roleDesc = "a trusted speaker"
+            case .guest:
+                roleDesc = "an unregistered speaker"
+            case .faeSelf, .none:
+                roleDesc = "unknown"
+            }
+            parts.append("The current speaker is \(name) (\(roleDesc)).")
+        } else {
+            parts.append("The speaker has not been identified.")
+        }
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        parts.append("Current date and time: \(dateFormatter.string(from: Date()))")
+
+        parts.append(PermissionStatusProvider.promptFragment())
+        parts.append(contentsOf: extraSections.filter { !$0.isEmpty })
+
+        let result = parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+
+        return result.isEmpty ? nil : result
     }
 
     // MARK: - Directive

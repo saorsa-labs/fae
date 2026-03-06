@@ -1,9 +1,10 @@
 import AVFoundation
 import Foundation
+import MLXLMCommon
 
 // MARK: - LLM Messages (distinct from UI ChatMessage in ConversationController)
 
-struct LLMMessage: Sendable, Codable {
+struct LLMMessage: Sendable, Codable, Equatable {
     enum Role: String, Sendable, Codable { case system, user, assistant, tool }
     let role: Role
     let content: String
@@ -59,6 +60,12 @@ struct STTResult: Sendable {
     var capturedAt: Date? = nil
 }
 
+enum LLMStreamEvent: Sendable {
+    case text(String)
+    case info(GenerateCompletionInfo)
+    case toolCall(ToolCall)
+}
+
 struct GenerationOptions: Sendable {
     var temperature: Float = 0.7
     var topP: Float = 0.9
@@ -70,6 +77,14 @@ struct GenerationOptions: Sendable {
     /// Native tool specs for MLX tool calling (ToolSpec = `[String: any Sendable]`).
     /// When set, passed to `UserInput.tools` so the chat template enables tool calling mode.
     var tools: [[String: any Sendable]]?
+
+    /// Per-turn ephemeral context that should be attached to the newly appended
+    /// conversation delta rather than baked into the stable system prompt.
+    var turnContextPrefix: String? = nil
+
+    /// Effective model context window in tokens for this generation.
+    /// Used to clamp `maxTokens` against the exact prepared prompt length.
+    var contextLimitTokens: Int? = nil
 
     // MARK: - KV Cache Optimization (Phase 1)
 

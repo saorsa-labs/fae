@@ -1,14 +1,42 @@
 import Foundation
+import MLX
 import MLXLLM
 import MLXLMCommon
+
+private final class UnsafeBox<T>: @unchecked Sendable {
+    var value: T
+
+    init(_ value: T) {
+        self.value = value
+    }
+}
 
 /// Large language model engine using mlx-swift-lm.
 ///
 /// Replaces: `src/llm/mod.rs` + `src/fae_llm/providers/local.rs`
 actor MLXLLMEngine: LLMEngine {
+    private struct SessionState {
+        let systemPrompt: String
+        let toolSignature: String
+        var history: [LLMMessage]
+        var kvCache: [KVCache]
+        var reusable: Bool
+    }
+
+    private struct GenerationSetup: Sendable {
+        let stream: AsyncStream<Generation>
+        let task: Task<Void, Never>
+        let promptTokenCount: Int
+        let cachedTokenCount: Int
+        let effectiveMaxTokens: Int
+    }
+
     private var container: ModelContainer?
     private(set) var isLoaded: Bool = false
     private(set) var loadState: MLEngineLoadState = .notStarted
+    private var sessionState: SessionState?
+    private var wiredMemoryTicketProvider: (@Sendable (Int, Int) async -> WiredMemoryTicket?)?
+    private(set) var lastCompletionInfo: GenerateCompletionInfo?
 
     /// Load the LLM model.
     func load(modelID: String) async throws {
@@ -21,9 +49,6 @@ actor MLXLLMEngine: LLMEngine {
             // The default ToolCallProcessor can't parse XML content and silently
             // discards tool calls. Setting .xmlFunction activates XMLFunctionParser
             // which correctly handles this format.
-            // NOTE: With .xmlFunction set, passing tools=nil causes 0-token generation.
-            // This is handled by always passing an empty array when tool_mode=off —
-            // see MLXLLMEngine.generate() where options.tools drives userInput.tools.
             if modelID.lowercased().contains("qwen") {
                 config.toolCallFormat = .xmlFunction
                 NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen model")
@@ -31,6 +56,7 @@ actor MLXLLMEngine: LLMEngine {
             container = try await LLMModelFactory.shared.loadContainer(configuration: config)
             isLoaded = true
             loadState = .loaded
+            sessionState = nil
             NSLog("MLXLLMEngine: model loaded")
         } catch {
             loadState = .failed(error.localizedDescription)
@@ -39,28 +65,77 @@ actor MLXLLMEngine: LLMEngine {
         }
     }
 
-    /// Run a minimal warmup inference to pre-compile Metal shaders.
-    ///
-    /// The first MLX inference on Apple Silicon compiles Metal shader kernels,
-    /// which can take 30–60 seconds on a cold GPU cache. Calling this after
-    /// model load but before the first user interaction ensures Fae is actually
-    /// responsive when she announces ready.
+    func setWiredMemoryTicketProvider(
+        _ provider: (@Sendable (Int, Int) async -> WiredMemoryTicket?)?
+    ) {
+        wiredMemoryTicketProvider = provider
+    }
+
+    func synchronizeSession(history: [LLMMessage]) async {
+        guard var sessionState else { return }
+        sessionState.history = history
+        sessionState.reusable = true
+        self.sessionState = sessionState
+    }
+
+    func resetSession() async {
+        sessionState = nil
+    }
+
+    func measureMemory(
+        tokenCount: Int,
+        parameters: GenerateParameters
+    ) async throws -> WiredMemoryMeasurement {
+        guard let container else {
+            throw MLEngineError.notLoaded("LLM")
+        }
+
+        return try await container.perform { context in
+            try await WiredMemoryUtils.tune(
+                context: context,
+                tokenCount: tokenCount,
+                parameters: parameters
+            )
+        }
+    }
+
+    /// Run a warmup inference to pre-compile Metal shaders using production-like paths.
     func warmup() async {
         guard let container else { return }
         NSLog("MLXLLMEngine: starting warmup inference...")
+
+        let plainPrompt = "Hello Fae. Give me a short greeting."
+        let toolPrompt = "If you needed a tool, you would call it. For now just say hi."
+        let dummyTools: [[String: any Sendable]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "noop",
+                    "description": "No-op warmup tool",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "input": ["type": "string"] as [String: String],
+                        ] as [String: Any],
+                        "required": ["input"],
+                    ] as [String: Any],
+                ] as [String: Any],
+            ],
+        ]
+
         do {
-            let chatMessages: [Chat.Message] = [.system(""), .user("Hi")]
-            var userInput = UserInput(chat: chatMessages)
-            userInput.additionalContext = ["enable_thinking": false]
-            let lmInput = try await container.prepare(input: userInput)
-            let params = GenerateParameters(
-                maxTokens: 1,
-                temperature: 0.0,
-                topP: 1.0,
-                repetitionPenalty: 1.0
+            try await performWarmupPass(
+                container: container,
+                systemPrompt: "You are Fae.",
+                userPrompt: plainPrompt,
+                tools: []
             )
-            let stream = try await container.generate(input: lmInput, parameters: params)
-            for await _ in stream { break }
+            try await performWarmupPass(
+                container: container,
+                systemPrompt: "You are Fae. Tools may be available.",
+                userPrompt: toolPrompt,
+                tools: dummyTools
+            )
             NSLog("MLXLLMEngine: warmup complete")
         } catch {
             NSLog("MLXLLMEngine: warmup failed (non-fatal): %@", error.localizedDescription)
@@ -72,7 +147,7 @@ actor MLXLLMEngine: LLMEngine {
         messages: [LLMMessage],
         systemPrompt: String,
         options: GenerationOptions
-    ) -> AsyncThrowingStream<String, Error> {
+    ) -> AsyncThrowingStream<LLMStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task { [weak self] in
                 guard let self else {
@@ -85,130 +160,128 @@ actor MLXLLMEngine: LLMEngine {
                     return
                 }
 
+                let turnContextPrefix = options.turnContextPrefix?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let toolSignature = await self.toolSignature(for: options.tools)
+                let priorSession = await self.sessionState
+                let canReuseSession = await self.canReuseSession(
+                    priorSession,
+                    messages: messages,
+                    systemPrompt: systemPrompt,
+                    toolSignature: toolSignature
+                )
+
+                let deltaMessages: [LLMMessage]
+                let chatMessages: [Chat.Message]
+                let cacheBox: UnsafeBox<[KVCache]>
+
+                if let priorSession, canReuseSession {
+                    deltaMessages = Array(messages.dropFirst(priorSession.history.count))
+                    chatMessages = await self.makeDeltaChatMessages(
+                        from: deltaMessages,
+                        turnContextPrefix: turnContextPrefix
+                    )
+                    cacheBox = UnsafeBox(priorSession.kvCache)
+                    NSLog(
+                        "MLXLLMEngine: reusing session cache for %d message(s)",
+                        deltaMessages.count
+                    )
+                } else {
+                    deltaMessages = messages
+                    chatMessages = await self.makeFullChatMessages(
+                        from: messages,
+                        systemPrompt: systemPrompt,
+                        turnContextPrefix: turnContextPrefix
+                    )
+                    cacheBox = UnsafeBox([])
+                    if priorSession != nil {
+                        NSLog("MLXLLMEngine: session cache invalidated — rebuilding prompt state")
+                    }
+                }
+
+                let baseParameters = await self.makeParameters(from: options)
+                let ticketProvider = await self.wiredMemoryTicketProvider
+
                 do {
-                    // Build chat messages with system prompt.
-                    // Thinking suppression is handled at the system-prompt level
-                    // (PersonalityManager injects the directive there) rather than
-                    // by appending "/no_think" to user messages.  Appending "/no_think"
-                    // as literal text causes mlx-swift-lm to pass it through to the
-                    // model as user content — Qwen3 then reasons *about* the string
-                    // instead of treating it as a control directive, producing visible
-                    // thinking text and breaking tool calls.
-                    var chatMessages: [Chat.Message] = [
-                        .system(systemPrompt),
-                    ]
-                    for (_, msg) in messages.enumerated() {
-                        switch msg.role {
-                        case .user:
-                            chatMessages.append(.user(msg.content))
-                        case .assistant:
-                            chatMessages.append(.assistant(msg.content))
-                        case .system:
-                            chatMessages.append(.system(msg.content))
-                        case .tool:
-                            chatMessages.append(.tool(msg.content))
+                    let setup = try await container.perform { context in
+                        var userInput = UserInput(chat: chatMessages)
+                        userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
+                        // With toolCallFormat=.xmlFunction, passing tools=nil can cause
+                        // 0-token generation. Always provide an array.
+                        userInput.tools = options.tools ?? []
+
+                        let input = try await context.processor.prepare(input: userInput)
+                        let cachedTokenCount = cacheBox.value.first?.offset ?? 0
+                        let totalPromptTokens = cachedTokenCount + input.text.tokens.size
+
+                        var effectiveParameters = baseParameters
+                        if let contextLimit = options.contextLimitTokens {
+                            let availableForGeneration = max(contextLimit - totalPromptTokens - 32, 1)
+                            if let maxTokens = effectiveParameters.maxTokens, maxTokens > availableForGeneration {
+                                effectiveParameters.maxTokens = availableForGeneration
+                            }
                         }
+
+                        if cacheBox.value.isEmpty {
+                            cacheBox.value = context.model.newCache(parameters: effectiveParameters)
+                        }
+
+                        let ticket = await ticketProvider?(totalPromptTokens, effectiveParameters.maxTokens ?? 0)
+                        let iterator = try TokenIterator(
+                            input: input,
+                            model: context.model,
+                            cache: cacheBox.value,
+                            parameters: effectiveParameters
+                        )
+                        let (stream, task) = generateTask(
+                            promptTokenCount: input.text.tokens.size,
+                            modelConfiguration: context.configuration,
+                            tokenizer: context.tokenizer,
+                            iterator: iterator,
+                            wiredMemoryTicket: ticket
+                        )
+                        return GenerationSetup(
+                            stream: stream,
+                            task: task,
+                            promptTokenCount: input.text.tokens.size,
+                            cachedTokenCount: cachedTokenCount,
+                            effectiveMaxTokens: effectiveParameters.maxTokens ?? 0
+                        )
                     }
 
-                    // Pass enable_thinking to the model's Jinja2 chat template.
-                    // Qwen3.5-35B-A3B does NOT support the /no_think per-turn suffix
-                    // (removed from Qwen3.5). The correct way to suppress thinking is
-                    // via chat_template_kwargs — Swift equivalent is additionalContext.
-                    var userInput = UserInput(chat: chatMessages)
-                    userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
-
-                    // Pass native tool specs so the chat template enables tool calling mode.
-                    // Without this, Qwen3.5 thinks about tools in <think> but never emits
-                    // actual tool calls — the template needs `tools` to activate that behavior.
-                    // IMPORTANT: With toolCallFormat=.xmlFunction, passing tools=nil causes
-                    // 0-token generation (the xmlFunction ToolCallProcessor interferes when
-                    // no tools context is present). Always pass an array — either the real
-                    // specs or an empty array to signal "no tools available" safely.
-                    userInput.tools = options.tools ?? []
-
-                    let lmInput = try await container.prepare(input: userInput)
-
-                    // Build GenerateParameters with KV cache optimization (Phase 1).
-                    // Based on research into Ollama, mistral.rs, and LM Studio pipelines:
-                    // - kvBits: 4-bit KV quantization → 4x memory savings
-                    // - maxKVSize: Enables RotatingKVCache for bounded memory
-                    // - quantizedKVStart: Progressive quantization for quality
-                    // - repetitionContextSize: Larger window for better rep handling
-                    // - prefillStepSize: Tuned per model size
-                    let params = GenerateParameters(
-                        maxTokens: options.maxTokens,
-                        maxKVSize: options.maxKVSize,
-                        kvBits: options.kvBits,
-                        kvGroupSize: options.kvGroupSize,
-                        quantizedKVStart: options.quantizedKVStart,
-                        temperature: options.temperature,
-                        topP: options.topP,
-                        repetitionPenalty: options.repetitionPenalty,
-                        repetitionContextSize: options.repetitionContextSize,
-                        prefillStepSize: options.prefillStepSize ?? 512
+                    await self.storePreparedSession(
+                        history: messages,
+                        systemPrompt: systemPrompt,
+                        toolSignature: toolSignature,
+                        kvCache: cacheBox.value
                     )
 
-                    let stream = try await container.generate(
-                        input: lmInput,
-                        parameters: params
-                    )
-
-                    // With .xmlFunction format, the ToolCallProcessor passes
-                    // raw XML text through as .chunk events AND emits .toolCall events
-                    // when parsing succeeds. We suppress the raw XML text between
-                    // <tool_call>...</tool_call> tags so PipelineCoordinator only sees
-                    // clean JSON-serialized tool calls from the .toolCall events.
-                    var insideToolCallTag = false
-
-                    for await generation in stream {
+                    var completionInfo: GenerateCompletionInfo?
+                    for await generation in setup.stream {
                         if Task.isCancelled {
                             break
                         }
                         switch generation {
                         case .chunk(let text):
-                            if insideToolCallTag {
-                                // Suppress raw XML text inside <tool_call> region.
-                                if text.contains("</tool_call>") {
-                                    insideToolCallTag = false
-                                    // Yield any trailing text after the closing tag.
-                                    if let range = text.range(of: "</tool_call>") {
-                                        let after = String(text[range.upperBound...])
-                                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                                        if !after.isEmpty { continuation.yield(after) }
-                                    }
-                                }
-                            } else if text.contains("<tool_call>") {
-                                insideToolCallTag = true
-                                // Yield any text before the opening tag.
-                                if let range = text.range(of: "<tool_call>") {
-                                    let before = String(text[..<range.lowerBound])
-                                    if !before.isEmpty { continuation.yield(before) }
-                                }
-                            } else {
-                                continuation.yield(text)
-                            }
-                        case .info:
-                            break
+                            continuation.yield(.text(text))
                         case .toolCall(let call):
-                            // Serialize native ToolCall to JSON text so the existing
-                            // parseToolCalls() parser in PipelineCoordinator picks it up.
-                            let jsonObj: [String: Any] = [
-                                "name": call.function.name,
-                                "arguments": call.function.arguments.mapValues { $0.anyValue },
-                            ]
-                            if let data = try? JSONSerialization.data(
-                                withJSONObject: jsonObj, options: [.sortedKeys]),
-                                let jsonStr = String(data: data, encoding: .utf8)
-                            {
-                                NSLog(
-                                    "MLXLLMEngine: native .toolCall → %@", call.function.name)
-                                continuation.yield("<tool_call>\(jsonStr)</tool_call>")
-                            }
+                            continuation.yield(.toolCall(call))
+                        case .info(let info):
+                            completionInfo = info
+                            continuation.yield(.info(info))
                         }
                     }
 
+                    await setup.task.value
+                    await self.finishGeneration(info: completionInfo, kvCache: cacheBox.value)
                     continuation.finish()
                 } catch {
+                    await self.invalidatePreparedSession(
+                        history: messages,
+                        systemPrompt: systemPrompt,
+                        toolSignature: toolSignature,
+                        kvCache: cacheBox.value
+                    )
                     if Task.isCancelled {
                         continuation.finish()
                     } else {
@@ -219,6 +292,192 @@ actor MLXLLMEngine: LLMEngine {
 
             continuation.onTermination = { @Sendable _ in
                 producer.cancel()
+            }
+        }
+    }
+
+    private func performWarmupPass(
+        container: ModelContainer,
+        systemPrompt: String,
+        userPrompt: String,
+        tools: [[String: any Sendable]]
+    ) async throws {
+        let chatMessages: [Chat.Message] = [.system(systemPrompt), .user(userPrompt)]
+        var userInput = UserInput(chat: chatMessages)
+        userInput.additionalContext = ["enable_thinking": false]
+        userInput.tools = tools
+        let lmInput = try await container.prepare(input: userInput)
+        let params = GenerateParameters(
+            maxTokens: 8,
+            temperature: 0.0,
+            topP: 1.0,
+            repetitionPenalty: 1.0,
+            prefillStepSize: 256
+        )
+        let stream = try await container.generate(input: lmInput, parameters: params)
+        var sawEvent = false
+        for await generation in stream {
+            switch generation {
+            case .chunk, .toolCall, .info:
+                sawEvent = true
+            }
+            if sawEvent {
+                break
+            }
+        }
+    }
+
+    private func makeParameters(from options: GenerationOptions) -> GenerateParameters {
+        GenerateParameters(
+            maxTokens: options.maxTokens,
+            maxKVSize: options.maxKVSize,
+            kvBits: options.kvBits,
+            kvGroupSize: options.kvGroupSize,
+            quantizedKVStart: options.quantizedKVStart,
+            temperature: options.temperature,
+            topP: options.topP,
+            repetitionPenalty: options.repetitionPenalty,
+            repetitionContextSize: options.repetitionContextSize,
+            prefillStepSize: options.prefillStepSize ?? 512
+        )
+    }
+
+    private func storePreparedSession(
+        history: [LLMMessage],
+        systemPrompt: String,
+        toolSignature: String,
+        kvCache: [KVCache]
+    ) {
+        sessionState = SessionState(
+            systemPrompt: systemPrompt,
+            toolSignature: toolSignature,
+            history: history,
+            kvCache: kvCache,
+            reusable: false
+        )
+    }
+
+    private func finishGeneration(
+        info: GenerateCompletionInfo?,
+        kvCache: [KVCache]
+    ) {
+        lastCompletionInfo = info
+        if var sessionState {
+            sessionState.kvCache = kvCache
+            self.sessionState = sessionState
+        }
+    }
+
+    private func invalidatePreparedSession(
+        history: [LLMMessage],
+        systemPrompt: String,
+        toolSignature: String,
+        kvCache: [KVCache]
+    ) {
+        sessionState = SessionState(
+            systemPrompt: systemPrompt,
+            toolSignature: toolSignature,
+            history: history,
+            kvCache: kvCache,
+            reusable: false
+        )
+    }
+
+    private func canReuseSession(
+        _ session: SessionState?,
+        messages: [LLMMessage],
+        systemPrompt: String,
+        toolSignature: String
+    ) -> Bool {
+        guard let session else { return false }
+        guard session.reusable else { return false }
+        guard session.systemPrompt == systemPrompt else { return false }
+        guard session.toolSignature == toolSignature else { return false }
+        guard messages.count >= session.history.count else { return false }
+        return Array(messages.prefix(session.history.count)) == session.history
+    }
+
+    private func toolSignature(for tools: [[String: any Sendable]]?) -> String {
+        guard let tools else { return "none" }
+        let names = tools.compactMap { spec -> String? in
+            guard let function = spec["function"] as? [String: any Sendable] else { return nil }
+            return function["name"] as? String
+        }
+        return names.sorted().joined(separator: "|")
+    }
+
+    private func makeFullChatMessages(
+        from messages: [LLMMessage],
+        systemPrompt: String,
+        turnContextPrefix: String?
+    ) -> [Chat.Message] {
+        var chatMessages: [Chat.Message] = [.system(systemPrompt)]
+        chatMessages.append(contentsOf: makeChatMessages(from: messages))
+        attachTurnContext(turnContextPrefix, to: &chatMessages, mode: .lastMessage)
+        return chatMessages
+    }
+
+    private func makeDeltaChatMessages(
+        from messages: [LLMMessage],
+        turnContextPrefix: String?
+    ) -> [Chat.Message] {
+        var chatMessages = makeChatMessages(from: messages)
+        attachTurnContext(turnContextPrefix, to: &chatMessages, mode: .firstMessage)
+        return chatMessages
+    }
+
+    private enum TurnContextAttachmentMode {
+        case firstMessage
+        case lastMessage
+    }
+
+    private func attachTurnContext(
+        _ turnContextPrefix: String?,
+        to chatMessages: inout [Chat.Message],
+        mode: TurnContextAttachmentMode
+    ) {
+        guard let turnContextPrefix,
+              !turnContextPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return
+        }
+
+        let payload = "<turn_context>\n\(turnContextPrefix)\n</turn_context>"
+
+        let targetIndex: Int?
+        switch mode {
+        case .firstMessage:
+            targetIndex = chatMessages.indices.first
+        case .lastMessage:
+            targetIndex = chatMessages.indices.last
+        }
+
+        guard let index = targetIndex else {
+            chatMessages = [.user(payload)]
+            return
+        }
+
+        let message = chatMessages[index]
+        let decoratedContent = payload + "\n\n" + message.content
+        chatMessages[index] = Chat.Message(
+            role: message.role,
+            content: decoratedContent,
+            images: message.images,
+            videos: message.videos
+        )
+    }
+
+    private func makeChatMessages(from messages: [LLMMessage]) -> [Chat.Message] {
+        messages.map { msg in
+            switch msg.role {
+            case .user:
+                return .user(msg.content)
+            case .assistant:
+                return .assistant(msg.content)
+            case .system:
+                return .system(msg.content)
+            case .tool:
+                return .tool(msg.content)
             }
         }
     }

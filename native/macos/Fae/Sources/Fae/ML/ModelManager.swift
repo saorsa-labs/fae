@@ -43,12 +43,30 @@ actor ModelManager {
     /// Helps prevent OOM by coordinating memory limits across concurrent tasks.
     private var wiredPolicy: FaeWiredSumPolicy?
 
+    /// Conservative fallback for KV bytes/token when no measured value is available.
+    private let fallbackKVBytesPerToken = 2048
+
     /// On-demand VLM engine — loaded only when vision tools are invoked.
     private var vlmEngine: MLXVLMEngine?
 
-    /// Get a wired memory ticket for inference. Returns nil if policy not configured.
-    func wiredTicket(kvBytes: Int) -> WiredMemoryTicket? {
-        wiredPolicy?.ticket(size: kvBytes, kind: WiredMemoryTicketKind.active)
+    /// Get a wired memory ticket for inference using measured or estimated budgets.
+    func generationTicket(promptTokens: Int, expectedNewTokens: Int) -> WiredMemoryTicket? {
+        guard let wiredPolicy else { return nil }
+
+        let totalTokens = max(promptTokens + expectedNewTokens, 1)
+        let kvBytesPerToken: Int = {
+            guard let measurement = memoryMeasurement, measurement.tokenCount > 0 else {
+                return fallbackKVBytesPerToken
+            }
+            return max(measurement.kvBytes / max(measurement.tokenCount, 1), 512)
+        }()
+
+        let weightBytes = memoryMeasurement?.weightBytes ?? 0
+        let workspaceBytes = memoryMeasurement?.workspaceBytes ?? 256 * 1_024 * 1_024
+        let estimatedKVBytes = totalTokens * kvBytesPerToken
+        let ticketSize = weightBytes + workspaceBytes + estimatedKVBytes
+
+        return wiredPolicy.ticket(size: ticketSize, kind: WiredMemoryTicketKind.active)
     }
 
     /// Get memory budget info for diagnostics/settings UI.
@@ -126,6 +144,35 @@ actor ModelManager {
             // Setup wired memory policy for GPU memory management.
             // This helps prevent OOM by coordinating memory limits across tasks.
             setupWiredMemoryPolicy()
+
+            let prefillStep = config.llm.prefillStepSize
+                ?? FaeConfig.recommendedPrefillStepSize(modelId: modelId)
+            let measurementParams = GenerateParameters(
+                maxTokens: 1,
+                maxKVSize: config.llm.maxKVCacheSize,
+                kvBits: config.llm.kvQuantBits,
+                kvGroupSize: config.llm.kvGroupSize,
+                quantizedKVStart: config.llm.kvQuantStartTokens,
+                temperature: 0.0,
+                topP: 1.0,
+                repetitionPenalty: nil,
+                repetitionContextSize: 0,
+                prefillStepSize: prefillStep
+            )
+            let measurementTokens = min(max(recommendedContext / 4, 512), 2_048)
+            if let measurement = try? await llm.measureMemory(
+                tokenCount: measurementTokens,
+                parameters: measurementParams
+            ) {
+                memoryMeasurement = measurement
+                NSLog(
+                    "ModelManager: measured wired memory weights=%dMB kv=%dMB workspace=%dMB tokens=%d",
+                    measurement.weightBytes / 1_000_000,
+                    measurement.kvBytes / 1_000_000,
+                    measurement.workspaceBytes / 1_000_000,
+                    measurement.tokenCount
+                )
+            }
 
             // Persist model ID for Settings UI
             UserDefaults.standard.set(modelId, forKey: "fae.loaded_model_id")

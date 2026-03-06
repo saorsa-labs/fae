@@ -153,6 +153,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     config: config
                 )
 
+                let loadedModelManager = modelManager
+                await llmEngine.setWiredMemoryTicketProvider { promptTokens, expectedNewTokens in
+                    await loadedModelManager.generationTicket(
+                        promptTokens: promptTokens,
+                        expectedNewTokens: expectedNewTokens
+                    )
+                }
+
                 // Initialize memory system.
                 let memoryStore = try Self.createMemoryStore()
                 let entityStore = EntityStore(dbQueue: await memoryStore.sharedDatabaseQueue)

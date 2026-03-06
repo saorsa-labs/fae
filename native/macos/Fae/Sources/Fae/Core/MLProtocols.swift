@@ -43,9 +43,13 @@ protocol LLMEngine: Actor {
         messages: [LLMMessage],
         systemPrompt: String,
         options: GenerationOptions
-    ) -> AsyncThrowingStream<String, Error>
+    ) -> AsyncThrowingStream<LLMStreamEvent, Error>
     /// Run a minimal warmup inference to pre-compile Metal shaders.
     func warmup() async
+    /// Mark the session cache as authoritative for the supplied conversation history.
+    func synchronizeSession(history: [LLMMessage]) async
+    /// Clear any retained prompt/session cache state.
+    func resetSession() async
     var isLoaded: Bool { get }
     var loadState: MLEngineLoadState { get }
 }
@@ -53,6 +57,10 @@ protocol LLMEngine: Actor {
 extension LLMEngine {
     /// Default no-op for engines that don't implement warmup.
     func warmup() async {}
+
+    func synchronizeSession(history: [LLMMessage]) async {}
+
+    func resetSession() async {}
 }
 
 /// Text-to-speech engine protocol.

@@ -47,6 +47,10 @@ actor ConversationStateTracker {
         trimHistory()
     }
 
+    func currentContextBudget() -> Int {
+        contextBudget
+    }
+
     // MARK: - History Management
 
     /// Add a user message to history, optionally annotated with speaker name and ID.

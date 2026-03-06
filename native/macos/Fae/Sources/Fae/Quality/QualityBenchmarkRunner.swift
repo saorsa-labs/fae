@@ -108,7 +108,8 @@ actor QualityBenchmarkRunner {
                 options: options
             )
 
-            for try await _ in stream {
+            for try await event in stream {
+                guard case .text = event else { continue }
                 if firstTokenTime == nil {
                     firstTokenTime = Date()
                 }

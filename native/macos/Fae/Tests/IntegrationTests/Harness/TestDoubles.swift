@@ -36,7 +36,7 @@ actor MockLLMEngine: LLMEngine {
         messages: [LLMMessage],
         systemPrompt: String,
         options: GenerationOptions
-    ) -> AsyncThrowingStream<String, Error> {
+    ) -> AsyncThrowingStream<LLMStreamEvent, Error> {
         generateCallCount += 1
         let capturedTokens = tokens
         let delayMs = tokenDelayMs
@@ -46,7 +46,7 @@ actor MockLLMEngine: LLMEngine {
                     if delayMs > 0 {
                         try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
                     }
-                    continuation.yield(token)
+                    continuation.yield(.text(token))
                 }
                 continuation.finish()
             }

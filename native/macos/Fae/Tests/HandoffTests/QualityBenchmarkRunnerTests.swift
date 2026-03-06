@@ -38,14 +38,14 @@ private actor MockLLMEngineForBenchmark: LLMEngine {
         messages: [LLMMessage],
         systemPrompt: String,
         options: GenerationOptions
-    ) -> AsyncThrowingStream<String, Error> {
+    ) -> AsyncThrowingStream<LLMStreamEvent, Error> {
         let delayMs = tokenDelayMs
         let count = tokenCount
         return AsyncThrowingStream { continuation in
             Task {
                 for i in 0..<count {
                     try await Task.sleep(nanoseconds: delayMs * 1_000_000)
-                    continuation.yield("token\(i)")
+                    continuation.yield(.text("token\(i)"))
                 }
                 continuation.finish()
             }
