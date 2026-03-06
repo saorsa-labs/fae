@@ -281,11 +281,16 @@ final class AuxiliaryWindowManager: ObservableObject {
         panel.setFrame(frame, display: false)
 
         if !isThoughtBubbleVisible {
+            // Slide in from 16 px below final position while fading up.
+            var startFrame = frame
+            startFrame.origin.y -= 16
+            panel.setFrame(startFrame, display: false)
             panel.alphaValue = 0
             panel.orderFront(nil)
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.3
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                ctx.duration = 0.4
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(frame, display: true)
                 panel.animator().alphaValue = 1
             }
             isThoughtBubbleVisible = true
@@ -294,16 +299,20 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     func hideThoughtBubble() {
         guard isThoughtBubbleVisible, let panel = thoughtBubblePanel else { return }
+        isThoughtBubbleVisible = false
+        // Float upward 20 px while fading — thought bubble drifting away.
+        var floatFrame = panel.frame
+        floatFrame.origin.y += 20
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.25
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ctx.duration = 0.5
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().setFrame(floatFrame, display: true)
             panel.animator().alphaValue = 0
         }, completionHandler: {
             Task { @MainActor in
                 panel.orderOut(nil)
             }
         })
-        isThoughtBubbleVisible = false
     }
 
     // MARK: - Positioning (external)
@@ -572,7 +581,7 @@ final class AuxiliaryWindowManager: ObservableObject {
         panel.hidesOnDeactivate = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.isOpaque = false
         panel.ignoresMouseEvents = false
 

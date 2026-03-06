@@ -79,12 +79,12 @@ struct ThoughtBubbleView: View {
         }
         .frame(width: cloudWidth, height: cloudHeight)
         .background {
-            // Dark base + lavender tint — two fills so the tint reads without a material layer.
+            // Frosted glass base (matches canvas panel) + lavender tint overlay.
             ZStack {
                 ThoughtCloudBlobShape()
-                    .fill(Color(red: 28/255, green: 24/255, blue: 44/255).opacity(0.92))
+                    .fill(.thinMaterial)
                 ThoughtCloudBlobShape()
-                    .fill(Self.bubbleColor.opacity(0.16))
+                    .fill(Self.bubbleColor.opacity(0.18))
             }
         }
         // Close button — positioned inside the large central lobe (not topTrailing which is outside the blob).
@@ -122,9 +122,9 @@ struct ThoughtBubbleView: View {
     private func tailDot(size: CGFloat, delay: Double, x: CGFloat, y: CGFloat) -> some View {
         ZStack {
             Circle()
-                .fill(Color(red: 28/255, green: 24/255, blue: 44/255).opacity(0.92))
+                .fill(.thinMaterial)
             Circle()
-                .fill(Self.bubbleColor.opacity(0.18))
+                .fill(Self.bubbleColor.opacity(0.22))
         }
         .frame(width: size, height: size)
         .shadow(color: Self.bubbleColor.opacity(0.50), radius: size / 3)
