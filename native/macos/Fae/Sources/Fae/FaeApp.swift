@@ -121,6 +121,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
 
+    // Local runtime server for OpenAI-compatible localhost access.
+    var localRuntimeServer: FaeLocalRuntimeServer?
+
     // Test harness (only active with --test-server or FAE_TEST_SERVER=1)
     var testServer: TestServer?
     var debugFileLogger: DebugFileLogger?
@@ -259,6 +262,14 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         memoryImport.auxiliaryWindows = auxiliaryWindows
         coworkWindow.faeCore = faeCore
         coworkWindow.conversation = conversation
+        let localRuntimeServer = FaeLocalRuntimeServer(
+            faeCore: faeCore,
+            conversation: conversation,
+            approvalOverlay: approvalOverlay
+        )
+        self.localRuntimeServer = localRuntimeServer
+        coworkWindow.runtimeDescriptor = localRuntimeServer.descriptor
+        localRuntimeServer.start()
         relayServer.bindOrbState(orbState)
         relayServer.commandSender = faeCore
         relayServer.audioSender = faeCore

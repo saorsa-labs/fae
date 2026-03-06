@@ -8,6 +8,7 @@ final class CoworkWindowController {
 
     var faeCore: FaeCore?
     var conversation: ConversationController?
+    var runtimeDescriptor: FaeLocalRuntimeDescriptor?
 
     func show() {
         if let window {
@@ -22,7 +23,11 @@ final class CoworkWindowController {
             return
         }
 
-        let controller = CoworkWorkspaceController(faeCore: faeCore, conversation: conversation)
+        let controller = CoworkWorkspaceController(
+            faeCore: faeCore,
+            conversation: conversation,
+            runtimeDescriptor: runtimeDescriptor
+        )
         let rootView = CoworkWorkspaceView(
             controller: controller,
             faeCore: faeCore,
@@ -30,13 +35,17 @@ final class CoworkWindowController {
         )
 
         let hostingController = NSHostingController(rootView: rootView)
+        // Allow the window to freely resize without SwiftUI constraining it to ideal size.
+        if #available(macOS 13.0, *) {
+            hostingController.sizingOptions = .minSize
+        }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1380, height: 920),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.title = "Fae Cowork"
+        window.title = "Work with Fae"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unifiedCompact

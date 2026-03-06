@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum CoworkPalette {
-    static let ink = Color(red: 0.05, green: 0.07, blue: 0.10)
+    static let ink = Color.black.opacity(0.16)
     static let panel = Color.white.opacity(0.05)
     static let outline = Color.white.opacity(0.10)
+    static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
     static let amber = Color(red: 0.92, green: 0.72, blue: 0.28)
     static let cyan = Color(red: 0.42, green: 0.82, blue: 0.92)
     static let rose = Color(red: 0.86, green: 0.52, blue: 0.65)
@@ -19,6 +21,8 @@ struct CoworkWorkspaceView: View {
     @ObservedObject var controller: CoworkWorkspaceController
     @ObservedObject var faeCore: FaeCore
     @ObservedObject var conversation: ConversationController
+
+    @State private var isDropTargeted = false
 
     var body: some View {
         ZStack {
@@ -43,6 +47,27 @@ struct CoworkWorkspaceView: View {
             VisualEffectBlur(material: .underWindowBackground, blendingMode: .behindWindow)
                 .ignoresSafeArea()
         )
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(CoworkPalette.heather.opacity(0.55), style: StrokeStyle(lineWidth: 2, dash: [8, 8]))
+                    .padding(18)
+                    .overlay {
+                        Text("Drop files or images to add them to Work with Fae")
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+            }
+        }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+            WorkWithFaeWorkspaceStore.dropURLs(from: providers) { urls in
+                controller.addAttachments(from: urls)
+            }
+            return true
+        }
         .preferredColorScheme(.dark)
         .onAppear {
             controller.scheduleRefresh(after: 0.05)
@@ -51,37 +76,24 @@ struct CoworkWorkspaceView: View {
 
     private var backdrop: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    CoworkPalette.ink,
-                    Color(red: 0.08, green: 0.10, blue: 0.14),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .padding(10)
+                .ignoresSafeArea()
 
             RadialGradient(
-                colors: [CoworkPalette.amber.opacity(0.30), .clear],
-                center: .topLeading,
+                colors: [CoworkPalette.heather.opacity(0.16), .clear],
+                center: .top,
                 startRadius: 40,
-                endRadius: 460
+                endRadius: 380
             )
             .ignoresSafeArea()
 
             RadialGradient(
-                colors: [CoworkPalette.cyan.opacity(0.22), .clear],
-                center: .topTrailing,
-                startRadius: 30,
-                endRadius: 420
-            )
-            .ignoresSafeArea()
-
-            RadialGradient(
-                colors: [CoworkPalette.rose.opacity(0.16), .clear],
-                center: .bottomLeading,
+                colors: [CoworkPalette.amber.opacity(0.12), .clear],
+                center: .topLeading,
                 startRadius: 20,
-                endRadius: 360
+                endRadius: 320
             )
             .ignoresSafeArea()
         }
@@ -90,7 +102,7 @@ struct CoworkWorkspaceView: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Cowork Desktop")
+                Text("Work with Fae")
                     .font(.system(size: 31, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
 
@@ -121,6 +133,12 @@ struct CoworkWorkspaceView: View {
                         icon: "sparkles",
                         title: "\(snapshot.activeSkills.count) active skills",
                         accent: CoworkPalette.amber
+                    )
+
+                    statusChip(
+                        icon: "network",
+                        title: controller.providerKind == .faeLocalhost ? "Fae localhost" : "External provider",
+                        accent: controller.providerStatus.contains("fallback") ? CoworkPalette.rose : CoworkPalette.heather
                     )
                 }
             }
@@ -179,10 +197,10 @@ struct CoworkWorkspaceView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 
                             VStack(alignment: .leading, spacing: 5) {
-                                Text("Fae is live")
+                                Text("Workspace context")
                                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                                     .foregroundStyle(.white)
-                                Text(conversation.loadedModelLabel.isEmpty ? "Loading model context..." : conversation.loadedModelLabel)
+                                Text(currentWorkspaceSubtitle)
                                     .font(.system(size: 13, weight: .medium, design: .rounded))
                                     .foregroundStyle(Color.white.opacity(0.62))
                                     .lineLimit(2)
@@ -190,45 +208,303 @@ struct CoworkWorkspaceView: View {
                         }
 
                         HStack(spacing: 14) {
-                            metricTile(title: "Messages", value: "\(conversation.messages.count)", accent: CoworkPalette.amber)
-                            metricTile(title: "Tasks", value: "\(controller.schedulerTasks.filter(\.enabled).count)", accent: CoworkPalette.cyan)
-                            metricTile(title: "Apple", value: "\(snapshot.appleTools.count)", accent: CoworkPalette.mint)
+                            metricTile(title: "Files", value: "\(controller.workspaceState.indexedFiles.count)", accent: CoworkPalette.amber)
+                            metricTile(title: "Attached", value: "\(controller.workspaceState.attachments.count)", accent: CoworkPalette.cyan)
+                            metricTile(title: "Tasks", value: "\(controller.schedulerTasks.filter(\.enabled).count)", accent: CoworkPalette.mint)
+                        }
+
+                        HStack(spacing: 10) {
+                            workspaceActionButton(
+                                title: controller.workspaceState.selectedDirectoryPath == nil ? "Choose folder" : "Change folder",
+                                systemImage: "folder",
+                                accent: CoworkPalette.heather,
+                                action: controller.chooseWorkspaceDirectory
+                            )
+
+                            if controller.workspaceState.selectedDirectoryPath != nil {
+                                workspaceActionButton(
+                                    title: "Clear",
+                                    systemImage: "xmark.circle",
+                                    accent: CoworkPalette.rose,
+                                    action: controller.clearWorkspaceDirectory
+                                )
+                            }
                         }
                     }
                 }
 
                 glassCard {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("Quick actions")
+                        Text("Add context")
                             .font(.system(size: 17, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white)
 
                         quickPromptButton(
-                            title: "Plan my day",
-                            subtitle: "Use scheduler, memory, and Apple tools where helpful.",
-                            action: {
-                                controller.useQuickPrompt(
-                                    "Please help me plan today using my memories, existing commitments, and any relevant scheduler tasks. Keep it concise and actionable."
-                                )
-                            }
+                            title: "Add files",
+                            subtitle: "+ button behaviour — open Finder and attach docs, code, or images.",
+                            action: controller.addAttachmentsViaPicker
                         )
 
                         quickPromptButton(
-                            title: "Review skills",
-                            subtitle: "Audit active skills and suggest anything stale or missing.",
-                            action: {
-                                controller.useQuickPrompt(
-                                    "Audit your active skills, explain what they are doing for me now, and point out anything stale or worth improving."
-                                )
-                            }
+                            title: "Paste clipboard",
+                            subtitle: "Paste text, copied files, or copied images into this workspace.",
+                            action: controller.addPastedContent
+                        )
+
+                        quickPromptButton(
+                            title: "Look at screen",
+                            subtitle: "Tell Fae to inspect what is currently visible.",
+                            action: controller.inspectScreen
                         )
                     }
                 }
             }
-            .frame(height: 220)
+            .frame(height: 260)
 
-            workspaceConversationPanel
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HStack(alignment: .top, spacing: 18) {
+                workspaceContextPanel
+                    .frame(width: 360)
+
+                workspaceConversationPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var workspaceContextPanel: some View {
+        glassCard {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Workspace")
+                        .font(.system(size: 19, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Folder grounding, attached files, drag-and-drop, and pasted context all live here.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.62))
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Current folder")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.60))
+
+                    if let path = controller.workspaceState.selectedDirectoryPath {
+                        Text(path)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .textSelection(.enabled)
+                            .lineLimit(3)
+                    } else {
+                        Text("No folder selected yet")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                    }
+                }
+
+                Divider().overlay(Color.white.opacity(0.08))
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Attached items")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Button {
+                            controller.addAttachmentsViaPicker()
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                    }
+
+                    if controller.workspaceState.attachments.isEmpty {
+                        Text("Drop files here, click + to add them, or paste from the clipboard.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(controller.workspaceState.attachments) { attachment in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: attachment.kind == .image ? "photo" : (attachment.kind == .text ? "doc.text" : "paperclip"))
+                                            .foregroundStyle(CoworkPalette.heather)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(attachment.displayName)
+                                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                                .foregroundStyle(.white)
+                                                .lineLimit(2)
+                                            if let path = attachment.path {
+                                                Text(path)
+                                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                                    .foregroundStyle(Color.white.opacity(0.45))
+                                                    .lineLimit(2)
+                                            } else if let inlineText = attachment.inlineText {
+                                                Text(String(inlineText.prefix(140)))
+                                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                    .foregroundStyle(Color.white.opacity(0.55))
+                                                    .lineLimit(3)
+                                            }
+                                        }
+                                        Spacer()
+                                        Button {
+                                            controller.removeAttachment(id: attachment.id)
+                                        } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 10, weight: .bold))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(Color.white.opacity(0.5))
+                                    }
+                                    .padding(10)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .fill(controller.selectedAttachment?.id == attachment.id ? CoworkPalette.heather.opacity(0.18) : Color.white.opacity(0.04))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                    .stroke(controller.selectedAttachment?.id == attachment.id ? CoworkPalette.heather.opacity(0.28) : Color.white.opacity(0.08), lineWidth: 1)
+                                            )
+                                    )
+                                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .onTapGesture {
+                                        controller.selectAttachment(attachment)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 180)
+                    }
+                }
+
+                Divider().overlay(Color.white.opacity(0.08))
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Indexed files")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text("\(controller.filteredWorkspaceFiles.count)/\(controller.workspaceState.indexedFiles.count)")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.45))
+                    }
+
+                    TextField("Search files by name or type", text: $controller.workspaceSearchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.white.opacity(0.05))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                )
+                        )
+
+                    if controller.workspaceState.indexedFiles.isEmpty {
+                        Text("Select a folder to let Fae ground her answers in code, docs, and local project files.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                ForEach(controller.filteredWorkspaceFiles.prefix(80)) { file in
+                                    Button {
+                                        controller.selectWorkspaceFile(file)
+                                    } label: {
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Image(systemName: file.kind == "image" ? "photo" : "doc")
+                                                .foregroundStyle(CoworkPalette.amber)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(file.relativePath)
+                                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                                    .foregroundStyle(.white)
+                                                    .lineLimit(2)
+                                                Text(file.kind.capitalized)
+                                                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                                                    .foregroundStyle(Color.white.opacity(0.45))
+                                            }
+                                            Spacer()
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill(controller.selectedWorkspaceFile?.id == file.id ? CoworkPalette.heather.opacity(0.18) : Color.clear)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 180)
+                    }
+                }
+
+                if let focusedPreview = controller.focusedPreview {
+                    Divider().overlay(Color.white.opacity(0.08))
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Focused preview")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Text(focusedPreview.subtitle ?? focusedPreview.kind.capitalized)
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.45))
+                        }
+
+                        Text(focusedPreview.title)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .textSelection(.enabled)
+
+                        if let path = focusedPreview.path {
+                            Text(path)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.45))
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                        }
+
+                        if focusedPreview.kind == "image", let path = focusedPreview.path,
+                           let image = NSImage(contentsOf: URL(fileURLWithPath: path))
+                        {
+                            Image(nsImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxHeight: 160)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        } else if let textPreview = focusedPreview.textPreview, !textPreview.isEmpty {
+                            ScrollView {
+                                Text(textPreview)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(Color.white.opacity(0.78))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                            }
+                            .frame(maxHeight: 180)
+                            .padding(10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.white.opacity(0.04))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                    )
+                            )
+                        } else {
+                            Text("Preview is not available for this file type yet, but Fae still knows it is part of the workspace.")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.55))
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -240,7 +516,7 @@ struct CoworkWorkspaceView: View {
                         Text("Live conversation")
                             .font(.system(size: 19, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white)
-                        Text("A native Swift workspace shaped after AionUi's left rail and conversation core, but bound directly to Fae's live runtime.")
+                        Text("Use the folder, attachments, pasted items, and vision actions around this chat to ground Fae in the work you are doing.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.62))
                     }
@@ -327,8 +603,23 @@ struct CoworkWorkspaceView: View {
                     }
 
                     HStack(alignment: .bottom, spacing: 12) {
+                        HStack(spacing: 8) {
+                            iconActionButton(symbol: "plus") {
+                                controller.addAttachmentsViaPicker()
+                            }
+                            iconActionButton(symbol: "doc.on.clipboard") {
+                                controller.addPastedContent()
+                            }
+                            iconActionButton(symbol: "camera") {
+                                controller.inspectCamera()
+                            }
+                            iconActionButton(symbol: "rectangle.on.rectangle") {
+                                controller.inspectScreen()
+                            }
+                        }
+
                         TextField(
-                            "Ask Fae to coordinate work, run a scheduler task, or use one of her skills...",
+                            "Ask Fae to work with this folder, these files, or what you want her to inspect…",
                             text: $controller.draft,
                             axis: .vertical
                         )
@@ -371,23 +662,23 @@ struct CoworkWorkspaceView: View {
 
     private var emptyConversationState: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("This workspace is ready for desktop coworking.")
+            Text("Start by choosing a folder or adding a few files.")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
 
-            Text("Use it as a command center for conversations, scheduler runs, skills, and Apple integrations. Additional model bays are reserved for the next issue.")
+            Text("Work with Fae is designed to keep local project context close at hand. Select a workspace, drop files or images, paste something in, or ask Fae to look at your screen.")
                 .font(.system(size: 14, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.68))
 
             HStack(spacing: 10) {
-                quickSuggestionChip("Morning briefing") {
-                    controller.useQuickPrompt("Give me a morning briefing using memory, current context, and any useful scheduler tasks.")
+                quickSuggestionChip("Summarize this workspace") {
+                    controller.useQuickPrompt("Summarize this workspace and tell me where I should start.")
                 }
-                quickSuggestionChip("Inbox triage") {
-                    controller.useQuickPrompt("Help me triage my inbox and summarize anything urgent.")
+                quickSuggestionChip("Find key files") {
+                    controller.useQuickPrompt("Given this workspace context, identify the most important files for the task at hand.")
                 }
-                quickSuggestionChip("Skill review") {
-                    controller.useQuickPrompt("Explain which skills are active and how I should use them in this session.")
+                quickSuggestionChip("Look at my screen") {
+                    controller.inspectScreen()
                 }
             }
         }
@@ -606,21 +897,20 @@ struct CoworkWorkspaceView: View {
 
             glassCard {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Apple lane")
+                    Text("Workspace at a glance")
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white)
 
-                    Text("These tools stay visible here because the cowork desktop is meant to feel native on macOS, not like a generic web shell.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.62))
+                    inspectorRow(title: "Folder", value: controller.workspaceState.selectedDirectoryPath == nil ? "Not selected" : "Selected")
+                    inspectorRow(title: "Indexed files", value: "\(controller.workspaceState.indexedFiles.count)")
+                    inspectorRow(title: "Attachments", value: "\(controller.workspaceState.attachments.count)")
+                    inspectorRow(title: "Apple tools", value: "\(snapshot.appleTools.count)")
 
-                    if snapshot.appleTools.isEmpty {
-                        Text("Apple integrations are unavailable in the current tool mode.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.52))
-                    } else {
-                        ForEach(snapshot.appleTools) { tool in
-                            capsule(text: tool.displayName, accent: CoworkPalette.cyan)
+                    if !snapshot.appleTools.isEmpty {
+                        FlowLayout(spacing: 6) {
+                            ForEach(snapshot.appleTools) { tool in
+                                capsule(text: tool.displayName, accent: CoworkPalette.cyan)
+                            }
                         }
                     }
                 }
@@ -639,10 +929,10 @@ struct CoworkWorkspaceView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Fae Cowork")
+                        Text("Work with Fae")
                             .font(.system(size: 20, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
-                        Text("Native macOS desk")
+                        Text("Local workspace")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.62))
                     }
@@ -656,38 +946,18 @@ struct CoworkWorkspaceView: View {
 
                 Divider().overlay(Color.white.opacity(0.08))
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Model bays")
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Quick controls")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.white.opacity(0.86))
 
-                    glassCard(padding: 14) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Fae Core")
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white)
-                                Spacer()
-                                capsule(text: "Live", accent: CoworkPalette.mint)
-                            }
-
-                            Text("Additional model slots are intentionally held for phase two so this first pass stays tightly bound to Fae.")
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.58))
-                        }
-                    }
+                    quickActionPill(title: "Choose folder", action: controller.chooseWorkspaceDirectory)
+                    quickActionPill(title: "Add files", action: controller.addAttachmentsViaPicker)
+                    quickActionPill(title: "Look at screen", action: controller.inspectScreen)
+                    quickActionPill(title: "Open settings", action: controller.openSettings)
                 }
 
                 Spacer()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Quick control")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.86))
-
-                    quickActionPill(title: "Skill health", action: { controller.runTask(id: "skill_health_check") })
-                    quickActionPill(title: "Open settings", action: controller.openSettings)
-                }
             }
         }
     }
@@ -822,6 +1092,24 @@ struct CoworkWorkspaceView: View {
                     Capsule()
                         .fill(Color.white.opacity(0.05))
                         .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func iconActionButton(symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                        )
                 )
         }
         .buttonStyle(.plain)
@@ -1039,11 +1327,18 @@ struct CoworkWorkspaceView: View {
     private var snapshot: CoworkWorkspaceSnapshot { controller.snapshot }
 
     private var headerSubtitle: String {
-        let user = snapshot.userName ?? "your day"
+        let user = snapshot.userName ?? "you"
         if faeCore.pipelineState == .running {
-            return "Fae is ready to cowork with \(user), using her live skills, tools, and scheduler."
+            return "Fae is ready to work with \(user), grounded in your folder, files, pasted context, and live tools."
         }
-        return "Fae is still starting. The desktop stays mounted so the workspace can come online without shifting context."
+        return "Fae is still starting. Your workspace can stay mounted so context is ready when she is."
+    }
+
+    private var currentWorkspaceSubtitle: String {
+        if let path = controller.workspaceState.selectedDirectoryPath {
+            return path
+        }
+        return conversation.loadedModelLabel.isEmpty ? "Choose a folder or add files to ground Fae in what you are working on." : conversation.loadedModelLabel
     }
 
     private var latestAssistantExcerpt: String {
@@ -1054,5 +1349,47 @@ struct CoworkWorkspaceView: View {
             return message.content
         }
         return "No assistant reply yet."
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                y += rowHeight + spacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+
+        return CGSize(width: maxWidth, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
