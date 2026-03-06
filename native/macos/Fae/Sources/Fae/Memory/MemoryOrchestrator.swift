@@ -369,6 +369,7 @@ actor MemoryOrchestrator {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               !scan.shouldSuppressStructuredExtraction,
+              SensitiveContentPolicy.shouldPersistProactiveObservation(taskId: taskId, text: responseText),
               let spec = proactiveMemorySpec(for: taskId)
         else {
             return MemoryCaptureReport()

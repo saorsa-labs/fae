@@ -81,4 +81,22 @@ enum SensitiveContentPolicy {
         }
         return output
     }
+
+    static func shouldPersistProactiveObservation(taskId: String, text: String) -> Bool {
+        let lower = text.lowercased()
+        let observationTasks: Set<String> = ["camera_presence_check", "screen_activity_check"]
+        guard observationTasks.contains(taskId) else { return true }
+
+        if scan(text).containsSensitiveContent {
+            return false
+        }
+
+        let protectedKeywords = [
+            "1password", "lastpass", "bitwarden", "password manager", "passkey",
+            "bank", "banking", "account balance", "credit card", "card number", "routing number",
+            "inbox", "private message", "text thread", "imessage", "whatsapp", "signal",
+            "medical", "diagnosis", "prescription", "patient", "lab result", "social security"
+        ]
+        return !protectedKeywords.contains(where: { lower.contains($0) })
+    }
 }

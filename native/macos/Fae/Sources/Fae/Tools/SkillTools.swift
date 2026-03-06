@@ -110,7 +110,7 @@ struct RunSkillTool: Tool {
 struct ManageSkillTool: Tool {
     let name = "manage_skill"
     let description = "Create, update, or delete personal skills. Actions: create, update, delete, list."
-    let parametersSchema = #"{"action": "string (required: create|update|delete|list)", "name": "string (required for create/update/delete)", "description": "string (required for create, optional for update — what the skill does)", "body": "string (required for create, optional for update — SKILL.md instructions)", "script": "string (optional for create — Python script content)"}"#
+    let parametersSchema = #"{"action": "string (required: create|update|delete|list)", "name": "string (required for create/update/delete)", "description": "string (required for create, optional for update — what the skill does)", "body": "string (required for create, optional for update — SKILL.md instructions)", "script": "string (optional for create — Python script content)", "script_name": "string (optional for create — custom filename under scripts/)", "manifest_json": "string (optional for create — full MANIFEST.json content for richer executable skills)"}"#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"manage_skill","arguments":{"action":"create","name":"weather-check","description":"Check weather for a city","body":"Search for weather using web_search tool."}}</tool_call>"#
@@ -152,13 +152,17 @@ struct ManageSkillTool: Tool {
         }
 
         let script = input["script"] as? String
+        let scriptName = input["script_name"] as? String
+        let manifestJSON = input["manifest_json"] as? String
 
         do {
             let metadata = try await skillManager.createSkill(
                 name: name,
                 description: description,
                 body: body,
-                scriptContent: script
+                scriptContent: script,
+                scriptName: scriptName,
+                manifestJSON: manifestJSON
             )
             let typeLabel = metadata.type == .executable ? "executable" : "instruction"
             return .success("Created \(typeLabel) skill '\(name)': \(description)")

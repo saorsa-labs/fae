@@ -481,12 +481,17 @@ actor SkillManager {
         name: String,
         description: String,
         body: String,
-        scriptContent: String? = nil
+        scriptContent: String? = nil,
+        scriptName: String? = nil,
+        manifestJSON: String? = nil
     ) throws -> SkillMetadata {
         try Self.validateSkillName(name)
         try Self.validateSkillMetadata(name: name, description: description, body: body)
         if let script = scriptContent {
             try Self.validateScriptContent(script)
+        }
+        if let scriptName {
+            try Self.validateScriptFileName(scriptName)
         }
 
         let skillDir = try Self.canonicalSkillDirectory(for: name)
@@ -518,15 +523,20 @@ actor SkillManager {
         if let script = scriptContent {
             let scriptsDir = skillDir.appendingPathComponent("scripts")
             try fm.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+            let resolvedScriptName = (scriptName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                ? scriptName!
+                : name
             try script.write(
-                to: scriptsDir.appendingPathComponent("\(name).py"),
+                to: scriptsDir.appendingPathComponent("\(resolvedScriptName).py"),
                 atomically: true, encoding: .utf8
             )
 
             let integrity = SkillManifestPolicy.buildIntegrity(for: skillDir)
-            let manifest = SkillCapabilityManifest
-                .conservativeDefault(for: .executable)
-                .withIntegrity(integrity)
+            let manifest = try Self.buildManifest(
+                for: .executable,
+                manifestJSON: manifestJSON,
+                integrity: integrity
+            )
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let manifestData = try encoder.encode(manifest)
@@ -987,6 +997,40 @@ actor SkillManager {
                 "script content failed safety lint: forbidden pattern '\(pattern)'"
             )
         }
+    }
+
+    private static func validateScriptFileName(_ name: String) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw SkillError.policyViolation("script_name must not be empty")
+        }
+        guard isSafeSkillName(trimmed) else {
+            throw SkillError.policyViolation("script_name contains invalid characters")
+        }
+    }
+
+    private static func buildManifest(
+        for type: SkillType,
+        manifestJSON: String?,
+        integrity: SkillIntegrityManifest
+    ) throws -> SkillCapabilityManifest {
+        if let manifestJSON,
+           !manifestJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            guard let data = manifestJSON.data(using: .utf8) else {
+                throw SkillError.invalidManifest("manifest_json is not valid UTF-8")
+            }
+            var manifest = try JSONDecoder().decode(SkillCapabilityManifest.self, from: data)
+            manifest = manifest.withIntegrity(integrity)
+            try validateManifest(manifest, for: type)
+            return manifest
+        }
+
+        let manifest = SkillCapabilityManifest
+            .conservativeDefault(for: type)
+            .withIntegrity(integrity)
+        try validateManifest(manifest, for: type)
+        return manifest
     }
 
     private static func validateExecutableScriptPolicy(

@@ -330,6 +330,48 @@ final class SkillBypassRegressionTests: XCTestCase {
         }
     }
 
+    func testCreateSkillSupportsCustomScriptNameAndManifestJSON() async throws {
+        let manager = SkillManager()
+        let skillName = "network_ok_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+        }
+
+        let manifestJSON = """
+        {
+          \"schemaVersion\": 1,
+          \"capabilities\": [\"execute\"],
+          \"allowedTools\": [\"run_skill\"],
+          \"allowedDomains\": [],
+          \"dataClasses\": [\"local_files\", \"network\"],
+          \"riskTier\": \"medium\",
+          \"timeoutSeconds\": 30,
+          \"allowNetwork\": true,
+          \"allowSubprocess\": false
+        }
+        """
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Skill with richer manifest authoring",
+            body: "This skill uses a custom script filename and explicit manifest JSON.",
+            scriptContent: "import urllib\nprint('ok')",
+            scriptName: "runner",
+            manifestJSON: manifestJSON
+        )
+
+        let output = try await manager.execute(
+            skillName: skillName,
+            scriptName: "runner",
+            input: [:],
+            capabilityTicketId: UUID().uuidString
+        )
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "ok")
+    }
+
     func testRunSkillToolForwardsStructuredParamsAndSecretBindings() async throws {
         let manager = SkillManager()
         let tool = RunSkillTool(skillManager: manager)

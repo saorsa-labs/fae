@@ -133,6 +133,7 @@ enum PersonalityManager {
           - Ask one field at a time; never request already-configured values.
         - Manage personal skills with the manage_skill tool.
           - Canonical skill format is a directory-based Agent Skill with `SKILL.md` and optional `scripts/`, `references/`, and `assets/`.
+          - For richer executable skills, you can provide `script_name` and `manifest_json` so the skill contract stays explicit instead of hard-coded.
           - Personal skills live at ~/Library/Application Support/fae/skills/
           - Shared/community skills may also be discovered from ~/.agents/skills/, ./.agents/skills/, and ~/.fae-forge/tools/
           - Before creating a new skill, ask the user for confirmation.

@@ -127,6 +127,22 @@ final class MemoryOrchestratorTests: XCTestCase {
         XCTAssertTrue(guestNames[0].text.contains("Bob"))
     }
 
+    func testSensitiveScreenObservationIsNotPersisted() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
+        let store = try makeStore(path: dbPath)
+        let orchestrator = MemoryOrchestrator(store: store, config: enabledMemoryConfig())
+
+        _ = await orchestrator.captureProactiveRecord(
+            turnId: UUID().uuidString,
+            taskId: "screen_activity_check",
+            prompt: "[PROACTIVE SCREEN OBSERVATION]",
+            responseText: "1Password was open next to a banking dashboard showing an account balance."
+        )
+
+        let records = try await store.listRecords(includeInactive: true)
+        XCTAssertTrue(records.isEmpty)
+    }
+
     func testProactiveCaptureBuildsMorningBriefingContextFromSourceMetadata() async throws {
         let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
         let store = try makeStore(path: dbPath)
