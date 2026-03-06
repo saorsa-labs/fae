@@ -148,9 +148,9 @@ tests:
       - action: "http_post"
         url: "/cancel"
         body: {}
-      # Allow pipeline time to tear down generation
+      # Allow pipeline time to tear down generation — 35B model may take >10s to cancel
       - action: "sleep"
-        duration_ms: 10000
+        duration_ms: 20000
       - action: "http_get"
         url: "/conversation"
     criteria:
