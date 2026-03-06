@@ -82,7 +82,7 @@ struct ThoughtBubbleView: View {
             // Frosted glass base (matches canvas panel) + lavender tint overlay.
             ZStack {
                 ThoughtCloudBlobShape()
-                    .fill(.thinMaterial)
+                    .fill(.ultraThinMaterial)
                 ThoughtCloudBlobShape()
                     .fill(Self.bubbleColor.opacity(0.18))
             }
@@ -122,7 +122,7 @@ struct ThoughtBubbleView: View {
     private func tailDot(size: CGFloat, delay: Double, x: CGFloat, y: CGFloat) -> some View {
         ZStack {
             Circle()
-                .fill(.thinMaterial)
+                .fill(.ultraThinMaterial)
             Circle()
                 .fill(Self.bubbleColor.opacity(0.22))
         }
