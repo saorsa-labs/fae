@@ -147,6 +147,51 @@ final class ApprovalOverlayControllerTests: XCTestCase {
         XCTAssertNil(controller.activeGovernanceConfirmation)
     }
 
+    func testToolModeUpgradeRequestUsesPopupPathBeforeSettingsFallback() async throws {
+        let controller = ApprovalOverlayController()
+
+        NotificationCenter.default.post(
+            name: .faeToolModeUpgradeRequested,
+            object: nil,
+            userInfo: ["reason": "toolMode=off"]
+        )
+        try await flushNotifications()
+
+        XCTAssertEqual(controller.activeToolModeRequest?.reason, "toolMode=off")
+
+        let expectation = expectation(forNotification: .faeToolModeUpgradeRespond, object: nil) { notification in
+            notification.userInfo?["action"] as? String == "set_mode"
+                && notification.userInfo?["mode"] as? String == "read_only"
+        }
+
+        controller.upgradeToolMode("read_only")
+
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertNil(controller.activeToolModeRequest)
+    }
+
+    func testToolModeOpenSettingsRequiresExplicitUserChoice() async throws {
+        let controller = ApprovalOverlayController()
+
+        NotificationCenter.default.post(
+            name: .faeToolModeUpgradeRequested,
+            object: nil,
+            userInfo: ["reason": "tool_not_called"]
+        )
+        try await flushNotifications()
+
+        XCTAssertEqual(controller.activeToolModeRequest?.reason, "tool_not_called")
+
+        let expectation = expectation(forNotification: .faeToolModeUpgradeRespond, object: nil) { notification in
+            notification.userInfo?["action"] as? String == "open_settings"
+        }
+
+        controller.openSettingsFromToolMode()
+
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertNil(controller.activeToolModeRequest)
+    }
+
     private func flushNotifications() async throws {
         try await Task.sleep(nanoseconds: 50_000_000)
     }

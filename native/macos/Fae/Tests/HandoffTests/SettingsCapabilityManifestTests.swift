@@ -169,6 +169,104 @@ final class SettingsCapabilityManifestTests: XCTestCase {
         XCTAssertEqual(matrix?.missingFields, [])
     }
 
+    func testBuildManifestOnlyReportsStillMissingRequiredFields() async throws {
+        let manager = SkillManager()
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let skillName = "channel_progressive_\(suffix)"
+        let channelKey = "progressive\(suffix)"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "bot_token",
+                store: .secretStore
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "guild_id",
+                store: .configStore
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "nickname",
+                store: .configStore
+            )
+        }
+
+        try await createChannelSkill(
+            manager: manager,
+            skillName: skillName,
+            channelKey: channelKey,
+            displayName: "Progressive Chat",
+            fields: [
+                SkillSettingsField(
+                    id: "bot_token",
+                    type: .secret,
+                    label: "Bot Token",
+                    required: true,
+                    prompt: "What is your bot token?",
+                    placeholder: nil,
+                    help: nil,
+                    defaultValue: nil,
+                    options: nil,
+                    validation: nil,
+                    sensitive: true,
+                    store: .secretStore
+                ),
+                SkillSettingsField(
+                    id: "guild_id",
+                    type: .text,
+                    label: "Guild ID",
+                    required: true,
+                    prompt: "What is your guild ID?",
+                    placeholder: nil,
+                    help: nil,
+                    defaultValue: nil,
+                    options: nil,
+                    validation: nil,
+                    sensitive: false,
+                    store: .configStore
+                ),
+                SkillSettingsField(
+                    id: "nickname",
+                    type: .text,
+                    label: "Nickname",
+                    required: false,
+                    prompt: "Optional nickname",
+                    placeholder: nil,
+                    help: nil,
+                    defaultValue: nil,
+                    options: nil,
+                    validation: nil,
+                    sensitive: false,
+                    store: .configStore
+                ),
+            ]
+        )
+
+        try ChannelSettingsStore.setValue(
+            channelKey: channelKey,
+            fieldID: "guild_id",
+            store: .configStore,
+            rawValue: "guild-123"
+        )
+
+        var config = FaeConfig()
+        config.channels.enabled = true
+
+        let manifest = await SettingsCapabilityManifestBuilder.build(config: config, skillManager: manager)
+        let progressive = manifest.channels.first(where: { $0.key == channelKey && $0.skillName == skillName })
+
+        XCTAssertNotNil(progressive)
+        XCTAssertEqual(progressive?.state, .missingInput)
+        XCTAssertEqual(progressive?.requiredFields, ["bot_token", "guild_id"])
+        XCTAssertEqual(progressive?.missingFields, ["bot_token"])
+        XCTAssertFalse(progressive?.missingFields.contains("nickname") ?? true)
+    }
+
     private func createChannelSkill(
         manager: SkillManager,
         skillName: String,
@@ -176,16 +274,6 @@ final class SettingsCapabilityManifestTests: XCTestCase {
         displayName: String,
         requiredFields: [String]
     ) async throws {
-        _ = try await manager.createSkill(
-            name: skillName,
-            description: "Channel skill test fixture",
-            body: "Fixture body for channel skill capability tests.",
-            scriptContent: "print('ok')"
-        )
-
-        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(skillName)
-        let manifestURL = SkillManifestPolicy.manifestURL(for: skillDir)
-
         let fields = requiredFields.map { fieldID in
             SkillSettingsField(
                 id: fieldID,
@@ -202,6 +290,32 @@ final class SettingsCapabilityManifestTests: XCTestCase {
                 store: fieldID.contains("token") ? .secretStore : .configStore
             )
         }
+
+        try await createChannelSkill(
+            manager: manager,
+            skillName: skillName,
+            channelKey: channelKey,
+            displayName: displayName,
+            fields: fields
+        )
+    }
+
+    private func createChannelSkill(
+        manager: SkillManager,
+        skillName: String,
+        channelKey: String,
+        displayName: String,
+        fields: [SkillSettingsField]
+    ) async throws {
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Channel skill test fixture",
+            body: "Fixture body for channel skill capability tests.",
+            scriptContent: "print('ok')"
+        )
+
+        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(skillName)
+        let manifestURL = SkillManifestPolicy.manifestURL(for: skillDir)
 
         let manifest = SkillCapabilityManifest(
             schemaVersion: 1,

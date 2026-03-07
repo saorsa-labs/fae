@@ -74,6 +74,120 @@ final class ChannelSetupToolTests: XCTestCase {
         XCTAssertTrue(result.output.contains("disabled by rollout flag"))
     }
 
+    func testNextPromptAdvancesOneMissingFieldAtATimeAndSkipsOptionalFields() async throws {
+        let manager = SkillManager()
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let skillName = "channel_progressive_\(suffix)"
+        let channelKey = "progressive\(suffix)"
+
+        defer {
+            try? FileManager.default.removeItem(
+                at: SkillManager.skillsDirectory.appendingPathComponent(skillName)
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "bot_token",
+                store: .secretStore
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "guild_id",
+                store: .configStore
+            )
+            try? ChannelSettingsStore.clearValue(
+                channelKey: channelKey,
+                fieldID: "nickname",
+                store: .configStore
+            )
+        }
+
+        try await createChannelSkill(
+            manager: manager,
+            skillName: skillName,
+            channelKey: channelKey,
+            displayName: "Progressive Chat",
+            fields: [
+                SkillSettingsField(
+                    id: "bot_token",
+                    type: .secret,
+                    label: "Bot Token",
+                    required: true,
+                    prompt: "What is your bot token?",
+                    placeholder: nil,
+                    help: nil,
+                    defaultValue: nil,
+                    options: nil,
+                    validation: nil,
+                    sensitive: true,
+                    store: .secretStore
+                ),
+                SkillSettingsField(
+                    id: "guild_id",
+                    type: .text,
+                    label: "Guild ID",
+                    required: true,
+                    prompt: "What is your guild ID?",
+                    placeholder: nil,
+                    help: nil,
+                    defaultValue: nil,
+                    options: nil,
+                    validation: nil,
+                    sensitive: false,
+                    store: .configStore
+                ),
+                SkillSettingsField(
+                    id: "nickname",
+                    type: .text,
+                    label: "Nickname",
+                    required: false,
+                    prompt: "Optional nickname",
+                    placeholder: nil,
+                    help: nil,
+                    defaultValue: nil,
+                    options: nil,
+                    validation: nil,
+                    sensitive: false,
+                    store: .configStore
+                ),
+            ]
+        )
+
+        let tool = ChannelSetupTool()
+        let firstPrompt = try await tool.execute(
+            input: [
+                "action": "next_prompt",
+                "channel": channelKey,
+            ]
+        )
+
+        XCTAssertFalse(firstPrompt.isError)
+        XCTAssertTrue(firstPrompt.output.contains("Next required field: bot_token"))
+        XCTAssertTrue(firstPrompt.output.contains("Remaining required fields: bot_token, guild_id"))
+        XCTAssertFalse(firstPrompt.output.contains("nickname"))
+
+        let setResult = try await tool.execute(
+            input: [
+                "action": "set",
+                "channel": channelKey,
+                "values": ["bot_token": "secret-token"],
+            ]
+        )
+        XCTAssertFalse(setResult.isError)
+
+        let secondPrompt = try await tool.execute(
+            input: [
+                "action": "next_prompt",
+                "channel": channelKey,
+            ]
+        )
+
+        XCTAssertFalse(secondPrompt.isError)
+        XCTAssertTrue(secondPrompt.output.contains("Next required field: guild_id"))
+        XCTAssertTrue(secondPrompt.output.contains("Remaining required fields: guild_id"))
+        XCTAssertFalse(secondPrompt.output.contains("bot_token"))
+        XCTAssertFalse(secondPrompt.output.contains("nickname"))
+    }
+
     func testSetAndDisconnectUseContractBackedStorageForCustomChannel() async throws {
         let manager = SkillManager()
         let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -171,16 +285,6 @@ final class ChannelSetupToolTests: XCTestCase {
         displayName: String,
         requiredFields: [String]
     ) async throws {
-        _ = try await manager.createSkill(
-            name: skillName,
-            description: "Channel setup test fixture",
-            body: "Fixture body for channel setup contract tests.",
-            scriptContent: "print('ok')"
-        )
-
-        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(skillName)
-        let manifestURL = SkillManifestPolicy.manifestURL(for: skillDir)
-
         let fields = requiredFields.map { fieldID in
             SkillSettingsField(
                 id: fieldID,
@@ -197,6 +301,32 @@ final class ChannelSetupToolTests: XCTestCase {
                 store: fieldID.contains("token") ? .secretStore : .configStore
             )
         }
+
+        try await createChannelSkill(
+            manager: manager,
+            skillName: skillName,
+            channelKey: channelKey,
+            displayName: displayName,
+            fields: fields
+        )
+    }
+
+    private func createChannelSkill(
+        manager: SkillManager,
+        skillName: String,
+        channelKey: String,
+        displayName: String,
+        fields: [SkillSettingsField]
+    ) async throws {
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "Channel setup test fixture",
+            body: "Fixture body for channel setup contract tests.",
+            scriptContent: "print('ok')"
+        )
+
+        let skillDir = SkillManager.skillsDirectory.appendingPathComponent(skillName)
+        let manifestURL = SkillManifestPolicy.manifestURL(for: skillDir)
 
         let manifest = SkillCapabilityManifest(
             schemaVersion: 1,
