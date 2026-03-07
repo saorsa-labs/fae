@@ -78,6 +78,47 @@ final class ToolApprovalRegressionTests: XCTestCase {
         XCTAssertTrue(bashApprovedAfterGlobal)
     }
 
+    func testRevokingSpecificToolApprovalRestoresPromptRequirement() async {
+        let store = ApprovedToolsStore.shared
+
+        await store.approveTool("write")
+        let approvedBeforeRevoke = await store.shouldAutoApprove(toolName: "write", riskLevel: .medium)
+        let approvedToolNamesBeforeRevoke = await store.approvedToolNames()
+        XCTAssertTrue(approvedBeforeRevoke)
+        XCTAssertEqual(approvedToolNamesBeforeRevoke, ["write"])
+
+        await store.revokeTool("write")
+
+        let approvedAfterRevoke = await store.shouldAutoApprove(toolName: "write", riskLevel: .medium)
+        let approvedToolNamesAfterRevoke = await store.approvedToolNames()
+        XCTAssertFalse(approvedAfterRevoke)
+        XCTAssertEqual(approvedToolNamesAfterRevoke, [])
+    }
+
+    func testRevokeAllClearsGlobalApprovalFlagsAndSnapshot() async {
+        let store = ApprovedToolsStore.shared
+
+        await store.approveTool("read")
+        await store.setApproveAllReadonly(true)
+        await store.setApproveAll(true)
+
+        let grantedSnapshot = await store.approvalSnapshot()
+        XCTAssertEqual(grantedSnapshot.approvedTools, ["read"])
+        XCTAssertTrue(grantedSnapshot.approveAllReadonly)
+        XCTAssertTrue(grantedSnapshot.approveAll)
+
+        await store.revokeAll()
+
+        let revokedSnapshot = await store.approvalSnapshot()
+        let readApprovedAfterRevoke = await store.shouldAutoApprove(toolName: "read", riskLevel: .low)
+        let bashApprovedAfterRevoke = await store.shouldAutoApprove(toolName: "bash", riskLevel: .high)
+        XCTAssertEqual(revokedSnapshot.approvedTools, [])
+        XCTAssertFalse(revokedSnapshot.approveAllReadonly)
+        XCTAssertFalse(revokedSnapshot.approveAll)
+        XCTAssertFalse(readApprovedAfterRevoke)
+        XCTAssertFalse(bashApprovedAfterRevoke)
+    }
+
     func testOutboundExfiltrationGuardDeniesSensitivePayloads() async {
         let decision = await OutboundExfiltrationGuard.shared.evaluate(
             toolName: "mail",

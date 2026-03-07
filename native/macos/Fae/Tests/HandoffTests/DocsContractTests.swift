@@ -108,6 +108,34 @@ final class DocsContractTests: XCTestCase {
         XCTAssertTrue(plan.contains("missing capability ticket denied"))
     }
 
+    func testUserSecurityBehaviorContractPreservesPopupFirstAndScopedApprovalPromises() throws {
+        let contract = try loadRepositoryText(relativePath: "docs/guides/user-security-behavior-contract.md")
+
+        XCTAssertTrue(contract.contains("present the approval popup as the primary path"))
+        XCTAssertTrue(contract.contains("Settings remain available for review and revocation, not as the first resort."))
+        XCTAssertTrue(contract.contains("Allow All In Current Mode"))
+        XCTAssertTrue(contract.contains("it does not silently escalate raw capability beyond the selected mode"))
+        XCTAssertTrue(contract.contains("Advanced controls exist, but safe defaults are built in even if you never open settings."))
+    }
+
+    func testSecurityBoundaryAndPermissionGuidesReflectCurrentEnforcementStory() throws {
+        let boundaryGuide = try loadRepositoryText(relativePath: "docs/guides/security-autonomy-boundary-and-execution-plan.md")
+        let schedulerGuide = try loadRepositoryText(relativePath: "docs/guides/scheduler-tooling-and-permissions.md")
+        let confirmationCopy = try loadRepositoryText(relativePath: "docs/guides/security-confirmation-copy.md")
+
+        XCTAssertTrue(boundaryGuide.contains("single broker chokepoint"))
+        XCTAssertTrue(boundaryGuide.contains("Default-deny on uncovered action shapes"))
+        XCTAssertTrue(boundaryGuide.contains("Credentials out of untrusted execution contexts") || boundaryGuide.contains("Keep credentials out of untrusted execution contexts."))
+        XCTAssertTrue(boundaryGuide.contains("Skills may request behavior. Core code grants, transforms, confirms, or denies."))
+
+        XCTAssertTrue(schedulerGuide.lowercased().contains("prefer asking fae conversationally for setup/changes over manual config editing"))
+        XCTAssertTrue(schedulerGuide.contains("Apple tool (CalendarTool, RemindersTool, ContactsTool, MailTool, NotesTool)"))
+        XCTAssertTrue(schedulerGuide.contains("Tool execution in pipeline uses layered checks:"))
+
+        XCTAssertTrue(confirmationCopy.contains("Say yes or no, or press the Yes/No button."))
+        XCTAssertTrue(confirmationCopy.contains("Never mention internal terms (broker, policy engine, invariant IDs)."))
+    }
+
     private func loadRepositoryText(relativePath: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
