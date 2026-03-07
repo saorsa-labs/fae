@@ -3718,12 +3718,15 @@ actor PipelineCoordinator {
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
                 }
                 if shouldSpeak {
-                    for (i, sentence) in filteredSentences.enumerated() {
-                        let isFinal = i == filteredSentences.count - 1
-                        NSLog("PipelineCoordinator: TTS sentence[%d/%d] → \"%@\"", i + 1, filteredSentences.count, String(sentence.prefix(120)))
-                        recordSpokenText(sentence)
-                        enqueueTTS(sentence, isFinal: isFinal)
-                    }
+                    // Join all deferred sentences into a single TTS call so the model
+                    // synthesises one continuous audio stream with no inter-sentence gaps.
+                    // Sequential per-sentence calls caused audible stuttering because each
+                    // sentence had to synthesise from scratch before playback of the previous
+                    // one finished, leaving a silence gap proportional to RTF.
+                    let fullText = filteredSentences.joined(separator: " ")
+                    NSLog("PipelineCoordinator: TTS full response → \"%@\" (from %d parts)", String(fullText.prefix(120)), filteredSentences.count)
+                    recordSpokenText(fullText)
+                    enqueueTTS(fullText, isFinal: true)
                 }
                 // Wait for all TTS (streaming + final) to complete.
                 await awaitPendingTTS()
@@ -4231,6 +4234,14 @@ actor PipelineCoordinator {
                     let audioStream = await ttsEngine.synthesize(
                         text: text, voiceInstruct: effectiveVoiceInstruct
                     )
+                    // Accumulate TTS chunks before scheduling on the player.
+                    // The TTS model (Qwen3-TTS 12Hz) yields small chunks — scheduling
+                    // each individually causes actor-hop overhead and risks player underruns.
+                    // ~500ms of audio (12 000 samples at 24kHz) per enqueue gives the
+                    // player a comfortable rolling buffer without inflating TTFA.
+                    var accum: [Float] = []
+                    var accumRate = 24_000
+                    let accumTarget = 12_000  // ~500ms at 24kHz
                     for try await buffer in audioStream {
                         try Task.checkCancellation()
                         if !firstChunkEmitted {
@@ -4239,12 +4250,16 @@ actor PipelineCoordinator {
                             NSLog("phase1.tts_first_chunk_latency_ms=%.2f", latencyMs)
                         }
                         produced = true
-                        let samples = Self.extractSamples(from: buffer)
-                        await playback.enqueue(
-                            samples: samples,
-                            sampleRate: Int(buffer.format.sampleRate),
-                            isFinal: isFinal
-                        )
+                        accumRate = Int(buffer.format.sampleRate)
+                        accum.append(contentsOf: Self.extractSamples(from: buffer))
+                        if accum.count >= accumTarget {
+                            await playback.enqueue(samples: accum, sampleRate: accumRate, isFinal: false)
+                            accum = []
+                        }
+                    }
+                    // Flush any remaining samples; isFinal is handled by markEnd() below.
+                    if !accum.isEmpty {
+                        await playback.enqueue(samples: accum, sampleRate: accumRate, isFinal: false)
                     }
                     return produced
                 }
