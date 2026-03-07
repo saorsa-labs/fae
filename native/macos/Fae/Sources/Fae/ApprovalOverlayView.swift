@@ -86,11 +86,11 @@ private struct ApprovalCard: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
-            Text("Say yes, no, always, allow all read-only, or allow all in this mode.")
+            Text("Say no, once, always, always read-only, or always all.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
-            // Row 1: Primary actions — No / Yes / Always
+            // Row 1: Primary actions — No / Once / Always
             HStack(spacing: 8) {
                 Button(action: { controller.deny() }) {
                     Text("No")
@@ -103,7 +103,7 @@ private struct ApprovalCard: View {
                 .keyboardShortcut(.escape, modifiers: [])
 
                 Button(action: { controller.approve() }) {
-                    Text("Yes")
+                    Text("Once")
                         .font(.system(size: 12, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -122,10 +122,10 @@ private struct ApprovalCard: View {
                 .tint(.blue)
             }
 
-            // Row 2: Escalation — Allow All Read-Only / Allow All In Current Mode
+            // Row 2: Escalation — Always read-only / Always all
             HStack(spacing: 8) {
                 Button(action: { controller.approveAllReadOnly() }) {
-                    Text("Allow All Read-Only")
+                    Text("Always read-only")
                         .font(.system(size: 10, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
@@ -134,7 +134,7 @@ private struct ApprovalCard: View {
                 .tint(.teal)
 
                 Button(action: { controller.approveAll() }) {
-                    Text("Allow All In Mode")
+                    Text("Always all")
                         .font(.system(size: 10, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
@@ -303,7 +303,7 @@ private struct ToolModeCard: View {
                 // Tools off / general case: progressive allow
                 HStack(spacing: 8) {
                     Button(action: { controller.dismissToolModeRequest() }) {
-                        Text("No Thanks")
+                        Text("Dismiss")
                             .font(.system(size: 12, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
@@ -313,7 +313,7 @@ private struct ToolModeCard: View {
                     .keyboardShortcut(.escape, modifiers: [])
 
                     Button(action: { controller.upgradeToolMode("read_write") }) {
-                        Text("Read/Write")
+                        Text("Read & Write")
                             .font(.system(size: 12, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
