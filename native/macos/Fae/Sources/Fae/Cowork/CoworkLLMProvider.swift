@@ -165,6 +165,13 @@ enum CoworkBackendPresetCatalog {
 struct CoworkProviderRequest: Sendable {
     let model: String
     let preparedPrompt: WorkWithFaePreparedPrompt
+    let thinkingLevel: FaeThinkingLevel
+
+    init(model: String, preparedPrompt: WorkWithFaePreparedPrompt, thinkingLevel: FaeThinkingLevel = .fast) {
+        self.model = model
+        self.preparedPrompt = preparedPrompt
+        self.thinkingLevel = thinkingLevel
+    }
 }
 
 struct CoworkProviderResponse: Sendable {
@@ -244,6 +251,35 @@ enum CoworkPromptEgressPolicy {
         request.preparedPrompt.containsLocalOnlyContext
             ? "Local-only workspace context stayed on this Mac; only shareable context was sent."
             : "Only shareable workspace context was sent."
+    }
+}
+
+enum CoworkReasoningHints {
+    static func openAICompatibleReasoning(baseURL: String, model: String, level: FaeThinkingLevel) -> [String: Any]? {
+        let normalizedBaseURL = baseURL.lowercased()
+        let normalizedModel = model.lowercased()
+        let looksReasoningCapable = normalizedBaseURL.contains("openrouter.ai")
+            || normalizedModel.hasPrefix("o1")
+            || normalizedModel.hasPrefix("o3")
+            || normalizedModel.hasPrefix("o4")
+            || normalizedModel.hasPrefix("gpt-5")
+            || normalizedModel.contains("reasoning")
+            || normalizedModel.contains("thinking")
+        guard looksReasoningCapable else { return nil }
+        return [
+            "effort": level.openAIReasoningEffort,
+            "exclude": true,
+        ]
+    }
+
+    static func anthropicEffort(model: String, level: FaeThinkingLevel) -> String? {
+        let normalizedModel = model.lowercased()
+        let supportsEffort = normalizedModel.contains("4-6")
+            || normalizedModel.contains("4.6")
+            || normalizedModel.contains("opus-4-5")
+            || normalizedModel.contains("opus-4.5")
+        guard supportsEffort else { return nil }
+        return level.anthropicEffort
     }
 }
 
@@ -482,7 +518,7 @@ struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvide
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": request.model,
             "stream": stream,
             "messages": [
@@ -494,8 +530,16 @@ struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvide
             "metadata": [
                 "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
                 "context_scope": request.preparedPrompt.containsLocalOnlyContext ? "shareable_only" : "shareable",
+                "thinking_level": request.thinkingLevel.rawValue,
             ],
         ]
+        if let reasoning = CoworkReasoningHints.openAICompatibleReasoning(
+            baseURL: baseURL,
+            model: request.model,
+            level: request.thinkingLevel
+        ) {
+            body["reasoning"] = reasoning
+        }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         return urlRequest
     }
@@ -613,7 +657,7 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": request.model,
             "max_tokens": maxTokens,
             "stream": stream,
@@ -623,7 +667,14 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
                     "content": CoworkPromptEgressPolicy.prompt(for: .anthropic, request: request),
                 ],
             ],
+            "metadata": [
+                "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
+                "thinking_level": request.thinkingLevel.rawValue,
+            ],
         ]
+        if let effort = CoworkReasoningHints.anthropicEffort(model: request.model, level: request.thinkingLevel) {
+            body["effort"] = effort
+        }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         return urlRequest
     }
@@ -691,10 +742,14 @@ enum CoworkProviderFactory {
             }
             return FaeLocalhostCoworkProvider(descriptor: runtimeDescriptor)
         case .openAICompatibleExternal:
-            guard let credentialKey = agent.credentialKey,
-                  let apiKey = CredentialManager.retrieve(key: credentialKey),
-                  !apiKey.isEmpty
-            else {
+            let perAgentKey = agent.credentialKey
+                .flatMap { CredentialManager.retrieve(key: $0) }
+                .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            let globalKey = (agent.backendPresetID == "openrouter")
+                ? CredentialManager.retrieve(key: "llm.openrouter.api_key")
+                    .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+                : nil
+            guard let apiKey = (perAgentKey ?? globalKey) else {
                 throw CoworkProviderError.rejected("Add an API key for \(agent.backendDisplayName) before sending prompts.")
             }
             let baseURL = CoworkProviderConnectionTester.normalizedBaseURL(agent.baseURL, fallback: agent.providerKind.defaultBaseURL)

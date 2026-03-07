@@ -83,13 +83,18 @@ actor PipelineCoordinator {
 
     // MARK: - Live Config Overrides
 
-    /// Live override for thinking mode — set by FaeCore when the user toggles the button.
-    /// `nil` means fall back to `config.llm.thinkingEnabled`.
-    private var thinkingEnabledLive: Bool?
+    /// Live override for reasoning depth — set by FaeCore when the user changes the level.
+    /// `nil` means fall back to `config.llm.resolvedThinkingLevel`.
+    private var thinkingLevelLive: FaeThinkingLevel?
 
-    /// Update the thinking-mode flag without restarting the pipeline.
+    /// Update the reasoning depth without restarting the pipeline.
+    func setThinkingLevel(_ level: FaeThinkingLevel) {
+        thinkingLevelLive = level
+    }
+
+    /// Legacy compatibility hook for older call sites.
     func setThinkingEnabled(_ enabled: Bool) {
-        thinkingEnabledLive = enabled
+        thinkingLevelLive = enabled ? .balanced : .fast
     }
 
     /// Live override for barge-in — set by FaeCore when the user toggles the setting.
@@ -2630,7 +2635,7 @@ actor PipelineCoordinator {
                 originalText: originalText,
                 key: "llm.thinking_enabled",
                 enabled: enabled,
-                currentValue: thinkingEnabledLive ?? config.llm.thinkingEnabled,
+                currentValue: (thinkingLevelLive ?? config.llm.resolvedThinkingLevel).enablesThinking,
                 voiceTag: "set_thinking",
                 highRiskWhenEnabled: false,
                 onApplied: "Done. Thinking mode is now \(enabled ? "on" : "off")."
@@ -2797,7 +2802,7 @@ actor PipelineCoordinator {
             ownerGateEnabled: config.speaker.requireOwnerForTools,
             ownerProfileExists: ownerProfileExists,
             permissions: permissions,
-            thinkingEnabled: thinkingEnabledLive ?? config.llm.thinkingEnabled,
+            thinkingEnabled: (thinkingLevelLive ?? config.llm.resolvedThinkingLevel).enablesThinking,
             bargeInEnabled: bargeInEnabledLive ?? config.bargeIn.enabled,
             requireDirectAddress: effectiveRequireDirectAddress(),
             visionEnabled: effectiveVisionEnabled(),
@@ -3202,17 +3207,15 @@ actor PipelineCoordinator {
         }
 
         let systemPrompt = generationContext.systemPrompt
-        let turnContextPrefix = generationContext.turnContextPrefix ?? ""
-        let dynamicReservedTokens = max(
-            1024,
-            Self.estimateTokenCount(for: systemPrompt)
-                + Self.estimateTokenCount(for: turnContextPrefix)
-                + config.llm.maxTokens
-        )
-        await conversationState.setReservedTokens(dynamicReservedTokens)
+        let baseTurnContextPrefix = generationContext.turnContextPrefix ?? ""
         let history = await conversationState.history
 
-        let suppressThinking = forceSuppressThinking || !(thinkingEnabledLive ?? config.llm.thinkingEnabled)
+        // Suppress thinking on initial (conversational) turns for speed when the
+        // user selected Fast mode. Balanced and Deep keep explicit reasoning active.
+        // Tool follow-up turns may still reason even in Fast mode so the model can
+        // think carefully about tool results before responding.
+        let effectiveThinkingLevel = thinkingLevelLive ?? config.llm.resolvedThinkingLevel
+        let suppressThinking = forceSuppressThinking || (!effectiveThinkingLevel.enablesThinking && !isToolFollowUp)
 
         // Auto-tune prefill step size based on loaded model if not explicitly configured.
         var prefillStep = config.llm.prefillStepSize ?? 512
@@ -3221,14 +3224,35 @@ actor PipelineCoordinator {
         }
 
         let contextLimitTokens = await conversationState.currentContextBudget()
+        let effectiveTurnContextPrefix: String? = {
+            guard let directive = effectiveThinkingLevel.localReasoningDirective,
+                  !suppressThinking
+            else {
+                return generationContext.turnContextPrefix
+            }
+            if let existing = generationContext.turnContextPrefix,
+               !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return directive + "\n\n" + existing
+            }
+            return directive
+        }()
+        let localMaxTokens = min(config.llm.maxTokens + effectiveThinkingLevel.additionalLocalMaxTokens, 8_192)
+        let dynamicReservedTokens = max(
+            1024,
+            Self.estimateTokenCount(for: systemPrompt)
+                + Self.estimateTokenCount(for: effectiveTurnContextPrefix ?? baseTurnContextPrefix)
+                + localMaxTokens
+        )
+        await conversationState.setReservedTokens(dynamicReservedTokens)
         let options = GenerationOptions(
             temperature: config.llm.temperature,
             topP: config.llm.topP,
-            maxTokens: config.llm.maxTokens,
+            maxTokens: localMaxTokens,
             repetitionPenalty: config.llm.repeatPenalty,
             suppressThinking: suppressThinking,
             tools: generationContext.nativeTools,
-            turnContextPrefix: generationContext.turnContextPrefix,
+            turnContextPrefix: effectiveTurnContextPrefix,
             contextLimitTokens: contextLimitTokens,
             // KV Cache Optimization (Phase 1) - based on Ollama/mistral.rs/LM Studio research
             maxKVSize: config.llm.maxKVCacheSize,
@@ -3266,9 +3290,11 @@ actor PipelineCoordinator {
         var visibleTextThisTurn = ""
         // Stability-first speech mode: keep live text streaming, but defer TTS
         // until the turn completes so Qwen3-TTS sees larger coherent text spans.
-        // This avoids audible interleaving/hallucinated fragments from tiny chunks.
+        // NOTE: streaming TTS (preferFinalOnlySpeech=false) causes MLX GPU contention —
+        // MLXTTSEngine.synthesize blocks waiting for MLXLLMEngine to release Metal
+        // when both are called concurrently. Needs architecture change before enabling.
         let preferFinalOnlySpeech = true
-        var deferredStreamingSpeech = ""
+        var deferredSentenceQueue: [String] = []
         var streamedToolCalls: [ToolCall] = []
         var completionInfo: GenerateCompletionInfo?
 
@@ -3346,11 +3372,7 @@ actor PipelineCoordinator {
             if preferFinalOnlySpeech {
                 recordVisibleText(cleaned)
                 eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                if deferredStreamingSpeech.isEmpty {
-                    deferredStreamingSpeech = cleaned
-                } else {
-                    deferredStreamingSpeech += " " + cleaned
-                }
+                deferredSentenceQueue.append(cleaned)
                 return
             }
 
@@ -3417,9 +3439,7 @@ actor PipelineCoordinator {
                             arguments: nativeCall.function.arguments.mapValues { $0.anyValue }
                         )
                     )
-                    if preferFinalOnlySpeech {
-                        deferredStreamingSpeech = ""
-                    }
+                    deferredSentenceQueue = []
                     sentenceBuffer = ""
                     continue
 
@@ -3687,22 +3707,23 @@ actor PipelineCoordinator {
             } else {
                 sentenceBuffer += remaining
                 let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
-                let spokenTextCandidate: String = {
-                    if deferredStreamingSpeech.isEmpty { return finalText }
-                    if finalText.isEmpty { return deferredStreamingSpeech }
-                    return deferredStreamingSpeech + " " + finalText
-                }()
-                let shouldSpeak = generationContext.allowsAudibleOutput
-                    && !spokenTextCandidate.isEmpty
-                    && !TextProcessing.looksLikeNonProse(spokenTextCandidate)
+                var sentences = deferredSentenceQueue
+                if !finalText.isEmpty { sentences.append(finalText) }
+                let filteredSentences = sentences.filter {
+                    !$0.isEmpty && !TextProcessing.looksLikeNonProse($0)
+                }
+                let shouldSpeak = generationContext.allowsAudibleOutput && !filteredSentences.isEmpty
                 if !finalText.isEmpty {
                     recordVisibleText(finalText)
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
                 }
                 if shouldSpeak {
-                    NSLog("PipelineCoordinator: TTS final → \"%@\"", String(spokenTextCandidate.prefix(120)))
-                    recordSpokenText(spokenTextCandidate)
-                    enqueueTTS(spokenTextCandidate, isFinal: true)
+                    for (i, sentence) in filteredSentences.enumerated() {
+                        let isFinal = i == filteredSentences.count - 1
+                        NSLog("PipelineCoordinator: TTS sentence[%d/%d] → \"%@\"", i + 1, filteredSentences.count, String(sentence.prefix(120)))
+                        recordSpokenText(sentence)
+                        enqueueTTS(sentence, isFinal: isFinal)
+                    }
                 }
                 // Wait for all TTS (streaming + final) to complete.
                 await awaitPendingTTS()
