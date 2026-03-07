@@ -206,7 +206,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker │
 │                         │              │                      │
 │                         │              ├── Memory (SQLite)     │
-│                         │              ├── Tools (30 built-in) │
+│                         │              ├── Tools (33 built-in) │
 │                         │              ├── Scheduler           │
 │                         │              └── Self-Config         │
 │                         │                                     │
@@ -231,20 +231,16 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |---|---|---|---|---|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3.5-27B / 35B-A3B | MLX | 4-bit | Conversation, reasoning, tool use |
+| LLM | Qwen3.5-2B (default) with optional larger manual presets | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
 | VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit | Vision — screen/camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
-Auto mode selects the LLM based on system RAM (Qwen3.5 for all tiers ≥16 GB):
-- 96+ GiB → Qwen3.5-35B-A3B (65K context)
-- 64-95 GiB → Qwen3.5-35B-A3B (32-49K context)
-- 48-63 GiB → Qwen3.5-27B (32K context)
-- 32-47 GiB → Qwen3.5-27B (16K context)
-- 24-31 GiB → Qwen3.5-27B (8K context)
-- 16-23 GiB → Qwen3.5-27B (4K context)
-- <16 GiB → Qwen3-1.7B (4K context)
+Current benchmark-backed default:
+- `auto` currently resolves to `mlx-community/Qwen3.5-2B-4bit` on all machines
+- this is an intentional temporary benchmark/default policy in `FaeConfig.recommendedModel(...)`
+- larger presets such as Qwen3.5-4B, 9B, 27B, and 35B-A3B remain available for manual selection
 
 ### Pipeline
 

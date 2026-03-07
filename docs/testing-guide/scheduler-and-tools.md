@@ -67,7 +67,7 @@ Via the **`scheduler_trigger`** tool:
 
 Implementation in `SchedulerTriggerTool`:
 - Finds task by ID
-- Calls `FaeScheduler.runTaskNamed(id)`
+- Calls `FaeScheduler.triggerTask(id:)`
 - Executes synchronously within the same pipeline turn
 - Returns success/failure + execution details
 
@@ -89,21 +89,22 @@ Implementation in `SchedulerTriggerTool`:
 
 ### Tool Inventory
 
-**Total: 31 tools**
+**Total: 33 tools**
 
 Breakdown by category:
 
 | Category | Count | Tools |
 |----------|-------|-------|
-| Core | 8 | read, write, edit, bash, self_config, channel_setup, window_control, web_search, fetch_url |
+| Core | 9 | read, write, edit, bash, self_config, channel_setup, window_control, web_search, fetch_url |
 | Skills | 3 | activate_skill, run_skill, manage_skill |
+| Delegation | 1 | delegate_agent |
 | User Input | 1 | input_request |
 | Apple | 5 | calendar, reminders, contacts, mail, notes |
 | Scheduler | 5 | scheduler_list, scheduler_create, scheduler_update, scheduler_delete, scheduler_trigger |
 | Roleplay | 1 | roleplay |
 | Vision | 7 | screenshot, camera, read_screen, click, type_text, scroll, find_element |
 | Voice Identity | 1 | voice_identity |
-| **Total** | **31** | |
+| **Total** | **33** | |
 
 ### Tool Modes & Filtering
 
@@ -121,7 +122,7 @@ The registry supports 5 permission modes:
 
 ### Read-Only Tool Set
 
-**13 tools** (always safe):
+**15 tools** (always safe):
 ```
 read, window_control, web_search, fetch_url,
 calendar, reminders, contacts, mail, notes,
@@ -130,7 +131,7 @@ scheduler_list, roleplay, activate_skill, input_request, find_element, voice_ide
 
 ### Write Tool Set
 
-**13 additional tools** (requires `read_write` or `full`):
+**16 additional tools** (requires `read_write` or `full`):
 ```
 write, edit, self_config, channel_setup,
 scheduler_create, scheduler_update, scheduler_delete, scheduler_trigger,
@@ -147,12 +148,12 @@ screenshot, camera, read_screen, click, type_text, scroll
 
 ### Testing Checklist
 
-- [ ] **Tool Count**: Verify 31 tools are registered: `ToolRegistry.buildDefault().allTools.count == 31`
+- [ ] **Tool Count**: Verify 33 tools are registered: `ToolRegistry.buildDefault().allTools.count == 33`
 - [ ] **Mode Filtering**: Test `isToolAllowed(name, mode)` for each mode:
   - `off`: zero tools
-  - `read_only`: 13 tools (no write, no bash)
-  - `read_write`: 26 tools (no bash)
-  - `full` / `full_no_approval`: 31 tools
+  - `read_only`: 15 tools (no write, no bash)
+  - `read_write`: 31 tools (no bash)
+  - `full` / `full_no_approval`: 33 tools
 - [ ] **Native Specs**: Call `nativeToolSpecs(for:)` with each mode, verify count and content
 - [ ] **Schema Generation**: Call `toolSchemas(for:)` with each mode, verify JSON is valid and filtered
 - [ ] **Compact Summary**: Call `compactToolSummary(for:)` with each mode, verify output includes tool names and risk levels
@@ -773,14 +774,14 @@ func testReadOnlyToolsInReadOnlyMode() {
 ```swift
 func testSchedulerTrigger() async {
     let scheduler = FaeScheduler(eventBus: FakeEventBus())
-    var memoryReflectRan = false
 
     // Override task handler
     scheduler.setSpeakHandler { _ in }
 
     // Trigger task manually
-    let result = await scheduler.runTaskNamed("memory_reflect")
-    XCTAssertTrue(result.success)
+    await scheduler.triggerTask(id: "memory_reflect")
+    let history = await scheduler.history(taskID: "memory_reflect")
+    XCTAssertEqual(history.count, 1)
 }
 ```
 
