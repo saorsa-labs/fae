@@ -413,16 +413,20 @@ enum PersonalityManager {
         // 11. Tool schemas.
         if nativeToolsAvailable {
             // Native tool calling: the chat template injects tool definitions from
-            // UserInput.tools. We only need behavioral guidance here — no schemas.
-            parts.append("""
+            // UserInput.tools. Include behavioral guidance + compact tool list so the
+            // model knows which tools exist and when to use them.
+            var toolSection = """
                 Tool usage:
-                - You have tools available. Use them when the user's request genuinely needs one.
-                - After receiving a tool result, respond naturally in spoken language.
-                - Only use tools when the user's request genuinely needs one.
-                - For simple conversation, just respond directly without tools.
-                - Keep your spoken responses concise (1-4 sentences).
-                - NEVER expose raw tool call markup or JSON to the user.
-                """)
+                - Calendar, reminders, mail, contacts, notes queries: ALWAYS call the relevant tool. Do NOT answer from memory — these require real-time data from the tool.
+                - Real-time data, file access, web searches, system changes: use the appropriate tool.
+                - After a tool result, respond naturally in 1-4 spoken sentences.
+                - General knowledge and simple conversation: respond directly without tools.
+                - NEVER expose tool markup, JSON, or code in your spoken response.
+                """
+            if let schemas = toolSchemas, !schemas.isEmpty {
+                toolSection += "\n\n" + schemas
+            }
+            parts.append(toolSection)
         } else if let schemas = toolSchemas, !schemas.isEmpty {
             // Legacy inline tool schemas — fallback for models without native tool support.
             parts.append("""

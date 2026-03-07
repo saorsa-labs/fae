@@ -159,9 +159,13 @@ final class ToolRegistry: Sendable {
         guard !allowed.isEmpty else { return "" }
 
         let lines = allowed.map { tool in
-            "- \(tool.name): \(tool.riskLevel.rawValue)"
+            let brief = tool.description.components(separatedBy: ".")
+                .first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? tool.description
+            return "- \(tool.name): \(brief)"
         }
-        return "Available tools (name: risk):\n" + lines.joined(separator: "\n")
+        return "Available tools:\n" + lines.joined(separator: "\n")
     }
 
     /// Check whether a tool is allowed in the given mode.

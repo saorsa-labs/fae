@@ -166,11 +166,19 @@ struct CoworkProviderRequest: Sendable {
     let model: String
     let preparedPrompt: WorkWithFaePreparedPrompt
     let thinkingLevel: FaeThinkingLevel
+    /// Optional system prompt injected for external providers so they have user context.
+    let systemPrompt: String?
 
-    init(model: String, preparedPrompt: WorkWithFaePreparedPrompt, thinkingLevel: FaeThinkingLevel = .fast) {
+    init(
+        model: String,
+        preparedPrompt: WorkWithFaePreparedPrompt,
+        thinkingLevel: FaeThinkingLevel = .fast,
+        systemPrompt: String? = nil
+    ) {
         self.model = model
         self.preparedPrompt = preparedPrompt
         self.thinkingLevel = thinkingLevel
+        self.systemPrompt = systemPrompt
     }
 }
 
@@ -518,15 +526,18 @@ struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvide
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        var messages: [[String: Any]] = []
+        if let sys = request.systemPrompt, !sys.isEmpty {
+            messages.append(["role": "system", "content": sys])
+        }
+        messages.append([
+            "role": "user",
+            "content": CoworkPromptEgressPolicy.prompt(for: .openAICompatibleExternal, request: request),
+        ])
         var body: [String: Any] = [
             "model": request.model,
             "stream": stream,
-            "messages": [
-                [
-                    "role": "user",
-                    "content": CoworkPromptEgressPolicy.prompt(for: .openAICompatibleExternal, request: request),
-                ],
-            ],
+            "messages": messages,
             "metadata": [
                 "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
                 "context_scope": request.preparedPrompt.containsLocalOnlyContext ? "shareable_only" : "shareable",
@@ -672,6 +683,9 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
                 "thinking_level": request.thinkingLevel.rawValue,
             ],
         ]
+        if let sys = request.systemPrompt, !sys.isEmpty {
+            body["system"] = sys
+        }
         if let effort = CoworkReasoningHints.anthropicEffort(model: request.model, level: request.thinkingLevel) {
             body["effort"] = effort
         }
