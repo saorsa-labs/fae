@@ -135,6 +135,30 @@ final class PersonalityContractTests: XCTestCase {
         XCTAssertTrue(soul.contains("docs/guides/Memory.md"))
     }
 
+    func testAssembledPromptPreservesSkillConfirmationAndSecretSafeSetupRules() {
+        let prompt = PersonalityManager.assemblePrompt(
+            voiceOptimized: false,
+            soulContract: "SOUL CONTRACT",
+            heartbeatContract: "HEARTBEAT CONTRACT",
+            nativeToolsAvailable: true,
+            includeEphemeralContext: false
+        )
+
+        XCTAssertTrue(prompt.contains("Before creating a new skill, ask the user for confirmation."))
+        XCTAssertTrue(prompt.contains("Use manage_skill update to modify existing personal skill behavior."))
+        XCTAssertTrue(prompt.contains("collect them with input_request + store_key"))
+        XCTAssertTrue(prompt.contains("secrets stay out of chat history"))
+    }
+
+    func testVisibleSkillAndApprovalCopyPreservesProgressiveDisclosure() throws {
+        let skillsTab = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsSkillsTab.swift")
+        let approvalOverlay = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ApprovalOverlayView.swift")
+
+        XCTAssertTrue(skillsTab.contains("Personal skills are first-class here: create, edit, import, and remove them directly."))
+        XCTAssertTrue(skillsTab.contains("Built-in and Apple integrations are still available, but tucked away so the screen stays focused."))
+        XCTAssertTrue(approvalOverlay.contains("Use the popup to confirm. Settings are for review and revocation."))
+    }
+
     private func loadRepositoryText(relativePath: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

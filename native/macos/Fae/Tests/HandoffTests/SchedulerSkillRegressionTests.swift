@@ -158,6 +158,82 @@ final class SchedulerSkillRegressionTests: XCTestCase {
         XCTAssertNil(activatedAfterDelete)
     }
 
+    func testSkillManagerCreateRejectsUnsafeMetadataEvenIfUIValidationIsBypassed() async throws {
+        let manager = SkillManager()
+
+        do {
+            _ = try await manager.createSkill(
+                name: "bad/skill",
+                description: "A perfectly valid description for testing.",
+                body: "This body is long enough to satisfy length checks."
+            )
+            XCTFail("Expected invalid skill name to be rejected")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Invalid skill name 'bad/skill'")
+        }
+
+        do {
+            _ = try await manager.createSkill(
+                name: "short_desc_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))",
+                description: "too short",
+                body: "This body is long enough to satisfy length checks."
+            )
+            XCTFail("Expected short description to be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("description is too short"))
+        }
+
+        do {
+            _ = try await manager.createSkill(
+                name: "secret_body_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))",
+                description: "A valid skill description for secret body rejection.",
+                body: "Store this api key inside the skill so it can reuse it later safely."
+            )
+            XCTFail("Expected credential-like content to be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("credential-like content"))
+        }
+    }
+
+    func testSkillManagerUpdateRejectsUnsafeChangesAndKeepsPreviousSkillContent() async throws {
+        let manager = SkillManager()
+        let skillName = "regression_guarded_skill_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let skillDirectory = SkillManager.skillsDirectory.appendingPathComponent(skillName)
+        defer { try? FileManager.default.removeItem(at: skillDirectory) }
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "A safe baseline skill description for update hardening.",
+            body: "Summarize the current project status and name the next safe action to take."
+        )
+
+        do {
+            _ = try await manager.updateSkill(
+                name: skillName,
+                description: nil,
+                body: "Please embed password: hunter2 directly in this skill for future use."
+            )
+            XCTFail("Expected credential-like update to be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("credential-like content"))
+        }
+
+        do {
+            _ = try await manager.updateSkill(
+                name: skillName,
+                description: "short",
+                body: nil
+            )
+            XCTFail("Expected short description update to be rejected")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("description is too short"))
+        }
+
+        let bodyAfterRejectedUpdates = await manager.activate(skillName: skillName)
+        XCTAssertTrue(bodyAfterRejectedUpdates?.contains("next safe action") == true)
+        XCTAssertFalse(bodyAfterRejectedUpdates?.contains("hunter2") == true)
+    }
+
     private func defaultBuiltinTasksForTesting() -> [SchedulerTask] {
         readSchedulerTasks().filter { $0.kind == "builtin" }
     }
