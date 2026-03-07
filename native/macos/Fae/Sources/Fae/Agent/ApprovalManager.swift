@@ -17,6 +17,7 @@ actor ApprovalManager {
     private var nextRequestId: UInt64 = 1
 
     static let timeoutSeconds: TimeInterval = 20
+    nonisolated(unsafe) static var timeoutSecondsOverrideForTests: TimeInterval?
 
     init(eventBus: FaeEventBus) {
         self.eventBus = eventBus
@@ -55,8 +56,9 @@ actor ApprovalManager {
 
             // Start timeout task.
             Task {
-                try? await Task.sleep(nanoseconds: UInt64(Self.timeoutSeconds * 1_000_000_000))
-                self.resolveIfPending(requestId: requestId, approved: false)
+                let timeoutSeconds = Self.timeoutSecondsOverrideForTests ?? Self.timeoutSeconds
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                self.resolveTimeoutIfPending(requestId: requestId)
             }
         }
 
@@ -65,7 +67,7 @@ actor ApprovalManager {
 
     /// Resolve a pending approval (called from FaeCore when user responds).
     func resolve(requestId: UInt64, approved: Bool, source: String = "user") {
-        resolveIfPending(requestId: requestId, approved: approved)
+        guard resolveIfPending(requestId: requestId, approved: approved) else { return }
         eventBus.send(.approvalResolved(id: requestId, approved: approved, source: source))
     }
 
@@ -81,7 +83,7 @@ actor ApprovalManager {
             approved = false
         }
 
-        resolveIfPending(requestId: requestId, approved: approved)
+        guard resolveIfPending(requestId: requestId, approved: approved) else { return }
         eventBus.send(.approvalResolved(id: requestId, approved: approved, source: source))
 
         // Persist escalation decisions.
@@ -141,11 +143,19 @@ actor ApprovalManager {
         return true
     }
 
-    private func resolveIfPending(requestId: UInt64, approved: Bool) {
+    @discardableResult
+    private func resolveIfPending(requestId: UInt64, approved: Bool) -> Bool {
         pendingOrder.removeAll { $0 == requestId }
         pendingToolNames.removeValue(forKey: requestId)
         if let continuation = pendingApprovals.removeValue(forKey: requestId) {
             continuation.resume(returning: approved)
+            return true
         }
+        return false
+    }
+
+    private func resolveTimeoutIfPending(requestId: UInt64) {
+        guard resolveIfPending(requestId: requestId, approved: false) else { return }
+        eventBus.send(.approvalResolved(id: requestId, approved: false, source: "timeout"))
     }
 }

@@ -7,11 +7,13 @@ final class ApprovalManagerTests: XCTestCase {
 
     override func setUp() async throws {
         await ApprovedToolsStore.shared.revokeAll()
+        ApprovalManager.timeoutSecondsOverrideForTests = nil
         cancellables.removeAll()
     }
 
     override func tearDown() async throws {
         await ApprovedToolsStore.shared.revokeAll()
+        ApprovalManager.timeoutSecondsOverrideForTests = nil
         cancellables.removeAll()
     }
 
@@ -167,5 +169,78 @@ final class ApprovalManagerTests: XCTestCase {
         let approveAllReadonly = await ApprovedToolsStore.shared.isApproveAllReadonly()
         XCTAssertTrue(approveAll)
         XCTAssertTrue(approveAllReadonly)
+    }
+
+    func testRequestApprovalTimesOutPublishesResolutionAndClearsPendingState() async throws {
+        ApprovalManager.timeoutSecondsOverrideForTests = 0.05
+        let bus = FaeEventBus()
+        let manager = ApprovalManager(eventBus: bus)
+        let requested = expectation(description: "approval requested")
+        let timedOut = expectation(description: "approval timed out")
+        var resolvedEvents: [(id: UInt64, approved: Bool, source: String)] = []
+
+        bus.subject.sink { event in
+            switch event {
+            case .approvalRequested:
+                requested.fulfill()
+            case .approvalResolved(let id, let approved, let source):
+                resolvedEvents.append((id, approved, source))
+                if source == "timeout" {
+                    timedOut.fulfill()
+                }
+            default:
+                break
+            }
+        }.store(in: &cancellables)
+
+        let task = Task {
+            await manager.requestApproval(toolName: "bash", description: "Run a command")
+        }
+
+        await fulfillment(of: [requested, timedOut], timeout: 1.0)
+        let approved = await task.value
+        XCTAssertFalse(approved)
+        XCTAssertEqual(resolvedEvents.count, 1)
+        XCTAssertEqual(resolvedEvents.first?.approved, false)
+        XCTAssertEqual(resolvedEvents.first?.source, "timeout")
+
+        let handled = await manager.resolveMostRecent(approved: true, source: "voice")
+        XCTAssertFalse(handled)
+    }
+
+    func testLateManualResolutionAfterTimeoutDoesNotPublishDuplicateResolution() async throws {
+        ApprovalManager.timeoutSecondsOverrideForTests = 0.05
+        let bus = FaeEventBus()
+        let manager = ApprovalManager(eventBus: bus)
+        let requested = expectation(description: "approval requested")
+        let timedOut = expectation(description: "approval timed out")
+        var resolutionSources: [String] = []
+
+        bus.subject.sink { event in
+            switch event {
+            case .approvalRequested:
+                requested.fulfill()
+            case .approvalResolved(_, _, let source):
+                resolutionSources.append(source)
+                if source == "timeout" {
+                    timedOut.fulfill()
+                }
+            default:
+                break
+            }
+        }.store(in: &cancellables)
+
+        let task = Task {
+            await manager.requestApproval(toolName: "edit", description: "Edit a file")
+        }
+
+        await fulfillment(of: [requested, timedOut], timeout: 1.0)
+        let approved = await task.value
+        XCTAssertFalse(approved)
+
+        await manager.resolve(requestId: 1, approved: true, source: "voice")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(resolutionSources, ["timeout"])
     }
 }
