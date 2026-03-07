@@ -8,6 +8,7 @@ struct ContentView: View {
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
+    @EnvironmentObject private var faeCore: FaeCore
     @State private var viewLoaded = false
 
     private static var menuHandlersKey: UInt8 = 0
@@ -105,6 +106,15 @@ struct ContentView: View {
             // Subtle separator
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
 
+            // Enrollment invitation — visible until owner voice is enrolled.
+            if !onboarding.isComplete {
+                EnrollmentInvitationBanner {
+                    windowState.transitionToCompact()
+                    faeCore.injectText("Hi Fae, I'm ready to introduce myself.")
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             // Zone 3: Input — pinned at bottom, always visible so users
             // can type while models load. Text is queued until pipeline starts.
             InputBarView()
@@ -147,6 +157,7 @@ struct ContentView: View {
     /// Simplified context menu for the collapsed orb (no Reset Conversation —
     /// that lives in the full compact context menu via OrbCrownView).
     private func showCollapsedContextMenu() {
+
         guard let window = windowState.window,
               let contentView = window.contentView else { return }
 
@@ -189,5 +200,44 @@ struct ContentView: View {
 
         let mouseLocation = window.mouseLocationOutsideOfEventStream
         menu.popUp(positioning: nil, at: mouseLocation, in: contentView)
+    }
+}
+
+// MARK: - Enrollment Invitation Banner
+
+/// Shown above the input bar until the owner voice is enrolled.
+/// Tapping it triggers the enrollment conversation with Fae.
+private struct EnrollmentInvitationBanner: View {
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.and.person.filled")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.purple)
+
+                Text("Let me get to know you")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.purple.opacity(0.35), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 }
