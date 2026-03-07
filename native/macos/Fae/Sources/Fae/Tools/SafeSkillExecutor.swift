@@ -7,11 +7,36 @@ struct SafeSkillProcessHandles {
     let stderr: Pipe
 }
 
+/// Error thrown when uv is not available for skill execution.
+enum SafeSkillExecutorError: LocalizedError {
+    case uvNotInstalled
+    
+    var errorDescription: String? {
+        switch self {
+        case .uvNotInstalled:
+            return "uv is not installed. Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        }
+    }
+}
+
 /// Constrained process launcher for executable skills.
 enum SafeSkillExecutor {
+    
+    /// Create a process to run a Python skill script via uv.
+    ///
+    /// - Parameters:
+    ///   - skillName: Name of the skill (for environment variable)
+    ///   - scriptPath: Path to the Python script
+    ///   - uvPath: Path to the uv binary (obtain via `UVRuntime.shared.path()`)
+    ///   - timeoutSeconds: Maximum execution time
+    ///   - memoryLimitKB: Memory limit for the process
+    ///   - cpuLimitSeconds: CPU time limit
+    ///   - additionalEnvironment: Extra environment variables
+    /// - Returns: Process handles for stdin/stdout/stderr
     static func createProcess(
         skillName: String,
         scriptPath: String,
+        uvPath: String,
         timeoutSeconds: Int,
         memoryLimitKB: Int = 1_048_576,
         cpuLimitSeconds: Int = 20,
@@ -20,7 +45,8 @@ enum SafeSkillExecutor {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
 
-        let escaped = shellEscape(scriptPath)
+        let escapedScript = shellEscape(scriptPath)
+        let escapedUV = shellEscape(uvPath)
         process.arguments = [
             "-c",
             // ulimit calls are best-effort — some CI/sandbox environments don't support
@@ -29,7 +55,7 @@ enum SafeSkillExecutor {
             "ulimit -t \(cpuLimitSeconds) 2>/dev/null || true; "
                 + "ulimit -v \(memoryLimitKB) 2>/dev/null || true; "
                 + "ulimit -n 64 2>/dev/null || true; "
-                + "exec /usr/bin/env uv run --script \(escaped)",
+                + "exec \(escapedUV) run --script \(escapedScript)",
         ]
 
         let home = NSHomeDirectory()

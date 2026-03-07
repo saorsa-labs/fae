@@ -212,7 +212,14 @@ actor KokoroPythonTTSEngine: TTSEngine {
             throw TTSError.scriptNotFound
         }
 
-        let uvPath = Self.uvPath()
+        // Ensure uv is available, installing with user approval if needed
+        let uvPath: String
+        do {
+            uvPath = try await UVRuntime.shared.ensureAvailable()
+        } catch {
+            throw TTSError.uvNotInstalled
+        }
+        
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: uvPath)
         proc.arguments = ["run", "--script", scriptURL.path]
@@ -285,17 +292,6 @@ actor KokoroPythonTTSEngine: TTSEngine {
 
     // MARK: - Path helpers
 
-    private static func uvPath() -> String {
-        let candidates = [
-            "/Users/\(NSUserName())/.local/bin/uv",
-            "/usr/local/bin/uv",
-            "/opt/homebrew/bin/uv",
-            "/opt/zerobrew/bin/uv",
-        ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-            ?? "uv"  // Fall back to PATH lookup
-    }
-
     private static func hfCacheBase() -> String? {
         let base = "\(FileManager.default.homeDirectoryForCurrentUser.path)/.cache/huggingface/hub"
         let repoDir = "\(base)/models--onnx-community--Kokoro-82M-v1.0-ONNX/snapshots"
@@ -336,6 +332,7 @@ actor KokoroPythonTTSEngine: TTSEngine {
 enum TTSError: LocalizedError {
     case notReady
     case scriptNotFound
+    case uvNotInstalled
     case serverDied(String)
     case protocolError(String)
     case synthesisError(String)
@@ -345,6 +342,7 @@ enum TTSError: LocalizedError {
         switch self {
         case .notReady: return "Kokoro TTS engine not ready"
         case .scriptNotFound: return "kokoro_tts_server.py not found in app bundle"
+        case .uvNotInstalled: return "uv is not installed. Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh"
         case .serverDied(let msg): return "Kokoro TTS server died: \(msg)"
         case .protocolError(let msg): return "Kokoro TTS protocol error: \(msg)"
         case .synthesisError(let msg): return "Kokoro TTS synthesis failed: \(msg)"

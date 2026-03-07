@@ -418,9 +418,19 @@ actor SkillManager {
 
         let timeoutSeconds = min(max(manifest.timeoutSeconds, 5), 120)
         let secretEnvironment = try Self.resolveSecretBindings(secretBindings)
+        
+        // Ensure uv is available, installing with user approval if needed
+        let uvPath: String
+        do {
+            uvPath = try await UVRuntime.shared.ensureAvailable()
+        } catch {
+            throw SkillError.executionFailed(skillName, "Python runtime (uv) is not available. Please allow Fae to install it when prompted.")
+        }
+        
         let handles = try SafeSkillExecutor.createProcess(
             skillName: skillName,
             scriptPath: scriptPath,
+            uvPath: uvPath,
             timeoutSeconds: timeoutSeconds,
             additionalEnvironment: secretEnvironment
         )

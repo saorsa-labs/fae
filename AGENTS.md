@@ -115,6 +115,57 @@ Proactive automation must stay useful and quiet:
 
 ---
 
+## Python integration
+
+Fae uses Python as an **extension mechanism**, not a core runtime. Python runs in subprocesses managed by Swift.
+
+See `docs/guides/python-integration.md` for full details.
+
+### Key facts
+
+- **Auto-install**: Fae installs uv automatically when needed (with user approval)
+- **UVRuntime.swift**: Centralized uv discovery/management in `Sources/Fae/Runtime/UVRuntime.swift`
+- **DependencyInstaller.swift**: Handles approval dialogs and installation for required tools
+- **Isolation**: Each script gets its own venv in `~/.cache/uv/environments-v2/`
+- **No bundled Python**: uv handles Python installation and package management
+
+### Automatic dependency installation
+
+**Fae takes care of her users.** When Python features are needed:
+
+1. `UVRuntime.ensureAvailable()` checks if uv is installed
+2. If not, `DependencyInstaller` shows a friendly approval dialog
+3. If approved, uv is installed automatically (no terminal required)
+4. The original operation continues seamlessly
+
+**Never ask users to type commands.** Fae handles everything.
+
+### Python components
+
+| Component | Script | Purpose |
+|-----------|--------|---------|
+| TTS | `Resources/Scripts/kokoro_tts_server.py` | Kokoro-ONNX TTS via subprocess |
+| Skills | `Resources/Skills/*/scripts/*.py` | Extensible skill scripts |
+
+### Cache locations
+
+| Cache | Location |
+|-------|----------|
+| uv environments | `~/.cache/uv/environments-v2/` |
+| uv packages | `~/.cache/uv/archive-v0/` |
+| HuggingFace models | `~/.cache/huggingface/hub/` |
+
+### Adding new dependencies
+
+To add support for auto-installing a new tool:
+
+1. Add a case to `DependencyInstaller.Dependency` enum
+2. Provide `displayName`, `description`, `installCommand`, `verifyCommand`
+3. Add installation logic in `install()` method
+4. Use `DependencyInstaller.shared.ensureInstalled(.yourTool)` where needed
+
+---
+
 ## Testing guardrails
 
 - Run before shipping Swift changes:
