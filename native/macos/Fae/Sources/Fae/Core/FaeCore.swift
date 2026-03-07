@@ -88,7 +88,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
     private let sttEngine = MLXSTTEngine()
     private let llmEngine = MLXLLMEngine()
-    private let ttsEngine: any TTSEngine = KokoroPythonTTSEngine()
+    private let ttsEngine: any TTSEngine = KokoroMLXTTSEngine()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
     private let playbackManager = AudioPlaybackManager()

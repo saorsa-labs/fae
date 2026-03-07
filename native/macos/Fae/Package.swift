@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "Fae",
     platforms: [
-        .macOS(.v14),
+        .macOS("15.0"),
     ],
     products: [
         .executable(name: "Fae", targets: ["Fae"]),
@@ -32,6 +32,8 @@ let package = Package(
         .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
         // Neural Voice Activity Detection (Silero VAD v6 via CoreML).
         .package(url: "https://github.com/paean-ai/silero-vad-swift.git", from: "1.0.0"),
+        // Kokoro-82M TTS — pure Swift MLX port, no Python dependency.
+        .package(url: "https://github.com/mlalma/kokoro-ios", from: "1.0.11"),
     ],
     targets: [
         .executableTarget(
@@ -52,6 +54,8 @@ let package = Package(
                 "CSQLiteVecCore",
                 .product(name: "TOMLKit", package: "TOMLKit"),
                 .product(name: "SileroVAD", package: "silero-vad-swift"),
+                // Kokoro-82M TTS via MLX — no Python/subprocess dependency.
+                .product(name: "KokoroSwift", package: "kokoro-ios"),
             ],
             path: "Sources/Fae",
             exclude: [
