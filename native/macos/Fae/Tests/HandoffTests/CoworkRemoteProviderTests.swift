@@ -1,11 +1,24 @@
 import XCTest
 @testable import Fae
 
+private actor PartialCollector {
+    private var values: [String] = []
+
+    func append(_ value: String) {
+        values.append(value)
+    }
+
+    func snapshot() -> [String] {
+        values
+    }
+}
+
 final class CoworkRemoteProviderTests: XCTestCase {
     func testOpenAICompatibleRequestUsesShareablePromptAndBearerAuth() throws {
         let request = CoworkProviderRequest(
             model: "gpt-4.1",
-            preparedPrompt: preparedPrompt()
+            preparedPrompt: preparedPrompt(),
+            thinkingLevel: .balanced
         )
 
         let urlRequest = try OpenAICompatibleCoworkProvider.makeRequest(
@@ -26,13 +39,63 @@ final class CoworkRemoteProviderTests: XCTestCase {
         let metadata = try XCTUnwrap(json["metadata"] as? [String: Any])
         XCTAssertEqual(metadata["user_visible_prompt"] as? String, "visible prompt")
         XCTAssertEqual(metadata["context_scope"] as? String, "shareable_only")
+        XCTAssertEqual(metadata["thinking_level"] as? String, FaeThinkingLevel.balanced.rawValue)
+        XCTAssertNil(json["reasoning"])
         XCTAssertEqual(json["stream"] as? Bool, false)
+    }
+
+    func testOpenRouterRequestAddsReasoningEffortForThinkingLevels() throws {
+        let request = CoworkProviderRequest(
+            model: "anthropic/claude-sonnet-4.6",
+            preparedPrompt: preparedPrompt(),
+            thinkingLevel: .deep
+        )
+
+        let urlRequest = try OpenAICompatibleCoworkProvider.makeRequest(
+            baseURL: "https://openrouter.ai/api",
+            apiKey: "secret-key",
+            request: request
+        )
+
+        let json = try XCTUnwrap(jsonObject(from: urlRequest))
+        let reasoning = try XCTUnwrap(json["reasoning"] as? [String: Any])
+        XCTAssertEqual(reasoning["effort"] as? String, "high")
+        XCTAssertEqual(reasoning["exclude"] as? Bool, true)
+    }
+
+    func testReasoningHintsMapThinkingLevelsAcrossProviders() {
+        let openAIFast = CoworkReasoningHints.openAICompatibleReasoning(
+            baseURL: "https://openrouter.ai/api",
+            model: "anthropic/claude-sonnet-4.6",
+            level: .fast
+        )
+        let openAIBalanced = CoworkReasoningHints.openAICompatibleReasoning(
+            baseURL: "https://openrouter.ai/api",
+            model: "anthropic/claude-sonnet-4.6",
+            level: .balanced
+        )
+        let openAIDeep = CoworkReasoningHints.openAICompatibleReasoning(
+            baseURL: "https://openrouter.ai/api",
+            model: "anthropic/claude-sonnet-4.6",
+            level: .deep
+        )
+
+        XCTAssertEqual(openAIFast?["effort"] as? String, "low")
+        XCTAssertEqual(openAIBalanced?["effort"] as? String, "medium")
+        XCTAssertEqual(openAIDeep?["effort"] as? String, "high")
+        XCTAssertEqual(openAIDeep?["exclude"] as? Bool, true)
+
+        XCTAssertEqual(CoworkReasoningHints.anthropicEffort(model: "claude-sonnet-4-6", level: .fast), "low")
+        XCTAssertEqual(CoworkReasoningHints.anthropicEffort(model: "claude-sonnet-4-6", level: .balanced), "medium")
+        XCTAssertEqual(CoworkReasoningHints.anthropicEffort(model: "claude-sonnet-4-6", level: .deep), "high")
+        XCTAssertNil(CoworkReasoningHints.anthropicEffort(model: "claude-haiku-4-5-20251001", level: .deep))
     }
 
     func testAnthropicRequestUsesShareablePromptAndAnthropicHeaders() throws {
         let request = CoworkProviderRequest(
-            model: "claude-sonnet-4-5",
-            preparedPrompt: preparedPrompt()
+            model: "claude-sonnet-4-6",
+            preparedPrompt: preparedPrompt(),
+            thinkingLevel: .deep
         )
 
         let urlRequest = try AnthropicCoworkProvider.makeRequest(
@@ -47,11 +110,14 @@ final class CoworkRemoteProviderTests: XCTestCase {
         XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
 
         let json = try XCTUnwrap(jsonObject(from: urlRequest))
-        XCTAssertEqual(json["model"] as? String, "claude-sonnet-4-5")
+        XCTAssertEqual(json["model"] as? String, "claude-sonnet-4-6")
         XCTAssertEqual(json["max_tokens"] as? Int, 1024)
 
         let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
         XCTAssertEqual(messages.first?["content"] as? String, "shareable prompt")
+        let metadata = try XCTUnwrap(json["metadata"] as? [String: Any])
+        XCTAssertEqual(metadata["thinking_level"] as? String, FaeThinkingLevel.deep.rawValue)
+        XCTAssertEqual(json["effort"] as? String, "high")
         XCTAssertEqual(json["stream"] as? Bool, false)
     }
 
@@ -105,14 +171,15 @@ final class CoworkRemoteProviderTests: XCTestCase {
         }
 
         let provider = OpenAICompatibleCoworkProvider(baseURL: "https://api.openai.com", apiKey: "secret")
-        var partials: [String] = []
+        let partials = PartialCollector()
         let response = try await provider.stream(
             request: CoworkProviderRequest(model: "gpt-4.1", preparedPrompt: preparedPrompt())
         ) { text in
-            partials.append(text)
+            await partials.append(text)
         }
 
-        XCTAssertEqual(partials, ["Hello", "Hello world"])
+        let captured = await partials.snapshot()
+        XCTAssertEqual(captured, ["Hello", "Hello world"])
         XCTAssertEqual(response.content, "Hello world")
     }
 
@@ -162,14 +229,15 @@ final class CoworkRemoteProviderTests: XCTestCase {
         }
 
         let provider = AnthropicCoworkProvider(baseURL: "https://api.anthropic.com", apiKey: "sk-ant-test")
-        var partials: [String] = []
+        let partials = PartialCollector()
         let response = try await provider.stream(
             request: CoworkProviderRequest(model: "claude-sonnet-4-5", preparedPrompt: preparedPrompt())
         ) { text in
-            partials.append(text)
+            await partials.append(text)
         }
 
-        XCTAssertEqual(partials, ["Claude", "Claude rocks"])
+        let captured = await partials.snapshot()
+        XCTAssertEqual(captured, ["Claude", "Claude rocks"])
         XCTAssertEqual(response.content, "Claude rocks")
     }
 

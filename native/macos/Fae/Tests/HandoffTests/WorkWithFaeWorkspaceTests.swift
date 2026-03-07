@@ -430,6 +430,25 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertEqual(persistedAgent?.modelIdentifier, "openai/gpt-5")
     }
 
+    func testControllerThinkingLevelControlsDelegateToFaeCore() async throws {
+        let core = FaeCore()
+        let controller = CoworkWorkspaceController(
+            faeCore: core,
+            conversation: ConversationController(),
+            runtimeDescriptor: nil
+        )
+
+        controller.setThinkingLevel(.deep)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(core.thinkingLevel, .deep)
+        XCTAssertTrue(core.thinkingEnabled)
+
+        controller.cycleThinkingLevel()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(core.thinkingLevel, .fast)
+        XCTAssertFalse(core.thinkingEnabled)
+    }
+
     func testRegistryByRemovingWorkspaceFallsBackToRemainingWorkspace() {
         let first = WorkWithFaeWorkspaceRecord(name: "One", agentID: WorkWithFaeAgentProfile.faeLocal.id)
         let second = WorkWithFaeWorkspaceRecord(name: "Two", agentID: WorkWithFaeAgentProfile.faeLocal.id)

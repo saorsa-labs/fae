@@ -235,6 +235,77 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
+    func testFaeCorePersistsThinkingLevelPatchAndConfigGet() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "llm.thinking_level", "value": "deep"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertEqual(reloaded.llm.resolvedThinkingLevel, .deep)
+        XCTAssertTrue(reloaded.llm.thinkingEnabled)
+
+        let response = await core.queryCommand(name: "config.get", payload: ["key": "llm"])
+        let payload = response?["payload"] as? [String: Any]
+        let llm = payload?["llm"] as? [String: Any]
+        XCTAssertEqual(llm?["thinking_level"] as? String, "deep")
+        XCTAssertEqual(llm?["thinking_enabled"] as? Bool, true)
+    }
+
+    @MainActor
+    func testFaeCoreSetThinkingMethodsKeepPublishedStateAndConfigInSync() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.setThinkingLevel(.deep)
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertEqual(core.thinkingLevel, .deep)
+        XCTAssertTrue(core.thinkingEnabled)
+
+        core.setThinkingEnabled(false)
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertEqual(core.thinkingLevel, .fast)
+        XCTAssertFalse(core.thinkingEnabled)
+
+        core.cycleThinkingLevel()
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertEqual(core.thinkingLevel, .balanced)
+        XCTAssertTrue(core.thinkingEnabled)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertEqual(reloaded.llm.resolvedThinkingLevel, .balanced)
+        XCTAssertTrue(reloaded.llm.thinkingEnabled)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "thinkingLevel"), FaeThinkingLevel.balanced.rawValue)
+        XCTAssertEqual(UserDefaults.standard.object(forKey: "thinkingEnabled") as? Bool, true)
+    }
+
+    @MainActor
     func testFaeCorePersistsPrivacyModePatch() async throws {
         let url = FaeConfig.configFileURL
         let fm = FileManager.default
@@ -397,5 +468,32 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(tts?["voice_identity_lock"] as? Bool, false)
         XCTAssertEqual(tts?["runtime_voice_source"] as? String, "locked_bundled_fae_wav")
         XCTAssertEqual(tts?["runtime_voice_lock_applied"] as? Bool, true)
+    }
+
+    func testThinkingLevelControlsRemainWiredAcrossMainAndCoworkSurfaces() throws {
+        let settingsModels = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsTab.swift")
+        let settingsPerformance = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsPerformanceTab.swift")
+        let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
+        let coworkView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/Cowork/CoworkWorkspaceView.swift")
+
+        XCTAssertTrue(settingsModels.contains("Picker(\"Thinking level\""))
+        XCTAssertTrue(settingsModels.contains("payload: [\"key\": \"llm.thinking_level\""))
+        XCTAssertTrue(settingsPerformance.contains("Picker(\"Thinking level\""))
+        XCTAssertTrue(settingsPerformance.contains("patchConfig(\"llm.thinking_level\""))
+        XCTAssertTrue(inputBar.contains("faeCore.setThinkingLevel(level)"))
+        XCTAssertTrue(inputBar.contains("Text(faeCore.thinkingLevel.displayName)"))
+        XCTAssertTrue(coworkView.contains("controller.setThinkingLevel(level)"))
+        XCTAssertTrue(coworkView.contains("conversationControlPill(icon: faeCore.thinkingLevel.systemImage, title: faeCore.thinkingLevel.displayName)"))
+    }
+
+    private func loadRepositoryText(relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(relativePath), encoding: .utf8)
     }
 }

@@ -69,6 +69,7 @@ extension LLMEngine {
 protocol TTSEngine: Actor {
     func load(modelID: String) async throws
     func loadVoice(referenceAudioURL: URL, referenceText: String?) async throws
+    func loadCustomVoice(url: URL, referenceText: String?) async throws
     func synthesize(text: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error>
     var isLoaded: Bool { get }
     var isVoiceLoaded: Bool { get }
@@ -78,6 +79,7 @@ protocol TTSEngine: Actor {
 extension TTSEngine {
     /// Default no-op for engines that don't support voice cloning.
     func loadVoice(referenceAudioURL: URL, referenceText: String?) async throws {}
+    func loadCustomVoice(url: URL, referenceText: String?) async throws {}
     var isVoiceLoaded: Bool { false }
 
     /// Default implementation delegates to `synthesize(text:)` ignoring voiceInstruct.

@@ -17,6 +17,7 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(config.llm.remoteProviderPreset, "openrouter")
         XCTAssertEqual(config.llm.remoteBaseURL, "https://openrouter.ai/api")
         XCTAssertEqual(config.llm.remoteModel, "openai/gpt-4.1-mini")
+        XCTAssertEqual(config.llm.resolvedThinkingLevel, .fast)
         XCTAssertTrue(config.memory.enabled)
         XCTAssertTrue(config.vision.enabled)
         XCTAssertTrue(config.awareness.enabled)
@@ -76,6 +77,8 @@ final class FaeConfigTests: XCTestCase {
         original.llm.remoteProviderPreset = "openrouter"
         original.llm.remoteBaseURL = "https://openrouter.ai/api"
         original.llm.remoteModel = "anthropic/claude-sonnet-4"
+        original.llm.thinkingLevel = FaeThinkingLevel.deep.rawValue
+        original.llm.thinkingEnabled = true
 
         original.tts.voice = "custom"
         original.tts.speed = 0.95
@@ -111,6 +114,7 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(loaded.llm.remoteProviderPreset, "openrouter")
         XCTAssertEqual(loaded.llm.remoteBaseURL, "https://openrouter.ai/api")
         XCTAssertEqual(loaded.llm.remoteModel, "anthropic/claude-sonnet-4")
+        XCTAssertEqual(loaded.llm.resolvedThinkingLevel, .deep)
 
         XCTAssertEqual(loaded.tts.voice, "custom")
         XCTAssertEqual(loaded.tts.speed, 0.95, accuracy: 0.0001)
@@ -175,5 +179,59 @@ final class FaeConfigTests: XCTestCase {
 
         let config = FaeConfig.load(from: fileURL)
         XCTAssertFalse(config.tts.voiceIdentityLock)
+    }
+
+    func testThinkingLevelFallsBackFromLegacyThinkingEnabledFlag() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [llm]
+        thinkingEnabled = true
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertEqual(config.llm.resolvedThinkingLevel, .balanced)
+        XCTAssertTrue(config.llm.thinkingEnabled)
+    }
+
+    func testExplicitThinkingLevelOverridesLegacyBooleanMirror() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [llm]
+        thinkingEnabled = true
+        thinkingLevel = "fast"
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertEqual(config.llm.resolvedThinkingLevel, .fast)
+        XCTAssertFalse(config.llm.thinkingEnabled)
+    }
+
+    func testInvalidExplicitThinkingLevelFallsBackToLegacyBooleanAndNormalizes() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [llm]
+        thinkingEnabled = true
+        thinkingLevel = "turbo"
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertEqual(config.llm.resolvedThinkingLevel, .balanced)
+        XCTAssertEqual(config.llm.thinkingLevel, FaeThinkingLevel.balanced.rawValue)
+        XCTAssertTrue(config.llm.thinkingEnabled)
     }
 }
