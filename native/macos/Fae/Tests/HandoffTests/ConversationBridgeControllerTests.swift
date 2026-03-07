@@ -142,6 +142,66 @@ final class ConversationBridgeControllerTests: XCTestCase {
         XCTAssertTrue(coworkConversation.messages.isEmpty)
     }
 
+    func testRepeatedRouteFlipsKeepUserAndAssistantTurnsBoundToActiveConversation() async throws {
+        let bridge = ConversationBridgeController()
+        let mainConversation = ConversationController()
+        let coworkConversation = ConversationController()
+        bridge.conversationController = mainConversation
+        bridge.coworkConversationController = coworkConversation
+
+        var expectedMain: [String] = []
+        var expectedCowork: [String] = []
+
+        for turn in 1...18 {
+            let routesToCowork = turn.isMultiple(of: 2)
+            NotificationCenter.default.post(
+                name: .faeCoworkConversationRoutingChanged,
+                object: nil,
+                userInfo: ["active": routesToCowork]
+            )
+            try await flushNotifications()
+
+            NotificationCenter.default.post(
+                name: .faeTranscription,
+                object: nil,
+                userInfo: ["text": "user-\(turn)", "is_final": true]
+            )
+            try await flushNotifications()
+
+            NotificationCenter.default.post(
+                name: .faeAssistantGenerating,
+                object: nil,
+                userInfo: ["active": true]
+            )
+            try await flushNotifications()
+
+            NotificationCenter.default.post(
+                name: .faeAssistantMessage,
+                object: nil,
+                userInfo: ["text": "assistant-\(turn)", "is_final": true]
+            )
+            try await flushNotifications()
+
+            NotificationCenter.default.post(
+                name: .faeAssistantGenerating,
+                object: nil,
+                userInfo: ["active": false]
+            )
+            try await flushNotifications()
+
+            if routesToCowork {
+                expectedCowork.append(contentsOf: ["user-\(turn)", "assistant-\(turn)"])
+            } else {
+                expectedMain.append(contentsOf: ["user-\(turn)", "assistant-\(turn)"])
+            }
+
+            XCTAssertEqual(mainConversation.messages.map(\.content), expectedMain)
+            XCTAssertEqual(coworkConversation.messages.map(\.content), expectedCowork)
+            XCTAssertFalse(mainConversation.isGenerating)
+            XCTAssertFalse(coworkConversation.isGenerating)
+        }
+    }
+
     private func flushNotifications() async throws {
         try await Task.sleep(nanoseconds: 50_000_000)
     }

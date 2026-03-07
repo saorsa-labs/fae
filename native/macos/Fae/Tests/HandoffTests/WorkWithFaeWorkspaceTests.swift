@@ -1,6 +1,7 @@
 import XCTest
 @testable import Fae
 
+@MainActor
 final class WorkWithFaeWorkspaceTests: XCTestCase {
     func testScanDirectorySkipsIgnoredFoldersAndFindsRegularFiles() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -126,6 +127,29 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertTrue(prepared.shareablePrompt.contains("Summarize this project"))
     }
 
+    func testPreparePromptIncludesRecentConversationHistoryForContinuation() {
+        let state = WorkWithFaeWorkspaceState(
+            selectedDirectoryPath: nil,
+            indexedFiles: [],
+            attachments: [],
+            conversationMessages: [
+                WorkWithFaeConversationMessage(role: "user", content: "Please compare these pricing options."),
+                WorkWithFaeConversationMessage(role: "assistant", content: "Sure — I need the providers and the usage profile first."),
+            ]
+        )
+
+        let prepared = WorkWithFaeWorkspaceStore.preparePrompt(
+            userPrompt: "Use OpenRouter for this next step.",
+            state: state,
+            focusedPreview: nil
+        )
+
+        XCTAssertTrue(prepared.faeLocalPrompt.contains("Recent conversation:"))
+        XCTAssertTrue(prepared.shareablePrompt.contains("Recent conversation:"))
+        XCTAssertTrue(prepared.shareablePrompt.contains("Please compare these pricing options."))
+        XCTAssertTrue(prepared.shareablePrompt.contains("Use OpenRouter for this next step."))
+    }
+
     func testDefaultRegistryIncludesTrustedLocalFaeAgent() {
         let registry = WorkWithFaeWorkspaceRegistry.default
         XCTAssertEqual(registry.workspaces.count, 1)
@@ -234,16 +258,176 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.name, "Client work")
     }
 
-    func testRegistryByDuplicatingWorkspaceSelectsCopy() {
+    func testRegistryByDuplicatingWorkspaceSelectsForkAndLinksParent() {
         let registry = WorkWithFaeWorkspaceRegistry.default
+        let sourceID = registry.selectedWorkspaceID
         let updated = WorkWithFaeWorkspaceStore.registryByDuplicatingWorkspace(
-            workspaceID: registry.selectedWorkspaceID,
+            workspaceID: sourceID,
             in: registry
         )
 
         XCTAssertEqual(updated.workspaces.count, 2)
-        XCTAssertTrue(updated.workspaces.contains(where: { $0.name == "Main workspace Copy" }))
-        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.name, "Main workspace Copy")
+        XCTAssertTrue(updated.workspaces.contains(where: { $0.name == "Main workspace Fork" }))
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.name, "Main workspace Fork")
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)?.parentWorkspaceID, sourceID)
+        XCTAssertEqual(updated.workspaces.first?.name, "Main workspace")
+        XCTAssertEqual(updated.workspaces.dropFirst().first?.name, "Main workspace Fork")
+    }
+
+    func testRegistryByDuplicatingWorkspaceTrimsForkConversationHistory() {
+        let messages = (1...150).map {
+            WorkWithFaeConversationMessage(role: $0.isMultiple(of: 2) ? "assistant" : "user", content: "message-\($0)")
+        }
+        let workspace = WorkWithFaeWorkspaceRecord(
+            name: "Main workspace",
+            agentID: WorkWithFaeAgentProfile.faeLocal.id,
+            state: WorkWithFaeWorkspaceState(
+                selectedDirectoryPath: nil,
+                indexedFiles: [],
+                attachments: [],
+                conversationMessages: messages
+            )
+        )
+        let registry = WorkWithFaeWorkspaceRegistry(
+            selectedWorkspaceID: workspace.id,
+            workspaces: [workspace],
+            agents: [.faeLocal]
+        )
+
+        let updated = WorkWithFaeWorkspaceStore.registryByDuplicatingWorkspace(
+            workspaceID: workspace.id,
+            in: registry
+        )
+
+        let duplicated = WorkWithFaeWorkspaceStore.selectedWorkspace(in: updated)
+        XCTAssertEqual(duplicated?.state.conversationMessages.count, 120)
+        XCTAssertEqual(duplicated?.state.conversationMessages.first?.content, "message-31")
+        XCTAssertEqual(duplicated?.state.conversationMessages.last?.content, "message-150")
+    }
+
+    func testControllerForkKeepsConversationRestoreStable() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cowork-fork-regression-\(UUID().uuidString)", isDirectory: true)
+        let storageURL = tempRoot.appendingPathComponent("work_with_fae_workspace.json")
+        let originalOverride = WorkWithFaeWorkspaceStore.storageURLOverride
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        WorkWithFaeWorkspaceStore.storageURLOverride = storageURL
+        defer {
+            WorkWithFaeWorkspaceStore.storageURLOverride = originalOverride
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let messages = (1...150).map {
+            WorkWithFaeConversationMessage(role: $0.isMultiple(of: 2) ? "assistant" : "user", content: "message-\($0)")
+        }
+        let sourceWorkspace = WorkWithFaeWorkspaceRecord(
+            name: "Main workspace",
+            agentID: WorkWithFaeAgentProfile.faeLocal.id,
+            state: WorkWithFaeWorkspaceState(
+                selectedDirectoryPath: nil,
+                indexedFiles: [],
+                attachments: [],
+                conversationMessages: messages
+            )
+        )
+        WorkWithFaeWorkspaceStore.saveRegistry(
+            WorkWithFaeWorkspaceRegistry(
+                selectedWorkspaceID: sourceWorkspace.id,
+                workspaces: [sourceWorkspace],
+                agents: [.faeLocal]
+            )
+        )
+
+        let conversation = ConversationController()
+        let controller = CoworkWorkspaceController(
+            faeCore: FaeCore(),
+            conversation: conversation,
+            runtimeDescriptor: nil
+        )
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(controller.workspaces.count, 1)
+        XCTAssertEqual(controller.selectedWorkspace?.id, sourceWorkspace.id)
+        XCTAssertEqual(conversation.messages.count, 120)
+        XCTAssertEqual(conversation.messages.first?.content, "message-31")
+        XCTAssertEqual(conversation.messages.last?.content, "message-150")
+
+        controller.duplicateSelectedWorkspace()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let forkWorkspace = try XCTUnwrap(controller.selectedWorkspace)
+        XCTAssertEqual(controller.workspaces.count, 2)
+        XCTAssertEqual(forkWorkspace.parentWorkspaceID, sourceWorkspace.id)
+        XCTAssertEqual(forkWorkspace.state.conversationMessages.count, 120)
+        XCTAssertEqual(conversation.messages.count, 120)
+        XCTAssertEqual(conversation.messages.first?.content, "message-31")
+        XCTAssertEqual(conversation.messages.last?.content, "message-150")
+
+        let originalWorkspace = try XCTUnwrap(controller.workspaces.first(where: { $0.id == sourceWorkspace.id }))
+        controller.selectWorkspace(originalWorkspace)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(conversation.messages.count, 120)
+        XCTAssertEqual(conversation.messages.first?.content, "message-31")
+        XCTAssertEqual(conversation.messages.last?.content, "message-150")
+
+        controller.selectWorkspace(forkWorkspace)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(conversation.messages.count, 120)
+        XCTAssertEqual(conversation.messages.first?.content, "message-31")
+        XCTAssertEqual(conversation.messages.last?.content, "message-150")
+
+        let persisted = WorkWithFaeWorkspaceStore.loadRegistry()
+        XCTAssertEqual(persisted.workspaces.count, 2)
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: persisted)?.id, forkWorkspace.id)
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: persisted)?.state.conversationMessages.count, 120)
+    }
+
+    func testControllerUpdateSelectedAgentModelPersistsAcrossWorkspaceRestore() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cowork-model-switch-regression-\(UUID().uuidString)", isDirectory: true)
+        let storageURL = tempRoot.appendingPathComponent("work_with_fae_workspace.json")
+        let originalOverride = WorkWithFaeWorkspaceStore.storageURLOverride
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        WorkWithFaeWorkspaceStore.storageURLOverride = storageURL
+        defer {
+            WorkWithFaeWorkspaceStore.storageURLOverride = originalOverride
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let remoteAgent = WorkWithFaeAgentProfile(
+            id: "agent-openrouter",
+            name: "OpenRouter",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openrouter",
+            modelIdentifier: "anthropic/claude-sonnet-4.6",
+            baseURL: "https://openrouter.ai/api",
+            credentialKey: "agents.openrouter.test.api_key",
+            notes: nil,
+            createdAt: Date()
+        )
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Workspace", agentID: remoteAgent.id)
+        WorkWithFaeWorkspaceStore.saveRegistry(
+            WorkWithFaeWorkspaceRegistry(
+                selectedWorkspaceID: workspace.id,
+                workspaces: [workspace],
+                agents: [.faeLocal, remoteAgent]
+            )
+        )
+
+        let controller = CoworkWorkspaceController(
+            faeCore: FaeCore(),
+            conversation: ConversationController(),
+            runtimeDescriptor: nil
+        )
+
+        controller.updateSelectedAgentModel("openai/gpt-5")
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(controller.selectedAgent?.modelIdentifier, "openai/gpt-5")
+
+        let persisted = WorkWithFaeWorkspaceStore.loadRegistry()
+        let persistedAgent = persisted.agents.first(where: { $0.id == remoteAgent.id })
+        XCTAssertEqual(persistedAgent?.modelIdentifier, "openai/gpt-5")
     }
 
     func testRegistryByRemovingWorkspaceFallsBackToRemainingWorkspace() {
@@ -519,5 +703,94 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
             WorkWithFaeWorkspaceStore.selectedWorkspace(in: normalized)?.policy.consensusAgentIDs,
             [WorkWithFaeAgentProfile.faeLocal.id]
         )
+    }
+
+    func testRepeatedWorkspaceSwitchingKeepsPerWorkspaceConversationStateIsolatedAcrossReload() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cowork-switch-stress-\(UUID().uuidString)", isDirectory: true)
+        let storageURL = tempRoot.appendingPathComponent("work_with_fae_workspace.json")
+        let originalOverride = WorkWithFaeWorkspaceStore.storageURLOverride
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        WorkWithFaeWorkspaceStore.storageURLOverride = storageURL
+        defer {
+            WorkWithFaeWorkspaceStore.storageURLOverride = originalOverride
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let workspaces = (1...3).map { index in
+            WorkWithFaeWorkspaceRecord(
+                name: "Workspace \(index)",
+                agentID: WorkWithFaeAgentProfile.faeLocal.id,
+                sortOrder: index - 1,
+                state: WorkWithFaeWorkspaceState(
+                    selectedDirectoryPath: nil,
+                    indexedFiles: [],
+                    attachments: [],
+                    conversationMessages: [
+                        WorkWithFaeConversationMessage(role: "assistant", content: "seed-\(index)")
+                    ]
+                )
+            )
+        }
+        let orderedIDs = workspaces.map(\.id)
+        WorkWithFaeWorkspaceStore.saveRegistry(
+            WorkWithFaeWorkspaceRegistry(
+                selectedWorkspaceID: workspaces.first?.id,
+                workspaces: workspaces,
+                agents: [.faeLocal]
+            )
+        )
+
+        let conversation = ConversationController()
+        let controller = CoworkWorkspaceController(
+            faeCore: FaeCore(),
+            conversation: conversation,
+            runtimeDescriptor: nil
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var expectedByWorkspaceID = Dictionary(uniqueKeysWithValues: workspaces.map {
+            ($0.id, $0.state.conversationMessages.map(\.content))
+        })
+
+        for round in 1...8 {
+            for workspaceID in orderedIDs {
+                let workspace = try XCTUnwrap(controller.workspaces.first(where: { $0.id == workspaceID }))
+                controller.selectWorkspace(workspace)
+                try await Task.sleep(nanoseconds: 60_000_000)
+
+                XCTAssertEqual(controller.selectedWorkspace?.id, workspaceID)
+                XCTAssertEqual(conversation.messages.map(\.content), expectedByWorkspaceID[workspaceID])
+
+                let marker = "\(workspace.name)-round-\(round)"
+                conversation.appendMessage(role: .user, content: marker)
+                try await Task.sleep(nanoseconds: 60_000_000)
+
+                expectedByWorkspaceID[workspaceID] = Array((expectedByWorkspaceID[workspaceID] ?? []) + [marker]).suffix(120)
+                XCTAssertEqual(controller.workspaceState.conversationMessages.map(\.content), expectedByWorkspaceID[workspaceID])
+            }
+        }
+
+        let persisted = WorkWithFaeWorkspaceStore.loadRegistry()
+        for workspaceID in orderedIDs {
+            let persistedWorkspace = try XCTUnwrap(persisted.workspaces.first(where: { $0.id == workspaceID }))
+            XCTAssertEqual(persistedWorkspace.state.conversationMessages.map(\.content), expectedByWorkspaceID[workspaceID])
+        }
+
+        let restoredConversation = ConversationController()
+        let restoredController = CoworkWorkspaceController(
+            faeCore: FaeCore(),
+            conversation: restoredConversation,
+            runtimeDescriptor: nil
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        for workspaceID in orderedIDs {
+            let workspace = try XCTUnwrap(restoredController.workspaces.first(where: { $0.id == workspaceID }))
+            restoredController.selectWorkspace(workspace)
+            try await Task.sleep(nanoseconds: 60_000_000)
+            XCTAssertEqual(restoredController.selectedWorkspace?.id, workspaceID)
+            XCTAssertEqual(restoredConversation.messages.map(\.content), expectedByWorkspaceID[workspaceID])
+        }
     }
 }
