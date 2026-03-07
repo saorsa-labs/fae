@@ -30,6 +30,24 @@ actor ModelManager {
         self.eventBus = eventBus
     }
 
+    func effectiveTTSModelID(for config: FaeConfig) -> String {
+        let rawModelID = config.tts.modelId
+        guard rawModelID.lowercased().hasPrefix("kokoro") else {
+            return rawModelID
+        }
+
+        let voice: String
+        if config.tts.voiceIdentityLock {
+            voice = "fae"
+        } else if !config.tts.voice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            voice = config.tts.voice.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            voice = "af_heart"
+        }
+
+        return "kokoro:\(voice):\(config.tts.speed)"
+    }
+
     /// The loaded LLM model ID (set after successful load).
     private(set) var loadedModelId: String?
 
@@ -184,12 +202,13 @@ actor ModelManager {
         // TTS — degraded mode if it fails (no spoken output).
         eventBus.send(.runtimeProgress(stage: "tts", progress: 0.66))
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.68))
+        let effectiveTTSModelID = effectiveTTSModelID(for: config)
         do {
-            try await tts.load(modelID: config.tts.modelId)
-            if config.tts.modelId.localizedCaseInsensitiveContains("12Hz") {
+            try await tts.load(modelID: effectiveTTSModelID)
+            if effectiveTTSModelID.localizedCaseInsensitiveContains("12Hz") {
                 NSLog("ModelManager: TTS streaming profile = 12Hz codec")
             } else {
-                NSLog("ModelManager: TTS streaming profile = non-12Hz (%@)", config.tts.modelId)
+                NSLog("ModelManager: TTS streaming profile = non-12Hz (%@)", effectiveTTSModelID)
             }
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.85))
             eventBus.send(.runtimeProgress(stage: "tts", progress: 0.85))

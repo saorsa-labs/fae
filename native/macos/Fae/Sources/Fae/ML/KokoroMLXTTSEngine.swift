@@ -15,10 +15,11 @@ import KokoroSwift
 /// **Model file:** `kokoro-v1_0.safetensors` (hexgrad/Kokoro-82M on HuggingFace)
 /// **Voices:**     `voices/*.bin` — identical across hexgrad and onnx-community caches
 ///
-/// **Model discovery order:**
+/// **Model discovery order (checked on every launch):**
 ///   1. `~/Library/Application Support/fae/models/kokoro/`
 ///   2. `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M/snapshots/*/`
 ///   3. ONNX voices dir + standalone safetensors model at app support path
+///   4. Auto-download from `hexgrad/Kokoro-82M` → saves to location 1
 actor KokoroMLXTTSEngine: TTSEngine {
 
     // MARK: - State
@@ -46,21 +47,43 @@ actor KokoroMLXTTSEngine: TTSEngine {
 
         loadState = .loading
         do {
-            guard let (modelURL, foundVoicesDir) = Self.findModelFiles() else {
-                throw KokoroMLXError.modelNotFound
+            // Find existing model files, or auto-download from HuggingFace.
+            let (modelURL, foundVoicesDir): (URL, URL)
+            if let found = Self.findModelFiles() {
+                (modelURL, foundVoicesDir) = found
+            } else {
+                NSLog("KokoroMLXTTSEngine: model not found locally — downloading hexgrad/Kokoro-82M")
+                (modelURL, foundVoicesDir) = try await Self.downloadModelFiles()
             }
             voicesDir = foundVoicesDir
 
             let tts = KokoroTTS(modelPath: modelURL)
             kokoroTTS = tts
 
-            // Load voice embedding — fall back through known voices on miss.
-            voiceEmbedding = Self.loadVoiceEmbedding(voicesDir: foundVoicesDir, name: voiceName)
-                ?? Self.loadVoiceEmbedding(voicesDir: foundVoicesDir, name: "af_heart")
-                ?? Self.loadVoiceEmbedding(voicesDir: foundVoicesDir, name: "bf_emma")
+            // Load voice embedding.
+            // Respect the requested voice by default.
+            // The bundled fae.bin is only selected when the caller explicitly asks
+            // for the canonical Fae voice via `kokoro:fae`.
+            let bundledFaeVoice = Bundle.module.url(forResource: "fae", withExtension: "bin",
+                                                     subdirectory: "Voices")
+            let bundledFaeEmbedding = bundledFaeVoice.flatMap { Self.loadBinFile(url: $0) }
+            let requestedFaeVoice = voiceName.caseInsensitiveCompare("fae") == .orderedSame
+
+            if requestedFaeVoice, let bundledFaeEmbedding {
+                voiceEmbedding = bundledFaeEmbedding
+                voiceName = "fae"
+            } else {
+                let requestedEmbedding = Self.loadVoiceEmbedding(voicesDir: foundVoicesDir, name: voiceName)
+                let heartEmbedding = Self.loadVoiceEmbedding(voicesDir: foundVoicesDir, name: "af_heart")
+                let emmaEmbedding = Self.loadVoiceEmbedding(voicesDir: foundVoicesDir, name: "bf_emma")
+                voiceEmbedding = requestedEmbedding ?? heartEmbedding ?? emmaEmbedding ?? bundledFaeEmbedding
+                if requestedEmbedding == nil && heartEmbedding == nil && emmaEmbedding == nil && bundledFaeEmbedding != nil {
+                    voiceName = "fae"
+                }
+            }
 
             if voiceEmbedding == nil {
-                NSLog("KokoroMLXTTSEngine: WARNING — no voice embedding found in %@", foundVoicesDir.path)
+                NSLog("KokoroMLXTTSEngine: WARNING — no voice embedding found")
             }
 
             loadState = .loaded
@@ -174,6 +197,72 @@ actor KokoroMLXTTSEngine: TTSEngine {
         let lower = instruct.lowercased()
         guard let match = known.first(where: { lower.contains($0) }) else { return nil }
         return loadVoiceEmbedding(voicesDir: voicesDir, name: match)
+    }
+
+    // MARK: - Auto-download
+
+    /// Pinned Hugging Face revision for deterministic Kokoro downloads.
+    /// Matches the local cache snapshot currently used in development.
+    static let pinnedRevision = "f3ff3571791e39611d31c381e3a41a3af07b4987"
+
+    /// Download `kokoro-v1_0.safetensors` and the 10 standard voice `.bin` files from
+    /// `hexgrad/Kokoro-82M` on HuggingFace into the app-support models directory.
+    ///
+    /// Files are only fetched when absent — interrupted downloads resume on the next
+    /// launch. The destination (`~/Library/Application Support/fae/models/kokoro/`) is
+    /// location 1 in `findModelFiles()`, so subsequent launches skip the download.
+    private static func downloadModelFiles() async throws -> (modelURL: URL, voicesDir: URL) {
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/fae/models/kokoro")
+        let voicesBase = base.appendingPathComponent("voices")
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        try fm.createDirectory(at: voicesBase, withIntermediateDirectories: true)
+
+        let hfBase = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/\(pinnedRevision)/"
+
+        // Model weights (~326 MB as of v1.0).
+        let modelDest = base.appendingPathComponent("kokoro-v1_0.safetensors")
+        try await downloadFile(
+            from: URL(string: hfBase + "kokoro-v1_0.safetensors")!,
+            to: modelDest,
+            label: "kokoro-v1_0.safetensors"
+        )
+
+        // Voice embeddings (~200 KB each, 10 standard voices).
+        let knownVoices = [
+            "af_aoede", "af_bella", "af_heart", "af_nicole", "af_sky",
+            "bf_emma", "bf_isabella", "am_adam", "am_echo", "bm_daniel",
+        ]
+        for voice in knownVoices {
+            let dest = voicesBase.appendingPathComponent("\(voice).bin")
+            try await downloadFile(
+                from: URL(string: hfBase + "voices/\(voice).bin")!,
+                to: dest,
+                label: "voices/\(voice).bin"
+            )
+        }
+
+        guard fm.fileExists(atPath: modelDest.path) else {
+            throw KokoroMLXError.downloadFailed("model file missing after download")
+        }
+        return (modelDest, voicesBase)
+    }
+
+    /// Download a single file from `url` to `destination` using a `.tmp` intermediate
+    /// for atomicity. Skips silently if the destination already exists.
+    private static func downloadFile(from url: URL, to destination: URL, label: String) async throws {
+        guard !fm.fileExists(atPath: destination.path) else { return }
+        NSLog("KokoroMLXTTSEngine: downloading %@", label)
+        let (tmpURL, response) = try await URLSession.shared.download(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw KokoroMLXError.downloadFailed("\(label): HTTP \(code)")
+        }
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        try fm.moveItem(at: tmpURL, to: destination)
+        NSLog("KokoroMLXTTSEngine: saved %@", label)
     }
 
     // MARK: - Model & Voice Discovery
@@ -294,6 +383,7 @@ enum KokoroMLXError: LocalizedError {
     case modelNotFound
     case notReady
     case bufferAllocationFailed
+    case downloadFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -305,6 +395,8 @@ enum KokoroMLXError: LocalizedError {
             return "Kokoro MLX TTS engine not ready"
         case .bufferAllocationFailed:
             return "Failed to allocate AVAudioPCMBuffer"
+        case .downloadFailed(let detail):
+            return "Kokoro model download failed: \(detail)"
         }
     }
 }

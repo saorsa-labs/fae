@@ -45,6 +45,8 @@ Use this only as a diagnostic view for larger Qwen models. It adds longer answer
 | LFM2.5-1.2B-Instruct-MLX-4bit | 770 MB | 43 ms | 136.8 | 20% | 46% | 50% | 100% | 33% | 100% |
 | LFM2-24B-A2B-MLX-4bit | 12945 MB | 147 ms | 26.0 | 80% | 52% | 80% | 67% | 67% | 67% |
 
+See also: `docs/benchmarks/fae-priority-eval-2026-03-07.md` for the stricter tool / instruction / memory-focused ranking.
+
 ### Winner badges
 
 - 🏆 **Best overall Fae default:** `LFM2-24B-A2B-MLX-4bit`

@@ -115,6 +115,18 @@ These tiers are based on measured model RSS, not total system memory. In practic
 | ~12 GB to ~14 GB | `LFM2-24B-A2B-MLX-4bit` if you want richer assistant behavior; otherwise `qwen3.5-2b` still wins on strict fit |
 | ~14 GB to ~20 GB | `qwen3.5-2b` still best strict fit; larger Qwens did not beat it |
 
+## Suggested defaults by installed system RAM
+
+These are product recommendations for typical user machines, not just model RSS buckets.
+
+| Installed system RAM | Recommended default | Optional upgrade |
+|---|---|---|
+| 8 GB | `qwen3.5-0.8b` | none |
+| 16 GB | `qwen3.5-2b` | `qwen3.5-0.8b` as ultra-light fallback |
+| 24 GB | `qwen3.5-2b` | `LFM2-24B-A2B-MLX-4bit` for richer responses if headroom is acceptable |
+| 32 GB | `qwen3.5-2b` | `LFM2-24B-A2B-MLX-4bit` or dual-model pipeline |
+| 64 GB+ | `qwen3.5-2b` operator + `LFM2-24B-A2B-MLX-4bit` background model | larger Qwens only for continued experimentation |
+
 ## Practical product recommendation
 
 The data now suggests two distinct winners depending on what Fae should optimize for:
@@ -125,10 +137,12 @@ The data now suggests two distinct winners depending on what Fae should optimize
 - Tiny fallback: `qwen3.5-0.8b`
 - Premium richer option: `LFM2-24B-A2B-MLX-4bit`
 
-### Option B — dual-model local pipeline
+### Option B — Pipeline Fae local dual-model architecture
 
 - Fast operator / tool-router / strict-output model: `qwen3.5-2b`
 - Rich summarization / conversational / background reasoning model: `LFM2-24B-A2B-MLX-4bit`
+
+This recommendation is about model-role pairing and local execution strategy within Pipeline Fae, not about unifying Pipeline Fae with Cowork Fae.
 
 This dual setup still looks like the strongest overall Fae architecture.
 

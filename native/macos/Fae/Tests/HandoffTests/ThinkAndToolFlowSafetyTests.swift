@@ -149,4 +149,44 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
             )
         )
     }
+
+    func testModelManagerEffectiveTTSModelIDUsesCanonicalFaeVoiceWhenLocked() async {
+        let manager = ModelManager(eventBus: FaeEventBus())
+        var config = FaeConfig()
+        config.tts.modelId = "kokoro:af_heart"
+        config.tts.voice = "bf_emma"
+        config.tts.speed = 1.25
+        config.tts.voiceIdentityLock = true
+
+        let modelID = await manager.effectiveTTSModelID(for: config)
+        XCTAssertEqual(modelID, "kokoro:fae:1.25")
+    }
+
+    func testModelManagerEffectiveTTSModelIDUsesConfiguredVoiceWhenUnlocked() async {
+        let manager = ModelManager(eventBus: FaeEventBus())
+        var config = FaeConfig()
+        config.tts.modelId = "kokoro:af_heart"
+        config.tts.voice = "bf_emma"
+        config.tts.speed = 0.95
+        config.tts.voiceIdentityLock = false
+
+        let modelID = await manager.effectiveTTSModelID(for: config)
+        XCTAssertEqual(modelID, "kokoro:bf_emma:0.95")
+    }
+
+    func testModelManagerEffectiveTTSModelIDLeavesNonKokoroModelUntouched() async {
+        let manager = ModelManager(eventBus: FaeEventBus())
+        var config = FaeConfig()
+        config.tts.modelId = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
+        config.tts.voice = "fae"
+        config.tts.voiceIdentityLock = true
+
+        let modelID = await manager.effectiveTTSModelID(for: config)
+        XCTAssertEqual(modelID, "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16")
+    }
+
+    func testKokoroDownloadRevisionIsPinned() {
+        XCTAssertEqual(KokoroMLXTTSEngine.pinnedRevision, "f3ff3571791e39611d31c381e3a41a3af07b4987")
+        XCTAssertEqual(KokoroMLXTTSEngine.pinnedRevision.count, 40)
+    }
 }
