@@ -254,3 +254,126 @@ benchmark-compare model1 model2:
 
 # Full validation (build + test)
 check: build test
+
+# ─── Bundle & Sign (local development) ──────────────────────────────────────
+
+# Build a standalone Fae.app with all SPM frameworks embedded and sign it.
+# Requires signing identity: source ~/.secrets && just bundle
+bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${MACOS_SIGNING_IDENTITY:-}" ]; then
+        echo "Error: MACOS_SIGNING_IDENTITY not set — run: source ~/.secrets && just bundle"
+        exit 1
+    fi
+
+    # Build via xcodebuild (required for Metal shader compilation).
+    xcodebuild build \
+        -scheme Fae \
+        -configuration Debug \
+        -destination 'platform=macOS,arch=arm64' \
+        -derivedDataPath .build/xcode \
+        -quiet
+
+    PRODUCTS=".build/xcode/Build/Products/Debug"
+    PKG_FW_DIR="$PRODUCTS/PackageFrameworks"
+
+    # Place the bundle at the project root (consistent with CI artifact location).
+    APP_BUNDLE="$(cd "../../.." && pwd)/Fae.app"
+    rm -rf "$APP_BUNDLE"
+    mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Frameworks" "$APP_BUNDLE/Contents/Resources"
+
+    cp "$PRODUCTS/Fae" "$APP_BUNDLE/Contents/MacOS/Fae"
+    chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
+
+    # Copy SPM resource bundles.
+    for bundle_dir in "$PRODUCTS"/*.bundle "$PKG_FW_DIR"/*.bundle; do
+        [ -d "$bundle_dir" ] || continue
+        BNAME=$(basename "$bundle_dir")
+        [ -d "$APP_BUNDLE/Contents/Resources/$BNAME" ] && continue
+        cp -R "$bundle_dir" "$APP_BUNDLE/Contents/Resources/"
+        echo "  Bundled: $BNAME"
+    done
+
+    # Copy all SPM dynamic frameworks (MLX, MLXNN, KokoroSwift, Sparkle, etc.).
+    if [ -d "$PKG_FW_DIR" ]; then
+        for fw in "$PKG_FW_DIR"/*.framework; do
+            [ -d "$fw" ] || continue
+            cp -R "$fw" "$APP_BUNDLE/Contents/Frameworks/"
+            echo "  Embedded: $(basename "$fw")"
+        done
+    fi
+
+    # Write Info.plist.
+    VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0")
+    cp Info.plist "$APP_BUNDLE/Contents/Info.plist"
+    sed -i '' "s/__VERSION__/${VERSION}/g" "$APP_BUNDLE/Contents/Info.plist"
+    sed -i '' "s|__APPCAST_URL__||g" "$APP_BUNDLE/Contents/Info.plist"
+
+    just _sign-bundle "$APP_BUNDLE"
+    echo ""
+    echo "Bundle ready: $APP_BUNDLE"
+    echo "Run:  open \"$APP_BUNDLE\""
+
+# Sign an existing app bundle (inside-out order).
+# Requires MACOS_SIGNING_IDENTITY to be set.
+[private]
+_sign-bundle app_bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${MACOS_SIGNING_IDENTITY:-}" ]; then
+        echo "Error: MACOS_SIGNING_IDENTITY not set"
+        exit 1
+    fi
+    APP_BUNDLE="{{app_bundle}}"
+
+    echo "=== Signing frameworks ==="
+    for fw in "$APP_BUNDLE/Contents/Frameworks"/*.framework; do
+        [ -d "$fw" ] || continue
+        FNAME=$(basename "$fw")
+        find "$fw" -type f | while read f; do
+            file "$f" | grep -q "Mach-O" || continue
+            codesign --force --options runtime \
+                --sign "$MACOS_SIGNING_IDENTITY" \
+                --timestamp "$f" 2>/dev/null || true
+        done
+        codesign --force --options runtime \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --timestamp "$fw"
+        echo "  Signed: $FNAME"
+    done
+
+    echo "=== Signing resource bundles ==="
+    for bundle in "$APP_BUNDLE/Contents/Resources"/*.bundle; do
+        [ -d "$bundle" ] || continue
+        find "$bundle" -type f | while read f; do
+            file "$f" | grep -q "Mach-O" || continue
+            codesign --force --options runtime \
+                --sign "$MACOS_SIGNING_IDENTITY" \
+                --timestamp "$f" 2>/dev/null || true
+        done
+        codesign --force --options runtime \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --timestamp "$bundle"
+    done
+
+    # Entitlements.plist lives at the project root (3 levels up from native/macos/Fae/).
+    ENTITLEMENTS="$(cd "../../.." && pwd)/Entitlements.plist"
+
+    echo "=== Signing main executable ==="
+    codesign --force --options runtime \
+        --sign "$MACOS_SIGNING_IDENTITY" \
+        --entitlements "$ENTITLEMENTS" \
+        --timestamp \
+        "$APP_BUNDLE/Contents/MacOS/Fae"
+
+    echo "=== Signing .app bundle ==="
+    codesign --force --options runtime \
+        --sign "$MACOS_SIGNING_IDENTITY" \
+        --entitlements "$ENTITLEMENTS" \
+        --timestamp \
+        "$APP_BUNDLE"
+
+    echo "=== Verifying ==="
+    codesign --verify --deep --strict "$APP_BUNDLE"
+    echo "Signed: $APP_BUNDLE"

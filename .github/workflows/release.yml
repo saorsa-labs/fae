@@ -278,6 +278,25 @@ jobs:
           echo "Found Sparkle.framework at: $SPARKLE_FW"
           cp -R "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
 
+          # Embed all other SPM dynamic frameworks (MLX, MLXNN, KokoroSwift, etc.)
+          # These live in PackageFrameworks/ alongside the app in the build products dir.
+          PKG_FW_DIR="$XCODE_PRODUCTS/PackageFrameworks"
+          if [ -d "$PKG_FW_DIR" ]; then
+            echo "Embedding SPM frameworks from PackageFrameworks/:"
+            FW_COUNT=0
+            for fw in "$PKG_FW_DIR"/*.framework; do
+              [ -d "$fw" ] || continue
+              FNAME=$(basename "$fw")
+              [ "$FNAME" = "Sparkle.framework" ] && continue
+              cp -R "$fw" "$APP_BUNDLE/Contents/Frameworks/"
+              echo "  Embedded: $FNAME"
+              FW_COUNT=$((FW_COUNT+1))
+            done
+            echo "Embedded $FW_COUNT SPM frameworks"
+          else
+            echo "::warning::PackageFrameworks/ not found at $PKG_FW_DIR — MLX and other dynamic SPM frameworks may be missing"
+          fi
+
           # Ensure the binary finds Sparkle at @executable_path/../Frameworks.
           install_name_tool -add_rpath "@executable_path/../Frameworks" \
             "$APP_BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
@@ -359,6 +378,26 @@ jobs:
                 --timestamp \
                 "$bundle"
             fi
+          done
+
+          echo "=== Signing non-Sparkle SPM frameworks ==="
+          for fw in "$APP_BUNDLE/Contents/Frameworks"/*.framework; do
+            [ -d "$fw" ] || continue
+            FNAME=$(basename "$fw")
+            [ "$FNAME" = "Sparkle.framework" ] && continue
+            find "$fw" -type f | while read f; do
+              if file "$f" | grep -q "Mach-O"; then
+                codesign --force --options runtime \
+                  --sign "$MACOS_SIGNING_IDENTITY" \
+                  --timestamp \
+                  "$f"
+              fi
+            done
+            codesign --force --options runtime \
+              --sign "$MACOS_SIGNING_IDENTITY" \
+              --timestamp \
+              "$fw"
+            echo "  Signed: $FNAME"
           done
 
           echo "=== Signing main executable ==="
