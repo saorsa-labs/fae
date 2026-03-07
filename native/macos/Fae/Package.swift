@@ -16,6 +16,10 @@ let package = Package(
         // Sparkle 2 auto-update framework (EdDSA signature verification).
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         // MLX ecosystem — local ML inference on Apple Silicon.
+        // mlx-swift pinned to branch:main to override the .upToNextMinor(from:"0.30.6")
+        // constraint imposed by mlx-swift-lm. Required to pick up fixes merged after 0.30.6
+        // (e.g. wired memory race condition fix — PR #358 on mlx-swift).
+        .package(url: "https://github.com/ml-explore/mlx-swift", branch: "main"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", branch: "main"),
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift", branch: "main"),
         // SQLite with ORM — memory store.
@@ -69,6 +73,7 @@ let package = Package(
                 .copy("Resources/damage-control-default.yaml"),
                 .copy("Resources/Voices/fae.wav"),
                 .copy("Resources/App/AppIconFace.jpg"),
+                .copy("Resources/Scripts"),
             ],
             linkerSettings: [
                 // System frameworks for native Swift pipeline.

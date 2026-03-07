@@ -109,7 +109,7 @@ actor ModelManager {
     func loadAll(
         stt: MLXSTTEngine,
         llm: MLXLLMEngine,
-        tts: MLXTTSEngine,
+        tts: any TTSEngine,
         speaker: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
         config: FaeConfig

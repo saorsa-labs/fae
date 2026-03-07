@@ -28,6 +28,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var userName: String?
     @Published var toolMode: String = "full"
     @Published var thinkingEnabled: Bool = false
+    @Published var thinkingLevel: FaeThinkingLevel = .fast
 
     /// Whether Fae is currently speaking (TTS playback in progress).
     /// Exposed for the test harness to wait until speech completes.
@@ -63,11 +64,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             try? loaded.save()
         }
 
+        loaded.llm.normalizeThinkingConfiguration(hasExplicitLevel: true)
+        let initialThinkingLevel = loaded.llm.resolvedThinkingLevel
         self.config = loaded
         self.isLicenseAccepted = loaded.licenseAccepted
         self.userName = loaded.userName
         self.toolMode = loaded.toolMode
-        self.thinkingEnabled = loaded.llm.thinkingEnabled
+        self.thinkingLevel = initialThinkingLevel
+        self.thinkingEnabled = initialThinkingLevel.enablesThinking
 
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -84,7 +88,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
     private let sttEngine = MLXSTTEngine()
     private let llmEngine = MLXLLMEngine()
-    private let ttsEngine = MLXTTSEngine()
+    private let ttsEngine: any TTSEngine = KokoroPythonTTSEngine()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
     private let playbackManager = AudioPlaybackManager()
@@ -499,14 +503,27 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
-    /// Toggle thinking mode on/off, persist to config, and update the live pipeline.
-    func setThinkingEnabled(_ enabled: Bool) {
-        thinkingEnabled = enabled
-        config.llm.thinkingEnabled = enabled
-        persistConfig(reason: "config.patch.thinking_enabled")
+    /// Update the reasoning depth used for future turns.
+    func setThinkingLevel(_ level: FaeThinkingLevel) {
+        thinkingLevel = level
+        thinkingEnabled = level.enablesThinking
+        config.llm.thinkingLevel = level.rawValue
+        config.llm.thinkingEnabled = level.enablesThinking
+        UserDefaults.standard.set(level.rawValue, forKey: "thinkingLevel")
+        UserDefaults.standard.set(level.enablesThinking, forKey: "thinkingEnabled")
+        persistConfig(reason: "config.patch.thinking_level")
         if let coordinator = pipelineCoordinator {
-            Task { await coordinator.setThinkingEnabled(enabled) }
+            Task { await coordinator.setThinkingLevel(level) }
         }
+    }
+
+    /// Legacy toggle mapping for older UI surfaces and voice commands.
+    func setThinkingEnabled(_ enabled: Bool) {
+        setThinkingLevel(enabled ? .balanced : .fast)
+    }
+
+    func cycleThinkingLevel() {
+        setThinkingLevel(thinkingLevel.next)
     }
 
     /// Wire the debug console to the pipeline coordinator.
@@ -1060,6 +1077,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             pipelineStateLabel: pipelineState.label,
             toolMode: toolMode,
             thinkingEnabled: thinkingEnabled,
+            thinkingLevel: thinkingLevel.rawValue,
             hasOwnerSetUp: hasOwnerSetUp,
             userName: userName,
             tools: tools,
@@ -1205,6 +1223,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "llm.thinking_enabled":
             guard let value = value as? Bool else { return }
             setThinkingEnabled(value)
+
+        case "llm.thinking_level":
+            guard let value = sanitizedString(value),
+                  let level = FaeThinkingLevel(rawValue: value)
+            else { return }
+            setThinkingLevel(level)
 
         case "barge_in.enabled":
             guard let value = value as? Bool else { return }
@@ -2012,6 +2036,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     "llm": [
                         "voice_model_preset": config.llm.voiceModelPreset,
                         "thinking_enabled": config.llm.thinkingEnabled,
+                        "thinking_level": config.llm.resolvedThinkingLevel.rawValue,
                         "kv_quant_bits": config.llm.kvQuantBits as Any,
                         "max_kv_cache_size": config.llm.maxKVCacheSize as Any,
                         "kv_quant_start_tokens": config.llm.kvQuantStartTokens,

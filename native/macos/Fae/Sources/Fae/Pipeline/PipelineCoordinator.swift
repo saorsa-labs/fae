@@ -45,7 +45,7 @@ actor PipelineCoordinator {
     private let playback: AudioPlaybackManager
     private let sttEngine: MLXSTTEngine
     private let llmEngine: MLXLLMEngine
-    private let ttsEngine: MLXTTSEngine
+    private let ttsEngine: any TTSEngine
     private let config: FaeConfig
     private let conversationState: ConversationStateTracker
     private let memoryOrchestrator: MemoryOrchestrator?
@@ -417,7 +417,7 @@ actor PipelineCoordinator {
         playback: AudioPlaybackManager,
         sttEngine: MLXSTTEngine,
         llmEngine: MLXLLMEngine,
-        ttsEngine: MLXTTSEngine,
+        ttsEngine: any TTSEngine,
         config: FaeConfig,
         conversationState: ConversationStateTracker,
         memoryOrchestrator: MemoryOrchestrator? = nil,
@@ -3289,10 +3289,10 @@ actor PipelineCoordinator {
         var spokenTextThisTurn = ""
         var visibleTextThisTurn = ""
         // Stability-first speech mode: keep live text streaming, but defer TTS
-        // until the turn completes so Qwen3-TTS sees larger coherent text spans.
-        // NOTE: streaming TTS (preferFinalOnlySpeech=false) causes MLX GPU contention —
-        // MLXTTSEngine.synthesize blocks waiting for MLXLLMEngine to release Metal
-        // when both are called concurrently. Needs architecture change before enabling.
+        // until the turn completes so the TTS engine sees larger coherent text spans.
+        // KokoroPythonTTSEngine runs in a separate process on CPU (ONNX Runtime),
+        // so MLX Metal contention is no longer a concern.  We still defer to get
+        // better prosody from longer text spans rather than sentence fragments.
         let preferFinalOnlySpeech = true
         var deferredSentenceQueue: [String] = []
         var streamedToolCalls: [ToolCall] = []

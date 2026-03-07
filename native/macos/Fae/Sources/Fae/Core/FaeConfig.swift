@@ -71,10 +71,14 @@ struct FaeConfig: Codable {
         /// Preferred remote model for user-managed external sessions.
         var remoteModel: String = "openai/gpt-4.1-mini"
         var enableVision: Bool = false
-        /// When true, model thinking mode is enabled (extended reasoning).
-        /// When false (default), Fae suppresses reasoning via
-        /// `enable_thinking: false` in the chat template context.
+        /// Legacy compatibility flag for whether deliberate reasoning is enabled.
+        /// Kept in sync with `thinkingLevel` when reading and writing config.
         var thinkingEnabled: Bool = false
+        /// Conversation reasoning depth.
+        /// - fast: minimize explicit reasoning for lower latency.
+        /// - balanced: normal reasoning for most work.
+        /// - deep: more deliberate reasoning with a larger local response budget.
+        var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
 
         // MARK: KV Cache Optimization (Phase 1)
 
@@ -105,7 +109,7 @@ struct FaeConfig: Codable {
 
     struct TtsConfig: Codable {
         var voice: String = "fae"
-        var modelId: String = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
+        var modelId: String = "kokoro:af_heart"
         var speed: Float = 1.1
         var sampleRate: Int = 24_000
         /// Transcript of the reference audio for voice cloning.
@@ -318,40 +322,10 @@ struct FaeConfig: Codable {
         case "qwen3_0_6b":
             return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
         default: // "auto"
-            // Qwen3.5 at every tier — full lineup (0.8B/2B/4B/9B/27B/35B-A3B) released March 2026.
-            // Hybrid Gated DeltaNet + Gated Attention architecture across all sizes.
-            //
-            // 96+ GB: 35B-A3B MoE with full 65K context — plenty of headroom.
-            // 80-95 GB: 35B-A3B MoE with 49K context — comfortable headroom.
-            // 64-79 GB: 35B-A3B MoE with 32K context — MoE ~18.8 GB + KV cache.
-            // 48-63 GB: 27B dense with 32K context — fits comfortably.
-            // 32-47 GB: 27B dense with 16K context — good headroom for STT+TTS.
-            // 24-31 GB: 9B with 32K context — 5 GB weights leaves 14-21 GB for KV.
-            // 16-23 GB: 4B with 16K context — 2.5 GB weights + full STT/TTS stack.
-            // 12-15 GB: 2B with 8K context — 1.2 GB weights, small STT/TTS.
-            // 8-11 GB: 0.8B with 4K context — 0.5 GB weights, minimal footprint.
-            // <8 GB: 0.8B with 2K context — absolute minimum viable.
-            if totalGB >= 96 {
-                return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
-            } else if totalGB >= 80 {
-                return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 49_152)
-            } else if totalGB >= 64 {
-                return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 32_768)
-            } else if totalGB >= 48 {
-                return ("NexVeridian/Qwen3.5-27B-4bit", 32_768)
-            } else if totalGB >= 32 {
-                return ("NexVeridian/Qwen3.5-27B-4bit", 16_384)
-            } else if totalGB >= 24 {
-                return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
-            } else if totalGB >= 16 {
-                return ("mlx-community/Qwen3.5-4B-4bit", 16_384)
-            } else if totalGB >= 12 {
-                return ("mlx-community/Qwen3.5-2B-4bit", 8_192)
-            } else if totalGB >= 8 {
-                return ("mlx-community/Qwen3.5-0.8B-4bit", 4_096)
-            } else {
-                return ("mlx-community/Qwen3.5-0.8B-4bit", 2_048)
-            }
+            // BENCHMARK OVERRIDE: Qwen3.5-2B fixed on all machines until further notice.
+            // Restore RAM-tiered selection once benchmarking is complete.
+            _ = totalGB
+            return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
         }
     }
 
@@ -480,7 +454,10 @@ struct FaeConfig: Codable {
                 return FaeConfig()
             }
             do {
-                return try parse(text)
+                var parsed = try parse(text)
+                let hasExplicitThinkingLevel = text.contains("thinkingLevel") || text.contains("thinking_level")
+                parsed.llm.normalizeThinkingConfiguration(hasExplicitLevel: hasExplicitThinkingLevel)
+                return parsed
             } catch {
                 NSLog("FaeConfig: failed to parse %@: %@; using defaults", url.path, String(describing: error))
                 return FaeConfig()
@@ -658,6 +635,9 @@ struct FaeConfig: Codable {
                 case "thinkingEnabled":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.thinkingEnabled = v
+                case "thinkingLevel", "thinking_level":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.thinkingLevel = v
                 default: break
                 }
             case "tts":
@@ -925,8 +905,10 @@ struct FaeConfig: Codable {
         lines.append("remoteProviderPreset = \(encodeString(llm.remoteProviderPreset))")
         lines.append("remoteBaseURL = \(encodeString(llm.remoteBaseURL))")
         lines.append("remoteModel = \(encodeString(llm.remoteModel))")
+        let normalizedThinkingLevel = llm.resolvedThinkingLevel
         lines.append("enableVision = \(llm.enableVision ? "true" : "false")")
-        lines.append("thinkingEnabled = \(llm.thinkingEnabled ? "true" : "false")")
+        lines.append("thinkingEnabled = \(normalizedThinkingLevel.enablesThinking ? "true" : "false")")
+        lines.append("thinkingLevel = \(encodeString(normalizedThinkingLevel.rawValue))")
         lines.append("")
 
         lines.append("[tts]")
@@ -1147,5 +1129,22 @@ struct FaeConfig: Codable {
     private func formatFloat(_ value: Float) -> String {
         let number = NSNumber(value: value)
         return number.description(withLocale: Locale(identifier: "en_US_POSIX"))
+    }
+}
+
+extension FaeConfig.LlmConfig {
+    var resolvedThinkingLevel: FaeThinkingLevel {
+        FaeThinkingLevel(rawValue: thinkingLevel) ?? (thinkingEnabled ? .balanced : .fast)
+    }
+
+    mutating func normalizeThinkingConfiguration(hasExplicitLevel: Bool = true) {
+        let resolvedLevel: FaeThinkingLevel
+        if hasExplicitLevel {
+            resolvedLevel = FaeThinkingLevel(rawValue: thinkingLevel) ?? (thinkingEnabled ? .balanced : .fast)
+        } else {
+            resolvedLevel = thinkingEnabled ? .balanced : .fast
+        }
+        thinkingLevel = resolvedLevel.rawValue
+        thinkingEnabled = resolvedLevel.enablesThinking
     }
 }
