@@ -17,10 +17,15 @@ final class ConversationBridgeController: ObservableObject {
     /// Set by `FaeApp` during wiring.
     weak var subtitleState: SubtitleStateController?
 
-    /// Native message store for the SwiftUI conversation window.
+    /// Native message store for the SwiftUI main conversation window.
     /// Set by `FaeApp` during wiring.
     weak var conversationController: ConversationController?
 
+    /// Native message store for the Work with Fae conversation surface.
+    /// Set by `FaeApp` during wiring.
+    weak var coworkConversationController: ConversationController?
+
+    private var routeConversationEventsToCowork = false
     private var observations: [NSObjectProtocol] = []
 
     /// Tracks the currently-streaming assistant message ID so we can
@@ -151,9 +156,28 @@ final class ConversationBridgeController: ObservableObject {
                 Task { @MainActor [weak self] in
                     let label = Self.friendlyModelLabel(from: modelId)
                     self?.conversationController?.loadedModelLabel = label
+                    self?.coworkConversationController?.loadedModelLabel = label
                 }
             }
         )
+
+        observations.append(
+            center.addObserver(
+                forName: .faeCoworkConversationRoutingChanged, object: nil, queue: .main
+            ) { [weak self] notification in
+                let active = notification.userInfo?["active"] as? Bool ?? false
+                Task { @MainActor [weak self] in
+                    self?.routeConversationEventsToCowork = active
+                }
+            }
+        )
+    }
+
+    private var activeConversationController: ConversationController? {
+        if routeConversationEventsToCowork {
+            return coworkConversationController ?? conversationController
+        }
+        return conversationController
     }
 
     // MARK: - Handlers
@@ -168,7 +192,7 @@ final class ConversationBridgeController: ObservableObject {
         // The old approach buffered until generation started, creating a perceptible
         // delay where the user spoke but saw no bubble. Noise drops that slip through
         // the echo suppressor are rare and harmless as conversation history entries.
-        conversationController?.appendMessage(role: .user, content: text)
+        activeConversationController?.appendMessage(role: .user, content: text)
         pendingUserTranscription = nil
     }
 
@@ -182,14 +206,14 @@ final class ConversationBridgeController: ObservableObject {
         subtitleState?.clearToolMessage()
 
         // Update live streaming bubble in conversation window
-        conversationController?.updateStreaming(text: streamingAssistantText)
+        activeConversationController?.updateStreaming(text: streamingAssistantText)
 
         if isFinal {
             streamingAssistantText = ""
             // Pass only the last sentence to the subtitle so it shows
             // the final fragment at full opacity rather than the entire accumulated text.
             subtitleState?.finalizeAssistantMessage(text)
-            conversationController?.finalizeStreaming()
+            activeConversationController?.finalizeStreaming()
         } else {
             subtitleState?.appendStreamingSentence(text)
         }
@@ -197,18 +221,18 @@ final class ConversationBridgeController: ObservableObject {
 
     private func handleGenerating(active: Bool) {
         // Native generating state — the ConversationWindowView observes this directly.
-        conversationController?.isGenerating = active
+        activeConversationController?.isGenerating = active
         if active {
             subtitleState?.showPersistentToolMessage("Thinking…")
             // Flush the buffered user transcription — coordinator confirmed it was accepted.
             if let pending = pendingUserTranscription, !pending.isEmpty {
-                conversationController?.appendMessage(role: .user, content: pending)
+                activeConversationController?.appendMessage(role: .user, content: pending)
                 pendingUserTranscription = nil
             }
             // Reset streaming buffer and start streaming state
             streamingAssistantText = ""
             isStreamingAssistant = false
-            conversationController?.startStreaming()
+            activeConversationController?.startStreaming()
         } else {
             // Generation stopped — clear the thinking bubble if still showing.
             subtitleState?.clearToolMessage()
@@ -217,9 +241,9 @@ final class ConversationBridgeController: ObservableObject {
             if !streamingAssistantText.isEmpty {
                 streamingAssistantText = ""
                 isStreamingAssistant = false
-                conversationController?.cancelStreaming()
+                activeConversationController?.cancelStreaming()
             } else {
-                conversationController?.finalizeStreaming()
+                activeConversationController?.finalizeStreaming()
             }
         }
     }
@@ -233,12 +257,12 @@ final class ConversationBridgeController: ObservableObject {
             playToolCueExecuting()
             let message = "⚙ Working: \(name)…"
             subtitleState?.showPersistentToolMessage(message)
-            conversationController?.appendMessage(role: .tool, content: message)
+            activeConversationController?.appendMessage(role: .tool, content: message)
 
             // Subtle UI signal for deferred/background tool work: only mark as
             // background when no active assistant generation is in progress.
-            if conversationController?.isGenerating == false {
-                conversationController?.beginBackgroundLookup()
+            if activeConversationController?.isGenerating == false {
+                activeConversationController?.beginBackgroundLookup()
             }
 
         case "result":
@@ -250,10 +274,10 @@ final class ConversationBridgeController: ObservableObject {
             }
             let message = success ? "✓ Done: \(name)" : "✗ Failed: \(name)"
             subtitleState?.showToolMessage(message)
-            conversationController?.appendMessage(role: .tool, content: message)
+            activeConversationController?.appendMessage(role: .tool, content: message)
 
-            if conversationController?.isBackgroundLookupActive == true {
-                conversationController?.endBackgroundLookup()
+            if activeConversationController?.isBackgroundLookupActive == true {
+                activeConversationController?.endBackgroundLookup()
             }
 
         default:
@@ -336,6 +360,7 @@ final class ConversationBridgeController: ObservableObject {
             // Capture the LLM model label for the About tab.
             if let llmLabel = Self.extractLLMLabel(from: model) {
                 conversationController?.loadedModelLabel = llmLabel
+                coworkConversationController?.loadedModelLabel = llmLabel
             }
 
         case "error":
@@ -445,9 +470,11 @@ final class ConversationBridgeController: ObservableObject {
         case "runtime.stopped":
             subtitleState?.hideProgress()
             conversationController?.resetBackgroundLookups()
+            coworkConversationController?.resetBackgroundLookups()
         case "runtime.error":
             subtitleState?.hideProgress()
             conversationController?.resetBackgroundLookups()
+            coworkConversationController?.resetBackgroundLookups()
             let payload = userInfo["payload"] as? [String: Any] ?? [:]
             let message = payload["error"] as? String ?? "unknown error"
             appendStatusMessage("Pipeline error: \(message)")

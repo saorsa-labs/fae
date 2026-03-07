@@ -6,7 +6,7 @@
 
 ![Fae](assets/fae.jpg)
 
-Fae is a personal AI companion who listens, remembers, and helps — like having a knowledgeable friend who is always in the room. She runs entirely on your Mac, keeping your data private and secure.
+Fae is a personal AI companion who listens, remembers, and helps — like having a knowledgeable friend who is always in the room. Fae Local runs entirely on your Mac, and Work with Fae can optionally connect selected remote providers under explicit user control.
 
 **The vision is simple:** imagine a computer that your grandmother could use. Fae handles the complexity — setting up software, managing files, scheduling reminders, researching topics, and keeping track of the people and events that matter to you. You just talk to her.
 
@@ -16,11 +16,11 @@ Fae is a personal AI companion who listens, remembers, and helps — like having
 
 ## Platform
 
-Fae is a **pure Apple-native app** built with Swift and MLX. Every model runs on-device using Apple Silicon's Neural Engine and GPU — no cloud, no API keys, no data leaves your Mac.
+Fae is a **pure Apple-native app** built with Swift and MLX. Fae Local runs on-device using Apple Silicon's Neural Engine and GPU. Work with Fae can also attach optional remote providers such as OpenAI-compatible endpoints, OpenRouter, and Anthropic, while keeping local-only context and approvals under Fae's control.
 
 | Platform | Status | Role |
 |---|---|---|
-| **macOS** (Apple Silicon) | Primary | Full app — on-device LLM, STT, TTS, voice identity, memory, tools |
+| **macOS** (Apple Silicon) | Primary | Full app — on-device Fae Local runtime, STT, TTS, voice identity, memory, tools, and optional remote specialist backends |
 | **iOS / iPadOS** | Planned | Lightweight companion via Handoff |
 
 **No web version. No Windows. No Linux builds.**
@@ -175,6 +175,26 @@ Built-in scheduled tasks:
 | `embedding_reindex` | Weekly (Sun 03:00) | Re-embed records missing ANN vectors |
 | `vault_backup` | Daily at 02:30 | Rolling git-based backup to `~/.fae-vault/` |
 
+### Work with Fae
+
+Work with Fae is Fae’s conversation-first project workspace.
+
+Current documented capabilities:
+
+- separate visible conversation surface from the main Fae window
+- per-conversation folders, indexed files, attachments, drag/drop, and paste
+- conversation forks for branching work without losing the original thread
+- provider-aware agent setup for Fae Local, OpenAI-compatible backends, OpenRouter, and Anthropic
+- searchable model selection with visible current model
+- mid-conversation model switching that preserves the same thread
+- Fast / Balanced / Deep thinking levels that can be changed mid-conversation
+- per-workspace strict-local vs remote execution policy
+- multi-agent compare with local Fae synthesis when available
+- fast local secret preflight before remote egress
+- remote models never get direct local tool access; Fae Local remains the only actor that can touch files, apps, approvals, and local memory
+
+See: [Work with Fae Guide](docs/guides/work-with-fae.md)
+
 ## Architecture
 
 Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-swift) for on-device ML inference. No Rust core, no subprocess — all intelligence runs natively on Apple Silicon.
@@ -266,10 +286,11 @@ Conversation and canvas are independent `NSPanel` windows positioned adjacent to
 
 ## Privacy
 
-**Everything runs on your Mac.** Zero data leaves the device:
+**Fae is local-first, and Fae Local is fully on-device.** Optional remote providers can be attached in Work with Fae, but they do not receive local-only workspace context when Fae marks that context as local-only.
 
 - Audio is processed locally — no cloud transcription.
-- LLM runs locally — no API calls, no tokens sent anywhere.
+- Fae Local runs on-device with no API dependency.
+- Work with Fae can optionally send shareable prompts to configured remote providers.
 - Memories stored locally in SQLite — no sync, no backup to cloud.
 - Voice biometrics stored locally — speaker profiles never leave the device.
 - Web search uses DuckDuckGo HTML endpoint — the most privacy-friendly option.
@@ -342,6 +363,10 @@ maxTokens = 512
 contextSizeTokens = 16384
 temperature = 0.7
 voiceModelPreset = "auto"
+thinkingLevel = "balanced" # fast | balanced | deep
+remoteProviderPreset = "openrouter"
+remoteBaseURL = "https://openrouter.ai/api"
+remoteModel = "anthropic/claude-sonnet-4.6"
 
 [memory]
 enabled = true

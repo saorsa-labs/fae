@@ -3,13 +3,13 @@ import FaeHandoffKit
 
 // MARK: - Chat Types
 
-enum ChatRole: String {
+enum ChatRole: String, Equatable {
     case user
     case assistant
     case tool
 }
 
-struct ChatMessage: Identifiable {
+struct ChatMessage: Identifiable, Equatable {
     let id: UUID
     let role: ChatRole
     let content: String
@@ -118,6 +118,13 @@ final class ConversationController: ObservableObject {
         messages.removeAll()
     }
 
+    func replaceMessages(_ newMessages: [ChatMessage]) {
+        messages = Array(newMessages.suffix(maxMessages))
+        streamingText = ""
+        isStreaming = false
+        isGenerating = false
+    }
+
     // MARK: - Background Tool Activity
 
     var isBackgroundLookupActive: Bool {
@@ -202,6 +209,9 @@ extension Notification.Name {
     static let faeCloseSettingsRequested = Notification.Name("faeCloseSettingsRequested")
     /// Posted when the user opens the cowork workspace from the orb UI or menus.
     static let faeOpenCoworkRequested = Notification.Name("faeOpenCoworkRequested")
+    /// Posted by the cowork runtime to route pipeline UI updates into the Work with Fae session.
+    /// userInfo: ["active": Bool]
+    static let faeCoworkConversationRoutingChanged = Notification.Name("faeCoworkConversationRoutingChanged")
     /// Posted by canvas interactions or voice authority flow to request a governed settings mutation.
     /// userInfo: ["action": String, "value": String, "source": String]
     static let faeGovernanceActionRequested = Notification.Name("faeGovernanceActionRequested")

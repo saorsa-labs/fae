@@ -1,0 +1,114 @@
+import XCTest
+@testable import Fae
+
+final class ToolApprovalRegressionTests: XCTestCase {
+    override func setUp() async throws {
+        await ApprovedToolsStore.shared.revokeAll()
+        await OutboundExfiltrationGuard.shared.resetForTesting()
+    }
+
+    override func tearDown() async throws {
+        await ApprovedToolsStore.shared.revokeAll()
+        await OutboundExfiltrationGuard.shared.resetForTesting()
+    }
+
+    func testToolRegistryModeFilteringAndNativeSpecsStayConsistent() {
+        let registry = ToolRegistry.buildDefault()
+
+        XCTAssertNil(registry.nativeToolSpecs(for: "off"))
+        XCTAssertEqual(registry.toolSchemas(for: "off"), "")
+
+        XCTAssertTrue(registry.isToolAllowed("read", mode: "read_only"))
+        XCTAssertFalse(registry.isToolAllowed("write", mode: "read_only"))
+        XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_only"))
+
+        XCTAssertTrue(registry.isToolAllowed("write", mode: "read_write"))
+        XCTAssertTrue(registry.isToolAllowed("screenshot", mode: "read_write"))
+        XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_write"))
+
+        XCTAssertTrue(registry.isToolAllowed("bash", mode: "full"))
+        XCTAssertTrue(registry.isToolAllowed("delegate_agent", mode: "full"))
+
+        let readOnlySpecs = registry.nativeToolSpecs(for: "read_only") ?? []
+        let readWriteSpecs = registry.nativeToolSpecs(for: "read_write") ?? []
+        let fullSpecs = registry.nativeToolSpecs(for: "full") ?? []
+
+        XCTAssertFalse(readOnlySpecs.isEmpty)
+        XCTAssertGreaterThan(readWriteSpecs.count, readOnlySpecs.count)
+        XCTAssertGreaterThan(fullSpecs.count, readWriteSpecs.count)
+    }
+
+    func testToolRegistryLimitedSchemasRespectSubsetAndStrictLocalPrivacy() {
+        let registry = ToolRegistry.buildDefault()
+        let limited = registry.toolSchemas(for: "full", limitedTo: ["read", "bash", "delegate_agent"])
+        XCTAssertTrue(limited.contains("## read"))
+        XCTAssertTrue(limited.contains("## bash"))
+        XCTAssertTrue(limited.contains("## delegate_agent"))
+        XCTAssertFalse(limited.contains("## write"))
+
+        let strictLocalSpecs = registry.nativeToolSpecs(for: "full", privacyMode: "strict_local") ?? []
+        let strictLocalNames = strictLocalSpecs.compactMap { spec in
+            (spec["function"] as? [String: any Sendable])?["name"] as? String
+        }
+        XCTAssertFalse(strictLocalNames.contains("delegate_agent"))
+        XCTAssertFalse(strictLocalNames.contains("web_search"))
+        XCTAssertFalse(strictLocalNames.contains("fetch_url"))
+    }
+
+    func testApprovedToolsStoreAutoApprovalMatrixHonorsRiskAndScope() async {
+        let store = ApprovedToolsStore.shared
+
+        let initiallyApproved = await store.shouldAutoApprove(toolName: "read", riskLevel: .low)
+        XCTAssertFalse(initiallyApproved)
+
+        await store.approveTool("write")
+        let writeApproved = await store.shouldAutoApprove(toolName: "write", riskLevel: .medium)
+        let bashApprovedBeforeGlobal = await store.shouldAutoApprove(toolName: "bash", riskLevel: .high)
+        XCTAssertTrue(writeApproved)
+        XCTAssertFalse(bashApprovedBeforeGlobal)
+
+        await store.setApproveAllReadonly(true)
+        let readApprovedInReadonly = await store.shouldAutoApprove(toolName: "read", riskLevel: .low)
+        let bashApprovedInReadonly = await store.shouldAutoApprove(toolName: "bash", riskLevel: .high)
+        XCTAssertTrue(readApprovedInReadonly)
+        XCTAssertFalse(bashApprovedInReadonly)
+
+        await store.setApproveAll(true)
+        let bashApprovedAfterGlobal = await store.shouldAutoApprove(toolName: "bash", riskLevel: .high)
+        XCTAssertTrue(bashApprovedAfterGlobal)
+    }
+
+    func testOutboundExfiltrationGuardDeniesSensitivePayloads() async {
+        let decision = await OutboundExfiltrationGuard.shared.evaluate(
+            toolName: "mail",
+            arguments: [
+                "action": "send",
+                "to": "friend@example.com",
+                "body": "Here is my api_key=sk-1234567890123456789012345678901234567890",
+            ]
+        )
+
+        guard case .deny(let message) = decision else {
+            XCTFail("Expected sensitive outbound payload to be denied")
+            return
+        }
+        XCTAssertTrue(message.lowercased().contains("blocked"))
+    }
+
+    func testOutboundExfiltrationGuardTreatsChannelIdentifiersAsRecipients() async {
+        let decision = await OutboundExfiltrationGuard.shared.evaluate(
+            toolName: "channel_out",
+            arguments: [
+                "action": "post",
+                "channel_id": "C123456",
+                "message": "status update",
+            ]
+        )
+
+        guard case .confirm(let message) = decision else {
+            XCTFail("Expected a novelty confirmation for a first-time channel recipient")
+            return
+        }
+        XCTAssertTrue(message.lowercased().contains("new recipient"))
+    }
+}

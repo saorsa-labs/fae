@@ -5,7 +5,12 @@ import Foundation
 /// Runtime cadence, timers, and safety gates still live in code/config. HEARTBEAT.md
 /// is loaded fresh into the model prompt so edits change how Fae frames proactive behavior.
 enum HeartbeatManager {
+    static var userHeartbeatURLOverride: URL?
+
     static var userHeartbeatURL: URL {
+        if let override = userHeartbeatURLOverride {
+            return override
+        }
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask

@@ -6,8 +6,13 @@ import Foundation
 /// Loaded fresh every turn so edits take effect immediately.
 enum SoulManager {
 
+    static var userSoulURLOverride: URL?
+
     /// User's editable soul file path.
     static var userSoulURL: URL {
+        if let override = userSoulURLOverride {
+            return override
+        }
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
