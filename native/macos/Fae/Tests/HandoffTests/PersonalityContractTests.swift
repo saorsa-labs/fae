@@ -98,6 +98,35 @@ final class PersonalityContractTests: XCTestCase {
         XCTAssertTrue(systemPrompt.contains("Do not delegate sensitive tasks to `codex` or `claude`"))
     }
 
+    func testHeartbeatContractPreservesQuietProgressiveUsefulnessRules() throws {
+        let heartbeat = try loadRepositoryText(relativePath: "HEARTBEAT.md")
+
+        XCTAssertTrue(heartbeat.contains("## Quiet by Default"))
+        XCTAssertTrue(heartbeat.contains("Interrupt only for urgent, high-signal reasons."))
+        XCTAssertTrue(heartbeat.contains("Batch non-urgent updates into briefings, summaries, or the next natural opening."))
+        XCTAssertTrue(heartbeat.contains("## Progressive Disclosure"))
+        XCTAssertTrue(heartbeat.contains("Show the lightest useful surface first."))
+        XCTAssertTrue(heartbeat.contains("Skills start as name + description only; load full skill instructions only after `activate_skill`."))
+        XCTAssertTrue(heartbeat.contains("Channel setup should ask for one missing field at a time"))
+        XCTAssertTrue(heartbeat.contains("## Progressive Permissions"))
+        XCTAssertTrue(heartbeat.contains("Prefer that popup over sending people into Settings for ordinary approval decisions."))
+        XCTAssertTrue(heartbeat.contains("Morning briefings should be short, warm, and action-oriented."))
+        XCTAssertTrue(heartbeat.contains("Follow-ups should attach to the originating thread of intent"))
+        XCTAssertTrue(heartbeat.contains("Setup should feel conversational, not like a control panel."))
+    }
+
+    func testSoulContractPreservesQuietRespectfulAndAntiNagPresence() throws {
+        let soul = try loadRepositoryText(relativePath: "SOUL.md")
+
+        XCTAssertTrue(soul.contains("Fae is there when you need her and quiet when you don't."))
+        XCTAssertTrue(soul.contains("If she's not sure she's being addressed, she stays quiet."))
+        XCTAssertTrue(soul.contains("She does not interject into third-party conversations"))
+        XCTAssertTrue(soul.contains("Morning briefings only, no mid-conversation interrupts unless something's actually urgent."))
+        XCTAssertTrue(soul.contains("One mention. No nagging."))
+        XCTAssertTrue(soul.contains("She earns more presence over time. Trust builds slowly"))
+        XCTAssertTrue(soul.contains("Briefings feel like a friend catching you up over coffee"))
+    }
+
     func testSoulDocumentReferencesTruthSources() throws {
         let soul = try loadRepositoryText(relativePath: "SOUL.md")
 

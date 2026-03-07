@@ -17,10 +17,11 @@ actor ApprovalManager {
     private var nextRequestId: UInt64 = 1
 
     static let timeoutSeconds: TimeInterval = 20
-    nonisolated(unsafe) static var timeoutSecondsOverrideForTests: TimeInterval?
+    private let timeoutSeconds: TimeInterval
 
-    init(eventBus: FaeEventBus) {
+    init(eventBus: FaeEventBus, timeoutSeconds: TimeInterval? = nil) {
         self.eventBus = eventBus
+        self.timeoutSeconds = timeoutSeconds ?? Self.timeoutSeconds
     }
 
     /// Request approval for a tool execution.
@@ -56,8 +57,7 @@ actor ApprovalManager {
 
             // Start timeout task.
             Task {
-                let timeoutSeconds = Self.timeoutSecondsOverrideForTests ?? Self.timeoutSeconds
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(self.timeoutSeconds * 1_000_000_000))
                 self.resolveTimeoutIfPending(requestId: requestId)
             }
         }

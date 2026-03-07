@@ -73,6 +73,76 @@ final class EndToEndBuiltInAwarenessTaskTests: XCTestCase {
         XCTAssertEqual(snapshot.silentFlags, [true])
     }
 
+    func testCameraPresenceCheckAvoidsRapidRepeatNudgesWhenUserPresenceIsUnknown() async throws {
+        let scheduler = FaeScheduler(eventBus: FaeEventBus())
+        let config = consentedAwarenessConfig()
+        await scheduler.setAwarenessConfig(config)
+
+        let capture = DispatchCapture()
+        let firstDispatch = expectation(description: "first camera dispatch")
+        let unexpectedSecondDispatch = expectation(description: "second camera dispatch should be suppressed")
+        unexpectedSecondDispatch.isInverted = true
+
+        await scheduler.setProactiveQueryHandler { _, silent, taskID, allowedTools, consentGranted in
+            await capture.record(taskID: taskID, allowedTools: allowedTools, consentGranted: consentGranted, silent: silent)
+            if await capture.snapshot().taskIDs.count == 1 {
+                firstDispatch.fulfill()
+            } else {
+                unexpectedSecondDispatch.fulfill()
+            }
+        }
+
+        await scheduler.triggerTask(id: "camera_presence_check")
+        await fulfillment(of: [firstDispatch], timeout: 1.0)
+        await scheduler.triggerTask(id: "camera_presence_check")
+        await fulfillment(of: [unexpectedSecondDispatch], timeout: 0.2)
+
+        let snapshot = await capture.snapshot()
+        XCTAssertEqual(snapshot.taskIDs, ["camera_presence_check"])
+        XCTAssertEqual(snapshot.allowedToolSets, [Set(["camera"])])
+        XCTAssertEqual(snapshot.consentFlags, [true])
+    }
+
+    func testScreenActivityCheckAvoidsRapidRepeatDispatchesWithoutNewSignal() async throws {
+        let scheduler = FaeScheduler(eventBus: FaeEventBus())
+        var config = consentedAwarenessConfig()
+        config.screenEnabled = true
+        await scheduler.setAwarenessConfig(config)
+
+        let capture = DispatchCapture()
+        let firstDispatch = expectation(description: "first screen dispatch")
+        let unexpectedSecondDispatch = expectation(description: "second screen dispatch should be suppressed")
+        unexpectedSecondDispatch.isInverted = true
+
+        await scheduler.setProactiveQueryHandler { _, silent, taskID, allowedTools, consentGranted in
+            await capture.record(taskID: taskID, allowedTools: allowedTools, consentGranted: consentGranted, silent: silent)
+            if await capture.snapshot().taskIDs.count == 1 {
+                firstDispatch.fulfill()
+            } else {
+                unexpectedSecondDispatch.fulfill()
+            }
+        }
+
+        if AwarenessThrottle.isQuietHours() {
+            firstDispatch.isInverted = true
+        }
+
+        await scheduler.triggerTask(id: "screen_activity_check")
+        await fulfillment(of: [firstDispatch], timeout: AwarenessThrottle.isQuietHours() ? 0.2 : 1.0)
+        await scheduler.triggerTask(id: "screen_activity_check")
+        await fulfillment(of: [unexpectedSecondDispatch], timeout: 0.2)
+
+        let snapshot = await capture.snapshot()
+        if AwarenessThrottle.isQuietHours() {
+            XCTAssertTrue(snapshot.taskIDs.isEmpty)
+        } else {
+            XCTAssertEqual(snapshot.taskIDs, ["screen_activity_check"])
+            XCTAssertEqual(snapshot.allowedToolSets, [Set(["screenshot"])])
+            XCTAssertEqual(snapshot.consentFlags, [true])
+            XCTAssertEqual(snapshot.silentFlags, [true])
+        }
+    }
+
     func testEnhancedMorningBriefingDispatchesOnceAndMarksDelivered() async throws {
         let scheduler = FaeScheduler(eventBus: FaeEventBus())
         let config = consentedAwarenessConfig()
@@ -80,8 +150,8 @@ final class EndToEndBuiltInAwarenessTaskTests: XCTestCase {
 
         let capture = DispatchCapture()
         let dispatched = expectation(description: "enhanced morning briefing dispatched")
-        await scheduler.setProactiveQueryHandler { _, _, taskID, allowedTools, consentGranted in
-            await capture.record(taskID: taskID, allowedTools: allowedTools, consentGranted: consentGranted, silent: false)
+        await scheduler.setProactiveQueryHandler { _, silent, taskID, allowedTools, consentGranted in
+            await capture.record(taskID: taskID, allowedTools: allowedTools, consentGranted: consentGranted, silent: silent)
             dispatched.fulfill()
         }
 
@@ -94,6 +164,7 @@ final class EndToEndBuiltInAwarenessTaskTests: XCTestCase {
         XCTAssertEqual(snapshot.taskIDs.first, "enhanced_morning_briefing")
         XCTAssertEqual(snapshot.allowedToolSets.first, Set(["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"]))
         XCTAssertEqual(snapshot.consentFlags.first, true)
+        XCTAssertEqual(snapshot.silentFlags.first, false)
         let delivered = await scheduler.isMorningBriefingDelivered()
         XCTAssertTrue(delivered)
     }

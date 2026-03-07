@@ -7,13 +7,11 @@ final class ApprovalManagerTests: XCTestCase {
 
     override func setUp() async throws {
         await ApprovedToolsStore.shared.revokeAll()
-        ApprovalManager.timeoutSecondsOverrideForTests = nil
         cancellables.removeAll()
     }
 
     override func tearDown() async throws {
         await ApprovedToolsStore.shared.revokeAll()
-        ApprovalManager.timeoutSecondsOverrideForTests = nil
         cancellables.removeAll()
     }
 
@@ -172,9 +170,8 @@ final class ApprovalManagerTests: XCTestCase {
     }
 
     func testRequestApprovalTimesOutPublishesResolutionAndClearsPendingState() async throws {
-        ApprovalManager.timeoutSecondsOverrideForTests = 0.05
         let bus = FaeEventBus()
-        let manager = ApprovalManager(eventBus: bus)
+        let manager = ApprovalManager(eventBus: bus, timeoutSeconds: 0.05)
         let requested = expectation(description: "approval requested")
         let timedOut = expectation(description: "approval timed out")
         var resolvedEvents: [(id: UInt64, approved: Bool, source: String)] = []
@@ -209,9 +206,8 @@ final class ApprovalManagerTests: XCTestCase {
     }
 
     func testLateManualResolutionAfterTimeoutDoesNotPublishDuplicateResolution() async throws {
-        ApprovalManager.timeoutSecondsOverrideForTests = 0.05
         let bus = FaeEventBus()
-        let manager = ApprovalManager(eventBus: bus)
+        let manager = ApprovalManager(eventBus: bus, timeoutSeconds: 0.05)
         let requested = expectation(description: "approval requested")
         let timedOut = expectation(description: "approval timed out")
         var resolutionSources: [String] = []
